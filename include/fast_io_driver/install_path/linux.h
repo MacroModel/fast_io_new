@@ -1,9 +1,8 @@
 ﻿#pragma once
 
-#if defined(__linux__)
-#include <linux/limits.h>
-#else
 #include <limits.h>
+#if defined(__linux__) && !defined(PATH_MAX)
+#include <linux/limits.h>
 #endif
 
 namespace fast_io::details
@@ -13,9 +12,6 @@ namespace fast_io::details
  */
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
-#endif
-#if __has_cpp_attribute(__gnu__::__const__)
-[[__gnu__::__const__]]
 #endif
 inline ::fast_io::install_path get_module_install_path()
 {

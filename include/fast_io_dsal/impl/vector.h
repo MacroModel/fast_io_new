@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 namespace fast_io
 {
 
@@ -202,7 +202,7 @@ struct vector_internal
 } // namespace details
 
 template <typename T, typename allocator>
-class vector FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
+class vector
 {
 public:
 	using allocator_type = allocator;
@@ -891,8 +891,7 @@ public:
 		requires std::constructible_from<value_type, Args...>
 	inline constexpr reference emplace_back(Args &&...args) noexcept(::std::is_nothrow_constructible_v<value_type, Args...>)
 	{
-		if (imp.curr_ptr == imp.end_ptr)
-			[[unlikely]]
+		if (imp.curr_ptr == imp.end_ptr) [[unlikely]]
 		{
 			grow_twice_impl();
 		}
@@ -936,7 +935,7 @@ public:
 			}
 			if constexpr (::std::is_nothrow_constructible_v<value_type, ::std::ranges::range_value_t<R>>)
 			{
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
 					::std::construct_at(imp.curr_ptr, ::std::forward<decltype(e)>(e));
 					++imp.curr_ptr;
@@ -945,7 +944,7 @@ public:
 			else
 			{
 				append_range_guard guard{this, old_size};
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
 					::std::construct_at(imp.curr_ptr, ::std::forward<decltype(e)>(e));
 					++imp.curr_ptr;
@@ -957,7 +956,7 @@ public:
 		{
 			if constexpr (::std::is_nothrow_constructible_v<value_type, ::std::ranges::range_value_t<R>>)
 			{
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
 					this->emplace_back(::std::forward<decltype(e)>(e));
 				}
@@ -965,7 +964,7 @@ public:
 			else
 			{
 				append_range_guard guard{this, this->size()};
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
 					this->emplace_back(::std::forward<decltype(e)>(e));
 				}

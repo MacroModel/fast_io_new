@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 #if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
 #include "rtl_gen_random.h"
 #include "win32_crypt_gen_random.h"
 #endif
-#if defined(__wasi__)
+#if defined(__wasi__) || defined(__EMSCRIPTEN__)
 #include "wasi_random_get.h"
 #endif
 
@@ -25,7 +25,7 @@ concept minimum_buffer_input_stream_require_size_impl =
 
 } // namespace fast_io::details
 #if ((defined(__linux__) && defined(__NR_getrandom)) || \
-	 (!(defined(__linux__) && defined(__NR_getrandom)) && __has_include(<sys/random.h>))) && !defined(__wasi__) && !defined(__DARWIN_C_LEVEL) && !defined(__CYGWIN__)
+	 (!(defined(__linux__) && defined(__NR_getrandom)) && __has_include(<sys/random.h>))) && !defined(__wasi__) && !defined(__EMSCRIPTEN__) && !defined(__DARWIN_C_LEVEL) && !defined(__CYGWIN__)
 #include "linux_getrandom.h"
 #endif
 #if ((defined(__linux__) && defined(__GLIBC__)) || (defined(__BSD_VISIBLE) && !defined(__DARWIN_C_LEVEL))) && 0
@@ -74,7 +74,7 @@ using basic_native_white_hole =
 #else
 	basic_rtl_gen_random<char_type>;
 #endif
-#elif defined(__wasi__)
+#elif defined(__wasi__) || defined(__EMSCRIPTEN__)
 	basic_wasi_random_get<char_type>;
 #elif (((defined(__linux__) && defined(__GLIBC__)) || (defined(__BSD_VISIBLE) && !defined(__DARWIN_C_LEVEL)))) && 0
 	basic_bsd_arc4random<char_type>;
@@ -156,7 +156,9 @@ struct basic_white_hole_engine
 			::std::size_t diff{static_cast<::std::size_t>(edptr - currptr)};
 			constexpr ::std::size_t objsz{sizeof(result_type)};
 			if (diff < objsz)
+#if __has_cpp_attribute(unlikely)
 				[[unlikely]]
+#endif
 			{
 				ibuffer_minimum_size_underflow_all_prepare_define(instmref);
 				currptr = ibuffer_curr(instmref);

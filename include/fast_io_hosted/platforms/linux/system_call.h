@@ -2,7 +2,7 @@
 
 #if defined(__linux__)
 #include <asm/unistd.h>
-#ifdef __x86_64__
+#if defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 #include "amd64.h"
 #elif defined(__arm64__) || defined(__aarch64__)
 #include "aarch64.h"
@@ -10,6 +10,8 @@
 #include "riscv64.h"
 #elif defined(__loongarch__) && __SIZEOF_SIZE_T__ == 8
 #include "loongarch64.h"
+#elif defined(__s390x__)
+#include "s390x.h"
 #else
 #include "generic.h"
 #endif

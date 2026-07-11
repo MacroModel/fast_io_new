@@ -28,7 +28,7 @@ public:
 			}
 			else
 			{
-				typed_allocator::deallocate_n(begin_ptr, buffer_size);
+				typed_allocator::deallocate_n(begin_ptr, static_cast<::std::size_t>(end_ptr - begin_ptr));
 			}
 		}
 	}
@@ -53,6 +53,13 @@ inline constexpr basic_dynamic_output_buffer_ref<
 output_stream_ref_define(basic_generic_dynamic_output_buffer<char_type, buffersize, allocatortype> &diob) noexcept
 {
 	return {__builtin_addressof(diob)};
+}
+
+template <typename T>
+inline constexpr basic_dynamic_output_buffer_ref<T>
+output_stream_ref_define(basic_dynamic_output_buffer_ref<T> diobref) noexcept
+{
+	return diobref;
 }
 
 namespace details
@@ -95,13 +102,13 @@ write_all_overflow_define_impl(basic_generic_dynamic_output_buffer<char_type, bu
 	if (bob.begin_ptr != bob.buffer)
 	{
 		// heap
-		pbuffer = typed_allocator::reallocate_n(bob.begin_ptr, to_allocate);
+		pbuffer = typed_allocator::reallocate_n(bob.begin_ptr, bfsz, to_allocate);
 	}
 	else
 	{
 		// Stack buffer to heap
 		pbuffer = typed_allocator::allocate(to_allocate);
-		::fast_io::details::non_overlapped_copy_n(bob.buffer, buffersize, pbuffer);
+		::fast_io::details::non_overlapped_copy_n(bob.buffer, rlsz, pbuffer);
 	}
 	bob.begin_ptr = pbuffer;
 	bob.end_ptr = pbuffer + to_allocate;
@@ -134,7 +141,7 @@ grow_twice_define_impl(basic_generic_dynamic_output_buffer<char_type, buffersize
 	if (bob.begin_ptr != bob.buffer)
 	{
 		// heap
-		pbuffer = typed_allocator::reallocate_n(bob.begin_ptr, twicebfsz);
+		pbuffer = typed_allocator::reallocate_n(bob.begin_ptr, bfsz, twicebfsz);
 	}
 	else
 	{
@@ -188,6 +195,14 @@ inline constexpr void obuffer_set_curr(
 	char_type *it) noexcept
 {
 	bdobr.dob_ptr->curr_ptr = it;
+}
+
+template <::std::integral char_type, ::std::size_t buffersize, typename allocatortype>
+inline constexpr void output_stream_buffer_flush_define(
+	basic_dynamic_output_buffer_ref<basic_generic_dynamic_output_buffer<char_type, buffersize, allocatortype>>
+		bdobr) noexcept
+{
+	::fast_io::details::grow_twice_define_impl(*bdobr.dob_ptr);
 }
 
 template <::std::integral char_type, ::std::size_t buffersize, typename allocatortype>

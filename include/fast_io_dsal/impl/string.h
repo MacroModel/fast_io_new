@@ -109,7 +109,7 @@ inline constexpr void string_push_back_heap_grow_twice(::fast_io::containers::de
 } // namespace details
 
 template <::std::integral chtype, typename alloctype>
-class basic_string FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
+class basic_string
 {
 public:
 	using allocator_type = alloctype;
@@ -1696,6 +1696,40 @@ inline constexpr ::fast_io::basic_io_scatter_t<chtype>
 print_alias_define(io_alias_t, basic_string<chtype, alloctype> const &str) noexcept
 {
 	return {str.imp.begin_ptr, static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr)};
+}
+
+template <::std::integral char_type, typename alloctype>
+inline constexpr ::std::size_t
+print_reserve_size(::fast_io::io_reserve_type_t<char_type, basic_string<char_type, alloctype>>,
+				   basic_string<char_type, alloctype> const &str) noexcept
+{
+	return static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr);
+}
+
+template <::std::integral char_type, typename alloctype>
+inline constexpr char_type *
+print_reserve_define(::fast_io::io_reserve_type_t<char_type, basic_string<char_type, alloctype>>,
+					 char_type *iter, basic_string<char_type, alloctype> const &str) noexcept
+{
+	return ::fast_io::details::non_overlapped_copy_n(str.imp.begin_ptr,
+													 static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr), iter);
+}
+
+template <::std::integral char_type, typename alloctype>
+inline constexpr ::std::size_t
+print_reserve_precise_size(::fast_io::io_reserve_type_t<char_type, basic_string<char_type, alloctype>>,
+						   basic_string<char_type, alloctype> const &str) noexcept
+{
+	return static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr);
+}
+
+template <::std::integral char_type, typename alloctype>
+inline constexpr char_type *
+print_reserve_precise_define(::fast_io::io_reserve_type_t<char_type, basic_string<char_type, alloctype>>,
+							 char_type *iter, ::std::size_t, basic_string<char_type, alloctype> const &str) noexcept
+{
+	return ::fast_io::details::non_overlapped_copy_n(str.imp.begin_ptr,
+													 static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr), iter);
 }
 
 template <::std::integral char_type, typename allocator_type>

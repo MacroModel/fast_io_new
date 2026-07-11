@@ -32,7 +32,7 @@
 #undef FAST_IO_DLLIMPORT
 #if defined(_MSC_VER) && !defined(__clang__)
 #define FAST_IO_DLLIMPORT __declspec(dllimport)
-#elif __has_cpp_attribute(__gnu__::__dllimport__) && !defined(__WINE__) && !defined(__arm64ec__)
+#elif __has_cpp_attribute(__gnu__::__dllimport__) && !defined(__WINE__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 #define FAST_IO_DLLIMPORT [[__gnu__::__dllimport__]]
 #else
 #define FAST_IO_DLLIMPORT
@@ -71,7 +71,7 @@
 #if defined(__clang__) || defined(__GNUC__)
 #if defined(_M_HYBRID)
 #define FAST_IO_WINSTDCALL_RENAME(name, count) __asm__("#" #name "@" #count)
-#elif defined(__arm64ec__)
+#elif defined(__arm64ec__) || defined(_M_ARM64EC)
 #define FAST_IO_WINSTDCALL_RENAME(name, count) __asm__("#" #name)
 #elif SIZE_MAX <= UINT_LEAST32_MAX && (defined(__x86__) || defined(_M_IX86) || defined(__i386__))
 #if !defined(__clang__)
@@ -101,7 +101,7 @@
 #if defined(__clang__) || defined(__GNUC__)
 #if defined(_M_HYBRID)
 #define FAST_IO_WINCDECL_RENAME(name, count) __asm__("#" #name "@" #count)
-#elif defined(__arm64ec__)
+#elif defined(__arm64ec__) || defined(_M_ARM64EC)
 #define FAST_IO_WINCDECL_RENAME(name, count) __asm__("#" #name)
 #elif SIZE_MAX <= UINT_LEAST32_MAX && (defined(__x86__) || defined(_M_IX86) || defined(__i386__))
 #if !defined(__clang__)
@@ -131,7 +131,7 @@
 #if defined(__clang__) || defined(__GNUC__)
 #if defined(_M_HYBRID)
 #define FAST_IO_WINFASTCALL_RENAME(name, count) __asm__("#" #name "@" #count)
-#elif defined(__arm64ec__)
+#elif defined(__arm64ec__) || defined(_M_ARM64EC)
 #define FAST_IO_WINFASTCALL_RENAME(name, count) __asm__("#" #name)
 #elif SIZE_MAX <= UINT_LEAST32_MAX && (defined(__x86__) || defined(_M_IX86) || defined(__i386__))
 #if !defined(__clang__)
@@ -215,24 +215,6 @@ Internal assert macros for fuzzing fast_io.
 #endif
 #else
 #define FAST_IO_ASSERT(x) ((void)0)
-#endif
-
-#pragma push_macro("FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE")
-#if 0
-#if defined(__cpp_trivial_relocatability)
-#undef FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
-#if defined(__clang__)
-#define FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE \
-	_Pragma("clang diagnostic push") _Pragma("clang diagnostic ignored \"-Wc++26-extensions\"") trivially_relocatable_if_eligible _Pragma("clang diagnostic pop")
-#else // ^^^ defined(__clang__) / vvv !defined(__clang__)
-#define FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE trivially_relocatable_if_eligible
-#endif // ^^^ !defined(__clang__)
-#else
-#define FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
-#endif
-#else
-#undef FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
-#define FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
 #endif
 
 #pragma push_macro("FAST_IO_HAS_BUILTIN")

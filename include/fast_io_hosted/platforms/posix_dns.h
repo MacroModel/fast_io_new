@@ -27,7 +27,7 @@ struct
 
 namespace details
 {
-#ifdef __DARWIN_C_LEVEL
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
 extern int libc_getaddrinfo(char const *node, char const *service, posix_addrinfo const *hints,
 							posix_addrinfo **res) noexcept __asm__("_getaddrinfo");
 
@@ -177,7 +177,7 @@ inline constexpr ::fast_io::ip_address to_ip_address(posix_dns_io_observer d) no
 	return fast_io::details::posix_to_ip_address_with_ai_addr_impl(d.res->ai_family, d.res->ai_addr);
 }
 
-class posix_dns_file FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE : public posix_dns_io_observer
+class posix_dns_file  : public posix_dns_io_observer
 {
 public:
 	using typename posix_dns_io_observer::char_type;

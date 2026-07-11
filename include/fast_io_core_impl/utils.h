@@ -141,6 +141,18 @@ concept my_integral =
 #endif
 	;
 
+// Character code-unit types are a special case: they satisfy ::std::integral,
+// but fast_io also treats them as characters. Keep them split from ordinary
+// numeric integrals so default printing does not accidentally format 'x' as 120.
+template <typename T>
+concept character_integral =
+	::std::same_as<::std::remove_cvref_t<T>, char> || ::std::same_as<::std::remove_cvref_t<T>, wchar_t> ||
+	::std::same_as<::std::remove_cvref_t<T>, char8_t> || ::std::same_as<::std::remove_cvref_t<T>, char16_t> ||
+	::std::same_as<::std::remove_cvref_t<T>, char32_t>;
+
+template <typename T>
+concept non_character_integral = my_integral<T> && !character_integral<T>;
+
 template <typename T>
 concept my_signed_integral = ::std::signed_integral<T>
 #ifdef __SIZEOF_INT128__
@@ -160,6 +172,9 @@ concept my_floating_point = ::std::floating_point<T>
 #endif
 #ifdef __SIZEOF_FLOAT128__
 							|| ::std::same_as<::std::remove_cv_t<T>, __float128>
+#endif
+#if defined(__clang__) && defined(__aarch64__) && !defined(__STDCPP_BFLOAT16_T__)
+							|| ::std::same_as<::std::remove_cv_t<T>, __bf16>
 #endif
 #ifdef __STDCPP_BFLOAT16_T__
 							|| ::std::same_as<::std::remove_cv_t<T>, decltype(0.0bf16)>
@@ -463,7 +478,6 @@ inline constexpr T compile_pow5{::fast_io::details::compile_pow_n<T, 5, pow>};
 
 template <my_integral T, ::std::size_t pow>
 inline constexpr T compile_pow2{::fast_io::details::compile_pow_n<T, 2, pow>};
-
 
 
 inline constexpr bool is_wasi_environment{

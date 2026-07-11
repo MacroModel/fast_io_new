@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 namespace fast_io
 {
@@ -167,7 +167,9 @@ scatter_write_some_impl(outstmtype outsm, basic_io_scatter_t<typename outstmtype
 		{
 			auto [base, len] = *i;
 			if (len < buffptrdiff)
+#if __has_cpp_attribute(likely)
 				[[likely]]
+#endif
 			{
 				curr = ::fast_io::details::non_overlapped_copy_n(base, len, curr);
 				buffptrdiff -= len;
@@ -179,7 +181,9 @@ scatter_write_some_impl(outstmtype outsm, basic_io_scatter_t<typename outstmtype
 		}
 		obuffer_set_curr(outsm, curr);
 		if (i != e)
+#if __has_cpp_attribute(unlikely)
 			[[unlikely]]
+#endif
 		{
 			auto ret{::fast_io::details::scatter_write_some_cold_impl(outsm, i, static_cast<::std::size_t>(e - i))};
 			ret.position += static_cast<::std::size_t>(i - pscatters);
@@ -336,7 +340,9 @@ inline constexpr void scatter_write_all_impl(outstmtype outsm,
 		{
 			auto [base, len] = *i;
 			if (len < buffptrdiff)
+#if __has_cpp_attribute(likely)
 				[[likely]]
+#endif
 			{
 				curr = ::fast_io::details::non_overlapped_copy_n(base, len, curr);
 				buffptrdiff -= len;
@@ -348,7 +354,9 @@ inline constexpr void scatter_write_all_impl(outstmtype outsm,
 		}
 		obuffer_set_curr(outsm, curr);
 		if (i != e)
+#if __has_cpp_attribute(unlikely)
 			[[unlikely]]
+#endif
 		{
 			return ::fast_io::details::scatter_write_all_cold_impl(outsm, i, static_cast<::std::size_t>(e - i));
 		}

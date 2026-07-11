@@ -5,10 +5,7 @@ using ::fast_io::char_literal_v;
 using ::fast_io::pr_rsv_size;
 using ::fast_io::pr_rsv_to_iterator_unchecked;
 
-using ::fast_io::io_alias_t;
-using ::fast_io::io_alias;
 using ::fast_io::io_alias_type_t;
-using ::fast_io::io_alias_type;
 
 using ::fast_io::io_reserve_type_t;
 using ::fast_io::io_reserve_type;
@@ -52,6 +49,23 @@ using ::fast_io::open_mode;
 using ::fast_io::basic_io_lockable;
 using ::fast_io::basic_io_lockable_nonmovable;
 
+using ::fast_io::basic_ibuffer_view;
+using ::fast_io::basic_ibuffer_view_ref;
+using ::fast_io::basic_obuffer_view;
+using ::fast_io::basic_obuffer_view_ref;
+
+using ::fast_io::ibuffer_view;
+using ::fast_io::wibuffer_view;
+using ::fast_io::u8ibuffer_view;
+using ::fast_io::u16ibuffer_view;
+using ::fast_io::u32ibuffer_view;
+using ::fast_io::obuffer_view;
+using ::fast_io::wobuffer_view;
+using ::fast_io::u8obuffer_view;
+using ::fast_io::u16obuffer_view;
+using ::fast_io::u32obuffer_view;
+
+#if !defined(__clang__) // The gcc and msvc module does not support non-exported functions adl matching
 using ::fast_io::input_stream_ref_define;
 using ::fast_io::output_stream_ref_define;
 using ::fast_io::io_stream_ref_define;
@@ -122,10 +136,11 @@ using ::fast_io::io_stream_require_secure_clear_define;
 // using ::fast_io::input_stream_buffer_flush_define;
 using ::fast_io::output_stream_buffer_flush_define;
 using ::fast_io::io_stream_buffer_flush_define;
+#endif
 
 namespace manipulators
 {
-
+    
 using ::fast_io::manipulators::print_alias_define;
 using ::fast_io::manipulators::print_reserve_size;
 using ::fast_io::manipulators::print_reserve_define;
@@ -179,7 +194,10 @@ using ::fast_io::manipulators::os_c_str_with_known_size;
 
 using ::fast_io::manipulators::base;
 using ::fast_io::manipulators::bin;
+using ::fast_io::manipulators::bin0b;
 using ::fast_io::manipulators::oct;
+using ::fast_io::manipulators::oct0;
+using ::fast_io::manipulators::oct0o;
 using ::fast_io::manipulators::dec;
 using ::fast_io::manipulators::hex;
 using ::fast_io::manipulators::hexupper;
@@ -191,12 +209,14 @@ using ::fast_io::manipulators::general;
 using ::fast_io::manipulators::fixed;
 using ::fast_io::manipulators::scientific;
 using ::fast_io::manipulators::hexfloat;
+using ::fast_io::manipulators::hexfloat0x;
 
 using ::fast_io::manipulators::comma_decimal;
 using ::fast_io::manipulators::comma_general;
 using ::fast_io::manipulators::comma_fixed;
 using ::fast_io::manipulators::comma_scientific;
 using ::fast_io::manipulators::comma_hexfloat;
+using ::fast_io::manipulators::comma_hexfloat0x;
 
 using ::fast_io::manipulators::width;
 using ::fast_io::manipulators::left;
@@ -214,23 +234,23 @@ using ::fast_io::manipulators::cur_src_loc;
 
 using ::fast_io::manipulators::ip_scan_generic;
 using ::fast_io::manipulators::strvw;
+
+using ::fast_io::manipulators::dec_get;
+using ::fast_io::manipulators::oct_get;
+using ::fast_io::manipulators::oct0_get;
+using ::fast_io::manipulators::oct0o_get;
+using ::fast_io::manipulators::bin_get;
+using ::fast_io::manipulators::bin0b_get;
+using ::fast_io::manipulators::hex0x_get;
+using ::fast_io::manipulators::hexfloat_get;
+using ::fast_io::manipulators::hexfloat0x_get;
 } // namespace manipulators
 
 namespace char_category
 {
-using ::fast_io::char_category::is_dos_file_invalid_character;
-using ::fast_io::char_category::char_category_family;
-using ::fast_io::char_category::char_category_traits;
-using ::fast_io::char_category::to_c_lower;
-using ::fast_io::char_category::to_c_upper;
-using ::fast_io::char_category::to_c_halfwidth;
-namespace ranges
-{
-using ::fast_io::char_category::ranges::to_c_lower;
-using ::fast_io::char_category::ranges::to_c_upper;
-using ::fast_io::char_category::ranges::to_c_halfwidth;
-} // namespace ranges
-} // namespace char_category
+    using ::fast_io::char_category::is_c_digit;
+    using ::fast_io::char_category::is_dos_file_invalid_character;
+}
 
 namespace mnp = manipulators;
 

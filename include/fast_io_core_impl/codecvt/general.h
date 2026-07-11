@@ -194,8 +194,9 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 	}
 	else
 	{
-#if (defined(_MSC_VER) && defined(_M_AMD64) && !defined(__clang__)) || \
-	(defined(__SSE__) && defined(__SSE2__) && defined(__x86_64__) && __cpp_lib_is_constant_evaluated >= 201811L)
+#if (defined(_MSC_VER) && defined(_M_AMD64) && !defined(_M_ARM64EC) && !defined(__clang__)) ||                                             \
+		(defined(__SSE__) && defined(__SSE2__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC)) &&                 \
+         __cpp_lib_is_constant_evaluated >= 201811L)
 		if constexpr (src_encoding != encoding_scheme::utf_ebcdic && encoding != encoding_scheme::utf_ebcdic &&
 					  1 == sizeof(src_char_type) && (1 == sizeof(dest_char_type) || encoding_is_utf(encoding)))
 		{
@@ -567,7 +568,8 @@ inline constexpr bool print_alias_test_codecvt_impl() noexcept
 		if constexpr (type_has_value_type<alias_type>)
 		{
 			using value_type = typename alias_type::value_type;
-			return ::std::same_as<alias_type, basic_io_scatter_t<value_type>>;
+			return ::std::same_as<alias_type, basic_io_scatter_t<value_type>> ||
+				   ::std::convertible_to<alias_type, basic_io_scatter_t<value_type>>;
 		}
 		else
 		{
@@ -616,6 +618,13 @@ inline constexpr auto code_cvt(small_scatter_t<char_type, N> t) noexcept
 }
 
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
+		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type, ::std::size_t N>
+inline constexpr auto code_cvt(static_scatter_t<char_type, N> t) noexcept
+{
+	return code_cvt_t<src_scheme, dst_scheme, char_type>{{t.base, N}};
+}
+
+template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type>
 inline constexpr auto code_cvt_os_c_str(char_type const *cstr) noexcept
 {
@@ -637,6 +646,15 @@ print_reserve_size(io_reserve_type_t<dst_char_type, code_cvt_t<src_scheme, dst_s
 				   code_cvt_t<src_scheme, dst_scheme, src_char_type> v) noexcept
 {
 	return details::cal_full_reserve_size<sizeof(src_char_type), sizeof(dst_char_type)>(v.reference.len);
+}
+
+template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
+		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral src_char_type,
+		  ::std::integral dst_char_type>
+inline constexpr ::std::size_t
+print_reserve_static_stack_size(io_reserve_type_t<dst_char_type, code_cvt_t<src_scheme, dst_scheme, src_char_type>>) noexcept
+{
+	return ::fast_io::details::dynamic_reserve_default_static_stack_size<dst_char_type>();
 }
 
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,

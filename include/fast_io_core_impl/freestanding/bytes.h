@@ -83,8 +83,7 @@ inline constexpr ::std::byte *bytes_copy_n(::std::byte const *first, ::std::size
 	}
 	else
 	{
-		if (n)
-			[[likely]]
+		if (n) [[likely]]
 		{
 #if FAST_IO_HAS_BUILTIN(__builtin_memmove)
 			__builtin_memmove(dest, first, n);
@@ -113,8 +112,7 @@ inline constexpr ::std::byte *nonoverlapped_bytes_copy_n(::std::byte const *firs
 	}
 	else
 	{
-		if (n)
-			[[likely]]
+		if (n) [[likely]]
 		{
 #if FAST_IO_HAS_BUILTIN(__builtin_memcpy)
 			__builtin_memcpy(dest, first, n);

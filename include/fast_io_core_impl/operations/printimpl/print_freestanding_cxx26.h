@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #error "We do not recommend using this header file for the time being."
 
@@ -138,6 +138,24 @@ template <typename output, ::std::size_t N>
 concept minimum_buffer_output_stream_require_size_impl =
 	::fast_io::operations::decay::defines::has_obuffer_minimum_size_operations<output> &&
 	minimum_buffer_output_stream_require_size_constant_impl<output, N>;
+
+template <bool line, ::std::integral char_type, typename T>
+inline constexpr ::std::size_t context_print_static_buffer_size_v = []() constexpr {
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::fast_io::context_printable_with_static_buffer_size<char_type, value_type>)
+	{
+		constexpr ::std::size_t n{
+			print_context_static_buffer_size(::fast_io::io_reserve_type<char_type, value_type>)};
+		static_assert(n != 0);
+		static_assert(n != SIZE_MAX);
+		static_assert(n > static_cast<::std::size_t>(line));
+		return n;
+	}
+	else
+	{
+		return 32u;
+	}
+}();
 
 template <::std::size_t sz>
 	requires(sz != 0)
@@ -408,7 +426,9 @@ inline constexpr void print_control_single(output outstm, T t)
 				bool smaller{static_cast<::std::ptrdiff_t>(size) < diff};
 				::fast_io::details::local_operator_new_array_ptr<char_type> newptr;
 				if (!smaller)
+#if __has_cpp_attribute(unlikely)
 					[[unlikely]]
+#endif
 				{
 					newptr.ptr = toptr = ::fast_io::details::allocate_iobuf_space<
 						char_type,
@@ -427,7 +447,9 @@ inline constexpr void print_control_single(output outstm, T t)
 					obuffer_set_curr(outstm, it);
 				}
 				else
+#if __has_cpp_attribute(unlikely)
 					[[unlikely]]
+#endif
 				{
 					::fast_io::operations::decay::write_all_decay(outstm, toptr, it);
 				}
@@ -491,7 +513,8 @@ inline constexpr void print_control_single(output outstm, T t)
 	else if constexpr (context_printable<char_type, value_type>)
 	{
 		typename ::std::remove_cvref_t<decltype(print_context_type(io_reserve_type<char_type, value_type>))>::type st;
-		constexpr ::std::size_t reserved_size{32u};
+		constexpr ::std::size_t reserved_size{
+			::fast_io::details::decay::context_print_static_buffer_size_v<line, char_type, value_type>};
 		constexpr ::std::ptrdiff_t reserved_size_no_line{
 			static_cast<::std::ptrdiff_t>(reserved_size - static_cast<::std::size_t>(line))};
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output>)
@@ -501,7 +524,9 @@ inline constexpr void print_control_single(output outstm, T t)
 				auto bcurr{obuffer_curr(outstm)};
 				auto bed{obuffer_end(outstm)};
 				if (bed <= bcurr)
+#if __has_cpp_attribute(unlikely)
 					[[unlikely]]
+#endif
 				{
 					if constexpr (minimum_buffer_output_stream_require_size_impl<output, reserved_size>)
 					{
@@ -515,7 +540,9 @@ inline constexpr void print_control_single(output outstm, T t)
 						bcurr = obuffer_curr(outstm);
 						bed = obuffer_end(outstm);
 						if (bed - bcurr < reserved_size_no_line)
+#if __has_cpp_attribute(unlikely)
 							[[unlikely]]
+#endif
 						{
 							char_type buffer[reserved_size];
 							char_type *buffered{buffer + reserved_size_no_line};
@@ -553,7 +580,9 @@ inline constexpr void print_control_single(output outstm, T t)
 					auto [resit, done] = st.print_context_define(t, bcurr, bed);
 					obuffer_set_curr(outstm, resit);
 					if (done)
+#if __has_cpp_attribute(likely)
 						[[likely]]
+#endif
 					{
 						if constexpr (line)
 						{
@@ -1328,7 +1357,7 @@ template <bool line, typename outputstmtype, typename... Args>
 #endif
 inline constexpr decltype(auto) print_freestanding_decay_cold(outputstmtype optstm, Args... args)
 {
-#if !__has_cpp_attribute(__gnu__::__cold__)
+#if !__has_cpp_attribute(__gnu__::__cold__) && __has_cpp_attribute(unlikely)
 	if (true) [[unlikely]]
 #endif
 		return ::fast_io::operations::decay::print_freestanding_decay<line>(optstm, args...);

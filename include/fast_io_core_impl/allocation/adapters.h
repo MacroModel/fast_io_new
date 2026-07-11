@@ -825,14 +825,14 @@ public:
 					}
 					else
 					{
-						ptr = allocator_type::allocate_aligned_at_least(alignment, n).ptr;
+						ptr = allocator_type::allocate_aligned_zero_at_least(alignment, n).ptr;
 					}
 				}
 				else
 				{
 					if constexpr (::fast_io::details::has_allocate_aligned_impl<alloc>)
 					{
-						ptr = allocator_type::allocate_aligned_zero(alignment, n);
+						ptr = allocator_type::allocate_aligned(alignment, n);
 					}
 					else
 					{
@@ -1087,29 +1087,6 @@ public:
 					::fast_io::allocation_least_result res;
 					if (zero)
 					{
-						if constexpr (::fast_io::details::has_allocate_at_least_impl<alloc>)
-						{
-							res = allocator_type::allocate_at_least(n);
-						}
-						else if constexpr (::fast_io::details::has_allocate_impl<alloc>)
-						{
-							res = {allocator_type::allocate(n), n};
-						}
-						else if constexpr (::fast_io::details::has_allocate_aligned_at_least_impl<alloc>)
-						{
-							res = allocator_type::allocate_aligned_at_least(default_alignment, n);
-						}
-						else if constexpr (::fast_io::details::has_allocate_aligned_impl<alloc>)
-						{
-							res = {allocator_type::allocate_aligned(default_alignment, n), n};
-						}
-						else
-						{
-							::fast_io::fast_terminate();
-						}
-					}
-					else
-					{
 						if constexpr (::fast_io::details::has_allocate_zero_at_least_impl<alloc>)
 						{
 							res = allocator_type::allocate_zero_at_least(n);
@@ -1125,6 +1102,29 @@ public:
 						else if constexpr (::fast_io::details::has_allocate_aligned_zero_impl<alloc>)
 						{
 							res = {allocator_type::allocate_aligned_zero(default_alignment, n), n};
+						}
+						else
+						{
+							::fast_io::fast_terminate();
+						}
+					}
+					else
+					{
+						if constexpr (::fast_io::details::has_allocate_at_least_impl<alloc>)
+						{
+							res = allocator_type::allocate_at_least(n);
+						}
+						else if constexpr (::fast_io::details::has_allocate_impl<alloc>)
+						{
+							res = {allocator_type::allocate(n), n};
+						}
+						else if constexpr (::fast_io::details::has_allocate_aligned_at_least_impl<alloc>)
+						{
+							res = allocator_type::allocate_aligned_at_least(default_alignment, n);
+						}
+						else if constexpr (::fast_io::details::has_allocate_aligned_impl<alloc>)
+						{
+							res = {allocator_type::allocate_aligned(default_alignment, n), n};
 						}
 						else
 						{
@@ -1282,7 +1282,7 @@ public:
 		}
 		else
 		{
-			return ::fast_io::details::allocator_pointer_aligned_at_least_impl<alloc>(default_alignment, n, zero);
+			return ::fast_io::details::allocator_pointer_aligned_at_least_impl<alloc>(alignment, n, zero);
 		}
 	}
 
@@ -1577,7 +1577,9 @@ public:
 	}
 
 	static inline constexpr bool has_native_reallocate_at_least = (has_reallocate &&
-																   (::fast_io::details::has_reallocate_aligned_at_least_impl<alloc> ||
+																   (::fast_io::details::has_reallocate_at_least_impl<alloc> ||
+																	::fast_io::details::has_reallocate_aligned_at_least_impl<alloc> ||
+																	::fast_io::details::has_reallocate_zero_at_least_impl<alloc> ||
 																	::fast_io::details::has_reallocate_aligned_zero_at_least_impl<alloc>));
 	static inline ::fast_io::allocation_least_result
 	reallocate_at_least(void *p, ::std::size_t n) noexcept
@@ -1623,7 +1625,7 @@ public:
 
 	static inline ::fast_io::allocation_least_result
 	reallocate_zero_at_least(void *p, ::std::size_t n) noexcept
-		requires(!has_status && has_reallocate)
+		requires(!has_status && has_reallocate_zero)
 	{
 		if constexpr (::fast_io::details::has_reallocate_zero_at_least_impl<alloc>)
 		{
@@ -1637,9 +1639,9 @@ public:
 		{
 			return {allocator_type::reallocate_zero(p, n), n};
 		}
-		else if constexpr (::fast_io::details::has_reallocate_aligned_impl<alloc>)
+		else if constexpr (::fast_io::details::has_reallocate_aligned_zero_impl<alloc>)
 		{
-			return {allocator_type::reallocate_aligned(p, default_alignment, n), n};
+			return {allocator_type::reallocate_aligned_zero(p, default_alignment, n), n};
 		}
 	}
 
@@ -1771,7 +1773,7 @@ public:
 
 	static inline ::fast_io::allocation_least_result
 	reallocate_aligned_at_least(void *p, ::std::size_t alignment, ::std::size_t n) noexcept
-		requires(!has_status && has_reallocate_aligned_zero)
+		requires(!has_status && has_reallocate_aligned)
 	{
 		if constexpr (::fast_io::details::has_reallocate_aligned_at_least_impl<alloc>)
 		{
@@ -1808,9 +1810,8 @@ public:
 		}
 	}
 
-	static inline constexpr bool has_native_reallocate_aligned_n_at_least = (has_reallocate_aligned &&
-																			 (::fast_io::details::has_reallocate_aligned_n_at_least_impl<alloc> ||
-																			  ::fast_io::details::has_reallocate_aligned_zero_n_at_least_impl<alloc>));
+	static inline constexpr bool has_native_reallocate_aligned_n_at_least = (::fast_io::details::has_reallocate_aligned_n_at_least_impl<alloc> ||
+																			 ::fast_io::details::has_reallocate_aligned_zero_n_at_least_impl<alloc>);
 	static inline ::fast_io::allocation_least_result
 	reallocate_aligned_n_at_least(void *p, ::std::size_t oldn, ::std::size_t alignment, ::std::size_t n) noexcept
 		requires(!has_status)
@@ -1831,7 +1832,7 @@ public:
 		{
 			return allocator_type::reallocate_aligned_zero_at_least(p, alignment, n);
 		}
-		else if constexpr (::fast_io::details::has_reallocate_aligned_impl<alloc>)
+		else if constexpr (::fast_io::details::has_reallocate_aligned_n_impl<alloc>)
 		{
 			return {allocator_type::reallocate_aligned_n(p, oldn, alignment, n), n};
 		}
@@ -1878,7 +1879,7 @@ public:
 		}
 	}
 
-	static inline constexpr bool has_native_reallocate_aligned_zero_n_at_least = (has_reallocate_aligned_zero && ::fast_io::details::has_reallocate_aligned_zero_at_least_impl<alloc>);
+	static inline constexpr bool has_native_reallocate_aligned_zero_n_at_least = ::fast_io::details::has_reallocate_aligned_zero_n_at_least_impl<alloc>;
 
 	static inline ::fast_io::allocation_least_result reallocate_aligned_zero_n_at_least(void *p, ::std::size_t oldn, ::std::size_t alignment, ::std::size_t n) noexcept
 		requires(!has_status)

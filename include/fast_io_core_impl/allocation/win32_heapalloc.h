@@ -58,8 +58,7 @@ inline void *win32_heaprealloc_handle_common_impl(void *heaphandle, void *addr, 
 	{
 		n = 1;
 	}
-	if (addr == nullptr)
-		[[unlikely]]
+	if (addr == nullptr) [[unlikely]]
 	{
 		return win32_heapalloc_handle_common_impl(heaphandle, n, flag);
 	}
@@ -86,12 +85,12 @@ inline void *win32_heaprealloc_handle_common_impl(void *heaphandle, void *addr, 
 inline void *win32_get_process_heap() noexcept
 {
 	constexpr bool intrinsicssupported{
-#if (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) &&                     \
-	(defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_AMD64) || \
-	 defined(__aarch64__) || defined(__arm64ec__) || defined(_M_ARM64) || defined(_M_ARM64EC))
-		true
+#if (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) &&                                                                                           \
+		(defined(__i386__) || (defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))) || defined(_M_IX86) ||                                      \
+		 (defined(_M_AMD64) && !defined(_M_ARM64EC)) || defined(__aarch64__) || defined(__arm64ec__) || defined(_M_ARM64) || defined(_M_ARM64EC))
+			true
 #endif
-	};
+		};
 	if constexpr (intrinsicssupported)
 	{
 		return ::fast_io::win32::nt::rtl_get_process_heap();
@@ -144,7 +143,7 @@ public:
 	{
 		return ::fast_io::details::win32_heapalloc_common_impl(n, zeroing ? 0x00000008u : 0u);
 	}
-
+#if 0
 	static inline void *reallocate(void *addr, ::std::size_t n) noexcept
 	{
 		return ::fast_io::details::win32_heaprealloc_common_impl(addr, n, 0u);
@@ -153,6 +152,7 @@ public:
 	{
 		return ::fast_io::details::win32_heaprealloc_common_impl(addr, n, 0x00000008u);
 	}
+#endif
 	static inline void *reallocate_conditional_zero(void *addr, ::std::size_t n, bool zeroing) noexcept
 	{
 		return ::fast_io::details::win32_heaprealloc_common_impl(addr, n, zeroing ? 0x00000008u : 0u);

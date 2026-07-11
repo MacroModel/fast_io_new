@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <errno.h>
+
 #if ((defined(_WIN32) && !defined(__WINE__) && !defined(__BIONIC__)) && !defined(__CYGWIN__)) || defined(__MSDOS__)
 #if __has_include(<corecrt_io.h>)
 #include <corecrt_io.h>
@@ -38,6 +40,10 @@
 #include <sys/socket.h>
 #endif
 
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
+#include <TargetConditionals.h>
+#endif
+
 #if defined(__wasi__)
 #include <wasi/api.h>
 #endif
@@ -65,7 +71,9 @@ namespace fast_io
 #if ((!defined(_WIN32) || defined(__WINE__)) || defined(__CYGWIN__))
 namespace posix
 {
-#if defined(__DARWIN_C_LEVEL) || defined(__MSDOS__)
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
+extern int libc_ioctl(int fd, unsigned long request, ...) noexcept __asm__("_ioctl");
+#elif defined(__MSDOS__)
 extern int libc_ioctl(int fd, unsigned long request, ...) noexcept __asm__("_ioctl");
 #else
 extern int libc_ioctl(int fd, unsigned long request, ...) noexcept __asm__("ioctl");
@@ -537,6 +545,38 @@ io_bytes_stream_ref_define(basic_posix_family_io_observer<family, ch_type> other
 	return {other.fd};
 }
 
+#if 0
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t scatter_fallback_full_output_threshold(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// POSIX has native writev. Measurements show that scatter-fallback copying is not a good default once
+	// whole-run materialization is available for compact output.
+	return 0u;
+}
+#endif
+
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t full_output_coalesce_threshold(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// Compact whole-output runs are copied into one contiguous buffer before a single write. This improves real
+	// file/log output patterns on measured POSIX kernels; syscall-shell sinks such as /dev/null-like streams should
+	// opt out with a zero threshold in their own stream policy.
+	return 2048u;
+}
+
+#if 0
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t small_scatter_coalesce_threshold(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// Repacking small scatter elements is a memcpy tradeoff. POSIX defaults to direct writev, so this remains
+	// disabled unless a more specialized stream type opts in with its own measured threshold.
+	return 0u;
+}
+#endif
+
 #if defined(__CYGWIN__)
 
 // https://github.com/cygwin/cygwin/blob/c43ec5f5951c7f4b882a0f8e619601a45ae70a91/newlib/libc/include/sys/_default_fcntl.h#L168
@@ -877,7 +917,10 @@ inline int open_fd_from_handle(void *handle, open_mode md)
 }
 
 #else
-#if defined(__DARWIN_C_LEVEL) || defined(__MSDOS__)
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
+extern int my_posix_open_noexcept(char const *pathname, int flags) noexcept __asm__("_open");
+extern int my_posix_open_noexcept(char const *pathname, int flags, mode_t mode) noexcept __asm__("_open");
+#elif defined(__MSDOS__)
 extern int my_posix_open_noexcept(char const *pathname, int flags) noexcept __asm__("_open");
 extern int my_posix_open_noexcept(char const *pathname, int flags, mode_t mode) noexcept __asm__("_open");
 #else
@@ -996,7 +1039,31 @@ inline int my_posix_openat(int, char const *, int, mode_t)
 }
 #else
 
-#if defined(__DARWIN_C_LEVEL) || defined(__MSDOS__)
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
+[[clang::availability(macos, introduced = 10.10), clang::availability(ios, introduced = 8.0)]]
+extern int my_posix_openat_noexcept(int fd, char const *path, int aflag, ... /*mode_t mode*/) noexcept __asm__("_openat");
+
+template <typename... Args>
+inline int my_posix_openat_noexcept_checked(int fd, char const *path, int aflag, Args... args) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_available)
+	if (__builtin_available(macOS 10.10, iOS 8.0, *)) [[likely]]
+	{
+		return my_posix_openat_noexcept(fd, path, aflag, args...);
+	}
+#else
+	return my_posix_openat_noexcept(fd, path, aflag, args...);
+#endif
+#if defined(AT_FDCWD)
+	if (fd == AT_FDCWD)
+	{
+		return my_posix_open_noexcept(path, aflag, args...);
+	}
+#endif
+	errno = ENOSYS;
+	return -1;
+}
+#elif defined(__MSDOS__)
 extern int my_posix_openat_noexcept(int fd, char const *path, int aflag, ... /*mode_t mode*/) noexcept __asm__("_openat");
 #else
 extern int my_posix_openat_noexcept(int fd, char const *path, int aflag, ... /*mode_t mode*/) noexcept __asm__("openat");
@@ -1009,7 +1076,11 @@ inline int my_posix_openat(int dirfd, char const *pathname, int flags, mode_t mo
 #if defined(__linux__) && defined(__NR_openat)
 		system_call<__NR_openat, int>
 #else
+#if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)
+		my_posix_openat_noexcept_checked
+#else
 		my_posix_openat_noexcept
+#endif
 #endif
 		(dirfd, pathname, flags, mode)};
 
@@ -1207,7 +1278,7 @@ inline int my_open_posix_fd_temp_file()
 
 } // namespace details
 
-struct posix_file_factory FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
+struct posix_file_factory 
 {
 	using native_handle_type = int;
 	int fd{-1};

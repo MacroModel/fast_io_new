@@ -611,17 +611,17 @@ inline constexpr void deque_allocate_on_empty_common_with_n_impl(dequecontroltyp
 
 	auto end_block_ptr{start_block_ptr + initial_allocated_block_counts};
 #if __cpp_if_consteval >= 202106L
-		if consteval
+	if consteval
 	{
 		for (auto i{start_block_ptr}; i != end_block_ptr; ++i)
 		{
 			::std::construct_at(i, static_cast<begin_ptrtype>(
 #if FAST_IO_HAS_BUILTIN(__builtin_operator_new)
-				__builtin_operator_new(bytes * sizeof(replacetype))
+									   __builtin_operator_new(bytes * sizeof(replacetype))
 #else
-				::operator new(bytes * sizeof(replacetype))
+									   ::operator new(bytes * sizeof(replacetype))
 #endif
-			));
+										   ));
 		}
 	}
 	else
@@ -717,11 +717,11 @@ inline constexpr void deque_allocate_init_blocks_dezeroing_impl(dequecontroltype
 		{
 			::std::construct_at(it, static_cast<begin_ptrtype>(
 #if FAST_IO_HAS_BUILTIN(__builtin_operator_new)
-				__builtin_operator_new(blockbytes * sizeof(replacetype))
+										__builtin_operator_new(blockbytes * sizeof(replacetype))
 #else
-				::operator new(blockbytes * sizeof(replacetype))
+										::operator new(blockbytes * sizeof(replacetype))
 #endif
-			));
+											));
 		}
 	}
 	else
@@ -1542,27 +1542,27 @@ inline constexpr void deque_reserve_back_blocks_impl_none_empty(dequecontroltype
 				"to_allocate_blocks=",to_allocate_blocks);
 #endif
 #if __cpp_if_consteval >= 202106L
-		if consteval
-		{
-			for (auto e{pos + to_allocate_blocks}; pos != e; ++pos)
+			if consteval
 			{
-				::std::construct_at(pos, static_cast<begin_ptrtype>(
+				for (auto e{pos + to_allocate_blocks}; pos != e; ++pos)
+				{
+					::std::construct_at(pos, static_cast<begin_ptrtype>(
 #if FAST_IO_HAS_BUILTIN(__builtin_operator_new)
-					__builtin_operator_new(blockbytes * sizeof(replacetype))
+												 __builtin_operator_new(blockbytes * sizeof(replacetype))
 #else
-					::operator new(blockbytes * sizeof(replacetype))
+												 ::operator new(blockbytes * sizeof(replacetype))
 #endif
-				));
+													 ));
+				}
 			}
-		}
-		else
+			else
 #endif
-		{
-			for (auto e{pos + to_allocate_blocks}; pos != e; ++pos)
 			{
-				::std::construct_at(pos, static_cast<begin_ptrtype>(allocator::allocate_aligned(align, blockbytes * sizeof(replacetype))));
+				for (auto e{pos + to_allocate_blocks}; pos != e; ++pos)
+				{
+					::std::construct_at(pos, static_cast<begin_ptrtype>(allocator::allocate_aligned(align, blockbytes * sizeof(replacetype))));
+				}
 			}
-		}
 			::std::construct_at(pos, nullptr);
 			controller.controller_block.controller_after_reserved_ptr = pos;
 		}
@@ -1742,27 +1742,27 @@ inline constexpr void deque_reserve_front_blocks_none_empty_impl(dequecontroltyp
 			auto ed{new_controller_start_reserved_ptr};
 			new_controller_start_reserved_ptr -= to_allocate_blocks;
 #if __cpp_if_consteval >= 202106L
-		if consteval
-		{
-			for (auto i{new_controller_start_reserved_ptr}; i != ed; ++i)
+			if consteval
 			{
-				::std::construct_at(i, static_cast<begin_ptrtype>(
+				for (auto i{new_controller_start_reserved_ptr}; i != ed; ++i)
+				{
+					::std::construct_at(i, static_cast<begin_ptrtype>(
 #if FAST_IO_HAS_BUILTIN(__builtin_operator_new)
-					__builtin_operator_new(blockbytes * sizeof(replacetype))
+											   __builtin_operator_new(blockbytes * sizeof(replacetype))
 #else
-					::operator new(blockbytes * sizeof(replacetype))
+											   ::operator new(blockbytes * sizeof(replacetype))
 #endif
-				));
+												   ));
+				}
 			}
-		}
-		else
+			else
 #endif
-		{
-			for (auto i{new_controller_start_reserved_ptr}; i != ed; ++i)
 			{
-				::std::construct_at(i, static_cast<begin_ptrtype>(allocator::allocate_aligned(align, blockbytes * sizeof(replacetype))));
+				for (auto i{new_controller_start_reserved_ptr}; i != ed; ++i)
+				{
+					::std::construct_at(i, static_cast<begin_ptrtype>(allocator::allocate_aligned(align, blockbytes * sizeof(replacetype))));
+				}
 			}
-		}
 			controller.controller_block.controller_start_reserved_ptr = new_controller_start_reserved_ptr;
 		}
 	}
@@ -2155,7 +2155,7 @@ inline constexpr ::std::size_t deque_itercontent_difference_unsigned_common(T co
 }
 #if 0
 template <typename allocator, bool divsz, bool zeroing, typename dequecontroltype>
-inline constexpr void deque_resize_common_impl(dequecontroltype &controller, ::std::size_t newsize, 
+inline constexpr void deque_resize_common_impl(dequecontroltype &controller, ::std::size_t newsize,
 	::std::size_t align, ::std::size_t sz, ::std::size_t block_size) noexcept
 {
 	::std::size_t blockbytes{block_size * sz};
@@ -2182,7 +2182,7 @@ inline constexpr void deque_resize_common_impl(dequecontroltype &controller, ::s
 		this->reserve_back(count);
 		auto ed{this->end()};
 		newed = ed + static_cast<size_type>(count - oldsz);
-		
+
 	}
 	if (newed.curr_ptr == newed.begin_ptr)
 	{
@@ -2208,7 +2208,7 @@ inline constexpr ForwardIt rotate_for_fast_io_deque(ForwardIt first, ForwardIt m
 }
 
 template <typename T, typename allocator>
-class deque FAST_IO_TRIVIALLY_RELOCATABLE_IF_ELIGIBLE
+class deque
 {
 public:
 	using value_type = T;
@@ -2244,7 +2244,7 @@ public:
 			return *this;
 		}
 #if 0
-		if constexpr (::std::is_nothrow_copy_constructible_v<value_type> && 
+		if constexpr (::std::is_nothrow_copy_constructible_v<value_type> &&
 			::std::is_nothrow_copy_assignable_v<value_type>)
 		{
 // Path A: High-performance reuse of existing blocks
@@ -2379,7 +2379,7 @@ private:
 		auto dq_back_backup{controller.back_block};
 		controller.back_block = controller.front_block;
 		auto dq_back_end_ptr_backup{controller.back_end_ptr};
-		controller.back_end_ptr = controller.back_begin_ptr;
+		controller.back_end_ptr = controller.front_end_ptr;
 
 		T *lastblockbegin;
 		if (front_controller_ptr == back_controller_ptr)
@@ -3359,17 +3359,17 @@ public:
 			// To do: cleanup code
 			if constexpr (::std::is_nothrow_constructible_v<value_type, ::std::ranges::range_value_t<R>>)
 			{
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
-					this->push_back(e);
+					this->emplace_back(::std::forward<decltype(e)>(e));
 				}
 			}
 			else
 			{
 				append_range_guard guard{this, this->size()};
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
-					this->push_back(e);
+					this->emplace_back(::std::forward<decltype(e)>(e));
 				}
 				guard.thisdeq = nullptr;
 			}
@@ -3382,9 +3382,9 @@ private:
 	inline constexpr size_type prepend_range_impl(R &&rg) noexcept(::std::is_nothrow_constructible_v<value_type, ::std::ranges::range_value_t<R>>)
 	{
 		size_type const old_size{this->size()};
-		for (auto &e : rg)
+		for (auto &&e : rg)
 		{
-			this->push_front(e);
+			this->emplace_front(::std::forward<decltype(e)>(e));
 		}
 		return this->size() - old_size;
 	}
@@ -3413,18 +3413,18 @@ public:
 				::std::is_nothrow_constructible_v<value_type, ::std::ranges::range_value_t<R>> &&
 				::std::is_nothrow_swappable_v<value_type>)
 			{
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
-					this->push_front(e);
+					this->emplace_front(::std::forward<decltype(e)>(e));
 				}
 				::std::reverse(this->begin(), this->end() - oldn);
 			}
 			else
 			{
 				prepend_range_guard guard{this, oldn};
-				for (auto &e : rg)
+				for (auto &&e : rg)
 				{
-					this->push_front(e);
+					this->emplace_front(::std::forward<decltype(e)>(e));
 				}
 				::std::reverse(this->begin(), this->end() - oldn);
 				guard.thisdeq = nullptr;
@@ -3696,7 +3696,8 @@ private:
 	struct insert_index_guard
 	{
 		deque *thisdeq;
-		size_type pos, count;
+		iterator pos;
+		size_type count;
 		constexpr ~insert_index_guard()
 		{
 			if (thisdeq) [[unlikely]]
@@ -3715,7 +3716,7 @@ private:
 		}
 		else
 		{
-			insert_index_guard g{this, res.pos, count};
+			insert_index_guard g{this, res.it, count};
 			::fast_io::freestanding::uninitialized_fill_n(res.it, count, val);
 			g.thisdeq = nullptr;
 		}
@@ -3973,11 +3974,11 @@ private:
 		}
 
 		::std::size_t const distofront{
-			::fast_io::containers::details::deque_iter_difference_unsigned_common(first, this->controller.front_block)};
+			::fast_io::containers::details::deque_iter_difference_unsigned_common(first.itercontent, this->controller.front_block)};
 
 		auto last{first + count};
 		::std::size_t const distoback{
-			::fast_io::containers::details::deque_iter_difference_unsigned_common(this->controller.last_block, last)};
+			::fast_io::containers::details::deque_iter_difference_unsigned_common(this->controller.back_block, last.itercontent)};
 
 		this->erase_unchecked_nodestroy_impl(first, last, distofront < distoback);
 	}

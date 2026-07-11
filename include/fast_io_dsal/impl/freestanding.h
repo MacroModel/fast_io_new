@@ -261,7 +261,7 @@ inline constexpr Iter2 uninitialized_relocate_backward(Iter1 first, Snt last, It
 	}
 	else
 	{
-		if constexpr (::fast_io::operations::defines::has_uninitialized_relocate_backward_define<Iter1, Iter1, Iter2>)
+		if constexpr (::fast_io::operations::defines::has_uninitialized_relocate_backward_define<Iter1, Snt, Iter2>)
 		{
 			return uninitialized_relocate_backward_define(::fast_io::operations::defines::memory_algorithm_define<Iter1, Snt, Iter2>, first, last, dest);
 		}
