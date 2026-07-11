@@ -18,7 +18,7 @@ inline void write(foo, char8_t const *first, char8_t const *last)
 	{
 		val ^= *first;
 	}
-	println(fast_io::u8out(), diff, " ", val);
+	println(fast_io::u8out(), diff, " ", fast_io::mnp::dec(val));
 }
 
 struct new_type

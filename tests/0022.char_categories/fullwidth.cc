@@ -15,5 +15,5 @@ int main()
 											   u8"｠\t",
 			boolalpha(is_c_fullwidth(U'｠')), u8"\n"
 											  u8"！\t",
-			to_c_halfwidth(U'！'));
+											  dec(to_c_halfwidth(U'！')));
 }

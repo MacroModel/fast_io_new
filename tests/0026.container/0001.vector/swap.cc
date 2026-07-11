@@ -16,9 +16,9 @@ int main()
 	int &ref1 = a1.front();
 	int &ref2 = a2.front();
 
-	perrln("{ ", rgvw(a1, " "), " } { ", rgvw(a2, " "), " } ", *it1, " ", *it2, " ", ref1, ' ', ref2);
+	perrln("{ ", rgvw(a1, " "), " } { ", rgvw(a2, " "), " } ", *it1, " ", *it2, " ", ref1, dec(' '), ref2);
 	a1.swap(a2);
-	perrln("{ ", rgvw(a1, " "), " } { ", rgvw(a2, " "), " } ", *it1, " ", *it2, " ", ref1, ' ', ref2);
+	perrln("{ ", rgvw(a1, " "), " } { ", rgvw(a2, " "), " } ", *it1, " ", *it2, " ", ref1, dec(' '), ref2);
 
 	if (!(a1.size() == 2 && a2.size() == 3)) ::fast_io::fast_terminate();
 	if (!(a1[0] == 4 && a1[1] == 5)) ::fast_io::fast_terminate();
