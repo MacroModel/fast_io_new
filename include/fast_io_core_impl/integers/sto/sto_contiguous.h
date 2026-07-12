@@ -725,6 +725,116 @@ scan_int_contiguous_ascii_hex_space_part_define_impl(char_type const *first, cha
 	return ret;
 }
 
+#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
+template <::std::integral char_type>
+	requires(sizeof(char_type) == sizeof(char8_t))
+[[gnu::always_inline]] inline bool
+aarch64_builtin_parse_16_decimal_digits(char_type const *first,
+	                                    ::std::uint_least64_t &value) noexcept
+{
+	using u8x8 [[gnu::vector_size(8)]] = unsigned char;
+	using u8x16 [[gnu::vector_size(16)]] = unsigned char;
+	using u16x4 [[gnu::vector_size(8)]] = unsigned short;
+	using u32x2 [[gnu::vector_size(8)]] = unsigned int;
+#if defined(__clang__)
+	using i8x8 [[gnu::vector_size(8)]] = signed char;
+	using i8x16 [[gnu::vector_size(16)]] = signed char;
+	using u16x8 [[gnu::vector_size(16)]] = unsigned short;
+	using u32x4 [[gnu::vector_size(16)]] = unsigned int;
+	using u64x2 [[gnu::vector_size(16)]] = unsigned long long;
+#endif
+
+	u8x16 raw;
+#if defined(__clang__)
+	raw = __builtin_bit_cast(
+		u8x16, __builtin_neon_vld1q_v(reinterpret_cast<unsigned char const *>(first), 48));
+#else
+	raw = __builtin_aarch64_ld1v16qi_us(
+		reinterpret_cast<__builtin_aarch64_simd_qi const *>(first));
+#endif
+	auto const digits{raw - u8x16{48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u,
+	                                  48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u}};
+#if defined(__clang__)
+	auto const maximum_digit{static_cast<unsigned char>(__builtin_neon_vmaxvq_u8(digits))};
+#else
+	auto const maximum_digit{
+		static_cast<unsigned char>(__builtin_aarch64_reduc_umax_scal_v16qi_uu(digits))};
+#endif
+	if (maximum_digit >= 10u) [[unlikely]]
+	{
+		return false;
+	}
+
+	u8x8 const low_digits{__builtin_shufflevector(digits, digits, 0, 1, 2, 3, 4, 5, 6, 7)};
+	u8x8 const high_digits{__builtin_shufflevector(digits, digits, 8, 9, 10, 11, 12, 13, 14, 15)};
+	u8x8 const pair_weights{10u, 1u, 10u, 1u, 10u, 1u, 10u, 1u};
+#if defined(__clang__)
+	auto const pair_products_low{__builtin_bit_cast(
+		u16x8, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_digits),
+		                               __builtin_bit_cast(i8x8, pair_weights), 49))};
+	auto const pair_products_high{__builtin_bit_cast(
+		u16x8, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_digits),
+		                               __builtin_bit_cast(i8x8, pair_weights), 49))};
+	auto const pairs{__builtin_bit_cast(
+		u16x8, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, pair_products_low),
+		                                __builtin_bit_cast(i8x16, pair_products_high), 49))};
+#else
+	auto const pair_products_low{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v8qi_uuu(low_digits, pair_weights)};
+	auto const pair_products_high{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v8qi_uuu(high_digits, pair_weights)};
+	auto const pairs{
+		__builtin_aarch64_addpv8hi_uuu(pair_products_low, pair_products_high)};
+#endif
+
+	u16x4 const low_pairs{__builtin_shufflevector(pairs, pairs, 0, 1, 2, 3)};
+	u16x4 const high_pairs{__builtin_shufflevector(pairs, pairs, 4, 5, 6, 7)};
+	u16x4 const quad_weights{100u, 1u, 100u, 1u};
+#if defined(__clang__)
+	auto const quad_products_low{__builtin_bit_cast(
+		u32x4, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_pairs),
+		                               __builtin_bit_cast(i8x8, quad_weights), 50))};
+	auto const quad_products_high{__builtin_bit_cast(
+		u32x4, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_pairs),
+		                               __builtin_bit_cast(i8x8, quad_weights), 50))};
+	auto const quads{__builtin_bit_cast(
+		u32x4, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, quad_products_low),
+		                                __builtin_bit_cast(i8x16, quad_products_high), 50))};
+#else
+	auto const quad_products_low{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v4hi_uuu(low_pairs, quad_weights)};
+	auto const quad_products_high{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v4hi_uuu(high_pairs, quad_weights)};
+	auto const quads{
+		__builtin_aarch64_addpv4si_uuu(quad_products_low, quad_products_high)};
+#endif
+
+	u32x2 const low_quads{__builtin_shufflevector(quads, quads, 0, 1)};
+	u32x2 const high_quads{__builtin_shufflevector(quads, quads, 2, 3)};
+	u32x2 const octet_weights{10000u, 1u};
+#if defined(__clang__)
+	auto const octet_products_low{__builtin_bit_cast(
+		u64x2, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_quads),
+		                               __builtin_bit_cast(i8x8, octet_weights), 51))};
+	auto const octet_products_high{__builtin_bit_cast(
+		u64x2, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_quads),
+		                               __builtin_bit_cast(i8x8, octet_weights), 51))};
+	auto const octets{__builtin_bit_cast(
+		u64x2, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, octet_products_low),
+		                                __builtin_bit_cast(i8x16, octet_products_high), 51))};
+#else
+	auto const octet_products_low{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v2si_uuu(low_quads, octet_weights)};
+	auto const octet_products_high{
+		__builtin_aarch64_intrinsic_vec_umult_lo_v2si_uuu(high_quads, octet_weights)};
+	auto const octets{
+		__builtin_aarch64_addpv2di_uuu(octet_products_low, octet_products_high)};
+#endif
+	value = octets[0] * 100000000u + octets[1];
+	return true;
+}
+#endif
+
 template <char8_t base, ::std::integral char_type, my_unsigned_integral T>
 inline parse_result<char_type const *>
 runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, char_type const *last, T &out) noexcept
@@ -1476,6 +1586,43 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			return {short_iter, parse_code::ok};
 		}
 	}
+#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
+	if constexpr (base == 10u && my_unsigned_integral<T> &&
+	              sizeof(char_type) == sizeof(char8_t) &&
+	              !::fast_io::details::is_ebcdic<char_type> &&
+	              sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+	{
+		auto const remaining{static_cast<::std::size_t>(last - first)};
+		if (remaining - 16u <= 4u)
+		{
+			auto const last_is_digit{char_is_digit<10u, char_type>(
+				static_cast<unsigned_char_type>(last[-1]))};
+			// A terminated 15-digit range and the exact 20-digit SWAR case
+			// stay on their existing faster paths.
+			if ((remaining != 16u || last_is_digit) &&
+				!(remaining == 20u && last_is_digit)) [[unlikely]]
+			{
+				::std::uint_least64_t value;
+				if (::fast_io::details::aarch64_builtin_parse_16_decimal_digits(
+						first, value)) [[likely]]
+				{
+					auto next{first + 16};
+					for (; next != last; ++next)
+					{
+						auto digit{static_cast<unsigned_char_type>(*next)};
+						if (char_digit_to_literal<10u, char_type>(digit)) [[unlikely]]
+						{
+							break;
+						}
+						value = value * 10u + digit;
+					}
+					t = static_cast<T>(value);
+					return {next, parse_code::ok};
+				}
+			}
+		}
+	}
+#endif
 	unsigned_type res{};
 	auto parse_first{first};
 #if defined(__aarch64__) || defined(_M_ARM64)
