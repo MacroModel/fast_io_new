@@ -2030,7 +2030,6 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 #endif
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
-		if constexpr ((base == 8 || (11u <= base && base <= 16u)))
 		{
 			if (inline_limit < static_cast<::std::size_t>(last - first) &&
 				!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[inline_limit])))
@@ -2453,6 +2452,11 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 template <char8_t base, bool noskipws, bool shbase, bool skipzero, bool oct_c2y,
 		  bool allow_leading_plus = false,
 		  ::std::integral char_type, details::my_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr parse_result<char_type const *> scan_int_contiguous_define_impl(char_type const *first,
 																				 char_type const *last, T &t) noexcept
 {
