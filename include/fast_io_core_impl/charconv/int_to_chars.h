@@ -23,6 +23,14 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_checked(char *firs
 	{
 		*first++ = '-';
 	}
+	if constexpr (base == 10u)
+	{
+		if (value < 10u)
+		{
+			*first = ::fast_io::char_literal_add<char>(value);
+			return {first + 1u, {}};
+		}
+	}
 	return {::fast_io::details::print_reserve_integral_withfull_main_impl<false, base, false>(first, value), {}};
 }
 
