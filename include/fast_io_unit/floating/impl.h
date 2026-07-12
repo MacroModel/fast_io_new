@@ -68,6 +68,7 @@ inline constexpr bool print_floating_decimal_via_float{
 
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(flags.base == 10)
 inline constexpr ::std::size_t
@@ -360,6 +361,7 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 }
 #endif
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(flags.base == 10 && flags.floating == manipulators::floating_format::hexfloat)
 inline constexpr ::std::size_t
@@ -461,6 +463,7 @@ inline constexpr char_type *print_reserve_define(
 	}
 }
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(flags.base == 10 && flags.floating != manipulators::floating_format::hexfloat)
 inline constexpr ::std::size_t

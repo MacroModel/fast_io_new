@@ -44,6 +44,7 @@ template <typename scatter_type, ::std::input_iterator I>
 	}
 range_view_t(scatter_type, I, I) -> range_view_t<typename ::std::remove_cvref_t<scatter_type>::value_type, I>;
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::std::input_iterator It>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>>,
 												  sized_range_view_t<char_type, It> t)

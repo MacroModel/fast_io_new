@@ -135,6 +135,7 @@ inline constexpr auto comma_base_percentage_sex_ratio(T male, U female) noexcept
 
 } // namespace manipulators
 
+/// @feature concept:runtime_precise_size
 template <::std::integral chartype, ::fast_io::manipulators::scalar_flags flags, typename T, typename U>
 	requires(::fast_io::details::my_integral<T> && ::fast_io::details::my_integral<U>)
 inline constexpr ::std::size_t print_reserve_size(

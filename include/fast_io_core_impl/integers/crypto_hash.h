@@ -540,6 +540,7 @@ inline constexpr char_type *prv_srv_hash_compress_df_impl(char_type *iter, ::std
 
 } // namespace details
 
+/// @feature concept:static_precise_size
 template <::std::integral char_type, ::fast_io::manipulators::digest_format d,
 		  ::fast_io::manipulators::compile_time_size_crypto_hash_context T>
 	requires(static_cast<::std::size_t>(d) < static_cast<::std::size_t>(3))

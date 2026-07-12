@@ -422,6 +422,7 @@ inline constexpr char_type *print_reserve_define_grouping_timestamp_impl(basic_l
 }
 
 } // namespace details
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename T>
 	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) && !flags.alphabet &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)

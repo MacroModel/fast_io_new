@@ -1299,6 +1299,7 @@ inline constexpr char_type *print_reserve_define_impl_for_stvl2_struct_tag_smp(c
 
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, typename T>
 	requires(::std::same_as<T, stvl2::stvl2_mmap_type> || ::std::same_as<T, stvl2::stvl2_struct_tag> ||
 			 ::std::same_as<T, stvl2::stvl2_header_tag> || ::std::same_as<T, stvl2::stvl2_firmware_flags>)

@@ -386,6 +386,7 @@ print_alias_define(io_alias_t, iptype t) noexcept
 	return {t};
 }
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::fast_io::manipulators::ip_flags flags, ::fast_io::details::iptypesimpl iptype>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]

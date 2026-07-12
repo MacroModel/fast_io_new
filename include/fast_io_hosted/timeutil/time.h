@@ -1380,6 +1380,7 @@ inline win32_timezone_t timezone_name(bool is_dst = posix_daylight())
 	return tzt;
 }
 
+/// @feature concept:runtime_precise_size
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char, win32_timezone_t>,
 												  win32_timezone_t tzt) noexcept
 {

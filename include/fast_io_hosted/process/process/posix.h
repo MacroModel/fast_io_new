@@ -130,6 +130,7 @@ inline constexpr ::std::uintmax_t code(posix_wait_status pws) noexcept
 	return static_cast<::std::uintmax_t>(pws.wait_loc);
 }
 
+/// @feature concept:runtime_precise_size
 template<::std::integral char_type>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type,posix_wait_status>) noexcept
 {

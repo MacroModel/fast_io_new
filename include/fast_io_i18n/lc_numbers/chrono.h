@@ -3,6 +3,7 @@
 namespace fast_io
 {
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type>
 inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const *__restrict all,
 												  ::std::chrono::weekday wkd) noexcept

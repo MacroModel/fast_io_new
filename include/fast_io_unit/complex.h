@@ -714,6 +714,7 @@ inline constexpr char_type *print_reserve_complex_impl(char_type *iter, T real, 
 }
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(flags.base == 10)
 inline constexpr ::std::size_t

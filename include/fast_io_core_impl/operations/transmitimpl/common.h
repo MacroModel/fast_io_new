@@ -81,6 +81,7 @@ struct transmit_result
 	}
 };
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type>
 inline constexpr ::std::size_t print_reserve_size(::fast_io::io_reserve_type_t<char_type, transmit_result>)
 {

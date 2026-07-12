@@ -85,6 +85,7 @@ inline constexpr ::std::size_t lc_print_reserve_float_size_impl(basic_lc_all<cha
 
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(flags.base == 10)
 inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const *all,

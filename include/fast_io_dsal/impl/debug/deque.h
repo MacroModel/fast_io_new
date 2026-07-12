@@ -164,6 +164,7 @@ inline constexpr char_type *pr_rsv_define_deque_debug_impl(char_type *iter, T co
 
 namespace manipulators
 {
+/// @feature concept:static_precise_size
 template <::std::integral char_type, typename T, typename allocator>
 inline constexpr ::std::size_t print_reserve_size(::fast_io::io_reserve_type_t<char_type,
 																			   ::fast_io::manipulators::debug_view_t<::fast_io::containers::deque<T, allocator> const &>>) noexcept

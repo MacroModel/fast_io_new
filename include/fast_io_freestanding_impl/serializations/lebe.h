@@ -607,6 +607,7 @@ inline constexpr auto scan_precise_reserve_define(
 	}
 }
 
+/// @feature concept:static_precise_size
 template <::std::integral char_type, ::std::endian end, ::std::size_t sz, typename int_type>
 	requires(((sz % (::std::numeric_limits<char unsigned>::digits)) == 0) &&
 			 (::fast_io::details::my_unsigned_integral<int_type> ||

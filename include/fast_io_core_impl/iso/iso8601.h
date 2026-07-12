@@ -777,6 +777,7 @@ inline constexpr char_type *print_reserve_bsc_timestamp_impl(char_type *iter, un
 
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>) noexcept
 {

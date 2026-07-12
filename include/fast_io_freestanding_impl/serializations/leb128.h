@@ -82,6 +82,7 @@ inline constexpr ::std::size_t leb128_length_val{print_reserve_size_leb128_lengt
 
 } // namespace details
 
+/// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::fast_io::details::my_integral T>
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, ::fast_io::manipulators::basic_leb128_get_put<T>>) noexcept
