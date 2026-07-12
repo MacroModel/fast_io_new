@@ -746,6 +746,67 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	auto first_phase_last{first + mn_val};
 	T res{out};
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type> &&
+				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+	{
+		if (20u <= diff) [[unlikely]]
+		{
+			auto parse_eight_digits = [](char_type const *digits,
+										 ::std::uint_least64_t &value) noexcept {
+				::std::uint_least64_t word;
+				::fast_io::freestanding::my_memcpy(__builtin_addressof(word), digits, sizeof(word));
+				word = ::fast_io::little_endian(word);
+				if ((((word + 0x4646464646464646u) | (word - 0x3030303030303030u)) &
+					 0x8080808080808080u) != 0u) [[unlikely]]
+				{
+					return false;
+				}
+				constexpr ::std::uint_least64_t mask{0x000000FF000000FFu};
+				constexpr ::std::uint_least64_t mul1{
+					100u + (static_cast<::std::uint_least64_t>(1000000u) << 32u)};
+				constexpr ::std::uint_least64_t mul2{
+					1u + (static_cast<::std::uint_least64_t>(10000u) << 32u)};
+				word -= 0x3030303030303030u;
+				word = word * 10u + (word >> 8u);
+				value = (((word & mask) * mul1) + (((word >> 16u) & mask) * mul2)) >> 32u;
+				return true;
+			};
+			::std::uint_least64_t high;
+			::std::uint_least64_t low;
+			if (parse_eight_digits(first, high) && parse_eight_digits(first + 8, low)) [[likely]]
+			{
+				::std::uint_least32_t word;
+				::fast_io::freestanding::my_memcpy(__builtin_addressof(word), first + 16, sizeof(word));
+				word = ::fast_io::little_endian(word);
+				if ((((word + 0x46464646u) | (word - 0x30303030u)) & 0x80808080u) == 0u) [[likely]]
+				{
+					word -= 0x30303030u;
+					word = word * 10u + (word >> 8u);
+					auto const tail{static_cast<::std::uint_least64_t>(
+						((word & 0x000000FFu) * 100u) + ((word >> 16u) & 0x000000FFu))};
+					auto const high16{high * 100000000u + low};
+					auto const next{first + 20};
+					if (next != last && char_is_digit<10u, char_type>(
+											static_cast<unsigned_char_type>(*next))) [[unlikely]]
+					{
+						return {skip_digits<10u>(next + 1, last), parse_code::overflow};
+					}
+					constexpr auto risky_value{static_cast<::std::uint_least64_t>(-1) / 10000u};
+					constexpr auto risky_digit{static_cast<::std::uint_least64_t>(-1) % 10000u};
+					if (risky_value < high16 || (high16 == risky_value && risky_digit < tail)) [[unlikely]]
+					{
+						return {next, parse_code::overflow};
+					}
+					out = static_cast<T>(high16 * 10000u + tail);
+					return {next, parse_code::ok};
+				}
+			}
+		}
+	}
+#endif
+
 	constexpr bool isebcdic{::fast_io::details::is_ebcdic<char_type>};
 	if constexpr (!isebcdic && (::std::numeric_limits<::std::uint_least64_t>::digits == 64u))
 	{
@@ -1342,21 +1403,50 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		constexpr bool inline_nonoverflowing_alnum{
 			10u < base && base < 16u && my_unsigned_integral<T> &&
 			sizeof(unsigned_type) == sizeof(::std::uint_least64_t)};
-		constexpr ::std::size_t inline_limit{inline_nonoverflowing_alnum
-			? ::fast_io::details::max_int_size_result<unsigned_type, base> - 1u
-			: 8u};
+		constexpr ::std::size_t default_inline_limit{inline_nonoverflowing_alnum
+														 ? ::fast_io::details::max_int_size_result<unsigned_type, base> - 1u
+														 : 8u};
+#if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
+		constexpr ::std::size_t inline_limit{
+			base == 2u || (5u <= base && base <= 10u) ? 9u : default_inline_limit};
+#else
+		constexpr ::std::size_t inline_limit{default_inline_limit};
+#endif
 		if (static_cast<::std::size_t>(last - first) <= inline_limit) [[likely]]
 		{
 			::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
 			auto short_iter{first + 1};
-			for (; short_iter != last; ++short_iter)
+#if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
+			if constexpr (base == 2u || (5u <= base && base <= 10u))
 			{
-				unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
-				if (char_digit_to_literal<base, char_type>(digit)) [[unlikely]]
+#pragma clang loop unroll(full)
+				for (::std::size_t short_index{1}; short_index != inline_limit; ++short_index)
 				{
-					break;
+					if (short_iter == last)
+					{
+						break;
+					}
+					unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+					if (char_digit_to_literal<base, char_type>(digit)) [[unlikely]]
+					{
+						break;
+					}
+					short_value = short_value * base + digit;
+					++short_iter;
 				}
-				short_value = short_value * base + digit;
+			}
+			else
+#endif
+			{
+				for (; short_iter != last; ++short_iter)
+				{
+					unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+					if (char_digit_to_literal<base, char_type>(digit)) [[unlikely]]
+					{
+						break;
+					}
+					short_value = short_value * base + digit;
+				}
 			}
 			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
 			if constexpr (my_signed_integral<T>)
@@ -1387,6 +1477,24 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 	unsigned_type res{};
+	auto parse_first{first};
+#if defined(__aarch64__) || defined(_M_ARM64)
+	if constexpr (((5u <= base && base <= 9u) || 16u < base) && my_unsigned_integral<T> &&
+				  sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type> &&
+				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+	{
+		constexpr ::std::size_t max_digits{
+			::fast_io::details::max_int_size_result<unsigned_type, base>};
+		if (static_cast<::std::size_t>(last - first) < max_digits) [[likely]]
+		{
+			// The first digit is already validated and mapped above. Starting the
+			// AArch64 accumulator with it removes one table load and one loop trip.
+			res = static_cast<unsigned_type>(first_digit);
+			parse_first = first + 1;
+		}
+	}
+#endif
 	char_type const *it;
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	if constexpr (base == 10 && sizeof(char_type) == 1 && sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
@@ -1422,7 +1530,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 		else [[unlikely]]
 		{
-			auto [it2, ec] = scan_int_contiguous_none_simd_space_part_define_impl<base>(first, last, res);
+			auto [it2, ec] = scan_int_contiguous_none_simd_space_part_define_impl<base>(parse_first, last, res);
 			if (ec != parse_code::ok) [[unlikely]]
 			{
 				return {it2, ec};
@@ -1433,7 +1541,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	else
 #endif
 	{
-		auto [it2, ec] = scan_int_contiguous_none_simd_space_part_define_impl<base>(first, last, res);
+		auto [it2, ec] = scan_int_contiguous_none_simd_space_part_define_impl<base>(parse_first, last, res);
 		if (ec != parse_code::ok) [[unlikely]]
 		{
 			return {it2, ec};
