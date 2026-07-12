@@ -1,4 +1,7 @@
 ﻿#pragma once
+
+#include "itoa_precise_length.h"
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC system_header
 #endif
@@ -3157,23 +3160,8 @@ inline constexpr ::std::size_t print_integer_reserved_precise_size(T t)
 	}
 	else
 	{
-		::std::size_t total_sum{print_integer_reserved_precise_size_cache<base, showbase, showpos, false, oct_c2y, T>};
-		if constexpr (my_signed_integral<T>)
-		{
-			using unsigned_type = my_make_unsigned_t<T>;
-			unsigned_type u{static_cast<unsigned_type>(t)};
-			if (t < 0)
-			{
-				++total_sum;
-				constexpr unsigned_type zero{};
-				u = static_cast<unsigned_type>(zero - u);
-			}
-			return total_sum + chars_len<base, false>(u);
-		}
-		else
-		{
-			return total_sum + chars_len<base, false>(t);
-		}
+		// Non-full formatting uses the extracted JEAIII detector and composes the exact sign, prefix, and digit lengths.
+		return ::fast_io::details::itoa_precise_length<base, showbase, showpos, oct_c2y>(t);
 	}
 }
 
