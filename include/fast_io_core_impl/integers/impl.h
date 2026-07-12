@@ -1818,10 +1818,193 @@ template <::std::integral char_type, ::std::size_t base, ::std::size_t digits, b
 alignas(64) static constexpr auto power_of_two_digits_table{
 	generate_power_of_two_digits_table<char_type, base, digits, uppercase>()};
 
-template <::std::size_t base, bool uppercase = false, ::std::integral char_type, my_unsigned_integral T>
-	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
-inline constexpr char_type *print_reserve_power_of_two_main(char_type *first, T value) noexcept
+template <typename result_type, ::std::integral char_type>
+inline constexpr result_type print_reserve_power_of_two_result(char_type *iter) noexcept
 {
+	if constexpr (::std::same_as<result_type, char_type *>)
+	{
+		return iter;
+	}
+	else
+	{
+		return {iter, {}};
+	}
+}
+
+template <::std::size_t base, bool uppercase = false, ::std::integral char_type,
+		  typename result_type = char_type *, my_unsigned_integral T>
+	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
+inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T value) noexcept
+{
+#if defined(__aarch64__) || defined(_M_ARM64)
+	if constexpr (base == 8u)
+	{
+		if (value < static_cast<T>(262144u)) [[likely]]
+		{
+			if (value < static_cast<T>(512u))
+			{
+				if (value < static_cast<T>(8u))
+				{
+					*first = ::fast_io::char_literal_add<char_type>(value);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 1u);
+				}
+				if (value < static_cast<T>(64u))
+				{
+					first[0] = ::fast_io::char_literal_add<char_type>(value >> 3u);
+					first[1] = ::fast_io::char_literal_add<char_type>(value & static_cast<T>(7u));
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 2u);
+				}
+				first[0] = ::fast_io::char_literal_add<char_type>(value >> 6u);
+				first[1] = ::fast_io::char_literal_add<char_type>((value >> 3u) & static_cast<T>(7u));
+				first[2] = ::fast_io::char_literal_add<char_type>(value & static_cast<T>(7u));
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 3u);
+			}
+			constexpr auto const *table{power_of_two_digits_table<char_type, base, 3u>.data()};
+			T const high{static_cast<T>(value >> 9u)};
+			::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(511u)) * 3u};
+			if (high < static_cast<T>(8u))
+			{
+				first[0] = ::fast_io::char_literal_add<char_type>(high);
+				non_overlapped_copy_n(table + low_index, 3u, first + 1u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 4u);
+			}
+			if (high < static_cast<T>(64u))
+			{
+				first[0] = ::fast_io::char_literal_add<char_type>(high >> 3u);
+				first[1] = ::fast_io::char_literal_add<char_type>(high & static_cast<T>(7u));
+				non_overlapped_copy_n(table + low_index, 3u, first + 2u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 5u);
+			}
+			::std::size_t const high_index{static_cast<::std::size_t>(high) * 3u};
+			non_overlapped_copy_n(table + high_index, 3u, first);
+			non_overlapped_copy_n(table + low_index, 3u, first + 3u);
+			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
+		}
+	}
+	else if constexpr (base == 16u)
+	{
+		if (value < static_cast<T>(16777216u)) [[likely]]
+		{
+			if (value < static_cast<T>(256u))
+			{
+				if (value < static_cast<T>(16u))
+				{
+					*first = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+						static_cast<char8_t>(value));
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 1u);
+				}
+				first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+					static_cast<char8_t>(value >> 4u));
+				first[1] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+					static_cast<char8_t>(value & static_cast<T>(15u)));
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 2u);
+			}
+			constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
+			if (value < static_cast<T>(65536u))
+			{
+				T const high{static_cast<T>(value >> 8u)};
+				::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
+				if (high < static_cast<T>(16u))
+				{
+					first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+						static_cast<char8_t>(high));
+					non_overlapped_copy_n(table + low_index, 2u, first + 1u);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 3u);
+				}
+				::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
+				non_overlapped_copy_n(table + high_index, 2u, first);
+				non_overlapped_copy_n(table + low_index, 2u, first + 2u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 4u);
+			}
+			T const high{static_cast<T>(value >> 16u)};
+			::std::size_t const middle_index{
+				static_cast<::std::size_t>((value >> 8u) & static_cast<T>(255u)) * 2u};
+			::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
+			if (high < static_cast<T>(16u))
+			{
+				first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+					static_cast<char8_t>(high));
+				non_overlapped_copy_n(table + middle_index, 2u, first + 1u);
+				non_overlapped_copy_n(table + low_index, 2u, first + 3u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 5u);
+			}
+			::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
+			non_overlapped_copy_n(table + high_index, 2u, first);
+			non_overlapped_copy_n(table + middle_index, 2u, first + 2u);
+			non_overlapped_copy_n(table + low_index, 2u, first + 4u);
+			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
+		}
+		constexpr ::std::size_t aarch64_type_bits{::std::numeric_limits<T>::digits};
+		if constexpr (aarch64_type_bits > 24u)
+		{
+			bool within_short_range{true};
+			if constexpr (aarch64_type_bits > 40u)
+			{
+				within_short_range = value < static_cast<T>(1099511627776u);
+			}
+			if (within_short_range)
+			{
+				constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
+				::std::size_t const index0{
+					static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
+				::std::size_t const index1{
+					static_cast<::std::size_t>((value >> 8u) & static_cast<T>(255u)) * 2u};
+				::std::size_t const index2{
+					static_cast<::std::size_t>((value >> 16u) & static_cast<T>(255u)) * 2u};
+				if constexpr (aarch64_type_bits > 32u)
+				{
+					if (value >= static_cast<T>(4294967296u))
+					{
+						T const high{static_cast<T>(value >> 32u)};
+						::std::size_t const index3{
+							static_cast<::std::size_t>((value >> 24u) & static_cast<T>(255u)) * 2u};
+						if (high < static_cast<T>(16u))
+						{
+							first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+								static_cast<char8_t>(high));
+							non_overlapped_copy_n(table + index3, 2u, first + 1u);
+							non_overlapped_copy_n(table + index2, 2u, first + 3u);
+							non_overlapped_copy_n(table + index1, 2u, first + 5u);
+							non_overlapped_copy_n(table + index0, 2u, first + 7u);
+							return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 9u);
+						}
+						::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
+						non_overlapped_copy_n(table + high_index, 2u, first);
+						non_overlapped_copy_n(table + index3, 2u, first + 2u);
+						non_overlapped_copy_n(table + index2, 2u, first + 4u);
+						non_overlapped_copy_n(table + index1, 2u, first + 6u);
+						non_overlapped_copy_n(table + index0, 2u, first + 8u);
+						return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 10u);
+					}
+				}
+				T const high{static_cast<T>(value >> 24u)};
+				if (high < static_cast<T>(16u))
+				{
+					first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+						static_cast<char8_t>(high));
+					non_overlapped_copy_n(table + index2, 2u, first + 1u);
+					non_overlapped_copy_n(table + index1, 2u, first + 3u);
+					non_overlapped_copy_n(table + index0, 2u, first + 5u);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 7u);
+				}
+				::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
+				non_overlapped_copy_n(table + high_index, 2u, first);
+				non_overlapped_copy_n(table + index2, 2u, first + 2u);
+				non_overlapped_copy_n(table + index1, 2u, first + 4u);
+				non_overlapped_copy_n(table + index0, 2u, first + 6u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 8u);
+			}
+		}
+	}
+	else if constexpr (base == 32u)
+	{
+		if (value < static_cast<T>(32u)) [[likely]]
+		{
+			*first = ::fast_io::details::charliteralofnumber<char_type, uppercase>(static_cast<char8_t>(value));
+			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 1u);
+		}
+	}
+#endif
 	constexpr ::std::size_t type_bits{::std::numeric_limits<T>::digits};
 	::std::size_t const bit_length{
 		type_bits - static_cast<::std::size_t>(::std::countl_zero(static_cast<T>(value | static_cast<T>(1u))))};
@@ -2089,7 +2272,11 @@ inline constexpr char_type *print_reserve_power_of_two_main(char_type *first, T 
 		}
 		if constexpr (type_bits > bits_per_iteration)
 		{
+#if defined(__aarch64__) || defined(_M_ARM64)
+			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration)) [[likely]]
+#else
 			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
+#endif
 			{
 				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
 				value >>= bits_per_iteration;
@@ -2097,6 +2284,23 @@ inline constexpr char_type *print_reserve_power_of_two_main(char_type *first, T 
 				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
 			}
 		}
+#if defined(__aarch64__) || defined(_M_ARM64)
+		if constexpr (base == 16u)
+		{
+			if (value < static_cast<T>(16u)) [[likely]]
+			{
+				*--iter = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+					static_cast<char8_t>(value));
+			}
+			else
+			{
+				::std::size_t const index{static_cast<::std::size_t>(value) * digits_per_iteration};
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
+			}
+			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(last);
+		}
+#endif
 		do
 		{
 			*--iter = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
@@ -2104,7 +2308,7 @@ inline constexpr char_type *print_reserve_power_of_two_main(char_type *first, T 
 			value >>= bits_per_digit;
 		} while (value != 0u);
 	}
-	return last;
+	return ::fast_io::details::print_reserve_power_of_two_result<result_type>(last);
 }
 
 template <::std::size_t base, bool uppercase_showbase, bool oct_c2y, ::std::integral char_type>
