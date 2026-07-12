@@ -1349,6 +1349,357 @@ scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, cha
 	}
 }
 
+#if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+template <::std::integral char_type, my_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline parse_result<char_type const *>
+scan_int_contiguous_x86_sse_hex8_space_part_define_impl(
+	char_type const *first, T &t,
+	[[maybe_unused]] bool sign) noexcept
+{
+	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	auto finish_ok = [&](char_type const *it, unsigned_type res) constexpr noexcept -> parse_result<char_type const *> {
+		if constexpr (my_signed_integral<T>)
+		{
+			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+			constexpr unsigned_type imax{umax >> 1};
+			if (res > (static_cast<unsigned_type>(imax) + sign)) [[unlikely]]
+			{
+				return {it, parse_code::overflow};
+			}
+			if (sign)
+			{
+				t = static_cast<T>(static_cast<unsigned_type>(0) - res);
+			}
+			else
+			{
+				t = static_cast<T>(res);
+			}
+		}
+		else
+		{
+			t = static_cast<T>(res);
+		}
+		return {it, parse_code::ok};
+	};
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	using namespace fast_io::intrinsics;
+	x86_64_v16qu chunk{};
+	__builtin_memcpy(__builtin_addressof(chunk), first, sizeof(::std::uint_least64_t));
+	x86_64_v16qu const lower{chunk | x86_64_v16qu{0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+												  0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}};
+	x86_64_v16qs const schunk{(x86_64_v16qs)chunk};
+	x86_64_v16qs const slower{(x86_64_v16qs)lower};
+	x86_64_v16qs const digit_mask{
+		(schunk > x86_64_v16qs{'/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/'}) &
+		(x86_64_v16qs{':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':'} > schunk)};
+	x86_64_v16qs const alpha_mask{
+		(slower > x86_64_v16qs{'`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`'}) &
+		(x86_64_v16qs{'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g'} > slower)};
+	::std::uint_least16_t const valid_mask{static_cast<::std::uint_least16_t>(
+		__builtin_ia32_pmovmskb128((x86_64_v16qi)(digit_mask | alpha_mask)))};
+#else
+	__m128i const chunk{_mm_loadl_epi64(reinterpret_cast<__m128i const *>(first))};
+	__m128i const lower{_mm_or_si128(chunk, _mm_set1_epi8(0x20))};
+	__m128i const digit_mask{
+		_mm_and_si128(_mm_cmpgt_epi8(chunk, _mm_set1_epi8(static_cast<char>('/'))),
+					  _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>(':')), chunk))};
+	__m128i const alpha_mask{
+		_mm_and_si128(_mm_cmpgt_epi8(lower, _mm_set1_epi8(static_cast<char>('`'))),
+					  _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>('g')), lower))};
+	::std::uint_least16_t const valid_mask{static_cast<::std::uint_least16_t>(
+		_mm_movemask_epi8(_mm_or_si128(digit_mask, alpha_mask)))};
+#endif
+	auto const digits{static_cast<::std::uint_least32_t>(::std::countr_one(valid_mask))};
+	if (digits == 0) [[unlikely]]
+	{
+		return {first, parse_code::invalid};
+	}
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	x86_64_v16qu const digit_values{
+		chunk - x86_64_v16qu{'0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'}};
+	x86_64_v16qu const alpha_values{
+		lower - x86_64_v16qu{'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10,
+							 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10}};
+	x86_64_v16qu values{(digit_values & (x86_64_v16qu)digit_mask) |
+						(alpha_values & ~(x86_64_v16qu)digit_mask)};
+	x86_64_v16qs const prefix_mask{
+		x86_64_v16qs{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} <
+		x86_64_v16qs{static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits)}};
+	values &= (x86_64_v16qu)prefix_mask;
+	values = (x86_64_v16qu)__builtin_ia32_pmaddubsw128(
+		(x86_64_v16qi)values, x86_64_v16qi{16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1});
+	values = (x86_64_v16qu)__builtin_ia32_packuswb128((x86_64_v8hi)values, (x86_64_v8hi)values);
+	::std::uint_least32_t res;
+	__builtin_memcpy(__builtin_addressof(res), __builtin_addressof(values), sizeof(res));
+#else
+	__m128i const digit_values{_mm_sub_epi8(chunk, _mm_set1_epi8(static_cast<char>('0')))};
+	__m128i const alpha_values{_mm_sub_epi8(lower, _mm_set1_epi8(static_cast<char>('a' - 10)))};
+	__m128i values{_mm_blendv_epi8(alpha_values, digit_values, digit_mask)};
+	values = _mm_and_si128(
+		values, _mm_cmplt_epi8(_mm_set_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+							   _mm_set1_epi8(static_cast<char>(digits))));
+	values = _mm_maddubs_epi16(values, _mm_set_epi8(1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16));
+	values = _mm_packus_epi16(values, values);
+	::std::uint_least32_t res;
+	::fast_io::freestanding::my_memcpy(__builtin_addressof(res), __builtin_addressof(values), sizeof(res));
+#endif
+	res = ::fast_io::byte_swap(res);
+	if (digits != 8u)
+	{
+		res >>= static_cast<unsigned>((8u - digits) << 2u);
+	}
+	return finish_ok(first + digits, static_cast<unsigned_type>(res));
+}
+
+template <::std::integral char_type, my_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline parse_result<char_type const *>
+scan_int_contiguous_x86_sse_hex16_space_part_define_impl(
+	char_type const *first, char_type const *last, T &t,
+	[[maybe_unused]] bool sign) noexcept
+{
+	using unsigned_char_type = ::std::make_unsigned_t<char_type>;
+	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	auto finish_ok = [&](char_type const *it, unsigned_type res) constexpr noexcept -> parse_result<char_type const *> {
+		if constexpr (my_signed_integral<T>)
+		{
+			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+			constexpr unsigned_type imax{umax >> 1};
+			if (res > (static_cast<unsigned_type>(imax) + sign)) [[unlikely]]
+			{
+				return {it, parse_code::overflow};
+			}
+			if (sign)
+			{
+				t = static_cast<T>(static_cast<unsigned_type>(0) - res);
+			}
+			else
+			{
+				t = static_cast<T>(res);
+			}
+		}
+		else
+		{
+			t = static_cast<T>(res);
+		}
+		return {it, parse_code::ok};
+	};
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	using namespace fast_io::intrinsics;
+	x86_64_v16qu chunk;
+	__builtin_memcpy(__builtin_addressof(chunk), first, sizeof(chunk));
+	x86_64_v16qu const lower{chunk | x86_64_v16qu{0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+												  0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}};
+	x86_64_v16qs const schunk{(x86_64_v16qs)chunk};
+	x86_64_v16qs const slower{(x86_64_v16qs)lower};
+	x86_64_v16qs const digit_mask{
+		(schunk > x86_64_v16qs{'/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/'}) &
+		(x86_64_v16qs{':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':', ':'} > schunk)};
+	x86_64_v16qs const alpha_mask{
+		(slower > x86_64_v16qs{'`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`'}) &
+		(x86_64_v16qs{'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g', 'g'} > slower)};
+	::std::uint_least16_t const valid_mask{static_cast<::std::uint_least16_t>(
+		__builtin_ia32_pmovmskb128((x86_64_v16qi)(digit_mask | alpha_mask)))};
+#else
+	__m128i const chunk{_mm_loadu_si128(reinterpret_cast<__m128i const *>(first))};
+	__m128i const lower{_mm_or_si128(chunk, _mm_set1_epi8(0x20))};
+	__m128i const digit_mask{
+		_mm_and_si128(_mm_cmpgt_epi8(chunk, _mm_set1_epi8(static_cast<char>('/'))),
+					  _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>(':')), chunk))};
+	__m128i const alpha_mask{
+		_mm_and_si128(_mm_cmpgt_epi8(lower, _mm_set1_epi8(static_cast<char>('`'))),
+					  _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>('g')), lower))};
+	::std::uint_least16_t const valid_mask{static_cast<::std::uint_least16_t>(
+		_mm_movemask_epi8(_mm_or_si128(digit_mask, alpha_mask)))};
+#endif
+	auto const digits{static_cast<::std::uint_least32_t>(::std::countr_one(valid_mask))};
+	if (digits == 0) [[unlikely]]
+	{
+		return {first, parse_code::invalid};
+	}
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	x86_64_v16qu const digit_values{
+		chunk - x86_64_v16qu{'0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'}};
+	x86_64_v16qu const alpha_values{
+		lower - x86_64_v16qu{'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10,
+							 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10}};
+	x86_64_v16qu values{(digit_values & (x86_64_v16qu)digit_mask) |
+						(alpha_values & ~(x86_64_v16qu)digit_mask)};
+	x86_64_v16qs const prefix_mask{
+		x86_64_v16qs{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} <
+		x86_64_v16qs{static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits)}};
+	values &= (x86_64_v16qu)prefix_mask;
+	values = (x86_64_v16qu)__builtin_ia32_pmaddubsw128(
+		(x86_64_v16qi)values, x86_64_v16qi{16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1});
+	values = (x86_64_v16qu)__builtin_ia32_packuswb128((x86_64_v8hi)values, (x86_64_v8hi)values);
+	::std::uint_least64_t res;
+	__builtin_memcpy(__builtin_addressof(res), __builtin_addressof(values), sizeof(res));
+#else
+	__m128i const digit_values{_mm_sub_epi8(chunk, _mm_set1_epi8(static_cast<char>('0')))};
+	__m128i const alpha_values{_mm_sub_epi8(lower, _mm_set1_epi8(static_cast<char>('a' - 10)))};
+	__m128i values{_mm_blendv_epi8(alpha_values, digit_values, digit_mask)};
+	values = _mm_and_si128(
+		values, _mm_cmplt_epi8(_mm_set_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+							   _mm_set1_epi8(static_cast<char>(digits))));
+	values = _mm_maddubs_epi16(values, _mm_set_epi8(1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16, 1, 16));
+	values = _mm_packus_epi16(values, values);
+	::std::uint_least64_t res;
+	::fast_io::freestanding::my_memcpy(__builtin_addressof(res), __builtin_addressof(values), sizeof(res));
+#endif
+	res = ::fast_io::byte_swap(res);
+	if (digits != 16u)
+	{
+		res >>= static_cast<unsigned>((16u - digits) << 2u);
+	}
+	else if (last != first + 16u &&
+			 char_is_digit<16u, char_type>(static_cast<unsigned_char_type>(first[16u]))) [[unlikely]]
+	{
+		return {skip_digits<16u>(first + 17u, last), parse_code::overflow};
+	}
+	return finish_ok(first + digits, static_cast<unsigned_type>(res));
+}
+
+template <::std::integral char_type, my_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline parse_result<char_type const *>
+scan_int_contiguous_x86_sse_oct16_space_part_define_impl(
+	char_type const *first, char_type const *last, T &t,
+	[[maybe_unused]] bool sign) noexcept
+{
+	using unsigned_char_type = ::std::make_unsigned_t<char_type>;
+	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	auto finish_ok = [&](char_type const *it, unsigned_type res, ::std::size_t digits) constexpr noexcept -> parse_result<char_type const *> {
+		if (22u < digits || (digits == 22u && 1u < static_cast<unsigned_char_type>(*first - char_literal_v<u8'0', char_type>))) [[unlikely]]
+		{
+			return {it, parse_code::overflow};
+		}
+		if constexpr (my_signed_integral<T>)
+		{
+			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+			constexpr unsigned_type imax{umax >> 1};
+			if (res > (static_cast<unsigned_type>(imax) + sign)) [[unlikely]]
+			{
+				return {it, parse_code::overflow};
+			}
+			if (sign)
+			{
+				t = static_cast<T>(static_cast<unsigned_type>(0) - res);
+			}
+			else
+			{
+				t = static_cast<T>(res);
+			}
+		}
+		else
+		{
+			t = static_cast<T>(res);
+		}
+		return {it, parse_code::ok};
+	};
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	using namespace fast_io::intrinsics;
+	x86_64_v16qu chunk;
+	__builtin_memcpy(__builtin_addressof(chunk), first, sizeof(chunk));
+	x86_64_v16qs const schunk{(x86_64_v16qs)chunk};
+	x86_64_v16qs const valid_vector{
+		(schunk > x86_64_v16qs{'/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/'}) &
+		(x86_64_v16qs{'8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8', '8'} > schunk)};
+	::std::uint_least16_t const valid_mask{
+		static_cast<::std::uint_least16_t>(__builtin_ia32_pmovmskb128((x86_64_v16qi)valid_vector))};
+#else
+	__m128i const chunk{_mm_loadu_si128(reinterpret_cast<__m128i const *>(first))};
+	__m128i const valid_vector{
+		_mm_and_si128(_mm_cmpgt_epi8(chunk, _mm_set1_epi8(static_cast<char>('/'))),
+					  _mm_cmpgt_epi8(_mm_set1_epi8(static_cast<char>('8')), chunk))};
+	::std::uint_least16_t const valid_mask{
+		static_cast<::std::uint_least16_t>(_mm_movemask_epi8(valid_vector))};
+#endif
+	auto const digits{static_cast<::std::uint_least32_t>(::std::countr_one(valid_mask))};
+	if (digits == 0) [[unlikely]]
+	{
+		return {first, parse_code::invalid};
+	}
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	x86_64_v16qu values{
+		chunk - x86_64_v16qu{'0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'}};
+	x86_64_v16qs const prefix_mask{
+		x86_64_v16qs{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15} <
+		x86_64_v16qs{static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits),
+					 static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits), static_cast<char>(digits)}};
+	values &= (x86_64_v16qu)prefix_mask;
+	auto pairs{(x86_64_v16qu)__builtin_ia32_pmaddubsw128(
+		(x86_64_v16qi)values, x86_64_v16qi{8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1})};
+	auto quads{(x86_64_v16qu)__builtin_ia32_pmaddwd128((x86_64_v8hi)pairs, x86_64_v8hi{64, 1, 64, 1, 64, 1, 64, 1})};
+	::std::uint_least32_t quad_values[4];
+	__builtin_memcpy(quad_values, __builtin_addressof(quads), sizeof(quad_values));
+#else
+	__m128i values{_mm_sub_epi8(chunk, _mm_set1_epi8(static_cast<char>('0')))};
+	values = _mm_and_si128(
+		values, _mm_cmplt_epi8(_mm_set_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0),
+							   _mm_set1_epi8(static_cast<char>(digits))));
+	auto pairs{_mm_maddubs_epi16(values, _mm_set_epi8(1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8))};
+	auto quads{_mm_madd_epi16(pairs, _mm_set_epi16(1, 64, 1, 64, 1, 64, 1, 64))};
+	::std::uint_least32_t quad_values[4];
+	::fast_io::freestanding::my_memcpy(quad_values, __builtin_addressof(quads), sizeof(quad_values));
+#endif
+	::std::uint_least64_t res{
+		(static_cast<::std::uint_least64_t>(quad_values[0]) << 36u) |
+		(static_cast<::std::uint_least64_t>(quad_values[1]) << 24u) |
+		(static_cast<::std::uint_least64_t>(quad_values[2]) << 12u) |
+		static_cast<::std::uint_least64_t>(quad_values[3])};
+	if (digits != 16u)
+	{
+		res >>= static_cast<unsigned>((16u - digits) * 3u);
+		return finish_ok(first + digits, static_cast<unsigned_type>(res), digits);
+	}
+
+	auto it{first + 16u};
+	::std::size_t total_digits{16u};
+	for (; it != last && total_digits != 22u; ++it)
+	{
+		unsigned_char_type digit{static_cast<unsigned_char_type>(*it)};
+		if (char_digit_to_literal<8u, char_type>(digit)) [[unlikely]]
+		{
+			return finish_ok(it, static_cast<unsigned_type>(res), total_digits);
+		}
+		res = (res << 3u) | digit;
+		++total_digits;
+	}
+	if (it != last && char_is_digit<8u, char_type>(static_cast<unsigned_char_type>(*it))) [[unlikely]]
+	{
+		return {skip_digits<8u>(it + 1, last), parse_code::overflow};
+	}
+	return finish_ok(it, static_cast<unsigned_type>(res), total_digits);
+}
+#endif
+
 inline constexpr parse_code ongoing_parse_code{static_cast<parse_code>(::std::numeric_limits<char unsigned>::max())};
 
 template <char8_t base, bool oct_c2y, ::std::integral char_type>
@@ -1418,6 +1769,11 @@ inline constexpr char_type const *skip_hexdigits(char_type const *first, char_ty
 
 template <char8_t base, bool shbase = false, bool skipzero = false, bool oct_c2y = false,
 		  bool allow_leading_plus = false, ::std::integral char_type, my_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr parse_result<char_type const *>
 scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_type const *last, T &t) noexcept
 {
@@ -1522,12 +1878,280 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #else
 		constexpr ::std::size_t inline_limit{default_inline_limit};
 #endif
+#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+		if constexpr ((base == 8u || base == 16u) && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+		{
+			auto const x86_remaining{static_cast<::std::size_t>(last - first)};
+			if (x86_remaining == 1u ||
+				(1u < x86_remaining &&
+				 !char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[1u]))))
+			{
+				if constexpr (my_signed_integral<T>)
+				{
+					if (sign)
+					{
+						t = static_cast<T>(static_cast<unsigned_type>(0) - static_cast<unsigned_type>(first_digit));
+					}
+					else
+					{
+						t = static_cast<T>(first_digit);
+					}
+				}
+				else
+				{
+					t = static_cast<T>(first_digit);
+				}
+				return {first + 1u, parse_code::ok};
+			}
+			if constexpr (base == 8u)
+			{
+				if (2u < x86_remaining &&
+					!char_is_digit<8u, char_type>(static_cast<unsigned_char_type>(first[2u])))
+				{
+					auto digit{static_cast<unsigned_char_type>(first[1u])};
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					auto short_value{static_cast<::std::uint_least64_t>(first_digit) * 8u + digit};
+					if constexpr (my_signed_integral<T>)
+					{
+						if (sign)
+						{
+							t = static_cast<T>(static_cast<unsigned_type>(0) - static_cast<unsigned_type>(short_value));
+						}
+						else
+						{
+							t = static_cast<T>(short_value);
+						}
+					}
+					else
+					{
+						t = static_cast<T>(short_value);
+					}
+					return {first + 2u, parse_code::ok};
+				}
+			}
+			if (4u < x86_remaining &&
+				!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[4u])))
+			{
+				::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
+				auto short_iter{first + 1u};
+				do
+				{
+					unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+					if constexpr (base == 8u)
+					{
+						digit -= static_cast<unsigned_char_type>(u8'0');
+						auto const next_value{short_value * 8u + digit};
+						if (7u < digit)
+						{
+							break;
+						}
+						short_value = next_value;
+					}
+					else
+					{
+						if (char_digit_to_literal<base, char_type>(digit))
+						{
+							break;
+						}
+						short_value = (short_value << 4u) | digit;
+					}
+					++short_iter;
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					if constexpr (base == 8u)
+					{
+						digit -= static_cast<unsigned_char_type>(u8'0');
+						auto const next_value{short_value * 8u + digit};
+						if (7u < digit)
+						{
+							break;
+						}
+						short_value = next_value;
+					}
+					else
+					{
+						if (char_digit_to_literal<base, char_type>(digit))
+						{
+							break;
+						}
+						short_value = (short_value << 4u) | digit;
+					}
+					++short_iter;
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					if constexpr (base == 8u)
+					{
+						digit -= static_cast<unsigned_char_type>(u8'0');
+						auto const next_value{short_value * 8u + digit};
+						if (7u < digit)
+						{
+							break;
+						}
+						short_value = next_value;
+					}
+					else
+					{
+						if (char_digit_to_literal<base, char_type>(digit))
+						{
+							break;
+						}
+						short_value = (short_value << 4u) | digit;
+					}
+					++short_iter;
+				} while (false);
+				if constexpr (my_signed_integral<T>)
+				{
+					if (sign)
+					{
+						t = static_cast<T>(static_cast<unsigned_type>(0) - static_cast<unsigned_type>(short_value));
+					}
+					else
+					{
+						t = static_cast<T>(short_value);
+					}
+				}
+				else
+				{
+					t = static_cast<T>(short_value);
+				}
+				return {short_iter, parse_code::ok};
+			}
+			if constexpr (base == 8u)
+			{
+				if (6u < x86_remaining &&
+					!char_is_digit<8u, char_type>(static_cast<unsigned_char_type>(first[6u])))
+				{
+					last = first + 6u;
+				}
+				else if (7u < x86_remaining &&
+						 !char_is_digit<8u, char_type>(static_cast<unsigned_char_type>(first[7u])))
+				{
+					last = first + 7u;
+				}
+			}
+		}
+#endif
+#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+		if constexpr ((base == 8 || (11u <= base && base <= 16u)))
+		{
+			if (inline_limit < static_cast<::std::size_t>(last - first) &&
+				!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[inline_limit])))
+			{
+#if defined(__SSE4_1__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
+				if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+				{
+					return ::fast_io::details::scan_int_contiguous_x86_sse_hex8_space_part_define_impl(
+						first, t, sign);
+				}
+#endif
+				last = first + inline_limit;
+			}
+		}
+#endif
 		if (static_cast<::std::size_t>(last - first) <= inline_limit) [[likely]]
 		{
 			::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
 			auto short_iter{first + 1};
+#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+			if constexpr (base == 8u)
+			{
+				do
+				{
+					if (short_iter == last)
+					{
+						break;
+					}
+					unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					auto next_value{short_value * 8u + digit};
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+					if (short_iter == last)
+					{
+						break;
+					}
+					digit = static_cast<unsigned_char_type>(*short_iter);
+					digit -= static_cast<unsigned_char_type>(u8'0');
+					next_value = short_value * 8u + digit;
+					if (7u < digit)
+					{
+						break;
+					}
+					short_value = next_value;
+					++short_iter;
+				} while (false);
+			}
+			else
+#endif
 #if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
-			if constexpr (base == 2u || (5u <= base && base <= 10u))
+				if constexpr (base == 2u || (5u <= base && base <= 10u))
 			{
 #pragma clang loop unroll(full)
 				for (::std::size_t short_index{1}; short_index != inline_limit; ++short_index)
@@ -1541,7 +2165,26 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 					{
 						break;
 					}
-					short_value = short_value * base + digit;
+					if constexpr (base == 2u)
+					{
+						short_value = (short_value << 1u) | digit;
+					}
+					else if constexpr (base == 4u)
+					{
+						short_value = (short_value << 2u) | digit;
+					}
+					else if constexpr (base == 8u)
+					{
+						short_value = (short_value << 3u) | digit;
+					}
+					else if constexpr (base == 16u)
+					{
+						short_value = (short_value << 4u) | digit;
+					}
+					else
+					{
+						short_value = short_value * base + digit;
+					}
 					++short_iter;
 				}
 			}
@@ -1555,7 +2198,26 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 					{
 						break;
 					}
-					short_value = short_value * base + digit;
+					if constexpr (base == 2u)
+					{
+						short_value = (short_value << 1u) | digit;
+					}
+					else if constexpr (base == 4u)
+					{
+						short_value = (short_value << 2u) | digit;
+					}
+					else if constexpr (base == 8u)
+					{
+						short_value = (short_value << 3u) | digit;
+					}
+					else if constexpr (base == 16u)
+					{
+						short_value = (short_value << 4u) | digit;
+					}
+					else
+					{
+						short_value = short_value * base + digit;
+					}
 				}
 			}
 			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
@@ -1585,6 +2247,75 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 			return {short_iter, parse_code::ok};
 		}
+#if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+		if constexpr (base == 8u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+		{
+			if (16u <= static_cast<::std::size_t>(last - first))
+			{
+				return ::fast_io::details::scan_int_contiguous_x86_sse_oct16_space_part_define_impl(
+					first, last, t, sign);
+			}
+		}
+		if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+		{
+			if (16u <= static_cast<::std::size_t>(last - first))
+			{
+				return ::fast_io::details::scan_int_contiguous_x86_sse_hex16_space_part_define_impl(
+					first, last, t, sign);
+			}
+		}
+#endif
+#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+		if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+		{
+			auto const diff{static_cast<::std::size_t>(last - first)};
+			char_type const *last16{};
+			if (diff <= 16u)
+			{
+				last16 = last;
+			}
+			else if (!char_is_digit<16u, char_type>(static_cast<unsigned_char_type>(first[16u])))
+			{
+				last16 = first + 16u;
+			}
+			if (last16 != nullptr)
+			{
+				::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
+				auto short_iter{first + 1};
+				for (; short_iter != last16; ++short_iter)
+				{
+					unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+					if (char_digit_to_literal<16u, char_type>(digit)) [[unlikely]]
+					{
+						break;
+					}
+					short_value = (short_value << 4u) | digit;
+				}
+				if constexpr (my_signed_integral<T>)
+				{
+					constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+					constexpr unsigned_type imax{umax >> 1};
+					if (short_value > static_cast<::std::uint_least64_t>(imax) + sign) [[unlikely]]
+					{
+						return {short_iter, parse_code::overflow};
+					}
+					if (sign)
+					{
+						t = static_cast<T>(static_cast<unsigned_type>(0) - static_cast<unsigned_type>(short_value));
+					}
+					else
+					{
+						t = static_cast<T>(short_value);
+					}
+				}
+				else
+				{
+					t = static_cast<T>(short_value);
+				}
+				return {short_iter, parse_code::ok};
+			}
+		}
+#endif
 	}
 #if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
 	if constexpr (base == 10u && my_unsigned_integral<T> &&
