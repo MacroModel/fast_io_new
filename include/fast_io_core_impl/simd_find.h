@@ -99,11 +99,13 @@ inline constexpr char_type const *find_simd_constant_simd_common_impl(char_type 
 	constexpr char_type lfchct{char_literal_v<lfch, ::std::remove_cvref_t<char_type>>};
 	constexpr unsigned N{vec_size / sizeof(char_type)};
 	using simd_vector_type = ::fast_io::intrinsics::simd_vector<char_type, N>;
+	constexpr auto chars_array{
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(lfchct)};
 #if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
-	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(characters_array_impl<lfchct, char_type, N>)};
+	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(chars_array)};
 #else
 	simd_vector_type charsvec;
-	charsvec.load(characters_array_impl<lfchct, char_type, N>.data());
+	charsvec.load(chars_array.data());
 #endif
 	return find_simd_constant_simd_common_all_impl<findnot, vec_size>(first, last, charsvec);
 }
