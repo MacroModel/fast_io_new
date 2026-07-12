@@ -488,6 +488,17 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			if (n < divisor8)
 			{
 				::std::uint_least32_t const u{static_cast<::std::uint_least32_t>(n)};
+#if defined(__x86_64__) || defined(_M_X64)
+				if (u < 10000u)
+				{
+					return jeaiii_result<result_type>(u < 1000u ? jeaiii_f<2>(iter, u) : jeaiii_f<3>(iter, u));
+				}
+				if (u < 1000000u)
+				{
+					return jeaiii_result<result_type>(u < 100000u ? jeaiii_f<4>(iter, u) : jeaiii_f<5>(iter, u));
+				}
+				return jeaiii_result<result_type>(u < 10000000u ? jeaiii_f<6>(iter, u) : jeaiii_f<7>(iter, u));
+#else
 				if (u < 10000u)
 				{
 					return jeaiii_result<result_type>(jeaiii_range4(iter, u));
@@ -497,6 +508,7 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 					return jeaiii_result<result_type>(jeaiii_range6(iter, u));
 				}
 				return jeaiii_result<result_type>(jeaiii_range8(iter, u));
+#endif
 			}
 #if defined(__aarch64__) || defined(_M_ARM64)
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
@@ -507,7 +519,12 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 #else
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !defined(__tune_znver3__) && \
+	!defined(__tune_znver4__) && !defined(__tune_znver5__)
+				return jeaiii_result<result_type>(jeaiii_f<8>(iter, static_cast<::std::uint_least32_t>(n)));
+#else
 				return jeaiii_result<result_type>(jeaiii_range10(iter, n));
+#endif
 			}
 #endif
 			::std::uint_least64_t const high{n / divisor8};
@@ -620,6 +637,17 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			}
 			if (n < divisor8)
 			{
+#if defined(__x86_64__) || defined(_M_X64)
+				if (n < 10000u)
+				{
+					return jeaiii_result<result_type>(n < 1000u ? jeaiii_f<2>(iter, n) : jeaiii_f<3>(iter, n));
+				}
+				if (n < 1000000u)
+				{
+					return jeaiii_result<result_type>(n < 100000u ? jeaiii_f<4>(iter, n) : jeaiii_f<5>(iter, n));
+				}
+				return jeaiii_result<result_type>(n < 10000000u ? jeaiii_f<6>(iter, n) : jeaiii_f<7>(iter, n));
+#else
 				if (n < 10000u)
 				{
 					return jeaiii_result<result_type>(jeaiii_range4(iter, n));
@@ -629,13 +657,22 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 					return jeaiii_result<result_type>(jeaiii_range6(iter, n));
 				}
 				return jeaiii_result<result_type>(jeaiii_range8(iter, n));
+#endif
 			}
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !defined(__tune_znver3__) && \
+	!defined(__tune_znver4__) && !defined(__tune_znver5__)
+			if (n < static_cast<::std::uint_least64_t>(1000000000u))
+			{
+				return jeaiii_result<result_type>(jeaiii_f<8>(iter, n));
+			}
+#endif
 			return jeaiii_result<result_type>(jeaiii_range10(iter, n));
 		}
 	}
 }
 
 template <::std::size_t n, ::std::integral char_type>
+[[__gnu__::__always_inline__]]
 inline constexpr void jeaiii_hash(char_type *iter, ::std::uint_least32_t u, ::std::uint_least32_t len) noexcept
 {
 	if constexpr (n == 7)
