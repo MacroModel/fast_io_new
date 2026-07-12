@@ -19,38 +19,38 @@ inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
 #endif
 };
 
+inline constexpr ::std::uint_least64_t champagne_lemire_power10_table[]{
+	static_cast<::std::uint_least64_t>(1u),
+	static_cast<::std::uint_least64_t>(10u),
+	static_cast<::std::uint_least64_t>(100u),
+	static_cast<::std::uint_least64_t>(1000u),
+	static_cast<::std::uint_least64_t>(10000u),
+	static_cast<::std::uint_least64_t>(100000u),
+	static_cast<::std::uint_least64_t>(1000000u),
+	static_cast<::std::uint_least64_t>(10000000u),
+	static_cast<::std::uint_least64_t>(100000000u),
+	static_cast<::std::uint_least64_t>(1000000000u),
+	static_cast<::std::uint_least64_t>(10000000000ull),
+	static_cast<::std::uint_least64_t>(100000000000ull),
+	static_cast<::std::uint_least64_t>(1000000000000ull),
+	static_cast<::std::uint_least64_t>(10000000000000ull),
+	static_cast<::std::uint_least64_t>(100000000000000ull),
+	static_cast<::std::uint_least64_t>(1000000000000000ull),
+	static_cast<::std::uint_least64_t>(10000000000000000ull),
+	static_cast<::std::uint_least64_t>(100000000000000000ull),
+	static_cast<::std::uint_least64_t>(1000000000000000000ull),
+	static_cast<::std::uint_least64_t>(10000000000000000000ull)};
+
 inline constexpr ::std::size_t champagne_lemire_digits(::std::uint_least64_t value) noexcept
 {
-	if (value >= static_cast<::std::uint_least64_t>(100000000000000u))
+	if (value == 0u)
 	{
-		return 15u + (value >= static_cast<::std::uint_least64_t>(1000000000000000u));
+		return 1u;
 	}
-	if (value >= static_cast<::std::uint_least64_t>(10000000000u))
-	{
-		if (value >= static_cast<::std::uint_least64_t>(1000000000000u))
-		{
-			return 13u + (value >= static_cast<::std::uint_least64_t>(10000000000000u));
-		}
-		return 11u + (value >= static_cast<::std::uint_least64_t>(100000000000u));
-	}
-	if (value >= static_cast<::std::uint_least64_t>(10000000u))
-	{
-		return 8u + (value >= static_cast<::std::uint_least64_t>(100000000u)) +
-			   (value >= static_cast<::std::uint_least64_t>(1000000000u));
-	}
-	if (value >= static_cast<::std::uint_least64_t>(100000u))
-	{
-		return 6u + (value >= static_cast<::std::uint_least64_t>(1000000u));
-	}
-	if (value >= static_cast<::std::uint_least64_t>(10000u))
-	{
-		return 5u;
-	}
-	if (value >= static_cast<::std::uint_least64_t>(100u))
-	{
-		return 3u + (value >= static_cast<::std::uint_least64_t>(1000u));
-	}
-	return 1u + (value >= static_cast<::std::uint_least64_t>(10u));
+	unsigned const bit_width{64u -
+							 static_cast<unsigned>(__builtin_clzll(static_cast<unsigned long long>(value)))};
+	unsigned const estimate{(bit_width * 1233u) >> 12u};
+	return estimate + static_cast<unsigned>(value >= champagne_lemire_power10_table[estimate]);
 }
 
 inline champagne_lemire_i8x16 champagne_lemire_16_digits_from_groups(::std::uint_least64_t high,
