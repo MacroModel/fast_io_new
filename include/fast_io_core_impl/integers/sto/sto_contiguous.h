@@ -357,10 +357,10 @@ template <bool char_execharset>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
-inline ::std::size_t sse_skip_long_overflow_digits(char unsigned const *buffer,
-												   char unsigned const *buffer_end) noexcept
+inline ::std::size_t sse_skip_overflow_digits(char unsigned const *buffer,
+											  char unsigned const *buffer_end) noexcept
 {
-	auto it{buffer + 16};
+	auto it{buffer};
 	for (; 16 <= buffer_end - it; it += 16)
 	{
 		auto new_length{detect_length<char_execharset>(it)};
@@ -369,11 +369,11 @@ inline ::std::size_t sse_skip_long_overflow_digits(char unsigned const *buffer,
 			return static_cast<::std::size_t>(it - buffer + new_length);
 		}
 	};
-	if (buffer_end == it)
+	constexpr char8_t zero_constant{char_execharset ? static_cast<char8_t>('0') : u8'0'};
+	for (; it != buffer_end && static_cast<char unsigned>(*it - zero_constant) < 10u; ++it)
 	{
-		return static_cast<::std::size_t>(it - buffer);
 	}
-	return static_cast<::std::size_t>(buffer_end - buffer + detect_length<char_execharset>(buffer_end - 16));
+	return static_cast<::std::size_t>(it - buffer);
 }
 
 template <bool char_execharset, bool less_than_64_bits>
@@ -407,9 +407,14 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 							 zero_constant, zero_constant, zero_constant, zero_constant, zero_constant, zero_constant,
 							 zero_constant, zero_constant, zero_constant, zero_constant};
 	chunk -= zeros;
-	x86_64_v16qi shuffle_mask;
-	__builtin_memcpy(__builtin_addressof(shuffle_mask), simd16_shift_table + digits, sizeof(x86_64_v16qi));
-	chunk = (x86_64_v16qu)__builtin_ia32_pshufb128((x86_64_v16qi)chunk, shuffle_mask);
+	// A full 16-digit chunk already has the required byte order. Avoid the
+	// shuffle-table load and PSHUFB on the long-decimal hot path.
+	if (digits != 16u) [[unlikely]]
+	{
+		x86_64_v16qi shuffle_mask;
+		__builtin_memcpy(__builtin_addressof(shuffle_mask), simd16_shift_table + digits, sizeof(x86_64_v16qi));
+		chunk = (x86_64_v16qu)__builtin_ia32_pshufb128((x86_64_v16qi)chunk, shuffle_mask);
+	}
 	chunk = (x86_64_v16qu)__builtin_ia32_pmaddubsw128(
 		(x86_64_v16qi)chunk, x86_64_v16qi{10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1});
 	chunk = (x86_64_v16qu)__builtin_ia32_pmaddwd128((x86_64_v8hi)chunk, x86_64_v8hi{100, 1, 100, 1, 100, 1, 100, 1});
@@ -428,7 +433,12 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 		return {0, parse_code::invalid};
 	}
 	chunk = _mm_sub_epi8(chunk, _mm_set1_epi8(zero_constant));
-	chunk = _mm_shuffle_epi8(chunk, _mm_loadu_si128(reinterpret_cast<__m128i const *>(simd16_shift_table + digits)));
+	// A full 16-digit chunk already has the required byte order. Avoid the
+	// shuffle-table load and PSHUFB on the long-decimal hot path.
+	if (digits != 16u) [[unlikely]]
+	{
+		chunk = _mm_shuffle_epi8(chunk, _mm_loadu_si128(reinterpret_cast<__m128i const *>(simd16_shift_table + digits)));
+	}
 	chunk = _mm_maddubs_epi16(chunk, _mm_set_epi8(1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10));
 	chunk = _mm_madd_epi16(chunk, _mm_set_epi16(1, 100, 1, 100, 1, 100, 1, 100));
 	chunk = _mm_packus_epi32(chunk, chunk);
@@ -443,11 +453,20 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 		if constexpr (less_than_64_bits)
 		{
 			//::std::uint_least32_t can never have 16 digits
-			return {sse_skip_long_overflow_digits<char_execharset>(buffer + 16, buffer_end) + 16, parse_code::overflow};
+			return {sse_skip_overflow_digits<char_execharset>(buffer + 16, buffer_end) + 16,
+					parse_code::overflow};
 		}
 		else
 		{
-			::std::size_t digits1{detect_length<char_execharset>(buffer + 16)};
+			::std::size_t digits1;
+			if (16 <= buffer_end - (buffer + 16))
+			{
+				digits1 = detect_length<char_execharset>(buffer + 16);
+			}
+			else
+			{
+				digits1 = sse_skip_overflow_digits<char_execharset>(buffer + 16, buffer_end);
+			}
 			// 18446744073709551615 20 digits
 			switch (digits1)
 			{
@@ -496,7 +515,7 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 			}
 			case 16:
 			{
-				digits1 = sse_skip_long_overflow_digits<char_execharset>(buffer + 16, buffer_end);
+				digits1 = sse_skip_overflow_digits<char_execharset>(buffer + 16, buffer_end);
 				[[fallthrough]];
 			}
 			default:
@@ -597,19 +616,9 @@ template <::std::integral char_type>
 	requires(!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t))
 inline constexpr char8_t ascii_hex_digit_value(my_make_unsigned_t<char_type> ch) noexcept
 {
-	my_make_unsigned_t<char_type> digit{ch};
-	digit -= static_cast<my_make_unsigned_t<char_type>>(u8'0');
-	if (digit < 10u)
-	{
-		return static_cast<char8_t>(digit);
-	}
-	ch |= static_cast<my_make_unsigned_t<char_type>>(0x20u);
-	ch -= static_cast<my_make_unsigned_t<char_type>>(u8'a');
-	if (ch < 6u)
-	{
-		return static_cast<char8_t>(ch + 10u);
-	}
-	return static_cast<char8_t>(0xFFu);
+	// Scalar tails contain an unpredictable mix of decimal and alphabetic
+	// digits. The shared table avoids a data-dependent branch for that mix.
+	return ::fast_io::details::sto_ascii_digit_table_lookup<char_type>(ch);
 }
 
 inline constexpr ::std::uint_least64_t ascii_hex_word_invalid_mask(::std::uint_least64_t val) noexcept
@@ -688,7 +697,8 @@ scan_int_contiguous_ascii_hex_space_part_define_impl(char_type const *first, cha
 				auto const valid_bytes{
 					static_cast<::std::size_t>(static_cast<unsigned>(::std::countr_zero(invalid_mask)) >> 3u)};
 				first = ::fast_io::details::scan_ascii_hex_digits_scalar(first, first + valid_bytes, res);
-				goto finish;
+				first_phase_last = first;
+				break;
 			}
 			auto const chunk{::fast_io::details::ascii_hex_word_to_u32(val)};
 			if constexpr (sizeof(unsigned_type) <= sizeof(::std::uint_least32_t))
@@ -705,7 +715,6 @@ scan_int_contiguous_ascii_hex_space_part_define_impl(char_type const *first, cha
 	}
 	first = ::fast_io::details::scan_ascii_hex_digits_scalar(first, first_phase_last, res);
 
-finish:
 	if (first == last)
 	{
 		out = res;
@@ -1292,7 +1301,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		return {first, parse_code::invalid};
 	}
 	auto first_ch{*first};
-	if (!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first_ch))) [[unlikely]]
+	unsigned_char_type first_digit{static_cast<unsigned_char_type>(first_ch)};
+	if (char_digit_to_literal<base, char_type>(first_digit)) [[unlikely]]
 	{
 		return {first, parse_code::invalid};
 	}
@@ -1307,6 +1317,11 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				t = 0;
 				return {first, parse_code::ok};
 			}
+			first_digit = static_cast<unsigned_char_type>(*first);
+			if (char_digit_to_literal<base, char_type>(first_digit)) [[unlikely]]
+			{
+				return {first, parse_code::invalid};
+			}
 		}
 		else
 		{
@@ -1320,6 +1335,57 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	if constexpr (base <= 16 && sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type> &&
+				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
+	{
+		constexpr bool inline_nonoverflowing_alnum{
+			10u < base && base < 16u && my_unsigned_integral<T> &&
+			sizeof(unsigned_type) == sizeof(::std::uint_least64_t)};
+		constexpr ::std::size_t inline_limit{inline_nonoverflowing_alnum
+			? ::fast_io::details::max_int_size_result<unsigned_type, base> - 1u
+			: 8u};
+		if (static_cast<::std::size_t>(last - first) <= inline_limit) [[likely]]
+		{
+			::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
+			auto short_iter{first + 1};
+			for (; short_iter != last; ++short_iter)
+			{
+				unsigned_char_type digit{static_cast<unsigned_char_type>(*short_iter)};
+				if (char_digit_to_literal<base, char_type>(digit)) [[unlikely]]
+				{
+					break;
+				}
+				short_value = short_value * base + digit;
+			}
+			constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+			if constexpr (my_signed_integral<T>)
+			{
+				constexpr unsigned_type imax{umax >> 1};
+				if (short_value > static_cast<::std::uint_least64_t>(imax) + sign) [[unlikely]]
+				{
+					return {short_iter, parse_code::overflow};
+				}
+				if (sign)
+				{
+					t = static_cast<T>(static_cast<unsigned_type>(0) - static_cast<unsigned_type>(short_value));
+				}
+				else
+				{
+					t = static_cast<T>(short_value);
+				}
+			}
+			else
+			{
+				if (short_value > static_cast<::std::uint_least64_t>(umax)) [[unlikely]]
+				{
+					return {short_iter, parse_code::overflow};
+				}
+				t = static_cast<T>(short_value);
+			}
+			return {short_iter, parse_code::ok};
+		}
+	}
 	unsigned_type res{};
 	char_type const *it;
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
