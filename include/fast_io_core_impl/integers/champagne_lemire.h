@@ -9,28 +9,13 @@ using champagne_lemire_i64x8 [[__gnu__::__vector_size__(64)]] = long long;
 using champagne_lemire_i8x64 [[__gnu__::__vector_size__(64)]] = char;
 using champagne_lemire_i8x16 [[__gnu__::__vector_size__(16)]] = char;
 
-inline constexpr ::std::size_t champagne_lemire_medium_digits(::std::uint_least64_t value) noexcept
+inline champagne_lemire_i8x16 champagne_lemire_16_digits_from_groups(::std::uint_least64_t high,
+																	 ::std::uint_least64_t low) noexcept
 {
-	constexpr ::std::uint_least64_t powers[]{
-		100000000u,
-		1000000000u,
-		static_cast<::std::uint_least64_t>(10000000000u),
-		static_cast<::std::uint_least64_t>(100000000000u),
-		static_cast<::std::uint_least64_t>(1000000000000u),
-		static_cast<::std::uint_least64_t>(10000000000000u),
-		static_cast<::std::uint_least64_t>(100000000000000u),
-		static_cast<::std::uint_least64_t>(1000000000000000u),
-		static_cast<::std::uint_least64_t>(100000000u) * static_cast<::std::uint_least64_t>(100000000u)};
-	::std::size_t const bit_length{64u - static_cast<::std::size_t>(::std::countl_zero(value))};
-	::std::size_t const estimate{(bit_length * 1233u) >> 12u};
-	return estimate + (value >= powers[estimate - 8u]);
-}
-
-inline champagne_lemire_i8x16 champagne_lemire_16_digits(::std::uint_least64_t value) noexcept
-{
-	constexpr ::std::uint_least64_t divisor{static_cast<::std::uint_least64_t>(100000000u)};
-	::std::uint_least64_t const high{value / divisor};
-	::std::uint_least64_t const low{value % divisor};
+#if __has_cpp_attribute(assume)
+	[[assume(high < static_cast<::std::uint_least64_t>(100000000u))]];
+	[[assume(low < static_cast<::std::uint_least64_t>(100000000u))]];
+#endif
 	constexpr ::std::uint_least64_t two52{static_cast<::std::uint_least64_t>(1u) << 52u};
 	champagne_lemire_i64x8 const multipliers{
 		static_cast<long long>(two52 / static_cast<::std::uint_least64_t>(100000000u)),
@@ -85,49 +70,32 @@ inline champagne_lemire_i8x16 champagne_lemire_16_digits(::std::uint_least64_t v
 
 inline char *champagne_lemire_main(char *iter, ::std::uint_least64_t value) noexcept
 {
-	if (value < static_cast<::std::uint_least64_t>(100000000u))
-	{
-		if (value < 100u)
-		{
-			return jeaiii_first_two(iter, static_cast<::std::uint_least32_t>(value));
-		}
-		if (value < 10000u)
-		{
-			return jeaiii_range4(iter, static_cast<::std::uint_least32_t>(value));
-		}
-		if (value < 1000000u)
-		{
-			return jeaiii_range6(iter, static_cast<::std::uint_least32_t>(value));
-		}
-		return jeaiii_range8(iter, static_cast<::std::uint_least32_t>(value));
-	}
+	constexpr ::std::uint_least64_t divisor{static_cast<::std::uint_least64_t>(100000000u)};
+	::std::uint_least64_t const quotient{value / divisor};
+	::std::uint_least64_t const low{value - quotient * divisor};
 	if (value < static_cast<::std::uint_least64_t>(10000000000000000u))
 	{
-		::std::size_t const length{champagne_lemire_medium_digits(value)};
-		champagne_lemire_i8x16 const digits{champagne_lemire_16_digits(value)};
-		if (length == 16u)
+		champagne_lemire_i8x16 const digits{champagne_lemire_16_digits_from_groups(quotient, low)};
+		if (value >= static_cast<::std::uint_least64_t>(1000000000000000u))
 		{
 			__builtin_memcpy(iter, &digits, sizeof(digits));
+			return iter + 16u;
 		}
-		else
-		{
-			unsigned short const mask{static_cast<unsigned short>(0xffffu << (16u - length))};
-			::std::uintptr_t const address{reinterpret_cast<::std::uintptr_t>(iter) + length - 16u};
+		constexpr unsigned short mask{static_cast<unsigned short>(0xffffu << 1u)};
+		::std::uintptr_t const address{reinterpret_cast<::std::uintptr_t>(iter) - 1u};
 #if defined(__clang__)
-			__builtin_ia32_storedquqi128_mask(reinterpret_cast<champagne_lemire_i8x16 *>(address), digits, mask);
+		__builtin_ia32_storedquqi128_mask(reinterpret_cast<champagne_lemire_i8x16 *>(address), digits, mask);
 #else
-			__builtin_ia32_storedquqi128_mask(reinterpret_cast<char *>(address), digits, mask);
+		__builtin_ia32_storedquqi128_mask(reinterpret_cast<char *>(address), digits, mask);
 #endif
-		}
-		return iter + length;
+		return iter + 15u;
 	}
-	constexpr ::std::uint_least64_t divisor{static_cast<::std::uint_least64_t>(100000000u) *
-											static_cast<::std::uint_least64_t>(100000000u)};
-	::std::uint_least64_t const high{value / divisor};
-	::std::uint_least64_t const low{value % divisor};
+	constexpr ::std::uint_least64_t wide_divisor{divisor * divisor};
+	::std::uint_least64_t const high{value / wide_divisor};
+	::std::uint_least64_t const middle{quotient - high * divisor};
+	champagne_lemire_i8x16 const digits{champagne_lemire_16_digits_from_groups(middle, low)};
 	char *const low_iter{high < 100u ? jeaiii_first_two(iter, static_cast<::std::uint_least32_t>(high))
 									 : jeaiii_range4(iter, static_cast<::std::uint_least32_t>(high))};
-	champagne_lemire_i8x16 const digits{champagne_lemire_16_digits(low)};
 	__builtin_memcpy(low_iter, &digits, sizeof(digits));
 	return low_iter + 16u;
 }
