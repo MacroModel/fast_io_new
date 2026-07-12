@@ -112,6 +112,169 @@ template <::std::integral char_type, typename T>
 using print_semantic_forwarded_arg_t =
 	decltype(::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(::std::declval<T>())));
 
+/// @brief    Counts the maximum number of emitted leaves represented by a semantic print type.
+/// @details  Ordinary values contribute one leaf. Semantic node specializations recursively describe their active
+///           output shape so strategy selection can distinguish compact compositions from long materializations.
+/// @tparam   T the semantic node or leaf type
+template <typename T>
+struct print_semantic_leaf_count_impl : ::std::integral_constant<::std::size_t, 1u>
+{};
+
+/// @brief    Normalizes cv-reference qualifiers before computing a semantic output leaf count.
+/// @tparam   T the semantic node or leaf type
+template <typename T>
+struct print_semantic_leaf_count
+	: ::fast_io::details::decay::print_semantic_leaf_count_impl<::std::remove_cvref_t<T>>
+{};
+
+/// @brief    Propagates semantic leaf counting through a parameter wrapper.
+/// @tparam   T the wrapped semantic type
+template <typename T>
+struct print_semantic_leaf_count_impl<::fast_io::parameter<T>>
+	: ::fast_io::details::decay::print_semantic_leaf_count<T>
+{};
+
+/// @brief    Sums semantic leaf counts while rejecting compile-time size overflow.
+/// @tparam   Args the semantic types whose leaf counts are accumulated
+/// @return   ::std::size_t the checked total semantic leaf count
+template <typename... Args>
+inline consteval ::std::size_t print_semantic_leaf_count_sum() noexcept
+{
+	::std::size_t total{};
+	((total = ::fast_io::details::intrinsics::add_or_overflow_die(
+		  total, ::fast_io::details::decay::print_semantic_leaf_count<Args>::value)),
+	 ...);
+	return total;
+}
+
+/// @brief    Sums the semantic leaf counts of every stored pack element.
+/// @tparam   Args the stored pack element types
+template <typename... Args>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::pack_t<Args...>>
+	: ::std::integral_constant<::std::size_t,
+							   ::fast_io::details::decay::print_semantic_leaf_count_sum<Args...>()>
+{};
+
+/// @brief    Uses the larger alternative as a condition node's compile-time leaf-count bound.
+/// @tparam   T1 the true alternative type
+/// @tparam   T2 the false alternative type
+template <typename T1, typename T2>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::condition<T1, T2>>
+	: ::std::integral_constant<
+		  ::std::size_t,
+		  (::fast_io::details::decay::print_semantic_leaf_count<T1>::value <
+		   ::fast_io::details::decay::print_semantic_leaf_count<T2>::value)
+			  ? ::fast_io::details::decay::print_semantic_leaf_count<T2>::value
+			  : ::fast_io::details::decay::print_semantic_leaf_count<T1>::value>
+{};
+
+/// @brief    Propagates semantic leaf counting through a statically placed width node.
+/// @tparam   placement the compile-time scalar placement
+/// @tparam   T         the formatted child type
+template <::fast_io::manipulators::scalar_placement placement, typename T>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::width_t<placement, T>>
+	: ::fast_io::details::decay::print_semantic_leaf_count<T>
+{};
+
+/// @brief    Propagates semantic leaf counting through a statically placed width node with an explicit fill character.
+/// @tparam   placement the compile-time scalar placement
+/// @tparam   T         the formatted child type
+/// @tparam   ch_type   the fill character type
+template <::fast_io::manipulators::scalar_placement placement, typename T, ::std::integral ch_type>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::width_ch_t<placement, T, ch_type>>
+	: ::fast_io::details::decay::print_semantic_leaf_count<T>
+{};
+
+/// @brief    Propagates semantic leaf counting through a run-time placed width node.
+/// @tparam   T the formatted child type
+template <typename T>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::width_runtime_t<T>>
+	: ::fast_io::details::decay::print_semantic_leaf_count<T>
+{};
+
+/// @brief    Propagates semantic leaf counting through a run-time placed width node with an explicit fill character.
+/// @tparam   T       the formatted child type
+/// @tparam   ch_type the fill character type
+template <typename T, ::std::integral ch_type>
+struct print_semantic_leaf_count_impl<::fast_io::manipulators::width_runtime_ch_t<T, ch_type>>
+	: ::fast_io::details::decay::print_semantic_leaf_count<T>
+{};
+
+/// @brief  Maximum leaf count for selecting a separate run-time precise-size traversal.
+/// @details Eight-leaf and larger statically bounded compositions favor one-pass bounded materialization according to
+///          concat, fake-system-call, null-device, and file-sink benchmarks.
+inline constexpr ::std::size_t print_semantic_precise_materialization_leaf_threshold{8u};
+
+/// @brief    Detects whether a semantic print type contains width formatting.
+/// @details  Width-bearing compositions use a distinct no-coalescing strategy because exact measurement can otherwise
+///           be repeated by both the enclosing semantic run and the width dispatcher.
+/// @tparam   T the semantic node or leaf type
+template <typename T>
+struct print_semantic_contains_width_impl : ::std::false_type
+{};
+
+/// @brief    Normalizes cv-reference qualifiers before detecting width formatting.
+/// @tparam   T the semantic node or leaf type
+template <typename T>
+struct print_semantic_contains_width
+	: ::fast_io::details::decay::print_semantic_contains_width_impl<::std::remove_cvref_t<T>>
+{};
+
+/// @brief    Propagates width detection through a parameter wrapper.
+/// @tparam   T the wrapped semantic type
+template <typename T>
+struct print_semantic_contains_width_impl<::fast_io::parameter<T>>
+	: ::fast_io::details::decay::print_semantic_contains_width<T>
+{};
+
+/// @brief    Detects width formatting in any stored pack element.
+/// @tparam   Args the stored pack element types
+template <typename... Args>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::pack_t<Args...>>
+	: ::std::bool_constant<
+		  (::fast_io::details::decay::print_semantic_contains_width<Args>::value || ...)>
+{};
+
+/// @brief    Detects width formatting in either condition alternative.
+/// @tparam   T1 the true alternative type
+/// @tparam   T2 the false alternative type
+template <typename T1, typename T2>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::condition<T1, T2>>
+	: ::std::bool_constant<
+		  ::fast_io::details::decay::print_semantic_contains_width<T1>::value ||
+		  ::fast_io::details::decay::print_semantic_contains_width<T2>::value>
+{};
+
+/// @brief    Marks a statically placed width node as width-bearing.
+/// @tparam   placement the compile-time scalar placement
+/// @tparam   T         the formatted child type
+template <::fast_io::manipulators::scalar_placement placement, typename T>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::width_t<placement, T>> : ::std::true_type
+{};
+
+/// @brief    Marks a statically placed width node with an explicit fill character as width-bearing.
+/// @tparam   placement the compile-time scalar placement
+/// @tparam   T         the formatted child type
+/// @tparam   ch_type   the fill character type
+template <::fast_io::manipulators::scalar_placement placement, typename T, ::std::integral ch_type>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::width_ch_t<placement, T, ch_type>>
+	: ::std::true_type
+{};
+
+/// @brief    Marks a run-time placed width node as width-bearing.
+/// @tparam   T the formatted child type
+template <typename T>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::width_runtime_t<T>> : ::std::true_type
+{};
+
+/// @brief    Marks a run-time placed width node with an explicit fill character as width-bearing.
+/// @tparam   T       the formatted child type
+/// @tparam   ch_type the fill character type
+template <typename T, ::std::integral ch_type>
+struct print_semantic_contains_width_impl<::fast_io::manipulators::width_runtime_ch_t<T, ch_type>>
+	: ::std::true_type
+{};
+
 template <::std::integral char_type, typename T>
 struct print_semantic_static_precise_size_impl
 {

@@ -5890,6 +5890,98 @@ inline constexpr bool print_semantic_try_precise_coalesce(outputstmtype optstm, 
 	return false;
 }
 
+/// @brief    Tests whether precise coalescing matches the composition's cheapest strategy.
+/// @details  Width-bearing runs with no contiguous target avoid a duplicate outer measurement. Long statically
+///           bounded packs continue to bounded materialization and use the returned cursor as their actual length.
+/// @tparam   line          true when a trailing newline is appended
+/// @tparam   char_type     the character type of the output stream
+/// @tparam   outputstmtype the decayed output stream reference type
+/// @tparam   Args          the argument types in the semantic run
+/// @return   bool          true when the caller should attempt precise coalescing
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+inline consteval bool print_semantic_precise_coalesce_strategy_selected() noexcept
+{
+	// Compile-time structure determines whether invoking an exact-size traversal can improve this output path.
+	constexpr ::std::size_t coalesce_threshold{
+		::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, outputstmtype>()};
+	constexpr bool contains_width{
+		(::fast_io::details::decay::print_semantic_contains_width<
+			 ::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, Args>>::value ||
+		 ...)};
+	constexpr ::std::size_t semantic_leaf_count{
+		::fast_io::details::decay::print_semantic_leaf_count_sum<
+			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, Args>...>()};
+	constexpr ::std::size_t run_static_bound{
+		::fast_io::operations::decay::print_semantic_static_bounded_total_size<
+			line, char_type,
+			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, Args>...>()};
+	if constexpr (!::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+				  coalesce_threshold == 0u && contains_width)
+	{
+		// Width performs its own exact measurement, so an unavailable outer coalescing target must not measure first.
+		return false;
+	}
+	else if constexpr (
+		semantic_leaf_count >=
+			::fast_io::details::decay::print_semantic_precise_materialization_leaf_threshold &&
+		run_static_bound != SIZE_MAX)
+	{
+		// A long bounded run generates each leaf once and discards unused reserve capacity through its returned cursor.
+		return false;
+	}
+	else
+	{
+		// Compact or unbounded compositions retain exact-size coalescing and its allocation/write-count advantages.
+		return true;
+	}
+}
+
+/// @brief    Emits a precisely measured width child without repeating a leaf-level size calculation.
+/// @details  A direct precise-reserve leaf receives the length already computed by the width dispatcher. Composite
+///           children retain ordinary semantic emission because their aggregate length cannot describe each leaf.
+/// @tparam   char_type the character type of the destination buffer
+/// @tparam   T         the width child input type
+/// @param    iter      a pointer to the next output position
+/// @param    len       the previously measured complete child length
+/// @param    t         the width child to emit
+/// @return   char_type* a pointer one past the emitted child
+template <::std::integral char_type, typename T>
+inline constexpr char_type *print_semantic_emit_prepared_width_child(char_type *iter, ::std::size_t len, T &&t)
+{
+	decltype(auto) forwarded{
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(::std::forward<T>(t))};
+	using value_type = ::std::remove_cvref_t<decltype(forwarded)>;
+	if constexpr (!::fast_io::details::decay::print_semantic_node<value_type> &&
+				  ::fast_io::precise_reserve_printable<char_type, value_type>)
+	{
+		// A measured leaf can pass its exact extent directly to the precise define customization.
+		if constexpr (requires {
+						  {
+							  print_reserve_precise_define(::fast_io::io_reserve_type<char_type, value_type>, iter, len,
+														   ::std::forward<decltype(forwarded)>(forwarded))
+						  } -> ::std::same_as<char_type *>;
+					  })
+		{
+			// Pointer-returning precise define operations report the actual next output position.
+			return print_reserve_precise_define(::fast_io::io_reserve_type<char_type, value_type>, iter, len,
+												::std::forward<decltype(forwarded)>(forwarded));
+		}
+		else
+		{
+			// Void-returning precise define operations advance by the previously measured exact length.
+			print_reserve_precise_define(::fast_io::io_reserve_type<char_type, value_type>, iter, len,
+										 ::std::forward<decltype(forwarded)>(forwarded));
+			return iter + len;
+		}
+	}
+	else
+	{
+		// Composite and non-precise children use the regular semantic dispatcher.
+		return ::fast_io::operations::decay::print_semantic_emit_unchecked<char_type, false>(
+			iter, ::std::forward<decltype(forwarded)>(forwarded));
+	}
+}
+
 /// @brief    Emits a width-formatted semantic child using the most direct available output path.
 /// @details  The function first tries the stream put area, then a small stack buffer, and finally a streaming fallback
 ///           that writes padding and child output in sequence.
@@ -5926,7 +6018,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 			if (width <= len || placement_code == 0u)
 			{
 				// Direct-buffer width is already satisfied, so only the child output is emitted.
-				iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+				iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(iter, len,
+																										 reference);
 			}
 			else
 			{
@@ -5935,7 +6028,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 				if (placement_code == 1u)
 				{
 					// Direct-buffer left placement appends all padding after the child output.
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 					iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
 				}
 				else if (placement_code == 2u)
@@ -5944,7 +6038,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 					::std::size_t const left_padding{padding >> 1u};
 					::std::size_t const right_padding{padding - left_padding};
 					iter = ::fast_io::details::my_fill_n(iter, left_padding, fillch);
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 					iter = ::fast_io::details::my_fill_n(iter, right_padding, fillch);
 				}
 				else if (placement_code == 4u)
@@ -5956,15 +6051,16 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 					{
 						// Without an internal shift point, internal placement falls back to right placement.
 						iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
-						iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter,
-																										  reference);
+						iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+							iter, len, reference);
 					}
 					else
 					{
 						// A valid internal shift point lets the already-emitted suffix move right to make room.
 						char_type *const first{iter};
 						char_type *const last{
-							::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference)};
+							::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+								iter, len, reference)};
 						if (len < internal_len)
 						{
 							// An invalid internal span preserves the child output and avoids padding insertion.
@@ -5984,7 +6080,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 				{
 					// Direct-buffer right placement emits all padding before the child output.
 					iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 				}
 			}
 			if constexpr (line)
@@ -6017,7 +6114,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 			if (width <= len || placement_code == 0u)
 			{
 				// Stack-buffer width is already satisfied, so only the child output is emitted.
-				iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+				iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(iter, len,
+																										 reference);
 			}
 			else
 			{
@@ -6026,7 +6124,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 				if (placement_code == 1u)
 				{
 					// Stack-buffer left placement appends all padding after the child output.
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 					iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
 				}
 				else if (placement_code == 2u)
@@ -6035,7 +6134,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 					::std::size_t const left_padding{padding >> 1u};
 					::std::size_t const right_padding{padding - left_padding};
 					iter = ::fast_io::details::my_fill_n(iter, left_padding, fillch);
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 					iter = ::fast_io::details::my_fill_n(iter, right_padding, fillch);
 				}
 				else if (placement_code == 4u)
@@ -6047,15 +6147,16 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 					{
 						// Without an internal shift point, internal placement falls back to right placement.
 						iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
-						iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter,
-																										  reference);
+						iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+							iter, len, reference);
 					}
 					else
 					{
 						// A valid internal shift point lets the already-emitted suffix move right to make room.
 						char_type *const first{iter};
 						char_type *const last{
-							::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference)};
+							::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+								iter, len, reference)};
 						if (len < internal_len)
 						{
 							// An invalid internal span preserves the child output and avoids padding insertion.
@@ -6075,7 +6176,8 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype optstm, T &
 				{
 					// Stack-buffer right placement emits all padding before the child output.
 					iter = ::fast_io::details::my_fill_n(iter, padding, fillch);
-					iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, reference);
+					iter = ::fast_io::operations::decay::print_semantic_emit_prepared_width_child<char_type>(
+						iter, len, reference);
 				}
 			}
 			if constexpr (line)
@@ -6454,18 +6556,58 @@ struct print_semantic_emit_flat_continuation
 	{
 		// Strategy selection is ordered by cost: a compile-time bound avoids measurement, a precise size avoids excess
 		// allocation, and a run-time bound handles the remaining coalescible compositions.
-		if (!::fast_io::operations::decay::print_semantic_try_static_bounded_coalesce<line, char_type>(
-				optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
-			!::fast_io::operations::decay::print_semantic_try_precise_coalesce<line, char_type>(
-				optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
-			!::fast_io::operations::decay::print_semantic_try_bounded_coalesce<line, char_type>(
-				optstm, ::std::forward<FilteredArgs>(filtered_args)...))
+		if constexpr (
+			::fast_io::operations::decay::print_semantic_precise_coalesce_strategy_selected<
+				line, char_type, outputstmtype, FilteredArgs...>())
 		{
-			// Failed coalescing keeps semantics by flattening nodes around ordinary freestanding output.
-			::fast_io::operations::decay::print_semantic_emit_flat_impl<line, char_type>(
-				optstm,
-				::fast_io::operations::decay::print_semantic_emit_freestanding_continuation<outputstmtype>{optstm},
-				::std::forward<FilteredArgs>(filtered_args)...);
+			// Selected compact and unbounded compositions preserve the established three-stage coalescing shape.
+			if (!::fast_io::operations::decay::print_semantic_try_static_bounded_coalesce<line, char_type>(
+					optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
+				!::fast_io::operations::decay::print_semantic_try_precise_coalesce<line, char_type>(
+					optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
+				!::fast_io::operations::decay::print_semantic_try_bounded_coalesce<line, char_type>(
+					optstm, ::std::forward<FilteredArgs>(filtered_args)...))
+			{
+				// Failed selected coalescing keeps semantics by flattening nodes around ordinary freestanding output.
+				::fast_io::operations::decay::print_semantic_emit_flat_impl<line, char_type>(
+					optstm,
+					::fast_io::operations::decay::print_semantic_emit_freestanding_continuation<outputstmtype>{optstm},
+					::std::forward<FilteredArgs>(filtered_args)...);
+			}
+		}
+		else
+		{
+			constexpr bool has_contiguous_target{
+				::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> ||
+				(::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, outputstmtype>() != 0u)};
+			if constexpr (has_contiguous_target)
+			{
+				// Long bounded packs with contiguous storage skip precise sizing but retain both bounded stages.
+				if (!::fast_io::operations::decay::print_semantic_try_static_bounded_coalesce<line, char_type>(
+						optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
+					!::fast_io::operations::decay::print_semantic_try_bounded_coalesce<line, char_type>(
+						optstm, ::std::forward<FilteredArgs>(filtered_args)...))
+				{
+					// Failed bounded coalescing keeps semantics by flattening nodes around ordinary freestanding output.
+					::fast_io::operations::decay::print_semantic_emit_flat_impl<line, char_type>(
+						optstm,
+						::fast_io::operations::decay::print_semantic_emit_freestanding_continuation<outputstmtype>{optstm},
+						::std::forward<FilteredArgs>(filtered_args)...);
+				}
+			}
+			else
+			{
+				// Without contiguous storage, both run-time sizing passes would be unable to change the output strategy.
+				if (!::fast_io::operations::decay::print_semantic_try_static_bounded_coalesce<line, char_type>(
+						optstm, ::std::forward<FilteredArgs>(filtered_args)...))
+				{
+					// A failed static attempt falls directly to checked semantic emission without measuring an unusable bound.
+					::fast_io::operations::decay::print_semantic_emit_flat_impl<line, char_type>(
+						optstm,
+						::fast_io::operations::decay::print_semantic_emit_freestanding_continuation<outputstmtype>{optstm},
+						::std::forward<FilteredArgs>(filtered_args)...);
+				}
+			}
 		}
 	}
 };

@@ -390,10 +390,40 @@ inline constexpr void basic_general_concat_decay_ref_impl_precise(T &str, Arg ar
 	strlike_set_curr(io_strlike_type<ch_type, T>, str, ptr);
 }
 
+/// @brief  Maximum semantic leaf count for which concat performs a separate exact-size traversal.
+/// @details Benchmarked long packs are faster when a static reserve bound drives one-pass materialization. The strict
+///          threshold keeps compact packs on exact allocation while routing eight-leaf and larger packs to bounded
+///          generation, whose returned cursor supplies the actual constructed length.
+inline constexpr ::std::size_t basic_general_concat_precise_leaf_threshold{
+	::fast_io::details::decay::print_semantic_precise_materialization_leaf_threshold};
+
+/// @brief    Counts the maximum semantic leaves in a concat argument list.
+/// @tparam   Args the concat argument types
+template <typename... Args>
+inline constexpr ::std::size_t basic_general_concat_semantic_leaf_count =
+	::fast_io::details::decay::print_semantic_leaf_count_sum<Args...>();
+
+/// @brief    Tests whether every concat argument supplies a compile-time semantic upper bound.
+/// @tparam   ch_type the concat character type
+/// @tparam   Args    the concat argument types
+template <::std::integral ch_type, typename... Args>
+inline constexpr bool basic_general_concat_semantic_static_bounded =
+	(::fast_io::details::decay::print_semantic_static_bounded_size<ch_type, ::std::remove_cvref_t<Args>>::available &&
+	 ...);
+
+/// @brief    Selects exact-size semantic concat for compact compositions that can consume precise sizing.
+/// @details  Long statically bounded packs deliberately bypass this path so bounded materialization can generate each
+///           integer once. Compact conditions, width packs, and mixed packs retain exact allocation when it reduces
+///           allocation size or output operations.
+/// @tparam   ch_type the concat character type
+/// @tparam   Args    the concat argument types
 template <::std::integral ch_type, typename... Args>
 inline constexpr bool basic_general_concat_semantic_precise_ok =
 	(false || ... || ::fast_io::details::decay::print_semantic_node<Args>) &&
-	(::fast_io::details::decay::print_semantic_precise_size_ok<ch_type, ::std::remove_cvref_t<Args>>::value && ...);
+	(::fast_io::details::decay::print_semantic_precise_size_ok<ch_type, ::std::remove_cvref_t<Args>>::value && ...) &&
+	(::fast_io::details::decay::basic_general_concat_semantic_leaf_count<Args...> <
+		 ::fast_io::details::decay::basic_general_concat_precise_leaf_threshold ||
+	 !::fast_io::details::decay::basic_general_concat_semantic_static_bounded<ch_type, Args...>);
 
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline constexpr void basic_general_concat_decay_ref_impl(T &str, Args... args);
