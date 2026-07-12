@@ -1792,6 +1792,321 @@ inline constexpr auto generate_base_prefix_array() noexcept
 template <::std::integral char_type, ::std::size_t base>
 inline constexpr auto base_prefix_array{generate_base_prefix_array<char_type, base>()};
 
+template <::std::integral char_type, ::std::size_t base, ::std::size_t digits, bool uppercase = false>
+	requires((base == 2u && (digits == 4u || digits == 8u)) ||
+			 (base == 4u && (digits == 2u || digits == 4u)) ||
+			 (base == 8u && (digits == 3u || digits == 4u)) ||
+			 ((base == 16u || base == 32u) && digits == 2u))
+consteval auto generate_power_of_two_digits_table() noexcept
+{
+	constexpr ::std::size_t table_size{compile_pow_n<::std::size_t, base, digits>};
+	::fast_io::freestanding::array<char_type, table_size * digits> table;
+	for (::std::size_t value{}; value != table_size; ++value)
+	{
+		::std::size_t remaining{value};
+		for (::std::size_t position{digits}; position != 0u; --position)
+		{
+			table[value * digits + position - 1u] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+				static_cast<char8_t>(remaining % base));
+			remaining /= base;
+		}
+	}
+	return table;
+}
+
+template <::std::integral char_type, ::std::size_t base, ::std::size_t digits, bool uppercase = false>
+alignas(64) static constexpr auto power_of_two_digits_table{
+	generate_power_of_two_digits_table<char_type, base, digits, uppercase>()};
+
+template <::std::size_t base, bool uppercase = false, ::std::integral char_type, my_unsigned_integral T>
+	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
+inline constexpr char_type *print_reserve_power_of_two_main(char_type *first, T value) noexcept
+{
+	constexpr ::std::size_t type_bits{::std::numeric_limits<T>::digits};
+	::std::size_t const bit_length{
+		type_bits - static_cast<::std::size_t>(::std::countl_zero(static_cast<T>(value | static_cast<T>(1u))))};
+	constexpr ::std::size_t bits_per_digit{
+		base == 2u ? 1u : (base == 4u ? 2u : (base == 8u ? 3u : (base == 16u ? 4u : 5u)))};
+	::std::size_t const length{(bit_length - 1u) / bits_per_digit + 1u};
+	char_type *const last{first + length};
+	char_type *iter{last};
+	if constexpr (base == 2u)
+	{
+		constexpr ::std::size_t digits_per_iteration{8u};
+		constexpr ::std::size_t bits_per_iteration{8u};
+		constexpr T mask{static_cast<T>((1u << bits_per_iteration) - 1u)};
+		constexpr auto const *table{power_of_two_digits_table<char_type, base, digits_per_iteration>.data()};
+		if constexpr (type_bits > bits_per_iteration * 4u)
+		{
+#if defined(__clang__)
+#pragma clang loop unroll(disable)
+#elif defined(__GNUC__)
+#pragma GCC unroll 0
+#endif
+			while (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 4u)))
+			{
+				::std::size_t const index0{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const index1{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				::std::size_t const index2{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 2u)) & mask) * digits_per_iteration};
+				::std::size_t const index3{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 3u)) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 4u;
+				iter -= digits_per_iteration * 4u;
+				non_overlapped_copy_n(table + index3, digits_per_iteration, iter);
+				non_overlapped_copy_n(table + index2, digits_per_iteration, iter + digits_per_iteration);
+				non_overlapped_copy_n(table + index1, digits_per_iteration, iter + digits_per_iteration * 2u);
+				non_overlapped_copy_n(table + index0, digits_per_iteration, iter + digits_per_iteration * 3u);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration * 2u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 2u)))
+			{
+				::std::size_t const low_index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const high_index{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 2u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + low_index, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + high_index, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
+			{
+				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				value >>= bits_per_iteration;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
+			}
+		}
+		if (value >= static_cast<T>(16u))
+		{
+			constexpr ::std::size_t tail_digits{4u};
+			constexpr T tail_mask{static_cast<T>(15u)};
+			constexpr auto const *tail_table{power_of_two_digits_table<char_type, base, tail_digits>.data()};
+			::std::size_t const index{static_cast<::std::size_t>(value & tail_mask) * tail_digits};
+			value >>= 4u;
+			iter -= tail_digits;
+			non_overlapped_copy_n(tail_table + index, tail_digits, iter);
+		}
+		do
+		{
+			*--iter = ::fast_io::char_literal_add<char_type>(value & static_cast<T>(1u));
+			value >>= 1u;
+		} while (value != 0u);
+	}
+	else if constexpr (base == 4u)
+	{
+		constexpr ::std::size_t digits_per_iteration{4u};
+		constexpr ::std::size_t bits_per_iteration{8u};
+		constexpr T mask{static_cast<T>((1u << bits_per_iteration) - 1u)};
+		constexpr auto const *table{power_of_two_digits_table<char_type, base, digits_per_iteration>.data()};
+		if constexpr (type_bits > bits_per_iteration * 4u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 4u)))
+			{
+				::std::size_t const index0{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const index1{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				::std::size_t const index2{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 2u)) & mask) * digits_per_iteration};
+				::std::size_t const index3{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 3u)) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 4u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index0, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index1, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index2, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index3, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration * 2u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 2u)))
+			{
+				::std::size_t const low_index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const high_index{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 2u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + low_index, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + high_index, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
+			{
+				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				value >>= bits_per_iteration;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
+			}
+		}
+		if (value >= static_cast<T>(16u))
+		{
+			constexpr ::std::size_t tail_digits{2u};
+			constexpr T tail_mask{static_cast<T>(15u)};
+			constexpr auto const *tail_table{power_of_two_digits_table<char_type, base, tail_digits>.data()};
+			::std::size_t const index{static_cast<::std::size_t>(value & tail_mask) * tail_digits};
+			value >>= 4u;
+			iter -= tail_digits;
+			non_overlapped_copy_n(tail_table + index, tail_digits, iter);
+		}
+		do
+		{
+			*--iter = ::fast_io::char_literal_add<char_type>(value & static_cast<T>(3u));
+			value >>= 2u;
+		} while (value != 0u);
+	}
+	else if constexpr (base == 8u)
+	{
+		constexpr ::std::size_t digits_per_iteration{4u};
+		constexpr ::std::size_t bits_per_iteration{12u};
+		constexpr T mask{static_cast<T>((1u << bits_per_iteration) - 1u)};
+		constexpr auto const *table{power_of_two_digits_table<char_type, base, digits_per_iteration>.data()};
+		if constexpr (type_bits > bits_per_iteration * 4u)
+		{
+#if defined(__clang__)
+#pragma clang loop unroll(disable)
+#elif defined(__GNUC__)
+#pragma GCC unroll 0
+#endif
+			while (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 4u)))
+			{
+				::std::size_t const index0{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const index1{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				::std::size_t const index2{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 2u)) & mask) * digits_per_iteration};
+				::std::size_t const index3{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 3u)) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 4u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index0, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index1, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index2, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index3, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration * 2u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 2u)))
+			{
+				::std::size_t const low_index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const high_index{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 2u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + low_index, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + high_index, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
+			{
+				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				value >>= bits_per_iteration;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > 9u)
+		{
+			if (value >= static_cast<T>(512u))
+			{
+				constexpr ::std::size_t tail_digits{3u};
+				constexpr T tail_mask{static_cast<T>(511u)};
+				constexpr auto const *tail_table{power_of_two_digits_table<char_type, base, tail_digits>.data()};
+				::std::size_t const index{static_cast<::std::size_t>(value & tail_mask) * tail_digits};
+				value >>= 9u;
+				iter -= tail_digits;
+				non_overlapped_copy_n(tail_table + index, tail_digits, iter);
+			}
+		}
+		do
+		{
+			*--iter = ::fast_io::char_literal_add<char_type>(value & static_cast<T>(7u));
+			value >>= 3u;
+		} while (value != 0u);
+	}
+	else
+	{
+		constexpr ::std::size_t digits_per_iteration{2u};
+		constexpr ::std::size_t bits_per_iteration{base == 16u ? 8u : 10u};
+		constexpr T mask{static_cast<T>((static_cast<T>(1u) << bits_per_iteration) - 1u)};
+		constexpr auto const *table{
+			power_of_two_digits_table<char_type, base, digits_per_iteration, uppercase>.data()};
+		if constexpr (type_bits > bits_per_iteration * 4u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 4u)))
+			{
+				::std::size_t const index0{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const index1{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				::std::size_t const index2{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 2u)) & mask) * digits_per_iteration};
+				::std::size_t const index3{
+					static_cast<::std::size_t>((value >> (bits_per_iteration * 3u)) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 4u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index0, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index1, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index2, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index3, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration * 2u)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << (bits_per_iteration * 2u)))
+			{
+				::std::size_t const low_index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				::std::size_t const high_index{
+					static_cast<::std::size_t>((value >> bits_per_iteration) & mask) * digits_per_iteration};
+				value >>= bits_per_iteration * 2u;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + low_index, digits_per_iteration, iter);
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + high_index, digits_per_iteration, iter);
+			}
+		}
+		if constexpr (type_bits > bits_per_iteration)
+		{
+			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
+			{
+				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
+				value >>= bits_per_iteration;
+				iter -= digits_per_iteration;
+				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
+			}
+		}
+		do
+		{
+			*--iter = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+				static_cast<char8_t>(value & static_cast<T>(base - 1u)));
+			value >>= bits_per_digit;
+		} while (value != 0u);
+	}
+	return last;
+}
+
 template <::std::size_t base, bool uppercase_showbase, bool oct_c2y, ::std::integral char_type>
 inline constexpr char_type *print_reserve_show_base_impl(char_type *iter)
 {
@@ -2163,8 +2478,23 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 		}
 		else
 		{
-			if constexpr (base == 10 && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
+			if constexpr ((base == 2u || base == 4u || base == 8u || base == 16u || base == 32u) &&
+						  !need_seperate_print<T>)
 			{
+				return print_reserve_power_of_two_main<base, uppercase>(first, u);
+			}
+			else if constexpr (base == 10 && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
+			{
+#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+				if constexpr (::std::same_as<char_type, char> && sizeof(T) == sizeof(::std::uint_least64_t))
+				{
+					if (!::std::is_constant_evaluated())
+					{
+						return ::fast_io::details::jeaiii::champagne_lemire_main(
+							first, static_cast<::std::uint_least64_t>(u));
+					}
+				}
+#endif
 				if constexpr (false)
 				{
 					return ::fast_io::details::uprsv::uprsv_main<base, uppercase>(first, u);
