@@ -40,6 +40,22 @@ The performance harness also performs a byte-for-byte preflight against `std::to
 
 This design controls ordering drift, frequency transitions, interruptions, point-order bias, and false sample inflation. It does not eliminate shared-system noise, and it does not generalize M4 timings to another CPU.
 
+## Assembly-level decimal analysis
+
+Decimal is the primary path and was audited separately. The retained `jeaiii_main` implementation is stackless and contains no calls on its conversion paths. One- and two-digit values share a branchless first-pair lookup. Three through eight digits use bounded range kernels, and nine digits use a fixed kernel. Values with 10 through 16 digits use one reciprocal division by 10⁸, a bounded leading range, and one fixed eight-digit suffix. Values with 17 through 20 digits reuse two fixed eight-digit suffixes.
+
+The complete native result is a clear win over `std::to_chars` at every decimal length. The fast_io/std ratios are 0.499–0.500x for one and two digits, 0.666–0.801x for three through eight digits, 0.726x for nine digits, 0.785x for ten digits, 0.941–0.959x for 11 through 16 digits, and 0.811–0.830x for 17 through 20 digits. The weakest point is 15 digits at 0.959x with a 95% interval of [0.953, 0.960].
+
+The fixed-length kernel probes remove only the public length dispatcher; they retain reciprocal division, table-address generation, all pair loads, and all output stores. The standard-library 12- and 16-digit wrappers require a stack frame and an out-of-line 32-bit conversion call, while the fast_io kernels remain leaf functions.
+
+| Decimal kernel | Static instructions | uOps/iteration | Apple M4/M1 throughput | Cortex-A76/A57 throughput |
+|:---|---:|---:|---:|---:|
+| 10 digits | 39 | 43 | 8.5 | 14.3 |
+| 12 digits | 50 | 55 | 11.0 | 18.3 |
+| 16 digits | 58 | 65 | 12.8 | 21.7 |
+
+Two additional candidates were rejected. Exact-length prefix dispatch increased the helper from 310 to 329 instructions and introduced a 48-byte stack frame on the long path. A scalar one-digit shortcut improved several ranges but regressed two digits by about 20% and 19–20 digits by 2–3% in nine-process same-process A/B testing. The branchless first-pair and paired-range design was therefore retained.
+
 ## Assembly-level power-of-two optimization
 
 The retained changes are confined to the AArch64 branches inside the existing power-of-two conversion function. Binary values through 16 digits compose existing four- and eight-digit tables without a scalar tail. Seven-digit octal values use one leading digit and two independent three-digit table copies. Two-digit hexadecimal values use the existing pair table; the previously retained bounded hexadecimal path covers the remaining short lengths.

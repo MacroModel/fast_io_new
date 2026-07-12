@@ -4708,15 +4708,31 @@ inline constexpr ::std::size_t print_semantic_precise_size(T &&t)
 	}
 	else if constexpr (::fast_io::details::decay::print_semantic_width_v<node_type>)
 	{
-		// Width nodes measure the child and then account for the requested field width.
+		// Width nodes use a static child bound to avoid measuring a child that padding always covers.
 		using width_traits = ::fast_io::details::decay::print_semantic_width_traits<node_type>;
-		::std::size_t const child_len{
-			::fast_io::operations::decay::print_semantic_precise_size_arg<char_type>(node_ref.reference)};
+		using width_child_type =
+			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, decltype(node_ref.reference)>;
 		::std::size_t const width{node_ref.width};
 		auto const placement{
 			::fast_io::operations::decay::print_semantic_width_placement<width_traits>(node_ref)};
 		::std::size_t const placement_code{
 			::fast_io::operations::decay::print_semantic_width_placement_code(placement)};
+		if constexpr (::fast_io::details::decay::print_semantic_static_bounded_size<
+						  char_type, width_child_type>::available)
+		{
+			// A compile-time child bound can prove that active padding determines the complete field length.
+			constexpr ::std::size_t child_bound{
+				::fast_io::details::decay::print_semantic_static_bounded_size<char_type, width_child_type>::size};
+			if (placement_code != 0u && child_bound <= width)
+			{
+				// Every possible child fits inside the requested field, so no run-time child measurement is needed.
+				// The unchecked emitter uses the same proof to select bounded one-pass child emission safely.
+				return width;
+			}
+		}
+		// The field width does not dominate the child bound, so the actual child length remains semantically relevant.
+		::std::size_t const child_len{
+			::fast_io::operations::decay::print_semantic_precise_size_arg<char_type>(node_ref.reference)};
 		if (width <= child_len || placement_code == 0u)
 		{
 			// Disabled placement or an already-wide child emits only the child size.
@@ -4749,27 +4765,29 @@ inline constexpr ::std::size_t print_semantic_precise_size_arg(T &&t)
 
 /// @brief    Forward declaration for unchecked semantic emission into an already-sized buffer.
 /// @tparam   char_type the destination buffer character type
+/// @tparam   bounded   true when the destination was sized from an upper bound and reserve emitters may use it
 /// @tparam   T         the semantic node or leaf type
 /// @param    iter      the current output cursor
 /// @param    t         the semantic node or leaf to emit
 /// @return   char_type* one past the emitted output
-template <::std::integral char_type, typename T>
+template <::std::integral char_type, bool bounded = false, typename T>
 inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t);
 
 /// @brief    Forwards one semantic print argument and emits it into an already-sized buffer.
 /// @details  This wrapper preserves the semantic forwarding rules used by the checked emitters before entering the
 ///           unchecked node dispatcher.
 /// @tparam   char_type  the character type of the destination buffer
+/// @tparam   bounded    true when the caller guarantees upper-bound capacity instead of only precise-size capacity
 /// @tparam   T          the argument type accepted by the semantic print layer
 /// @param    iter       a pointer to the next output position in a buffer large enough for the argument
 /// @param    t          the argument to print
 /// @return   char_type* a pointer one past the emitted argument
-template <::std::integral char_type, typename T>
+template <::std::integral char_type, bool bounded = false, typename T>
 inline constexpr char_type *print_semantic_emit_unchecked_arg(char_type *iter, T &&t)
 {
 	decltype(auto) forwarded{
 		::fast_io::details::decay::print_semantic_input_forward<char_type>(::std::forward<T>(t))};
-	return ::fast_io::operations::decay::print_semantic_emit_unchecked<char_type>(
+	return ::fast_io::operations::decay::print_semantic_emit_unchecked<char_type, bounded>(
 		iter, ::std::forward<decltype(forwarded)>(forwarded));
 }
 
@@ -5045,7 +5063,8 @@ print_semantic_emit_unchecked_condition_pack_try_factor(char_type *iter, bool pr
 
 /// @brief    Applies unchecked semantic emission to every element supplied by a pack expansion.
 /// @tparam   char_type the character type of the destination buffer
-template <::std::integral char_type>
+/// @tparam   bounded   true when every expanded element may consume its reserve upper-bound capacity
+template <::std::integral char_type, bool bounded = false>
 struct print_semantic_emit_unchecked_pack_continuation
 {
 	char_type **iterptr;
@@ -5056,21 +5075,23 @@ struct print_semantic_emit_unchecked_pack_continuation
 	template <typename... PackArgs>
 	inline constexpr void operator()(PackArgs &&...pack_args) const
 	{
-		((*iterptr = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(
+		// Preserve the caller's capacity policy across every element in the expanded pack.
+		((*iterptr = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
 			  *iterptr, ::std::forward<PackArgs>(pack_args))),
 		 ...);
 	}
 };
 
 /// @brief    Emits a semantic leaf into an already-sized buffer.
-/// @details  The dispatcher selects the most direct leaf protocol available: null output, reserve output, scatter
-///           output, or reserve-scatters output.
+/// @details  Exact-sized destinations use precise protocols where required. Upper-bound-sized destinations prefer
+///           reserve protocols so a leaf that supports both bounded and precise sizing is emitted only once.
 /// @tparam   char_type  the character type of the destination buffer
+/// @tparam   bounded    true when the destination has capacity for the leaf's reserve upper bound
 /// @tparam   T          the semantic leaf type
 /// @param    iter       a pointer to the next output position
 /// @param    t          the leaf to emit
 /// @return   char_type* a pointer one past the emitted leaf
-template <::std::integral char_type, typename T>
+template <::std::integral char_type, bool bounded = false, typename T>
 inline constexpr char_type *print_semantic_emit_unchecked_leaf(char_type *iter, T &&t)
 {
 	using value_type = ::std::remove_cvref_t<T>;
@@ -5078,6 +5099,14 @@ inline constexpr char_type *print_semantic_emit_unchecked_leaf(char_type *iter, 
 	{
 		// Null leaves intentionally emit no output and leave the cursor unchanged.
 		return iter;
+	}
+	else if constexpr (bounded && (::fast_io::reserve_printable<char_type, value_type> ||
+								   ::fast_io::dynamic_reserve_printable<char_type, value_type>))
+	{
+		// The caller allocated the reserve upper bound, so the one-pass reserve define is both safe and cheaper than
+		// recomputing an exact length before emission.
+		return print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, iter,
+									::std::forward<T>(t));
 	}
 	else if constexpr (::fast_io::static_precise_reserve_printable<char_type, value_type>)
 	{
@@ -5167,15 +5196,16 @@ inline constexpr char_type *print_semantic_emit_unchecked_leaf(char_type *iter, 
 }
 
 /// @brief    Emits any semantic print node into an already-sized buffer.
-/// @details  This unchecked dispatcher is used after precise sizing or coalescing has guaranteed enough contiguous
-///           output space. It preserves semantic nodes such as packs, conditions, and width manipulators while
-///           delegating leaves to the leaf protocol dispatcher.
+/// @details  This unchecked dispatcher is used after precise sizing or bounded coalescing has guaranteed enough
+///           contiguous output space. The bounded policy is propagated through packs, conditions, and width nodes so
+///           leaves select an emission protocol compatible with the capacity proof held by the caller.
 /// @tparam   char_type  the character type of the destination buffer
+/// @tparam   bounded    true when the buffer is sized by semantic upper bounds rather than exact emitted lengths
 /// @tparam   T          the semantic node or leaf type
 /// @param    iter       a pointer to the next output position
 /// @param    t          the node to emit
 /// @return   char_type* a pointer one past the emitted node
-template <::std::integral char_type, typename T>
+template <::std::integral char_type, bool bounded, typename T>
 inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t)
 {
 	auto &&node_ref{::fast_io::details::decay::print_semantic_node_ref(::std::forward<T>(t))};
@@ -5185,7 +5215,7 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 		// Packs emit each element in storage order into the same unchecked output run.
 		::fast_io::details::decay::print_semantic_pack_apply(
 			::std::forward<decltype(node_ref)>(node_ref),
-			::fast_io::operations::decay::print_semantic_emit_unchecked_pack_continuation<char_type>{
+			::fast_io::operations::decay::print_semantic_emit_unchecked_pack_continuation<char_type, bounded>{
 				__builtin_addressof(iter)});
 		return iter;
 	}
@@ -5194,7 +5224,10 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 		// Condition nodes choose one alternative, with optional common factoring for small pack alternatives.
 		using first_type = ::std::remove_cvref_t<decltype(node_ref.t1)>;
 		using second_type = ::std::remove_cvref_t<decltype(node_ref.t2)>;
-		if constexpr (::fast_io::details::print_pack<first_type> && ::fast_io::details::print_pack<second_type>)
+		// Common factoring uses the precise emitter and is therefore restricted to exact-sized destinations.
+		// Bounded destinations select a branch directly so their upper-bound capacity policy reaches every leaf.
+		if constexpr (!bounded && ::fast_io::details::print_pack<first_type> &&
+					  ::fast_io::details::print_pack<second_type>)
 		{
 			// Condition alternatives that are both packs may expose equal edge elements for shared emission.
 			if constexpr (first_type::size == second_type::size &&
@@ -5213,8 +5246,8 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 				if (node_ref.pred)
 				{
 					// The predicate selected the true pack after no safe shared factor was found.
-					return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter,
-																									  node_ref.t1);
+					return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(iter,
+																											   node_ref.t1);
 				}
 				// The predicate selected the false pack after no safe shared factor was found.
 				return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, node_ref.t2);
@@ -5234,20 +5267,24 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 		}
 		else
 		{
-			// Non-pack alternatives are emitted by the predicate without common-factor analysis.
+			// Direct selection handles non-pack alternatives and every bounded condition without factor analysis.
 			if (node_ref.pred)
 			{
-				// Non-pack condition alternatives emit the true branch selected by the predicate.
-				return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, node_ref.t1);
+				// Propagate the capacity policy through the true branch selected by the predicate.
+				return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(iter,
+																										   node_ref.t1);
 			}
-			// Non-pack condition alternatives emit the false branch selected by the predicate.
-			return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, node_ref.t2);
+			// Propagate the capacity policy through the false branch selected by the predicate.
+			return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(iter,
+																									   node_ref.t2);
 		}
 	}
 	else if constexpr (::fast_io::details::decay::print_semantic_width_v<node_type>)
 	{
 		// Width nodes materialize their child before padding so dynamic-reserve children use their actual length.
 		using width_traits = ::fast_io::details::decay::print_semantic_width_traits<node_type>;
+		using width_child_type =
+			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, decltype(node_ref.reference)>;
 		::std::size_t const width{node_ref.width};
 		char_type const fillch{
 			::fast_io::operations::decay::print_semantic_width_fill_char<char_type, width_traits>(node_ref)};
@@ -5256,8 +5293,34 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 		::std::size_t const placement_code{
 			::fast_io::operations::decay::print_semantic_width_placement_code(placement)};
 		char_type *const first{iter};
-		char_type *const last{
-			::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(iter, node_ref.reference)};
+		char_type *last;
+		if constexpr (!bounded && ::fast_io::details::decay::print_semantic_static_bounded_size<
+									  char_type, width_child_type>::available)
+		{
+			// An exact-sized outer run may still use bounded child emission when active padding proves that the field
+			// has at least the child's compile-time maximum capacity.
+			constexpr ::std::size_t child_bound{
+				::fast_io::details::decay::print_semantic_static_bounded_size<char_type, width_child_type>::size};
+			if (placement_code != 0u && child_bound <= width)
+			{
+				// The requested field contains the complete reserve frame, allowing one-pass bounded child emission.
+				last = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, true>(
+					iter, node_ref.reference);
+			}
+			else
+			{
+				// Without a dominating field width, the exact outer allocation cannot safely admit reserve over-allocation.
+				last = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, false>(
+					iter, node_ref.reference);
+			}
+		}
+		else
+		{
+			// Already-bounded runs propagate their proof directly; children without a static bound retain the caller's
+			// exact policy.
+			last = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
+				iter, node_ref.reference);
+		}
 		::std::size_t const len{static_cast<::std::size_t>(last - first)};
 		if (width <= len || placement_code == 0u)
 		{
@@ -5303,7 +5366,7 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 	else
 	{
 		// Leaf nodes use the fastest printable protocol supported by their decayed type.
-		return ::fast_io::operations::decay::print_semantic_emit_unchecked_leaf<char_type>(
+		return ::fast_io::operations::decay::print_semantic_emit_unchecked_leaf<char_type, bounded>(
 			iter, ::std::forward<decltype(node_ref)>(node_ref));
 	}
 }
@@ -5388,17 +5451,21 @@ inline constexpr ::std::size_t print_semantic_precise_total_size(Args &&...args)
 	return total;
 }
 
-/// @brief    Emits a precise semantic print run into an already-sized contiguous buffer.
+/// @brief    Emits a semantic print run into an already-sized contiguous buffer.
+/// @details  The bounded policy distinguishes buffers allocated from reserve upper bounds from buffers allocated at
+///           exact emitted size, preventing precise-capable leaves from forcing unnecessary second measurements.
 /// @tparam   line      true when a trailing newline is appended
 /// @tparam   char_type the character type of the destination buffer
+/// @tparam   bounded   true when the buffer has capacity for every argument's semantic reserve upper bound
 /// @tparam   Args      the argument types in the run
 /// @param    iter      a pointer to the next output position
 /// @param    args      the arguments to emit in order
 /// @return   char_type* a pointer one past the emitted run
-template <bool line, ::std::integral char_type, typename... Args>
+template <bool line, ::std::integral char_type, bool bounded = false, typename... Args>
 inline constexpr char_type *print_semantic_emit_unchecked_run(char_type *iter, Args &&...args)
 {
-	((iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type>(
+	// Apply one consistent capacity policy to the complete run before appending the optional line terminator.
+	((iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
 		  iter, ::std::forward<Args>(args))),
 	 ...);
 	if constexpr (line)
@@ -5419,7 +5486,9 @@ template <::std::integral char_type, typename T>
 inline constexpr ::std::size_t print_semantic_bounded_size_arg(T &&t);
 
 /// @brief    Computes an emitted-size upper bound for a semantic leaf.
-/// @details  Precise leaves use their exact size; dynamic-reserve leaves use their object-specific reserve bound.
+/// @details  Static reserve bounds take precedence over precise sizing so a bounded allocation and its subsequent
+///           emission use the same protocol. Leaves without a static reserve bound fall back to exact or dynamic
+///           object-specific sizing.
 /// @tparam   char_type the output character type
 /// @tparam   T         the semantic leaf type
 /// @param    t         the leaf to measure
@@ -5428,7 +5497,12 @@ template <::std::integral char_type, typename T>
 inline constexpr ::std::size_t print_semantic_bounded_size_leaf(T &&t)
 {
 	using value_type = ::std::remove_cvref_t<T>;
-	if constexpr (::fast_io::details::decay::print_semantic_precise_leaf_size_ok_v<char_type, value_type>)
+	if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+	{
+		// Prefer the compile-time reserve maximum even when the leaf also exposes a run-time precise size.
+		return print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>);
+	}
+	else if constexpr (::fast_io::details::decay::print_semantic_precise_leaf_size_ok_v<char_type, value_type>)
 	{
 		// Existing precise leaves already provide an exact bound.
 		return ::fast_io::operations::decay::print_semantic_precise_size_leaf<char_type>(::std::forward<T>(t));
@@ -5437,11 +5511,6 @@ inline constexpr ::std::size_t print_semantic_bounded_size_leaf(T &&t)
 	{
 		// Dynamic reserve leaves report the maximum buffer size needed for this object.
 		return print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>, ::std::forward<T>(t));
-	}
-	else if constexpr (::fast_io::reserve_printable<char_type, value_type>)
-	{
-		// Static reserve leaves expose a compile-time object-independent upper bound.
-		return print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>);
 	}
 }
 
@@ -5555,6 +5624,75 @@ inline constexpr ::std::size_t print_semantic_bounded_total_size(Args &&...args)
 	return total;
 }
 
+/// @brief    Attempts one-pass coalescing from a compile-time semantic upper bound.
+/// @details  This path intentionally precedes precise coalescing. When the complete run has a static reserve bound,
+///           it can emit directly with reserve protocols and avoid a separate exact-size traversal. The path is used
+///           only when an existing output area or the stream's coalescing threshold can hold the proven maximum.
+/// @tparam   line          true when a trailing newline is appended
+/// @tparam   char_type     the character type of the output stream
+/// @tparam   outputstmtype the decayed output stream reference type
+/// @tparam   Args          the argument types in the semantic run
+/// @param    optstm        the output stream reference
+/// @param    args          the arguments to emit
+/// @return   bool          true when this path emitted the run or proved it empty
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+inline constexpr bool print_semantic_try_static_bounded_coalesce(outputstmtype optstm, Args &&...args)
+{
+	// Forwarded semantic types determine whether every element contributes a compile-time reserve maximum.
+	constexpr ::std::size_t static_bound{
+		::fast_io::operations::decay::print_semantic_static_bounded_total_size<
+			line, char_type,
+			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, Args>...>()};
+	if constexpr (static_bound == SIZE_MAX)
+	{
+		// At least one element lacks a static upper bound, so precise or run-time bounded strategies must decide.
+		return false;
+	}
+	else if constexpr (static_bound == 0u)
+	{
+		// An empty non-line run is complete without touching the output stream.
+		return true;
+	}
+	else
+	{
+		// A non-zero compile-time bound can be consumed either by the stream's put area or by a fixed stack frame.
+		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
+		{
+			// Buffered streams avoid a temporary frame when their current put area contains the entire reserve bound.
+			char_type *const curr{obuffer_curr(optstm)};
+			char_type *const end{obuffer_end(optstm)};
+			if (static_cast<::std::size_t>(end - curr) >= static_bound)
+			{
+				// The static capacity proof permits bounded leaf emission directly into the stream buffer.
+				char_type *const iter{
+					::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
+						curr, ::std::forward<Args>(args)...)};
+				obuffer_set_curr(optstm, iter);
+				return true;
+			}
+		}
+		constexpr ::std::size_t threshold_chars{
+			::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, outputstmtype>()};
+		if constexpr (threshold_chars != 0u && static_bound <= threshold_chars)
+		{
+			// The stream accepts full-output coalescing and the proven maximum fits a fixed local frame.
+			char_type buffer[static_bound];
+			char_type *const iter{
+				::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
+					buffer, ::std::forward<Args>(args)...)};
+			if (iter != buffer)
+			{
+				// Write only the bytes actually produced; reserve capacity beyond the returned cursor is discarded.
+				::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
+			}
+			// A zero-byte result is still successfully handled because the non-zero bound is only a maximum.
+			return true;
+		}
+		// Neither available output storage nor the coalescing policy can hold the static reserve frame.
+		return false;
+	}
+}
+
 /// @brief    Attempts to coalesce a bounded semantic print run into one contiguous output operation.
 /// @details  This path admits dynamic-reserve leaves by allocating for their upper bound and writing the actual length.
 /// @tparam   line          true when a trailing newline is appended
@@ -5577,6 +5715,7 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype optstm, 
 			::fast_io::operations::decay::print_semantic_bounded_total_size<line, char_type>(args...)};
 		if (required == 0)
 		{
+			// The selected semantic branch emits no bytes, so the bounded path completes without an output operation.
 			return true;
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
@@ -5586,8 +5725,9 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype optstm, 
 			char_type *const end{obuffer_end(optstm)};
 			if (static_cast<::std::size_t>(end - curr) >= required)
 			{
+				// The put area was checked against the upper bound, so reserve-based bounded emission is safe in place.
 				char_type *const iter{
-					::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type>(
+					::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
 						curr, ::std::forward<Args>(args)...)};
 				obuffer_set_curr(optstm, iter);
 				return true;
@@ -5606,10 +5746,11 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype optstm, 
 				// Statically bounded runs use the proven maximum instead of the stream threshold as frame size.
 				if (required <= static_bound)
 				{
+					// Materialize with the same static-bound policy used to size this fixed local frame.
 					constexpr ::std::size_t buffer_size{static_bound == 0 ? 1u : static_bound};
 					char_type buffer[buffer_size];
 					char_type *const iter{
-						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type>(
+						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
 							buffer, ::std::forward<Args>(args)...)};
 					::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
 					return true;
@@ -5620,9 +5761,10 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype optstm, 
 				// Runs without a static upper bound preserve the historical threshold-sized stack buffer.
 				if (required <= threshold_chars)
 				{
+					// The threshold-sized frame contains the run-time upper bound and therefore admits bounded emission.
 					char_type buffer[threshold_chars];
 					char_type *const iter{
-						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type>(
+						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
 							buffer, ::std::forward<Args>(args)...)};
 					::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
 					return true;
@@ -5634,10 +5776,11 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype optstm, 
 			{
 				if (required <= materialize_limit)
 				{
+					// Allocate the measured upper bound exactly; emission may return an earlier cursor for shorter output.
 					::fast_io::details::buffer_alloc_arr_ptr<char_type, false> buffer(required);
 					char_type *const first{buffer.get()};
 					char_type *const last{
-						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type>(
+						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
 							first, ::std::forward<Args>(args)...)};
 					::fast_io::operations::decay::write_all_decay(optstm, first, last);
 					return true;
@@ -6293,7 +6436,8 @@ struct print_semantic_emit_freestanding_continuation
 };
 
 /// @brief    Entry continuation for flattened semantic emission.
-/// @details  It tries precise and bounded coalescing for the whole filtered run before semantic flattening.
+/// @details  It first tries one-pass static-bound coalescing, then exact-size coalescing, and finally general run-time
+///           bounded coalescing before falling back to semantic flattening.
 /// @tparam   line          true when a trailing newline is appended
 /// @tparam   char_type     the character type of the output stream
 /// @tparam   outputstmtype the decayed output stream reference type
@@ -6308,7 +6452,11 @@ struct print_semantic_emit_flat_continuation
 	template <typename... FilteredArgs>
 	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
 	{
-		if (!::fast_io::operations::decay::print_semantic_try_precise_coalesce<line, char_type>(
+		// Strategy selection is ordered by cost: a compile-time bound avoids measurement, a precise size avoids excess
+		// allocation, and a run-time bound handles the remaining coalescible compositions.
+		if (!::fast_io::operations::decay::print_semantic_try_static_bounded_coalesce<line, char_type>(
+				optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
+			!::fast_io::operations::decay::print_semantic_try_precise_coalesce<line, char_type>(
 				optstm, ::std::forward<FilteredArgs>(filtered_args)...) &&
 			!::fast_io::operations::decay::print_semantic_try_bounded_coalesce<line, char_type>(
 				optstm, ::std::forward<FilteredArgs>(filtered_args)...))

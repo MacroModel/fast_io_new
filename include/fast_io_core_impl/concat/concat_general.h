@@ -520,8 +520,31 @@ struct basic_general_concat_select_condition_phase1_continuation
 };
 
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
-inline constexpr void basic_general_concat_decay_ref_impl_semantic_precise(T &str, Args... args)
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr void
+basic_general_concat_decay_ref_impl_semantic_precise(T &str, Args... args)
 {
+	if constexpr (sso_buffer_strlike<ch_type, T>)
+	{
+		constexpr ::std::size_t local_cap{strlike_sso_size(io_strlike_type<ch_type, T>)};
+		constexpr ::std::size_t static_bound{
+			::fast_io::operations::decay::print_semantic_static_bounded_total_size<line, ch_type, Args...>()};
+		if constexpr (static_bound != SIZE_MAX)
+		{
+			if constexpr (static_bound <= local_cap)
+			{
+				auto first{strlike_begin(io_strlike_type<ch_type, T>, str)};
+				auto ptr{::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, ch_type, true>(
+					first, args...)};
+				strlike_set_curr(io_strlike_type<ch_type, T>, str, ptr);
+				return;
+			}
+		}
+	}
 	::std::size_t const precise_size{
 		::fast_io::operations::decay::print_semantic_precise_total_size<line, ch_type>(args...)};
 	if constexpr (sso_buffer_strlike<ch_type, T>)
