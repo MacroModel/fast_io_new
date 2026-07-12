@@ -43,6 +43,8 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 	{
 		return {first, ::std::errc::invalid_argument};
 	}
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (base == 10u)
 	{
 		if constexpr (::std::signed_integral<T>)
@@ -103,6 +105,7 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			}
 		}
 	}
+#endif
 	if constexpr (::std::unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  base == 8u)
 	{
