@@ -121,7 +121,7 @@ inline constexpr bool char_digit_to_literal(my_make_unsigned_t<char_type> &ch) n
 			}
 			else
 			{
-				constexpr unsigned_char_type mns{base - 27};
+				constexpr unsigned_char_type mns{base - 28};
 				unsigned_char_type ch2(ch);
 				ch2 -= 0xC1;
 				unsigned_char_type ch3(ch);
@@ -137,11 +137,11 @@ inline constexpr bool char_digit_to_literal(my_make_unsigned_t<char_type> &ch) n
 				ch -= 0xF0;
 				if (ch6 < mns)
 				{
-					ch = ch6 + static_cast<unsigned_char_type>(27);
+					ch = ch6 + static_cast<unsigned_char_type>(28);
 				}
 				else if (ch7 < mns)
 				{
-					ch = ch7 + static_cast<unsigned_char_type>(27);
+					ch = ch7 + static_cast<unsigned_char_type>(28);
 				}
 				else if (ch4 < 9)
 				{
@@ -264,11 +264,11 @@ inline constexpr bool char_is_digit(my_make_unsigned_t<char_type> ch) noexcept
 				unsigned_char_type ch5(ch);
 				ch5 -= 0x91;
 				ch -= 0xF0;
-				return (ch4 < mns) | (ch5 < mns) | (ch2 < mns) | (ch3 < 9) | (ch < 10u);
+				return (ch4 < mns) | (ch5 < mns) | (ch2 < 9u) | (ch3 < 9u) | (ch < 10u);
 			}
 			else
 			{
-				constexpr unsigned_char_type mns{base - 27};
+				constexpr unsigned_char_type mns{base - 28};
 				unsigned_char_type ch2(ch);
 				ch2 -= 0xC1;
 				unsigned_char_type ch3(ch);
@@ -1717,7 +1717,7 @@ inline constexpr parse_result<char_type const *> scan_shbase_impl(char_type cons
 	if constexpr (base == 2 || base == 3 || (base == 8 && oct_c2y) || base == 16)
 	{
 		auto ch{*first};
-		if ((ch != char_literal_v<(base == 2 ? u8'B' : (base == 3 ? u8't' : (base == 8 ? u8'O' : u8'X'))), char_type>)&(
+		if ((ch != char_literal_v<(base == 2 ? u8'B' : (base == 3 ? u8'T' : (base == 8 ? u8'O' : u8'X'))), char_type>)&(
 				ch != char_literal_v<(base == 2 ? u8'b' : (base == 3 ? u8't' : (base == 8 ? u8'o' : u8'x'))), char_type>)) [[unlikely]]
 		{
 			return {first, parse_code::invalid};
@@ -1731,7 +1731,7 @@ inline constexpr parse_result<char_type const *> scan_shbase_impl(char_type cons
 			return {first, parse_code::invalid};
 		}
 		++first;
-		if ((++first) == last) [[unlikely]]
+		if (first == last) [[unlikely]]
 		{
 			return {first, parse_code::invalid};
 		}
@@ -1760,6 +1760,7 @@ inline constexpr parse_result<char_type const *> scan_shbase_impl(char_type cons
 		{
 			return {first, parse_code::invalid};
 		}
+		++first;
 	}
 	return {first, ongoing_parse_code};
 }
