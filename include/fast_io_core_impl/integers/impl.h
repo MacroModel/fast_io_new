@@ -3017,8 +3017,13 @@ inline constexpr void print_reserve_integral_define_precise(char_type *start, ::
 			}
 			if constexpr (base == 10 && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 			{
-				return ::fast_io::details::jeaiii::jeaiii_main_len(
-					first, u, static_cast<::std::uint_least32_t>((start + n) - first));
+				auto const digits{static_cast<::std::size_t>((start + n) - first)};
+				if (digits == chars_len<base, false>(u))
+				{
+					return ::fast_io::details::jeaiii::jeaiii_main_len(
+						first, u, static_cast<::std::uint_least32_t>(digits));
+				}
+				print_reserve_integral_withfull_precise_main_impl<base, uppercase>(start + n, u, digits);
 			}
 			else
 			{
@@ -3087,7 +3092,8 @@ inline constexpr ::std::size_t print_reserve_scalar_size_impl()
 				++total_sum;
 			}
 		}
-		total_sum += ::fast_io::details::cal_max_int_size<T, base>();
+		using unsigned_type = ::fast_io::details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
+		total_sum += ::fast_io::details::cal_max_int_size<unsigned_type, base>();
 	}
 	return total_sum;
 }
@@ -3117,7 +3123,8 @@ inline constexpr ::std::size_t print_reserve_scalar_cal_precise_cache_size_impl(
 		}
 		else
 		{
-			total_sum += ::fast_io::details::cal_max_int_size<T, base>();
+			using unsigned_type = ::fast_io::details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
+			total_sum += ::fast_io::details::cal_max_int_size<unsigned_type, base>();
 		}
 	}
 	return total_sum;
