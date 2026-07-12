@@ -72,7 +72,6 @@
 
 // This should provide an option macro to disable any generation for table in freestanding environments.
 #include "fast_io_core_impl/integers/integer.h"
-#include "fast_io_core_impl/charconv/impl.h"
 
 #include "fast_io_core_impl/black_hole.h"
 #include "fast_io_core_impl/buffer_view.h"
@@ -85,6 +84,7 @@
 #include "fast_io_core_impl/simd/impl.h"
 #include "fast_io_core_impl/simd_find.h"
 #include "fast_io_core_impl/integers/sto/sto_contiguous.h"
+#include "fast_io_core_impl/charconv/impl.h"
 
 #include "fast_io_core_impl/integers/chrono.h"
 #include "fast_io_core_impl/iso/isos.h"

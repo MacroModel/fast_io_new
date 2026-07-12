@@ -1768,7 +1768,8 @@ template <::std::integral char_type>
 inline constexpr char_type const *skip_hexdigits(char_type const *first, char_type const *last) noexcept;
 
 template <char8_t base, bool shbase = false, bool skipzero = false, bool oct_c2y = false,
-		  bool allow_leading_plus = false, ::std::integral char_type, my_integral T>
+		  bool allow_leading_plus = false, bool zero_terminated_ok = false,
+		  ::std::integral char_type, my_integral T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -1833,12 +1834,22 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	{
 		return {first, parse_code::invalid};
 	}
-	else if (first_ch == zero)
+	else if (first_ch == zero) [[unlikely]]
 	{
 		if constexpr (skipzero)
 		{
 			++first;
-			first = ::fast_io::details::find_none_zero_simd_impl(first, last);
+			if constexpr (zero_terminated_ok)
+			{
+				while (first != last && *first == zero)
+				{
+					++first;
+				}
+			}
+			else
+			{
+				first = ::fast_io::details::find_none_zero_simd_impl(first, last);
+			}
 			if (first == last) [[likely]]
 			{
 				t = 0;
@@ -1847,6 +1858,11 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			first_digit = static_cast<unsigned_char_type>(*first);
 			if (char_digit_to_literal<base, char_type>(first_digit)) [[unlikely]]
 			{
+				if constexpr (zero_terminated_ok)
+				{
+					t = 0;
+					return {first, parse_code::ok};
+				}
 				return {first, parse_code::invalid};
 			}
 		}
@@ -2452,11 +2468,6 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 template <char8_t base, bool noskipws, bool shbase, bool skipzero, bool oct_c2y,
 		  bool allow_leading_plus = false,
 		  ::std::integral char_type, details::my_integral T>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
-#endif
 inline constexpr parse_result<char_type const *> scan_int_contiguous_define_impl(char_type const *first,
 																				 char_type const *last, T &t) noexcept
 {
