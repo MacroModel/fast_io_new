@@ -730,7 +730,7 @@ template <::std::integral char_type>
 	requires(sizeof(char_type) == sizeof(char8_t))
 [[gnu::always_inline]] inline bool
 aarch64_builtin_parse_16_decimal_digits(char_type const *first,
-	                                    ::std::uint_least64_t &value) noexcept
+										::std::uint_least64_t &value) noexcept
 {
 	using u8x8 [[gnu::vector_size(8)]] = unsigned char;
 	using u8x16 [[gnu::vector_size(16)]] = unsigned char;
@@ -753,7 +753,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 		reinterpret_cast<__builtin_aarch64_simd_qi const *>(first));
 #endif
 	auto const digits{raw - u8x16{48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u,
-	                                  48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u}};
+								  48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u}};
 #if defined(__clang__)
 	auto const maximum_digit{static_cast<unsigned char>(__builtin_neon_vmaxvq_u8(digits))};
 #else
@@ -771,13 +771,13 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 #if defined(__clang__)
 	auto const pair_products_low{__builtin_bit_cast(
 		u16x8, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_digits),
-		                               __builtin_bit_cast(i8x8, pair_weights), 49))};
+									  __builtin_bit_cast(i8x8, pair_weights), 49))};
 	auto const pair_products_high{__builtin_bit_cast(
 		u16x8, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_digits),
-		                               __builtin_bit_cast(i8x8, pair_weights), 49))};
+									  __builtin_bit_cast(i8x8, pair_weights), 49))};
 	auto const pairs{__builtin_bit_cast(
 		u16x8, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, pair_products_low),
-		                                __builtin_bit_cast(i8x16, pair_products_high), 49))};
+									   __builtin_bit_cast(i8x16, pair_products_high), 49))};
 #else
 	auto const pair_products_low{
 		__builtin_aarch64_intrinsic_vec_umult_lo_v8qi_uuu(low_digits, pair_weights)};
@@ -793,13 +793,13 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 #if defined(__clang__)
 	auto const quad_products_low{__builtin_bit_cast(
 		u32x4, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_pairs),
-		                               __builtin_bit_cast(i8x8, quad_weights), 50))};
+									  __builtin_bit_cast(i8x8, quad_weights), 50))};
 	auto const quad_products_high{__builtin_bit_cast(
 		u32x4, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_pairs),
-		                               __builtin_bit_cast(i8x8, quad_weights), 50))};
+									  __builtin_bit_cast(i8x8, quad_weights), 50))};
 	auto const quads{__builtin_bit_cast(
 		u32x4, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, quad_products_low),
-		                                __builtin_bit_cast(i8x16, quad_products_high), 50))};
+									   __builtin_bit_cast(i8x16, quad_products_high), 50))};
 #else
 	auto const quad_products_low{
 		__builtin_aarch64_intrinsic_vec_umult_lo_v4hi_uuu(low_pairs, quad_weights)};
@@ -815,13 +815,13 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 #if defined(__clang__)
 	auto const octet_products_low{__builtin_bit_cast(
 		u64x2, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_quads),
-		                               __builtin_bit_cast(i8x8, octet_weights), 51))};
+									  __builtin_bit_cast(i8x8, octet_weights), 51))};
 	auto const octet_products_high{__builtin_bit_cast(
 		u64x2, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, high_quads),
-		                               __builtin_bit_cast(i8x8, octet_weights), 51))};
+									  __builtin_bit_cast(i8x8, octet_weights), 51))};
 	auto const octets{__builtin_bit_cast(
 		u64x2, __builtin_neon_vpaddq_v(__builtin_bit_cast(i8x16, octet_products_low),
-		                                __builtin_bit_cast(i8x16, octet_products_high), 51))};
+									   __builtin_bit_cast(i8x16, octet_products_high), 51))};
 #else
 	auto const octet_products_low{
 		__builtin_aarch64_intrinsic_vec_umult_lo_v2si_uuu(low_quads, octet_weights)};
@@ -2319,9 +2319,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	}
 #if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
 	if constexpr (base == 10u && my_unsigned_integral<T> &&
-	              sizeof(char_type) == sizeof(char8_t) &&
-	              !::fast_io::details::is_ebcdic<char_type> &&
-	              sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+				  sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type> &&
+				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 	{
 		auto const remaining{static_cast<::std::size_t>(last - first)};
 		if (remaining - 16u <= 4u)
@@ -2468,6 +2468,10 @@ inline constexpr parse_result<char_type const *> scan_int_contiguous_define_impl
 	{
 		if constexpr (allow_leading_plus)
 		{
+			if (first == last) [[unlikely]]
+			{
+				return {first, parse_code::invalid};
+			}
 			if (*first == char_literal_v<u8'+', char_type>)
 			{
 				++first;
