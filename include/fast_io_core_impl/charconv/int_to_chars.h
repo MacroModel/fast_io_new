@@ -133,6 +133,114 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_runtime_base(char 
 	}
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
+template <::std::size_t base>
+inline constexpr ::fast_io::to_chars_result to_chars_integral_two_digits_table(char *first, char *last,
+																			   unsigned value, bool negative) noexcept
+{
+	if (static_cast<::std::size_t>(last - first) < 2u + static_cast<::std::size_t>(negative)) [[unlikely]]
+	{
+		return {last, ::std::errc::value_too_large};
+	}
+	if (negative)
+	{
+		*first++ = '-';
+	}
+	constexpr auto const *tb{::fast_io::details::digits_table<char, base, false>};
+	::std::size_t const index{static_cast<::std::size_t>(value) << 1u};
+	first[0] = tb[index];
+	first[1] = tb[index + 1u];
+	return {first + 2u, {}};
+}
+
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr ::fast_io::to_chars_result to_chars_integral_runtime_base_two_digits(char *first, char *last,
+																					  unsigned value, bool negative,
+																					  int base) noexcept
+{
+	switch (base)
+	{
+	case 2:
+		return ::fast_io::details::to_chars_integral_two_digits_table<2u>(first, last, value, negative);
+	case 3:
+		return ::fast_io::details::to_chars_integral_two_digits_table<3u>(first, last, value, negative);
+	case 4:
+		return ::fast_io::details::to_chars_integral_two_digits_table<4u>(first, last, value, negative);
+	case 5:
+		return ::fast_io::details::to_chars_integral_two_digits_table<5u>(first, last, value, negative);
+	case 6:
+		return ::fast_io::details::to_chars_integral_two_digits_table<6u>(first, last, value, negative);
+	case 7:
+		return ::fast_io::details::to_chars_integral_two_digits_table<7u>(first, last, value, negative);
+	case 8:
+		return ::fast_io::details::to_chars_integral_two_digits_table<8u>(first, last, value, negative);
+	case 9:
+		return ::fast_io::details::to_chars_integral_two_digits_table<9u>(first, last, value, negative);
+	case 10:
+		return ::fast_io::details::to_chars_integral_two_digits_table<10u>(first, last, value, negative);
+	case 11:
+		return ::fast_io::details::to_chars_integral_two_digits_table<11u>(first, last, value, negative);
+	case 12:
+		return ::fast_io::details::to_chars_integral_two_digits_table<12u>(first, last, value, negative);
+	case 13:
+		return ::fast_io::details::to_chars_integral_two_digits_table<13u>(first, last, value, negative);
+	case 14:
+		return ::fast_io::details::to_chars_integral_two_digits_table<14u>(first, last, value, negative);
+	case 15:
+		return ::fast_io::details::to_chars_integral_two_digits_table<15u>(first, last, value, negative);
+	case 16:
+		return ::fast_io::details::to_chars_integral_two_digits_table<16u>(first, last, value, negative);
+	case 17:
+		return ::fast_io::details::to_chars_integral_two_digits_table<17u>(first, last, value, negative);
+	case 18:
+		return ::fast_io::details::to_chars_integral_two_digits_table<18u>(first, last, value, negative);
+	case 19:
+		return ::fast_io::details::to_chars_integral_two_digits_table<19u>(first, last, value, negative);
+	case 20:
+		return ::fast_io::details::to_chars_integral_two_digits_table<20u>(first, last, value, negative);
+	case 21:
+		return ::fast_io::details::to_chars_integral_two_digits_table<21u>(first, last, value, negative);
+	case 22:
+		return ::fast_io::details::to_chars_integral_two_digits_table<22u>(first, last, value, negative);
+	case 23:
+		return ::fast_io::details::to_chars_integral_two_digits_table<23u>(first, last, value, negative);
+	case 24:
+		return ::fast_io::details::to_chars_integral_two_digits_table<24u>(first, last, value, negative);
+	case 25:
+		return ::fast_io::details::to_chars_integral_two_digits_table<25u>(first, last, value, negative);
+	case 26:
+		return ::fast_io::details::to_chars_integral_two_digits_table<26u>(first, last, value, negative);
+	case 27:
+		return ::fast_io::details::to_chars_integral_two_digits_table<27u>(first, last, value, negative);
+	case 28:
+		return ::fast_io::details::to_chars_integral_two_digits_table<28u>(first, last, value, negative);
+	case 29:
+		return ::fast_io::details::to_chars_integral_two_digits_table<29u>(first, last, value, negative);
+	case 30:
+		return ::fast_io::details::to_chars_integral_two_digits_table<30u>(first, last, value, negative);
+	case 31:
+		return ::fast_io::details::to_chars_integral_two_digits_table<31u>(first, last, value, negative);
+	case 32:
+		return ::fast_io::details::to_chars_integral_two_digits_table<32u>(first, last, value, negative);
+	case 33:
+		return ::fast_io::details::to_chars_integral_two_digits_table<33u>(first, last, value, negative);
+	case 34:
+		return ::fast_io::details::to_chars_integral_two_digits_table<34u>(first, last, value, negative);
+	case 35:
+		return ::fast_io::details::to_chars_integral_two_digits_table<35u>(first, last, value, negative);
+	case 36:
+		return ::fast_io::details::to_chars_integral_two_digits_table<36u>(first, last, value, negative);
+	[[unlikely]] default:
+		::fast_io::fast_terminate();
+	}
+}
+
+#endif
+
 } // namespace details
 
 template <::std::integral T>
@@ -317,6 +425,30 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 			first, magnitude);
 #endif
 	}
+
+#if defined(__x86_64__) || defined(_M_X64)
+	auto const short_base{static_cast<unsigned>(base)};
+	auto const short_base_square{short_base * short_base};
+	if (magnitude < static_cast<unsigned_type>(short_base))
+	{
+		if (static_cast<::std::size_t>(last - first) < 1u + static_cast<::std::size_t>(negative)) [[unlikely]]
+		{
+			return {last, ::std::errc::value_too_large};
+		}
+		if (negative)
+		{
+			*first++ = '-';
+		}
+		*first = ::fast_io::details::charliteralofnumber<char, false>(static_cast<char8_t>(magnitude));
+		return {first + 1u, {}};
+	}
+	if (magnitude < short_base_square)
+	{
+		return ::fast_io::details::to_chars_integral_runtime_base_two_digits(first, last,
+																			 static_cast<unsigned>(magnitude),
+																			 negative, base);
+	}
+#endif
 
 	if ((base & (base - 1)) == 0)
 	{
