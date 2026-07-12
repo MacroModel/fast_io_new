@@ -2971,7 +2971,7 @@ inline constexpr void print_reserve_integral_define_precise(char_type *start, ::
 			}
 			*first = t ? char_literal_v<u8'1', char_type> : char_literal_v<u8'0', char_type>;
 			++first;
-			return first;
+			return;
 		}
 		else
 		{
@@ -3108,24 +3108,16 @@ inline constexpr ::std::size_t print_reserve_scalar_cal_precise_cache_size_impl(
 	{
 		constexpr auto curr_length{::fast_io::details::print_showbase_length<base, oct_c2y>};
 		total_sum += curr_length;
-		// base==10 does not have showbase
-		if constexpr (full)
+	}
+	if constexpr (full)
+	{
+		if constexpr (::std::same_as<::std::remove_cvref_t<T>, bool>)
 		{
-			if constexpr (::std::same_as<::std::remove_cvref_t<T>, bool>)
-			{
-				++total_sum;
-			}
-			else
-			{
-				if constexpr (!showpos)
-				{
-					if constexpr (my_signed_integral<T>)
-					{
-						++total_sum;
-					}
-				}
-				total_sum += ::fast_io::details::cal_max_int_size<T, base>();
-			}
+			++total_sum;
+		}
+		else
+		{
+			total_sum += ::fast_io::details::cal_max_int_size<T, base>();
 		}
 	}
 	return total_sum;
