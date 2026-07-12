@@ -2488,8 +2488,7 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 				if constexpr (::std::same_as<char_type, char> && sizeof(T) == sizeof(::std::uint_least64_t))
 				{
-					if (!::std::is_constant_evaluated() &&
-						static_cast<::std::uint_least64_t>(u) >= static_cast<::std::uint_least64_t>(100000000000000u))
+					if (!::std::is_constant_evaluated())
 					{
 						return ::fast_io::details::jeaiii::champagne_lemire_main(
 							first, static_cast<::std::uint_least64_t>(u));
