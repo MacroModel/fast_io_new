@@ -39,12 +39,12 @@ template <::std::size_t base, ::std::integral T>
 [[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
 from_chars_integral_fixed_base(char const *first, char const *last, T &value) noexcept
 {
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if (first == last) [[unlikely]]
 	{
 		return {first, ::std::errc::invalid_argument};
 	}
-#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (base == 10u)
 	{
 		if constexpr (::std::signed_integral<T>)
