@@ -3083,9 +3083,11 @@ template <::std::integral char_type, ::std::size_t base, bool showbase, bool upp
 inline constexpr auto nullptr_print_optimization_call_cache{
 	nullptr_print_optimization_call_impl<char_type, base, showbase, uppercase_showbase, showpos, uppercase, full, oct_c2y>()};
 
-template <bool uppercase, ::std::integral char_type>
-inline constexpr char_type *print_reserve_boolalpha_impl(char_type *iter, bool b)
+template <bool uppercase, ::std::random_access_iterator Iter>
+	requires(::std::integral<::std::iter_value_t<Iter>>)
+inline constexpr Iter print_reserve_boolalpha_impl(Iter iter, bool b)
 {
+	using char_type = ::std::iter_value_t<Iter>;
 	if (b)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -3466,12 +3468,17 @@ print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scala
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
-	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) && !flags.alphabet)
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>))
 inline constexpr ::std::size_t
 print_reserve_precise_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
 						   manipulators::scalar_manip_t<flags, T> t) noexcept
 {
-	if constexpr (::std::same_as<T, ::std::byte>)
+	if constexpr (flags.alphabet)
+	{
+		return t.reference ? 4u : 5u;
+	}
+	else if constexpr (::std::same_as<T, ::std::byte>)
 	{
 		return details::print_integer_reserved_precise_size<flags.base, flags.showbase, flags.showpos, flags.full,
 															flags.modern_octal>(static_cast<char8_t>(t.reference));
@@ -3484,12 +3491,17 @@ print_reserve_precise_size(io_reserve_type_t<char_type, manipulators::scalar_man
 }
 
 template <::std::integral char_type, ::std::random_access_iterator Iter, manipulators::scalar_flags flags, typename T>
-	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) && !flags.alphabet)
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>))
 inline constexpr void print_reserve_precise_define(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
 												   Iter iter, ::std::size_t n,
 												   manipulators::scalar_manip_t<flags, T> t) noexcept
 {
-	if constexpr (::std::same_as<T, ::std::byte>)
+	if constexpr (flags.alphabet)
+	{
+		[[maybe_unused]] auto end{details::print_reserve_boolalpha_impl<flags.uppercase>(iter, t.reference)};
+	}
+	else if constexpr (::std::same_as<T, ::std::byte>)
 	{
 		details::print_reserve_integral_define_precise<flags.base, flags.showbase, flags.uppercase_showbase,
 													   flags.showpos, flags.uppercase, flags.modern_octal>(
