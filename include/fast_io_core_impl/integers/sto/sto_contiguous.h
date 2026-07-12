@@ -1883,9 +1883,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				  !::fast_io::details::is_ebcdic<char_type> &&
 				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
 	{
-		constexpr bool inline_nonoverflowing_alnum{
-			10u < base && base < 16u && my_unsigned_integral<T> &&
-			sizeof(unsigned_type) == sizeof(::std::uint_least64_t)};
+			constexpr bool inline_nonoverflowing_alnum{
+				10u < base && base < 16u &&
+				sizeof(unsigned_type) == sizeof(::std::uint_least64_t)};
 		constexpr ::std::size_t default_inline_limit{inline_nonoverflowing_alnum
 														 ? ::fast_io::details::max_int_size_result<unsigned_type, base> - 1u
 														 : 8u};
