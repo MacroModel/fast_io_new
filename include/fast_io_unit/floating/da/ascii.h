@@ -161,7 +161,9 @@ make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 using ascii_x86_i8x16 [[gnu::vector_size(16)]] = signed char;
+using ascii_x86_c8x16 [[gnu::vector_size(16)]] = char;
 using ascii_x86_u8x16 [[gnu::vector_size(16)]] = unsigned char;
+using ascii_x86_i16x8 [[gnu::vector_size(16)]] = short;
 using ascii_x86_u16x8 [[gnu::vector_size(16)]] = unsigned short;
 using ascii_x86_u32x4 [[gnu::vector_size(16)]] = unsigned int;
 using ascii_x86_i32x4 [[gnu::vector_size(16)]] = int;
@@ -171,7 +173,8 @@ using ascii_x86_u64x2 [[gnu::vector_size(16)]] = unsigned long long;
 ascii_x86_mul_high_u16(ascii_x86_u16x8 left, ascii_x86_u16x8 right) noexcept
 {
 	return __builtin_bit_cast(ascii_x86_u16x8,
-							  __builtin_ia32_pmulhuw128(left, right));
+							  __builtin_ia32_pmulhuw128(__builtin_bit_cast(ascii_x86_i16x8, left),
+														__builtin_bit_cast(ascii_x86_i16x8, right)));
 }
 
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_x86_u64x2
@@ -236,14 +239,14 @@ make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
 		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4(
 			__builtin_bit_cast(ascii_x86_u32x4, pairs))};
 		auto const nonzero_mask{static_cast<::std::uint_least32_t>(
-			__builtin_ia32_pmovmskb128(__builtin_bit_cast(ascii_x86_i8x16,
+			__builtin_ia32_pmovmskb128(__builtin_bit_cast(ascii_x86_c8x16,
 														  __builtin_bit_cast(ascii_x86_i8x16, unshuffled) > 0)))};
 		auto const span{nonzero_mask ? static_cast<::std::uint_least32_t>(
 										   16u - static_cast<::std::uint_least32_t>(::std::countr_zero(nonzero_mask)))
 									 : 0u};
 		auto const shuffled{__builtin_bit_cast(ascii_x86_u8x16,
-											   __builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_i8x16, unshuffled),
-																		ascii_x86_i8x16{15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}))};
+											   __builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, unshuffled),
+																		ascii_x86_c8x16{15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}))};
 		auto const ascii_digits{shuffled + ascii_x86_u8x16{
 											   48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48}};
 		auto const packed{__builtin_bit_cast(ascii_x86_u64x2, ascii_digits)};
@@ -324,6 +327,7 @@ struct ascii_fixed_layout_cache
 		::std::uint_least8_t point_position{};
 		::std::uint_least8_t shift_position{};
 		::std::uint_least8_t end_position[17]{};
+		::std::uint_least32_t decimal_fixed_mask{};
 	};
 
 	entry data[static_cast<::std::size_t>(maximum - minimum + 1)]{};
@@ -347,6 +351,23 @@ struct ascii_fixed_layout_cache
 									   : exponent + 1;
 				}
 				layout.end_position[length - 1u] = static_cast<::std::uint_least8_t>(end_position);
+				::std::uint_least32_t fixed_length{};
+				if (static_cast<::std::int_least32_t>(length) <= exponent)
+				{
+					fixed_length = static_cast<::std::uint_least32_t>(exponent + 1);
+				}
+				else if (0 <= exponent)
+				{
+					fixed_length = length + 2u - static_cast<::std::uint_least32_t>(static_cast<::std::int_least32_t>(length) == exponent + 1);
+				}
+				else
+				{
+					fixed_length = static_cast<::std::uint_least32_t>(-exponent) + length + 1u;
+				}
+				auto const scientific_length{length == 1u ? length + 3u : length + 5u};
+				layout.decimal_fixed_mask |= static_cast<::std::uint_least32_t>(
+												 fixed_length <= scientific_length)
+											 << (length - 1u);
 			}
 		}
 	}
@@ -485,25 +506,13 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 	}
 	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
 	{
-		::std::uint_least32_t fixed_length{};
-		if (static_cast<::std::int_least32_t>(digit_count) <= exponent)
+		if (ascii_fixed_layout_cache::minimum <= exponent &&
+			exponent <= ascii_fixed_layout_cache::maximum)
 		{
-			fixed_length = static_cast<::std::uint_least32_t>(exponent + 1);
+			auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(exponent - ascii_fixed_layout_cache::minimum)]};
+			use_fixed = static_cast<bool>(
+				(layout.decimal_fixed_mask >> (digit_count - 1u)) & 1u);
 		}
-		else if (0 <= exponent)
-		{
-			fixed_length = digit_count + 2u;
-			if (static_cast<::std::int_least32_t>(digit_count) == exponent + 1)
-			{
-				--fixed_length;
-			}
-		}
-		else
-		{
-			fixed_length = static_cast<::std::uint_least32_t>(-exponent) + digit_count + 1u;
-		}
-		auto const scientific_length{digit_count == 1u ? digit_count + 3u : digit_count + 5u};
-		use_fixed = fixed_length <= scientific_length;
 	}
 	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
 	{

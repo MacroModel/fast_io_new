@@ -16,6 +16,60 @@ struct decimal_result
 	::std::int_least32_t e10;
 };
 
+/// @brief  Indicates whether the floating decimal type customization provides staged conversion on this ISA.
+/// @details This is a capability of the concrete floating implementation, not a condition in the generic
+///          staged_printable protocol or print orchestration.
+template <typename flt>
+inline constexpr bool staged_supported{
+#if defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)
+	::std::same_as<::std::remove_cvref_t<flt>, float> ||
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#else
+	false
+#endif
+};
+
+/// @brief  Returns the preferred number of independent conversions in one staged floating run.
+/// @details Target tuning belongs to the decimal implementation; it does not change whether a floating
+///          manipulator models staged_printable or alter the generic print orchestration.
+/// @tparam flt the floating-point type
+template <typename flt>
+[[nodiscard]] inline consteval ::std::size_t staged_width() noexcept
+{
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
+	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 4u;
+#else
+	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 6u;
+#endif
+}
+
+/// @brief  Tests the regular-normal precondition required by the prepared decimal conversion.
+/// @details The Apple AArch64 constraint is a code-generation barrier only; every target evaluates the
+///          same mantissa and exponent predicate.
+/// @tparam flt           the floating-point type
+/// @tparam mantissa_type the unsigned representation used by the floating mantissa
+/// @tparam exponent_type the unsigned representation used by the raw exponent
+/// @param  mantissa      the explicit binary mantissa bits
+/// @param  exponent      the raw binary exponent bits
+/// @param  exponent_mask a mask containing every raw exponent bit
+/// @return bool true when the direct staged conversion accepts the value
+template <typename flt, typename mantissa_type, typename exponent_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool staged_eligible(
+	mantissa_type mantissa, exponent_type exponent, mantissa_type exponent_mask) noexcept
+{
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+	if constexpr (sizeof(::std::remove_cvref_t<flt>) > sizeof(float))
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			__asm__("" : "+r"(mantissa), "+r"(exponent));
+		}
+	}
+#endif
+	return (mantissa != 0u) &
+		   (static_cast<mantissa_type>(exponent - 1u) < exponent_mask - 1u);
+}
+
 template <typename flt>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_result<flt> finalize(
 	conversion_result converted) noexcept

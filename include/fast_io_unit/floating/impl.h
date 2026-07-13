@@ -69,13 +69,9 @@ inline constexpr bool print_floating_decimal_via_float{
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 concept print_floating_staged_supported =
 	::fast_io::details::my_floating_point<flt> &&
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)
-	true &&
-#else
-	false &&
-#endif
 	(::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	 ::std::same_as<::std::remove_cvref_t<flt>, double>) &&
+	::fast_io::details::da::staged_supported<::std::remove_cvref_t<flt>> &&
 	flags.base == 10u && flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
 	flags.rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even;
 
@@ -94,11 +90,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 inline constexpr ::std::size_t print_staged_width(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
-	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 4u;
-#else
-	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 6u;
-#endif
+	return ::fast_io::details::da::staged_width<::std::remove_cvref_t<flt>>();
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
@@ -114,14 +106,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 	auto [mantissa, exponent, sign]{
 		::fast_io::details::get_punned_result(static_cast<floating_type>(value.reference))};
 	(void)sign;
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-	if constexpr (sizeof(floating_type) > sizeof(float))
-	{
-		__asm__("" : "+r"(mantissa), "+r"(exponent));
-	}
-#endif
-	return (mantissa != 0u) &
-		   (static_cast<typename trait::mantissa_type>(exponent - 1u) < exponent_mask - 1u);
+	return ::fast_io::details::da::staged_eligible<floating_type>(
+		mantissa, exponent, exponent_mask);
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
