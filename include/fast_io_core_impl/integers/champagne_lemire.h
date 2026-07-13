@@ -16,9 +16,20 @@ static constexpr ::std::uint_least64_t champagne_lemire_ten{10u};
 static constexpr ::std::uint_least64_t champagne_lemire_zero{static_cast<::std::uint_least64_t>(u8'0')};
 #endif
 
-// Four IFMA operations set a fixed cost floor, so the scalar path wins for shorter values.
+// The scalar/SIMD crossover depends on compiler scheduling and register allocation.
+#if defined(__clang__)
+inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
+	static_cast<::std::uint_least64_t>(10000u)}; // 5 digits
+#elif defined(__GNUC__) && defined(__tune_znver4__)
+inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
+	static_cast<::std::uint_least64_t>(100000000u)}; // 9 digits
+#elif defined(__GNUC__)
+inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
+	static_cast<::std::uint_least64_t>(1000000000u)}; // 10 digits
+#else
 inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
 	static_cast<::std::uint_least64_t>(10000000000ull)}; // 11 digits
+#endif
 
 inline constexpr ::std::uint_least64_t champagne_lemire_power10_table[]{
 	static_cast<::std::uint_least64_t>(1u),
