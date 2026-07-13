@@ -10,14 +10,14 @@ inline constexpr auto generate_vals() noexcept
 	tb[0] = 0;
 	for (::std::size_t i{1}, n{tb.size() - 1}; i != n; ++i)
 	{
-		v *= UINT32_C(10);
+		v *= static_cast<::std::uint_least32_t>(10);
 		tb[i] = v;
 	}
 	tb.back() = 0;
 	return tb;
 }
 
-inline constexpr std::size_t N{UINT32_C(10000000)};
+inline constexpr std::size_t N{static_cast<::std::uint_least32_t>(10000000)};
 
 inline ::fast_io::vector<::std::uint_least64_t> generate_random_data()
 {
@@ -29,7 +29,7 @@ inline ::fast_io::vector<::std::uint_least64_t> generate_random_data()
 	for (::std::size_t i{}; i != N; ++i)
 	{
 		::std::size_t pos{dis(eng)};
-		::std::uniform_int_distribution<::std::uint_least64_t> dis2(tb[pos - 1], tb[pos] - UINT64_C(1));
+		::std::uniform_int_distribution<::std::uint_least64_t> dis2(tb[pos - 1], tb[pos] - static_cast<::std::uint_least64_t>(1));
 		vec[i] = dis2(eng);
 	}
 	return vec;

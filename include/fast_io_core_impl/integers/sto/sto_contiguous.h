@@ -472,20 +472,20 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 			{
 			case 3:
 			{
-				res = result * UINT16_C(1000) +
-					  ((buffer[16] - zero_constant) * UINT16_C(100) + (buffer[17] - zero_constant) * UINT16_C(10) +
+				res = result * static_cast<::std::uint_least16_t>(1000) +
+					  ((buffer[16] - zero_constant) * static_cast<::std::uint_least16_t>(100) + (buffer[17] - zero_constant) * static_cast<::std::uint_least16_t>(10) +
 					   (buffer[18] - zero_constant));
 				return {19, parse_code::ok};
 			}
 			case 2:
 			{
-				res = result * UINT16_C(100) + ((buffer[16] - zero_constant) * UINT16_C(10) +
+				res = result * static_cast<::std::uint_least16_t>(100) + ((buffer[16] - zero_constant) * static_cast<::std::uint_least16_t>(10) +
 												static_cast<::std::uint_least64_t>(buffer[17] - zero_constant));
 				return {18, parse_code::ok};
 			}
 			case 1:
 			{
-				res = result * UINT16_C(10) + (buffer[16] - zero_constant);
+				res = result * static_cast<::std::uint_least16_t>(10) + (buffer[16] - zero_constant);
 				return {17, parse_code::ok};
 			}
 			case 0:
@@ -502,15 +502,15 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 					return {20, parse_code::overflow};
 				}
 				::std::uint_fast16_t partial{static_cast<::std::uint_fast16_t>(
-					static_cast<::std::uint_fast16_t>(buffer[16] - zero_constant) * UINT16_C(1000) +
-					static_cast<::std::uint_fast8_t>(buffer[17] - zero_constant) * UINT16_C(100) +
-					static_cast<::std::uint_fast8_t>(buffer[18] - zero_constant) * UINT16_C(10) +
+					static_cast<::std::uint_fast16_t>(buffer[16] - zero_constant) * static_cast<::std::uint_least16_t>(1000) +
+					static_cast<::std::uint_fast8_t>(buffer[17] - zero_constant) * static_cast<::std::uint_least16_t>(100) +
+					static_cast<::std::uint_fast8_t>(buffer[18] - zero_constant) * static_cast<::std::uint_least16_t>(10) +
 					static_cast<::std::uint_fast8_t>(buffer[19] - zero_constant))};
 				if (result == risky_value && risky_mod < partial)
 				{
 					return {20, parse_code::overflow};
 				}
-				res = result * UINT16_C(10000) + partial;
+				res = result * static_cast<::std::uint_least16_t>(10000) + partial;
 				return {20, parse_code::ok};
 			}
 			case 16:

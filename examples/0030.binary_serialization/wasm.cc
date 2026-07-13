@@ -67,8 +67,8 @@ int main()
 
 	testvarint(12421);
 	testvarint(12421235);
-	testvarint(UINT64_C(124212351253253253));
-	testvarint(UINT32_C(5235252));
-	testvarint(INT64_C(-50));
-	testuint32(UINT32_C(3253));
+	testvarint(static_cast<::std::uint_least64_t>(124212351253253253));
+	testvarint(static_cast<::std::uint_least32_t>(5235252));
+	testvarint(static_cast<::std::int_least64_t>(-50));
+	testuint32(static_cast<::std::uint_least32_t>(3253));
 }

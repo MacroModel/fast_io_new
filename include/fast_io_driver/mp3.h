@@ -11,10 +11,10 @@ inline constexpr ::std::uint_least32_t decode_mp3_safe_int(::std::uint_least32_t
 	//  - discard most significant bit from each byte
 	//  - reverse byte order
 	//  - concatenate the 4 * 7-bit nibbles into a 24-bit size.
-	return static_cast<::std::uint_least32_t>(nval & UINT32_C(0x7F)) +
-		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 8) & UINT32_C(0x7C)) +
-		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 16) & UINT32_C(0x7C)) +
-		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 24) & UINT32_C(0x7C));
+	return static_cast<::std::uint_least32_t>(nval & static_cast<::std::uint_least32_t>(0x7F)) +
+		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 8) & static_cast<::std::uint_least32_t>(0x7C)) +
+		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 16) & static_cast<::std::uint_least32_t>(0x7C)) +
+		   static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(nval >> 24) & static_cast<::std::uint_least32_t>(0x7C));
 }
 
 struct mp3_duration_result
@@ -40,7 +40,7 @@ inline mp3_duration_result compute_mp3_duration(void const *first, void const *l
 	::std::uint_least8_t mp3_header_flag;
 	::memcpy(__builtin_addressof(mp3_header_flag), firstbyte + 6, 1);
 	constexpr ::std::size_t mp3extendedheadersize{6};
-	if (mp3_header_flag & UINT32_C(0x40))
+	if (mp3_header_flag & static_cast<::std::uint_least32_t>(0x40))
 	{
 		if (static_cast<::std::size_t>(lastbyte - firstbyte) < mp3extendedheadersize)
 		{

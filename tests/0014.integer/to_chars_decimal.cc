@@ -48,16 +48,16 @@ inline void test_decimal(T value)
 
 inline std::uint_least64_t splitmix64(std::uint_least64_t &state) noexcept
 {
-	state += UINT64_C(0x9e3779b97f4a7c15);
+	state += static_cast<::std::uint_least64_t>(0x9e3779b97f4a7c15);
 	auto value{state};
-	value = (value ^ (value >> 30u)) * UINT64_C(0xbf58476d1ce4e5b9);
-	value = (value ^ (value >> 27u)) * UINT64_C(0x94d049bb133111eb);
+	value = (value ^ (value >> 30u)) * static_cast<::std::uint_least64_t>(0xbf58476d1ce4e5b9);
+	value = (value ^ (value >> 27u)) * static_cast<::std::uint_least64_t>(0x94d049bb133111eb);
 	return value ^ (value >> 31u);
 }
 
 int main()
 {
-	test_decimal(UINT64_C(0));
+	test_decimal(static_cast<::std::uint_least64_t>(0));
 	test_decimal(UINT64_MAX);
 	test_decimal(INT64_MIN);
 	test_decimal(INT64_MAX);
@@ -78,7 +78,7 @@ int main()
 	test_decimal(power);
 	test_decimal(power + 1u);
 
-	std::uint_least64_t state{UINT64_C(0x243f6a8885a308d3)};
+	std::uint_least64_t state{static_cast<::std::uint_least64_t>(0x243f6a8885a308d3)};
 	for (std::size_t index{}; index != 250000u; ++index)
 	{
 		auto const value{splitmix64(state)};

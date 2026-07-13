@@ -434,7 +434,7 @@ inline constexpr win32_open_mode calculate_win32_open_mode(open_mode_perms ompm)
 		mode.dwFlagsAndAttributes |= 0x10;       // FILE_ATTRIBUTE_DIRECTORY
 		if (mode.dwCreationDisposition == 0)
 		{
-			mode.dwDesiredAccess |= UINT32_C(0x120116) | UINT32_C(0x120089); // GENERIC_WRITE|GENERIC_READ
+			mode.dwDesiredAccess |= static_cast<::std::uint_least32_t>(0x120116) | static_cast<::std::uint_least32_t>(0x120089); // GENERIC_WRITE|GENERIC_READ
 			mode.dwCreationDisposition = 3;                                  // OPEN_EXISTING
 		}
 	}
