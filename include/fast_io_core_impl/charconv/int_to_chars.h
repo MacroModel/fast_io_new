@@ -34,6 +34,37 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_checked(char *firs
 	return {::fast_io::details::print_reserve_integral_withfull_main_impl<false, base, false>(first, value), {}};
 }
 
+#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+template <::std::unsigned_integral U>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+inline constexpr ::fast_io::to_chars_result to_chars_integral_decimal(char *first, char *last, U value,
+																	  bool negative) noexcept
+{
+	constexpr ::std::size_t maximum_digits{::fast_io::details::cal_max_int_size<U, 10u>()};
+	if (static_cast<::std::size_t>(last - first) <
+		maximum_digits + static_cast<::std::size_t>(negative)) [[unlikely]]
+	{
+		return ::fast_io::details::to_chars_integral_checked<10u>(first, last, value, negative);
+	}
+	if (negative)
+	{
+		*first++ = '-';
+	}
+	if constexpr (sizeof(U) == sizeof(::std::uint_least64_t))
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			return {::fast_io::details::jeaiii::champagne_lemire_main(
+						first, static_cast<::std::uint_least64_t>(value)),
+					{}};
+		}
+	}
+	return ::fast_io::details::jeaiii::jeaiii_main<false, false, char, ::fast_io::to_chars_result>(first, value);
+}
+#endif
+
 template <::std::size_t base, ::std::unsigned_integral U>
 inline constexpr ::fast_io::to_chars_result to_chars_integral_fixed_base(char *first, char *last, U value,
 																		 bool negative) noexcept
@@ -51,10 +82,17 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_fixed_base(char *f
 	if constexpr (base == 10u && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 	{
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-		return {::fast_io::details::print_reserve_integral_withfull_main_impl<false, base, false>(first, value), {}};
-#else
-		return ::fast_io::details::jeaiii::jeaiii_main<false, false, char, ::fast_io::to_chars_result>(first, value);
+		if constexpr (sizeof(U) == sizeof(::std::uint_least64_t))
+		{
+			if (!::std::is_constant_evaluated())
+			{
+				return {::fast_io::details::jeaiii::champagne_lemire_main(
+							first, static_cast<::std::uint_least64_t>(value)),
+						{}};
+			}
+		}
 #endif
+		return ::fast_io::details::jeaiii::jeaiii_main<false, false, char, ::fast_io::to_chars_result>(first, value);
 	}
 	else if constexpr (base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
 	{
@@ -297,7 +335,18 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 	}
 	if (__builtin_constant_p(base) && base == 10)
 	{
+#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+		if constexpr (::std::numeric_limits<::std::uint_least32_t>::digits == 32u)
+		{
+			return ::fast_io::details::to_chars_integral_decimal(first, last, magnitude, negative);
+		}
+		else
+		{
+			return ::fast_io::details::to_chars_integral_fixed_base<10u>(first, last, magnitude, negative);
+		}
+#else
 		return ::fast_io::details::to_chars_integral_fixed_base<10u>(first, last, magnitude, negative);
+#endif
 	}
 	if (__builtin_constant_p(base) && base == 11)
 	{
@@ -408,7 +457,14 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 	if (base == 10) [[likely]]
 	{
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-		return ::fast_io::details::to_chars_integral_fixed_base<10u>(first, last, magnitude, negative);
+		if constexpr (::std::numeric_limits<::std::uint_least32_t>::digits == 32u)
+		{
+			return ::fast_io::details::to_chars_integral_decimal(first, last, magnitude, negative);
+		}
+		else
+		{
+			return ::fast_io::details::to_chars_integral_fixed_base<10u>(first, last, magnitude, negative);
+		}
 #else
 		constexpr ::std::size_t maximum_decimal_digits{
 			::fast_io::details::cal_max_int_size<unsigned_type, 10u>()};

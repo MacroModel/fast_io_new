@@ -9,15 +9,18 @@ using champagne_lemire_i64x8 [[__gnu__::__vector_size__(64)]] = long long;
 using champagne_lemire_i8x64 [[__gnu__::__vector_size__(64)]] = char;
 using champagne_lemire_i8x16 [[__gnu__::__vector_size__(16)]] = char;
 
-inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
-#if defined(__clang__)
-	static_cast<::std::uint_least64_t>(10000u) // 5 digits
-#elif defined(__GNUC__)
-	static_cast<::std::uint_least64_t>(1000000000u) // 10 digits
-#else
-	static_cast<::std::uint_least64_t>(10000000u) // 8-digit fallback
+#if defined(__GNUC__) && !defined(__clang__)
+// Keep GCC's constant broadcasts as memory-source instructions.  Materializing them through GPRs
+// otherwise makes GCC spill a dead ZMM value and adds shuffle-port pressure to the hot path.
+[[__gnu__::__visibility__("hidden")]]
+inline constexpr ::std::uint_least64_t champagne_lemire_ten{10u};
+[[__gnu__::__visibility__("hidden")]]
+inline constexpr ::std::uint_least64_t champagne_lemire_zero{static_cast<::std::uint_least64_t>(u8'0')};
 #endif
-};
+
+// Four IFMA operations set a fixed cost floor, so the scalar path wins for shorter values.
+inline constexpr ::std::uint_least64_t champagne_lemire_threshold{
+	static_cast<::std::uint_least64_t>(10000000000ull)}; // 11 digits
 
 inline constexpr ::std::uint_least64_t champagne_lemire_power10_table[]{
 	static_cast<::std::uint_least64_t>(1u),
@@ -87,17 +90,23 @@ inline champagne_lemire_i8x16 champagne_lemire_16_digits_from_groups(::std::uint
 	champagne_lemire_i64x8 const low_remainders{
 		__builtin_ia32_vpmadd52luq512_mask(multipliers, low_values, multipliers, static_cast<unsigned char>(-1))};
 #endif
-	champagne_lemire_i64x8 const tens{10, 10, 10, 10, 10, 10, 10, 10};
-	champagne_lemire_i64x8 const zeroes{'0', '0', '0', '0', '0', '0', '0', '0'};
 #if defined(__clang__)
+	champagne_lemire_i64x8 const tens{10, 10, 10, 10, 10, 10, 10, 10};
+	champagne_lemire_i64x8 const zeroes{u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0'};
 	champagne_lemire_i64x8 const high_digits{
 		__builtin_ia32_vpmadd52huq512(zeroes, tens, high_remainders)};
 	champagne_lemire_i64x8 const low_digits{__builtin_ia32_vpmadd52huq512(zeroes, tens, low_remainders)};
 #else
+	champagne_lemire_i64x8 tens_for_gcc;
+	champagne_lemire_i64x8 zeroes_for_gcc;
+	__asm__("vpbroadcastq {%1, %0|%0, %1}" : "=v"(tens_for_gcc) : "m"(champagne_lemire_ten));
+	__asm__("vpbroadcastq {%1, %0|%0, %1}" : "=v"(zeroes_for_gcc) : "m"(champagne_lemire_zero));
 	champagne_lemire_i64x8 const high_digits{
-		__builtin_ia32_vpmadd52huq512_mask(zeroes, tens, high_remainders, static_cast<unsigned char>(-1))};
+		__builtin_ia32_vpmadd52huq512_mask(zeroes_for_gcc, tens_for_gcc, high_remainders,
+										   static_cast<unsigned char>(-1))};
 	champagne_lemire_i64x8 const low_digits{
-		__builtin_ia32_vpmadd52huq512_mask(zeroes, tens, low_remainders, static_cast<unsigned char>(-1))};
+		__builtin_ia32_vpmadd52huq512_mask(zeroes_for_gcc, tens_for_gcc, low_remainders,
+										   static_cast<unsigned char>(-1))};
 #endif
 	champagne_lemire_i8x64 const indices{0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38,
 										 0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78};
