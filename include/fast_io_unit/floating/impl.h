@@ -227,17 +227,14 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 #endif
 		)
 		{
-#ifdef __SIZEOF_FLOAT80__
-			if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> && sizeof(flt) == sizeof(__float80) &&
-						  sizeof(flt) > sizeof(double))
+			if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
 			{
 				return details::print_rsv_fp_size_with_special_cache<
 					details::print_rsvhexfloat_size_cache<flags.showbase,
-														  typename details::iec559_traits<__float80>::mantissa_type>,
+														  typename details::iec559_traits<::std::remove_cvref_t<flt>>::mantissa_type>,
 					flags.nan_show_type>;
 			}
 			else
-#endif
 #if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
 				if constexpr (sizeof(flt) > sizeof(double))
 			{
@@ -309,17 +306,14 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 #endif
 		)
 		{
-#ifdef __SIZEOF_FLOAT80__
-			if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> && sizeof(flt) == sizeof(__float80) &&
-						  sizeof(flt) > sizeof(double))
+			if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
 			{
 				return details::print_rsvhexfloat_define_impl<flags.showbase, flags.uppercase_showbase, flags.showpos,
 															  flags.uppercase, flags.uppercase_e, flags.comma,
 															  flags.nan_show_sign, flags.nan_show_type>(
-					iter, static_cast<__float80>(f.reference));
+					iter, f.reference);
 			}
 			else
-#endif
 #if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
 				if constexpr (sizeof(flt) > sizeof(double))
 			{
@@ -518,17 +512,14 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 #endif
 	)
 	{
-#ifdef __SIZEOF_FLOAT80__
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> && sizeof(flt) == sizeof(__float80) &&
-					  sizeof(flt) > sizeof(double))
+		if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
 		{
 			base_size = details::print_rsv_fp_size_with_special_cache<
 				details::print_rsvhexfloat_size_cache<
-					flags.showbase, typename details::iec559_traits<__float80>::mantissa_type>,
+					flags.showbase, typename details::iec559_traits<::std::remove_cvref_t<flt>>::mantissa_type>,
 				flags.nan_show_type>;
 		}
 		else
-#endif
 #if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
 			if constexpr (sizeof(flt) > sizeof(double))
 		{
@@ -568,17 +559,14 @@ inline constexpr char_type *print_reserve_define(
 #endif
 	)
 	{
-#ifdef __SIZEOF_FLOAT80__
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> && sizeof(flt) == sizeof(__float80) &&
-					  sizeof(flt) > sizeof(double))
+		if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
 		{
 			return details::print_rsvhexfloat_precision_define_impl<
 				flags.showbase, flags.uppercase_showbase, flags.showpos, flags.uppercase, flags.uppercase_e,
 				flags.comma, flags.rounding, flags.precision, flags.nan_show_sign, flags.nan_show_type>(
-				iter, static_cast<__float80>(f.reference), f.precision);
+				iter, f.reference, f.precision);
 		}
 		else
-#endif
 #if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
 			if constexpr (sizeof(flt) > sizeof(double))
 		{

@@ -114,17 +114,14 @@ inline constexpr char_type *print_reserve_define(basic_lc_all<char_type> const *
 #endif
 		)
 		{
-#ifdef __SIZEOF_FLOAT80__
-			if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> && sizeof(flt) == sizeof(__float80) &&
-						  sizeof(flt) > sizeof(double))
+			if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
 			{
 				return ::fast_io::details::lc_print_rsvhexfloat_define_impl<
 					flags.showbase, flags.uppercase_showbase, flags.showpos, flags.uppercase, flags.uppercase_e,
 					flags.nan_show_sign, flags.nan_show_type>(
-					iter, static_cast<__float80>(f.reference), decimal_point.base, decimal_point.len);
+					iter, f.reference, decimal_point.base, decimal_point.len);
 			}
 			else
-#endif
 #if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
 			if constexpr (sizeof(flt) > sizeof(double))
 			{

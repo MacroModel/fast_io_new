@@ -608,13 +608,9 @@ inline constexpr bool long_double_alias_is_double{
 	::std::numeric_limits<long double>::digits == ::std::numeric_limits<double>::digits &&
 	::std::numeric_limits<long double>::max_exponent == ::std::numeric_limits<double>::max_exponent};
 
-#ifdef __SIZEOF_FLOAT80__
 inline constexpr bool long_double_alias_is_float80{
-	sizeof(long double) == sizeof(__float80) && ::std::numeric_limits<long double>::digits == 64 &&
+	::std::numeric_limits<long double>::digits == 64 &&
 	::std::numeric_limits<long double>::max_exponent == 16384};
-#else
-inline constexpr bool long_double_alias_is_float80{};
-#endif
 
 #if defined(__SIZEOF_INT128__) && defined(__STDCPP_FLOAT128_T__)
 inline constexpr bool long_double_alias_is_float128{
@@ -634,13 +630,11 @@ struct long_double_alias_type_traits
 	using alias_type = typename float_alias_type_traits<double>::alias_type;
 };
 
-#ifdef __SIZEOF_FLOAT80__
 template <bool is_float128>
 struct long_double_alias_type_traits<false, true, is_float128>
 {
-	using alias_type = __float80;
+	using alias_type = long double;
 };
-#endif
 
 #if defined(__SIZEOF_INT128__) && defined(__STDCPP_FLOAT128_T__)
 template <>

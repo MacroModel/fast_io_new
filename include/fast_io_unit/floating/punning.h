@@ -967,7 +967,9 @@ struct
 	::std::uint_least16_t exponent;
 };
 
-#ifdef __SIZEOF_FLOAT80__
+#if defined(__SIZEOF_FLOAT80__) ||                                                                            \
+	(defined(__LDBL_MANT_DIG__) && defined(__LDBL_MAX_EXP__) && __LDBL_MANT_DIG__ == 64 &&                    \
+	 __LDBL_MAX_EXP__ == 16384)
 template <::std::size_t padding_size>
 struct
 #if __has_cpp_attribute(__gnu__::__packed__)
@@ -1021,6 +1023,38 @@ inline constexpr punning_result<flt> get_punned_result(flt f) noexcept
 			static_cast<::std::uint_least32_t>((unwrap >> mbits) & exponent_mask),
 			static_cast<bool>((unwrap >> total_bits) & 1u)};
 }
+
+#if (defined(__LDBL_MANT_DIG__) && defined(__LDBL_MAX_EXP__) && __LDBL_MANT_DIG__ == 64 &&                    \
+	 __LDBL_MAX_EXP__ == 16384) &&                                                                             \
+	(!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+template <typename flt>
+	requires(::std::same_as<::std::remove_cv_t<flt>, long double> &&
+			 ::std::numeric_limits<long double>::digits == 64 &&
+			 ::std::numeric_limits<long double>::max_exponent == 16384)
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr punning_result<flt> get_punned_result(flt f) noexcept
+{
+	static_assert(sizeof(flt) >= sizeof(::std::uint_least64_t) + sizeof(::std::uint_least16_t));
+	using storage_type = float80_storage<sizeof(flt) - sizeof(::std::uint_least64_t) - sizeof(::std::uint_least16_t)>;
+	auto unwrap =
+#if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
+		__builtin_bit_cast(storage_type, f)
+#elif defined(_MSC_VER) && __cpp_lib_bit_cast >= 201806L
+		__builtin_bit_cast(storage_type, f)
+#else
+		bit_cast<storage_type>(f)
+#endif
+		;
+	constexpr ::std::uint_least64_t explicit_integer_bit{::std::uint_least64_t{1} << 63u};
+	return {unwrap.mantissa & static_cast<::std::uint_least64_t>(explicit_integer_bit - 1u),
+			static_cast<::std::uint_least32_t>(unwrap.exponent & 0x7fffu),
+			static_cast<bool>((unwrap.exponent >> 15u) & 1u)};
+}
+#endif
 
 #if defined(__SIZEOF_FLOAT80__) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
 template <>
