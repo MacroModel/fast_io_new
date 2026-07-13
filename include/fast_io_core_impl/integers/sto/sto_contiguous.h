@@ -1981,6 +1981,74 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #if (defined(__GNUC__) || defined(__clang__)) && \
 	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type>)
+	{
+		auto const next{first + 1u};
+		if (next == last ||
+			!::fast_io::details::char_is_digit<base, char_type>(
+				static_cast<unsigned_char_type>(*next))) [[likely]]
+		{
+			if constexpr (my_signed_integral<T>)
+			{
+				if (sign)
+				{
+					t = static_cast<T>(static_cast<unsigned_type>(0) -
+								   static_cast<unsigned_type>(first_digit));
+				}
+				else
+				{
+					t = static_cast<T>(first_digit);
+				}
+			}
+			else
+			{
+				t = static_cast<T>(first_digit);
+			}
+			return {next, parse_code::ok};
+		}
+	}
+	if constexpr (my_unsigned_integral<T> &&
+				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
+				  sizeof(char_type) == sizeof(char8_t) &&
+				  !::fast_io::details::is_ebcdic<char_type> &&
+				  (base == 3u || base == 4u || (11u <= base && base <= 16u)))
+	{
+		constexpr ::std::size_t short_limit{8u};
+		auto const remaining{static_cast<::std::size_t>(last - first)};
+		if (remaining <= short_limit ||
+			(remaining == short_limit + 1u &&
+			 !::fast_io::details::char_is_digit<base, char_type>(
+				 static_cast<unsigned_char_type>(last[-1])))) [[likely]]
+		{
+			unsigned_type accumulator{};
+			auto iter{first};
+			::std::size_t digits{};
+			for (; iter != last && digits != short_limit; ++iter, ++digits)
+			{
+				auto digit{static_cast<unsigned_char_type>(*iter)};
+				if (::fast_io::details::char_digit_to_literal<base, char_type>(digit)) [[unlikely]]
+				{
+					break;
+				}
+				if constexpr (base == 4u)
+				{
+					accumulator = static_cast<unsigned_type>((accumulator << 2u) | digit);
+				}
+				else
+				{
+					accumulator = static_cast<unsigned_type>(accumulator * base + digit);
+				}
+			}
+			if (iter == last ||
+				!::fast_io::details::char_is_digit<base, char_type>(
+					static_cast<unsigned_char_type>(*iter))) [[likely]]
+			{
+				t = static_cast<T>(accumulator);
+				return {iter, parse_code::ok};
+			}
+		}
+	}
 	if constexpr (base <= 10u && my_unsigned_integral<T> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
 				  sizeof(char_type) == sizeof(char8_t) &&

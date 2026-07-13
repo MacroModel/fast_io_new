@@ -39,73 +39,9 @@ template <::std::size_t base, ::std::integral T>
 [[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
 from_chars_integral_fixed_base(char const *first, char const *last, T &value) noexcept
 {
-#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-	if (first == last) [[unlikely]]
-	{
-		return {first, ::std::errc::invalid_argument};
-	}
-	if constexpr (base == 10u)
-	{
-		if constexpr (::std::signed_integral<T>)
-		{
-			auto const original_first{first};
-			if (*first == '-')
-			{
-				++first;
-				if (first == last) [[unlikely]]
-				{
-					return {original_first, ::std::errc::invalid_argument};
-				}
-				auto digit{static_cast<unsigned char>(*first)};
-				if (!::fast_io::details::char_digit_to_literal<10u, char>(digit)) [[likely]]
-				{
-					auto const next{first + 1u};
-					if (next == last ||
-						!::fast_io::details::char_is_digit<10u, char>(
-							static_cast<unsigned char>(*next)))
-					{
-						using unsigned_type = ::std::make_unsigned_t<T>;
-						value = static_cast<T>(static_cast<unsigned_type>(0) -
-											   static_cast<unsigned_type>(digit));
-						return {next, {}};
-					}
-				}
-				first = original_first;
-			}
-			else
-			{
-				auto digit{static_cast<unsigned char>(*first)};
-				if (!::fast_io::details::char_digit_to_literal<10u, char>(digit)) [[likely]]
-				{
-					auto const next{first + 1u};
-					if (next == last ||
-						!::fast_io::details::char_is_digit<10u, char>(
-							static_cast<unsigned char>(*next)))
-					{
-						value = static_cast<T>(digit);
-						return {next, {}};
-					}
-				}
-			}
-		}
-		else
-		{
-			auto digit{static_cast<unsigned char>(*first)};
-			if (!::fast_io::details::char_digit_to_literal<10u, char>(digit)) [[likely]]
-			{
-				auto const next{first + 1u};
-				if (next == last ||
-					!::fast_io::details::char_is_digit<10u, char>(
-						static_cast<unsigned char>(*next)))
-				{
-					value = static_cast<T>(digit);
-					return {next, {}};
-				}
-			}
-		}
-	}
-#endif
+#if !((defined(__GNUC__) || defined(__clang__)) && \
+	  (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	if constexpr (::std::unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  base == 8u)
 	{
@@ -190,6 +126,7 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			}
 		}
 	}
+#endif
 	auto const original_first{first};
 	auto const result =
 		::fast_io::details::scan_int_contiguous_none_space_part_define_impl<
