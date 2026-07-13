@@ -169,6 +169,12 @@ using ascii_x86_u32x4 [[gnu::vector_size(16)]] = unsigned int;
 using ascii_x86_i32x4 [[gnu::vector_size(16)]] = int;
 using ascii_x86_u64x2 [[gnu::vector_size(16)]] = unsigned long long;
 
+struct ascii_x86_digit_data
+{
+	ascii_digit_block digits;
+	ascii_x86_u8x16 unshuffled;
+};
+
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_x86_u16x8
 ascii_x86_mul_high_u16(ascii_x86_u16x8 left, ascii_x86_u16x8 right) noexcept
 {
@@ -202,8 +208,8 @@ ascii_x86_bcd4x4(ascii_x86_u32x4 value) noexcept
 }
 
 template <typename flt>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_digit_block
-make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_x86_digit_data
+make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 {
 	if constexpr (sizeof(flt) <= sizeof(float))
 	{
@@ -216,7 +222,7 @@ make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
 		auto const span{raw ? static_cast<::std::uint_least32_t>(
 								  8u - (static_cast<::std::uint_least32_t>(::std::countr_zero(raw)) >> 3u))
 							: 0u};
-		return {::fast_io::byte_swap(raw) + ascii_zeroes, 0u, span};
+		return {{::fast_io::byte_swap(raw) + ascii_zeroes, 0u, span}, unshuffled};
 	}
 	else
 	{
@@ -250,8 +256,15 @@ make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
 		auto const ascii_digits{shuffled + ascii_x86_u8x16{
 											   48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48}};
 		auto const packed{__builtin_bit_cast(ascii_x86_u64x2, ascii_digits)};
-		return {packed[0], packed[1], span};
+		return {{packed[0], packed[1], span}, unshuffled};
 	}
+}
+
+template <typename flt>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_digit_block
+make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
+{
+	return ::fast_io::details::da::make_ascii_digit_data_x86<flt>(value).digits;
 }
 #endif
 
@@ -319,10 +332,24 @@ struct ascii_fixed_layout_cache
 {
 	inline static constexpr ::std::int_least32_t minimum{-4};
 	inline static constexpr ::std::int_least32_t compact_maximum{6};
+	inline static constexpr ::std::int_least32_t binary64_shuffle_maximum{15};
 	inline static constexpr ::std::int_least32_t maximum{22};
+	inline static constexpr ::std::size_t entry_alignment{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	(defined(__GNUC__) || defined(__clang__))
+		64u
+#else
+		32u
+#endif
+	};
 
-	struct alignas(32) entry
+	struct alignas(entry_alignment) entry
 	{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	(defined(__GNUC__) || defined(__clang__))
+		::std::uint_least8_t binary64_shuffle[2][16]{};
+		::std::uint_least8_t binary64_last_digit_position[2]{};
+#endif
 		::std::uint_least8_t start_position{};
 		::std::uint_least8_t point_position{};
 		::std::uint_least8_t shift_position{};
@@ -337,6 +364,24 @@ struct ascii_fixed_layout_cache
 		for (auto exponent{minimum}; exponent <= maximum; ++exponent)
 		{
 			auto &layout{data[static_cast<::std::size_t>(exponent - minimum)]};
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	(defined(__GNUC__) || defined(__clang__))
+			for (::std::uint_least32_t extra{}; extra != 2u; ++extra)
+			{
+				auto source{static_cast<::std::uint_least8_t>(!extra)};
+				auto const point_slot{0 <= exponent && exponent <= 14 ? exponent + 1 : 128};
+				for (::std::uint_least32_t position{}; position != 16u; ++position)
+				{
+					layout.binary64_shuffle[extra][position] =
+						static_cast<::std::uint_least8_t>(static_cast<::std::int_least32_t>(position) == point_slot
+															  ? 0x80u
+															  : source++);
+				}
+				auto const length{15u + extra};
+				layout.binary64_last_digit_position[extra] = static_cast<::std::uint_least8_t>(
+					length + static_cast<::std::uint_least32_t>(0 <= exponent && exponent < static_cast<::std::int_least32_t>(length)));
+			}
+#endif
 			layout.start_position = static_cast<::std::uint_least8_t>(exponent < 0 ? 1 - exponent : 0);
 			layout.point_position = static_cast<::std::uint_least8_t>(exponent < 0 ? 1 : exponent + 1);
 			layout.shift_position = static_cast<::std::uint_least8_t>(
@@ -377,6 +422,70 @@ struct ascii_fixed_layout_cache
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
+
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__)
+/// @brief Compile-time generated GCC x86 shuffle layouts for complete binary32 scientific output.
+struct ascii_binary32_scientific_cache
+{
+	struct alignas(16) entry
+	{
+		::std::uint_least8_t shuffle[16]{};
+	};
+
+	entry data[32]{};
+
+	consteval ascii_binary32_scientific_cache() noexcept
+	{
+		for (::std::uint_least32_t index{}; index != 32u; ++index)
+		{
+			auto &layout{data[index]};
+			for (auto &position : layout.shuffle)
+			{
+				position = 0x80u;
+			}
+			auto const digit_span{index / 4u + 1u};
+			auto const has_last_digit{static_cast<bool>((index >> 1u) & 1u)};
+			auto const has_extra_digit{static_cast<bool>(index & 1u)};
+			auto const leading_position{static_cast<::std::uint_least8_t>(has_extra_digit ? 7u : 6u)};
+			::std::uint_least32_t length{};
+			if (has_last_digit)
+			{
+				layout.shuffle[length++] = leading_position;
+				layout.shuffle[length++] = 13u;
+				for (auto position{static_cast<::std::int_least32_t>(leading_position) - 1};
+					 0 <= position; --position)
+				{
+					layout.shuffle[length++] = static_cast<::std::uint_least8_t>(position);
+				}
+				layout.shuffle[length++] = 12u;
+			}
+			else
+			{
+				length = digit_span + static_cast<::std::uint_least32_t>(has_extra_digit);
+				length -= static_cast<::std::uint_least32_t>(length == 2u);
+				layout.shuffle[0] = leading_position;
+				layout.shuffle[1] = 13u;
+				for (::std::uint_least32_t position{2u}; position < length; ++position)
+				{
+					layout.shuffle[position] = static_cast<::std::uint_least8_t>(
+						leading_position + 1u - position);
+				}
+			}
+			for (::std::uint_least8_t exponent_position{8u}; exponent_position != 12u; ++exponent_position)
+			{
+				layout.shuffle[length++] = exponent_position;
+			}
+			layout.shuffle[15] = static_cast<::std::uint_least8_t>(length);
+		}
+	}
+};
+
+#if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
+[[__gnu__::__visibility__("hidden")]]
+#endif
+inline constexpr ascii_binary32_scientific_cache ascii_binary32_scientific_layouts{};
+#endif
 
 template <typename flt>
 FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
@@ -424,6 +533,35 @@ template <typename flt, bool comma, bool json_float>
 	__builtin_memcpy(destination, __builtin_addressof(ascii_zeroes), sizeof(ascii_zeroes));
 	auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(exponent - ascii_fixed_layout_cache::minimum)]};
 	auto buffer{destination + layout.start_position};
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	(defined(__GNUC__) || defined(__clang__))
+	if constexpr (sizeof(flt) > sizeof(float))
+	{
+		auto const extra{static_cast<::std::uint_least32_t>(has_extra_digit)};
+		auto const packed{ascii_x86_u64x2{digits.low, digits.high}};
+		ascii_x86_c8x16 shuffle;
+		__builtin_memcpy(__builtin_addressof(shuffle), layout.binary64_shuffle[extra], sizeof(shuffle));
+		auto const assembled{__builtin_bit_cast(
+			ascii_x86_u8x16,
+			__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, packed), shuffle))};
+		__builtin_memcpy(buffer, __builtin_addressof(assembled), sizeof(assembled));
+		buffer[16u] = static_cast<char>(digits.high >> 56u);
+		destination[layout.point_position] = static_cast<char>(comma ? u8',' : u8'.');
+		buffer[layout.binary64_last_digit_position[extra]] =
+			static_cast<char>(u8'0' + (has_last_digit ? last_digit : 0u));
+		auto end{buffer + layout.end_position[digit_count - 1u]};
+		if constexpr (json_float)
+		{
+			if (0 <= exponent &&
+				digit_count <= static_cast<::std::uint_least32_t>(exponent + 1))
+			{
+				*end++ = static_cast<char>(comma ? u8',' : u8'.');
+				*end++ = '0';
+			}
+		}
+		return end;
+	}
+#endif
 	::fast_io::details::da::store_ascii_digits<flt>(buffer, digits, !has_extra_digit);
 	constexpr ::std::uint_least32_t block_size{sizeof(flt) <= sizeof(float) ? 8u : 16u};
 	buffer[block_size + static_cast<::std::uint_least32_t>(has_extra_digit) - 1u] =
@@ -443,6 +581,124 @@ template <typename flt, bool comma, bool json_float>
 	}
 	return end;
 }
+
+template <typename flt, bool comma, bool json_float>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_fixed_extended(
+	char *destination, ascii_digit_block digits, ::std::uint_least32_t digit_count,
+	::std::int_least32_t exponent, bool has_extra_digit,
+	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
+{
+	::fast_io::details::da::store_ascii_digits<flt>(destination, digits, !has_extra_digit);
+	constexpr ::std::uint_least32_t block_size{sizeof(flt) <= sizeof(float) ? 8u : 16u};
+	destination[block_size + static_cast<::std::uint_least32_t>(has_extra_digit) - 1u] =
+		static_cast<char>(u8'0' + (has_last_digit ? last_digit : 0u));
+	auto const point_position{static_cast<::std::uint_least32_t>(exponent + 1)};
+	if (digit_count <= point_position)
+	{
+		// General notation admits at most six appended zeroes; decimal's length decision admits at most five.
+		switch (point_position - digit_count)
+		{
+		case 6u:
+			destination[digit_count + 5u] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 5u:
+			destination[digit_count + 4u] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 4u:
+			destination[digit_count + 3u] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 3u:
+			destination[digit_count + 2u] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 2u:
+			destination[digit_count + 1u] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 1u:
+			destination[digit_count] = static_cast<char>(u8'0');
+			[[fallthrough]];
+		case 0u:
+			break;
+		}
+		auto end{destination + point_position};
+		if constexpr (json_float)
+		{
+			*end++ = static_cast<char>(comma ? u8',' : u8'.');
+			*end++ = static_cast<char>(u8'0');
+		}
+		return end;
+	}
+	auto constexpr decimal_point{static_cast<char>(comma ? u8',' : u8'.')};
+	if constexpr (sizeof(flt) <= sizeof(float))
+	{
+		destination[point_position + 1u] = destination[point_position];
+		destination[point_position] = decimal_point;
+	}
+	else
+	{
+		// Extended fixed notation starts at byte eight, so the low eight digits never move.
+		auto trailing_digit{destination[16u]};
+		if (point_position == 16u)
+		{
+			destination[17u] = trailing_digit;
+			destination[16u] = decimal_point;
+		}
+		else
+		{
+			::std::uint_least64_t high_digits;
+			__builtin_memcpy(__builtin_addressof(high_digits), destination + 8u, sizeof(high_digits));
+			auto const last_high_digit{static_cast<char>(high_digits >> 56u)};
+			auto const shift{static_cast<::std::uint_least32_t>((point_position - 8u) * 8u)};
+			auto const lower_mask{(static_cast<::std::uint_least64_t>(1u) << shift) - 1u};
+			high_digits = (high_digits & lower_mask) |
+						  ((high_digits & ~lower_mask) << 8u) |
+						  (static_cast<::std::uint_least64_t>(static_cast<unsigned char>(decimal_point)) << shift);
+			__builtin_memcpy(destination + 8u, __builtin_addressof(high_digits), sizeof(high_digits));
+			if (digit_count == 17u)
+			{
+				destination[17u] = trailing_digit;
+			}
+			if (16u <= digit_count)
+			{
+				destination[16u] = last_high_digit;
+			}
+		}
+	}
+	return destination + digit_count + 1u;
+}
+
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__)
+template <bool comma, bool uppercase_e>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific_x86_binary32(
+	char *destination, ascii_x86_u8x16 unshuffled, ::std::uint_least32_t digit_span,
+	::std::int_least32_t exponent, bool has_extra_digit,
+	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
+{
+	auto exponent_data{
+		ascii_exponents.data[static_cast<::std::size_t>(exponent - ascii_exponent_cache::minimum)]};
+	if constexpr (uppercase_e)
+	{
+		exponent_data ^= static_cast<::std::uint_least64_t>(u8'e' ^ u8'E');
+	}
+	auto source{__builtin_bit_cast(ascii_x86_u64x2,
+								   unshuffled + ascii_x86_u8x16{48, 48, 48, 48, 48, 48, 48, 48,
+																48, 48, 48, 48, 48, 48, 48, 48})};
+	source[1] = (exponent_data & static_cast<::std::uint_least64_t>(0xffffffffu)) |
+				(static_cast<::std::uint_least64_t>(u8'0' + last_digit) << 32u) |
+				(static_cast<::std::uint_least64_t>(comma ? u8',' : u8'.') << 40u);
+	auto const index{(digit_span - 1u) * 4u +
+					 static_cast<::std::uint_least32_t>(has_last_digit) * 2u +
+					 static_cast<::std::uint_least32_t>(has_extra_digit)};
+	auto const &layout{ascii_binary32_scientific_layouts.data[index]};
+	ascii_x86_c8x16 shuffle;
+	__builtin_memcpy(__builtin_addressof(shuffle), layout.shuffle, sizeof(shuffle));
+	auto const assembled{__builtin_bit_cast(
+		ascii_x86_u8x16,
+		__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, source), shuffle))};
+	__builtin_memcpy(destination, __builtin_addressof(assembled), sizeof(assembled));
+	return destination + layout.shuffle[15];
+}
+#endif
 
 template <typename flt, bool comma, bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific(
@@ -466,6 +722,14 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 	char *destination, conversion_result converted) noexcept
 {
 	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
+	constexpr ::std::int_least32_t fast_fixed_maximum{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	(defined(__GNUC__) || defined(__clang__))
+		binary32 ? ascii_fixed_layout_cache::compact_maximum : ascii_fixed_layout_cache::binary64_shuffle_maximum
+#else
+		ascii_fixed_layout_cache::compact_maximum
+#endif
+	};
 	constexpr ::std::uint_least64_t extra_digit_threshold{
 		binary32 ? static_cast<::std::uint_least64_t>(10000000) : static_cast<::std::uint_least64_t>(1000000000000000)};
 	constexpr ::std::uint_least32_t block_size{binary32 ? 8u : 16u};
@@ -483,7 +747,12 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(converted.significand)};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
+#if defined(__GNUC__) && !defined(__clang__)
+	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt>(converted.significand)};
+	auto const digits{digit_data.digits};
+#else
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(converted.significand)};
+#endif
 #else
 	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(converted.significand)};
 #endif
@@ -518,22 +787,46 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 	{
 		if (use_fixed)
 		{
-			return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
+			if (exponent <= fast_fixed_maximum)
+			{
+				return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
+					destination, digits, digit_count, exponent, has_extra_digit,
+					converted.last_digit, converted.has_last_digit);
+			}
+			return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
 				destination, digits, digit_count, exponent, has_extra_digit,
 				converted.last_digit, converted.has_last_digit);
 		}
 	}
 	else if (use_fixed && ascii_fixed_layout_cache::minimum <= exponent &&
-			 exponent <= ascii_fixed_layout_cache::compact_maximum)
+			 exponent <= fast_fixed_maximum)
 	{
 		return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
 			destination, digits, digit_count, exponent, has_extra_digit,
 			converted.last_digit, converted.has_last_digit);
 	}
+	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
+	{
+		if (use_fixed)
+		{
+			return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
+				destination, digits, digit_count, exponent, has_extra_digit,
+				converted.last_digit, converted.has_last_digit);
+		}
+	}
 	if (use_fixed)
 	{
 		return nullptr;
 	}
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__)
+	if constexpr (binary32)
+	{
+		return ::fast_io::details::da::print_ascii_scientific_x86_binary32<flags.comma, flags.uppercase_e>(
+			destination, digit_data.unshuffled, digits.span, exponent, has_extra_digit,
+			converted.last_digit, converted.has_last_digit);
+	}
+#endif
 	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
 		destination, digits, digit_count, exponent, has_extra_digit,
 		converted.last_digit, converted.has_last_digit);

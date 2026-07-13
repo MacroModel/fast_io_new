@@ -82,7 +82,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 inline constexpr auto print_staged_type(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
-	return ::fast_io::io_type_t<::fast_io::details::da::conversion_result>{};
+	using floating_type = ::std::remove_cvref_t<flt>;
+	return ::fast_io::io_type_t<::fast_io::details::da::staged_conversion_result<floating_type>>{};
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
@@ -112,7 +113,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires ::fast_io::details::print_floating_staged_supported<flags, flt>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::details::da::conversion_result
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::details::da::staged_conversion_result<::std::remove_cvref_t<flt>>
 print_staged_prepare(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
 	manipulators::scalar_manip_t<flags, flt> const &value) noexcept
@@ -136,7 +137,15 @@ print_staged_prepare(
 		converted = ::fast_io::details::da::compute_binary64(
 			significand, static_cast<::std::uint_least32_t>(exponent));
 	}
-	return converted;
+	if constexpr (::fast_io::details::da::staged_prepares_sign<floating_type>)
+	{
+		return {converted.significand, converted.exponent, converted.last_digit,
+				converted.has_last_digit, sign};
+	}
+	else
+	{
+		return converted;
+	}
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
@@ -144,13 +153,25 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_staged_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>, char_type *iter,
 	manipulators::scalar_manip_t<flags, flt> const &value,
-	::fast_io::details::da::conversion_result const &prepared) noexcept
+	::fast_io::details::da::staged_conversion_result<::std::remove_cvref_t<flt>> const &prepared) noexcept
 {
 	using floating_type = ::std::remove_cvref_t<flt>;
-	auto const [mantissa, exponent, negative]{
-		::fast_io::details::get_punned_result(static_cast<floating_type>(value.reference))};
-	(void)mantissa;
-	(void)exponent;
+	::fast_io::details::da::conversion_result const converted{
+		prepared.significand, prepared.exponent, prepared.last_digit, prepared.has_last_digit};
+	bool negative;
+	if constexpr (::fast_io::details::da::staged_prepares_sign<floating_type>)
+	{
+		(void)value;
+		negative = prepared.negative;
+	}
+	else
+	{
+		auto const [mantissa, exponent, sign]{
+			::fast_io::details::get_punned_result(static_cast<floating_type>(value.reference))};
+		(void)mantissa;
+		(void)exponent;
+		negative = sign;
+	}
 	if constexpr (::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)
 	{
 		if (!::std::is_constant_evaluated())
@@ -166,13 +187,13 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 				iter += static_cast<::std::size_t>(negative);
 			}
 			auto const result{
-				::fast_io::details::da::print_ascii_shortest<floating_type, flags>(iter, prepared)};
+				::fast_io::details::da::print_ascii_shortest<floating_type, flags>(iter, converted)};
 			if (result != nullptr)
 			{
 				return result;
 			}
 			auto const finalized{::fast_io::details::da::trim_trailing_zeros(
-				::fast_io::details::da::finalize<floating_type>(prepared))};
+				::fast_io::details::da::finalize<floating_type>(converted))};
 			return ::fast_io::details::print_rsvflt_decimal_define_impl<
 				floating_type, flags.comma, flags.uppercase_e, flags.floating, flags.json_float>(
 				iter, finalized.m10, finalized.e10);
@@ -180,7 +201,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 	}
 	iter = ::fast_io::details::print_rsv_fp_sign_impl<flags.showpos>(iter, negative);
 	auto const finalized{::fast_io::details::da::trim_trailing_zeros(
-		::fast_io::details::da::finalize<floating_type>(prepared))};
+		::fast_io::details::da::finalize<floating_type>(converted))};
 	return ::fast_io::details::print_rsvflt_decimal_define_impl<
 		floating_type, flags.comma, flags.uppercase_e, flags.floating, flags.json_float>(
 		iter, finalized.m10, finalized.e10);

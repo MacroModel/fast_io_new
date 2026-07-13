@@ -29,6 +29,36 @@ inline constexpr bool staged_supported{
 #endif
 };
 
+/// @brief Indicates whether the staged decimal state carries the original sign on this compiler target.
+/// @details Carrying the sign removes a second value load during emission when it improves the concrete staged
+///          schedule. Other compiler/type combinations retain the independent sign extraction in their emitter.
+template <typename flt>
+inline constexpr bool staged_prepares_sign{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
+	::std::same_as<::std::remove_cvref_t<flt>, float> ||
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#elif (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__)
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#else
+	false
+#endif
+};
+
+struct signed_conversion_result
+{
+	::std::uint_least64_t significand;
+	::std::int_least32_t exponent;
+	::std::uint_least32_t last_digit;
+	bool has_last_digit;
+	bool negative;
+};
+
+template <typename flt>
+using staged_conversion_result = ::std::conditional_t<
+	::fast_io::details::da::staged_prepares_sign<flt>,
+	::fast_io::details::da::signed_conversion_result,
+	::fast_io::details::da::conversion_result>;
+
 /// @brief  Returns the preferred number of independent conversions in one staged floating run.
 /// @details Target tuning belongs to the decimal implementation; it does not change whether a floating
 ///          manipulator models staged_printable or alter the generic print orchestration.
