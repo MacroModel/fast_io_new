@@ -1,11 +1,11 @@
-# Integer `fast_io::from_chars` validation and performance on Apple M4
+# Integer `fast_io::from_chars` validation on Apple M4 and Intel x86-64
 
 This report was generated on 2026-07-13 from fast_io commit
-`ec7634ccf53d2215fc20a50a519fa99b5e7ed895`. Native timings apply only to the
-Apple M4 system described below. The Cortex-X4 results are static scheduling
-estimates, not native measurements.
+`f5839b8e44ab58ce8fbddf6fc8a0ca69d32b6082`. Native measurements are reported
+separately for Apple M4 and Intel Core i9-14900HX. The Cortex-X4 results are
+static scheduling estimates, not native measurements.
 
-## Environment
+## Apple M4 environment
 
 - Processor: Apple M4, 10 logical CPUs, 16 GiB memory.
 - Operating system: macOS 26.5.1 (25F80).
