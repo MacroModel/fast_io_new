@@ -175,9 +175,21 @@ paths, and must not be read as native Cortex-X4 benchmark results.
 
 ## x86-64 Clang optimization pass
 
-The x86-64 path was audited separately with Apple Clang 21, LLVM 23 llvm-mca,
-Compiler Explorer Clang trunk, and Rosetta execution on the M4 host. The retained
-implementation has three bounded components:
+The final x86-64 measurements were collected natively on an Intel Core
+i9-14900HX under Ubuntu, kernel 6.17.0-29-generic. The benchmark was compiled
+with Ubuntu Clang 21.1.8, C++20, `-O3 -DNDEBUG -march=native`, libstdc++ 15.2,
+and the same fast_float revision used by the M4 benchmark. The process was
+pinned to logical CPU 4, a 5.8 GHz P-core thread, so it could not migrate
+between P-cores and E-cores. Rosetta measurements were used only to screen
+early candidates and are not used for the final performance claims.
+
+The optimized kernels now live in `integers/sto/sto_contiguous.h`, below the
+public character-conversion wrapper. Consequently both internal fast_io
+integer scanning and `fast_io::from_chars` use the same implementation. The
+x86-64 public wrapper performs only the runtime-base dispatch, standard error
+mapping, and result construction; the duplicated x86 fast paths were removed.
+AArch64 retains its existing public specializations. The shared x86
+implementation has four bounded components:
 
 - Bases 2 through 10 use a 32-bit SWAR kernel for four-digit prefixes. The
   kernel performs one safe four-byte load, parallel digit validation, and two
@@ -192,6 +204,9 @@ implementation has three bounded components:
   `<immintrin.h>` and does not over-read the input range. An eight-byte range
   ending in a non-digit bypasses SIMD, avoiding a failed eight-byte validation
   followed by duplicate scalar parsing for seven-digit terminated input.
+- Decimal one-digit parsing and the existing short-input paths for bases 3, 4,
+  and 11 through 16 are performed inside the internal scanner. This avoids
+  giving the public wrapper a faster private implementation than internal I/O.
 
 An early generalized SSE implementation incorrectly used the decimal upper
 bound for bases below ten. The x86 libFuzzer target reduced this to base 5 input
@@ -199,38 +214,47 @@ bound for bases below ten. The x86 libFuzzer target reduced this to base 5 input
 The retained code uses the compile-time upper bound `'0' + base`, and the
 reproducer now agrees with libc++ at pointer 5 and value 780.
 
-The corrected public `uint64_t` target initially completed 34,135,047
-executions in 61 seconds under x86-64 ASan, UBSan, libFuzzer, and Rosetta with
-no sanitizer finding or crash artifact. After the final terminated-input
-adjustment, a newly compiled target completed another 19,101,889 executions in
-61 seconds with no sanitizer finding and no artifact. Deterministic exact and
-terminated tests also pass for both baseline x86-64 and Haswell builds. A
-constant-evaluation static assertion covers the SWAR fallback. Clang
-compilation passes for Core 2, Nehalem, Sandy Bridge, Haswell, Skylake, Alder
-Lake, Sapphire Rapids, and Zen 1 through Zen 4. The complete Apple M4 assembly
-remains byte-for-byte identical to the pre-x86-change file. The GCC/Clang
-builtin path is excluded for pure MSVC builds.
+The native matrix contains all 665 unsigned `(base, digits)` points for both
+exact and terminated ranges. Ratios are geometric means; a competitor/parser
+ratio above one favors fast_io. `core/API` below one means that internal
+scanning is faster after removing the public wrapper.
 
-The final corrected Rosetta matrix contains all 665 unsigned `(base, digits)`
-points. Rosetta is a translation environment rather than a native x86
-performance authority, so the point estimates below are reported without
-generalizing them to physical Intel or AMD processors.
+| Range | core/API | Core wins vs API | std/API | API wins vs std | fast_float/API | API wins vs fast_float | std/core | Core wins vs std | fast_float/core | Core wins vs fast_float |
+|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Exact | 0.919x | 526/665 | 1.304x | 515/665 | 1.352x | 553/665 | 1.418x | 584/665 | 1.470x | 603/665 |
+| Terminated | 0.943x | 481/665 | 1.308x | 538/665 | 1.406x | 614/665 | 1.386x | 577/665 | 1.490x | 620/665 |
 
-| Range | Current/baseline | std/API | Wins vs std | fast_float/API | Wins vs fast_float |
-|:---|---:|---:|---:|---:|---:|
-| Exact | 0.976x | 1.648x | 628/665 | 1.191x | 564/665 |
-| Terminated | 0.960x | 1.755x | 640/665 | 1.169x | 537/665 |
+The public API therefore exceeds both comparison implementations by more than
+1.30x in both range shapes. Internal scanning is faster still: 8.1% faster
+than the API for exact input and 5.7% faster for terminated input. Every base
+family has a core/API geometric mean below one except terminated decimal at
+1.004x, a 0.4% difference within the observed run-to-run noise.
 
-Within the four-digit SWAR window, exact input is 1.292x faster than libc++ and
-1.373x faster than fast_float; fast_io wins all 36 points against fast_float.
-Skipping the predictably failing SIMD attempt improves all 26 affected
-seven-digit terminated points; their public-API geometric-mean time decreases
-by 21.0% relative to the previously retained binary in the same Rosetta
-environment.
-The complete Rosetta matrix does not demonstrate a 30% aggregate advantage over
-fast_float: the final measured aggregate advantages are 19.1% for exact input
-and 16.9% for terminated input. A native x86-64 run is required before making the
-requested 30% production claim.
+Nine independent native Linux libFuzzer targets were compiled with Clang 21,
+ASan, and UBSan and ran for 61 seconds each. The two public targets compare
+directly with `std::from_chars`; every core target checks both signed and
+unsigned results, returned pointers, and parse codes. No sanitizer finding or
+artifact was produced.
+
+| Target | Executions | Peak RSS | Result |
+|:---|---:|---:|:---|
+| Public API, `uint64_t` | 25,003,675 | 435 MiB | pass |
+| Public API, `int64_t` | 28,759,242 | 431 MiB | pass |
+| Core, `char` | 21,871,477 | 429 MiB | pass |
+| Core, `wchar_t` | 18,850,307 | 394 MiB | pass |
+| Core, `char8_t` | 18,851,211 | 435 MiB | pass |
+| Core, `char16_t` | 19,250,178 | 398 MiB | pass |
+| Core, `char32_t` | 18,502,510 | 395 MiB | pass |
+| Core, `signed char` | 18,384,103 | 436 MiB | pass |
+| Core, `unsigned char` | 10,811,814 | 427 MiB | pass |
+| **Total** | **180,284,517** | — | **pass** |
+
+Deterministic exact and terminated tests pass for baseline SSE2 and Haswell
+builds, and a constant-evaluation static assertion covers the runtime fallback.
+Clang 21 compilation passes for Core 2, Nehalem, Sandy Bridge, Haswell,
+Skylake, Alder Lake, Sapphire Rapids, and Zen 1 through Zen 4. The complete
+665-wrapper Apple M4 assembly remains byte-for-byte identical to the saved
+pre-x86-change file. Pure MSVC builds do not enter the GCC/Clang builtin path.
 
 llvm-mca models the valid four-digit SWAR block at 2.7 to 4.0 cycles and the
 valid eight-digit SSE block at 5.5 to 11.3 cycles across Haswell, Skylake,
@@ -246,16 +270,23 @@ instructions and no helper call.
 The benchmark binaries were built with the following shape:
 
 ```sh
+# Native Apple M4
 SDK=$(xcrun --show-sdk-path)
 /usr/bin/clang++ -std=c++20 -O3 -DNDEBUG -mcpu=apple-m4 \
   -isysroot "$SDK" -Iinclude -I/path/to/fast_float/include \
   wrappers.cc bench.cc -o int_from_chars_bench
+
+# Native Intel Core i9-14900HX
+clang++-21 -std=c++20 -O3 -DNDEBUG -march=native \
+  -Iinclude -I/path/to/fast_float/include \
+  wrappers.cc bench.cc -o int_from_chars_bench
+taskset -c 4 ./int_from_chars_bench > results.csv
 ```
 
 Each production fuzz target used:
 
 ```sh
-clang++ -std=c++20 -O1 -g -fno-omit-frame-pointer -fuse-ld=lld \
+clang++-21 -std=c++20 -O1 -g -fno-omit-frame-pointer \
   -fsanitize=fuzzer,address,undefined -DFUZZ_KIND=N -Iinclude \
   fuzz_int_from_chars.cc -o fuzz_target
 fuzz_target -max_total_time=60 -timeout=5 -rss_limit_mb=4096 \
@@ -274,11 +305,20 @@ Primary artifact SHA-256 values:
 - Negative signed exact CSV: `4e247062d9da3c6009acd6d1c16de2eeb857d78c6fe6443e6ba38945a638a915`.
 - Negative signed terminated CSV: `146f70ab27c02d914432cac2c0dee3c55f316387c3f2683c16ec68afac16bb14`.
 - llvm-mca region source: `84960af382516afe7edccf8808504279a087adb95073009d3b44c14e042baab1`.
-- Retained x86 exact CSV: `a3e4d16eeb56ee936bf3c1f5d285e28a292eb62af7fd88aa7fd6cd22b16d17e1`.
-- Retained x86 terminated CSV: `e6121cf6a1c883883e3b294262033778d7171d4cac7a9e34ad942675586b96fe`.
-- x86 final-source fuzz log: `baf8a8d357ddcee0ae05bbbc9d5131c9a531ea576d1ca4177c5c5d4f97a6c1a7`.
+- Native x86 exact CSV: `cb8e271f6fe89ad06e904ef76f803ece956425e9f6a81ea2074a2af9df021299`.
+- Native x86 terminated CSV: `57de8a75d736050c68d92fdd4350774ea5127c48f96b43aa32cc31a4235ecf20`.
+- Native x86 fuzz logs, targets 0–8 respectively:
+  `38ba22d20a2e6be60d3db933bfdba67b074d8d88319f06f5868de0d0ed47e8d4`,
+  `8a2cfe151e65002c38ed68bbf85feb899aaf85a3a94019fb6444bbb34a7cf11e`,
+  `5372462338193e22154566c12b962901ee0b84b232712d88269f9c717c7b537a`,
+  `8cfba6739fe08506345116008a29555e314ba19bcd48d9e974393615aeba68d6`,
+  `06f6936c28bfd261fb662fbeaf068f1133dcd509e95fac1e42f619c1dbe6b048`,
+  `7fdd0b5a9818a58abdfc3c5e02fae32aaee44258b5f4c5d0b3ba6afb2cacc40a`,
+  `671eb4590ebcb903ffe7256397b049152208c318c56e7b80091f7da46f4f4c71`,
+  `e6b68cb8367d2a0a9ec234689e8c193a331918e929a73cf0936a47c437ce5b2a`,
+  and `e46e4e283e207b49539d0e804b80e61b9824388254151c8f2ca8371fd8a56a84`.
 - Compiler Explorer Clang-trunk response: `8553a06885e5fb137bc773654f5078acf0aa318b84f5c1a77cbbe8ece63d51ba`.
 
 The corresponding sources, binaries, corpora, logs, assembly, llvm-mca output,
-and CSV files are retained under `/tmp/fast_io_production_fuzz` and
-`/tmp/fast_io_fullbench` for local inspection.
+and CSV files are retained under `/tmp/fast_io_production_fuzz`,
+`/tmp/fast_io_fullbench`, and `/tmp/fast_io_native_bench` on the Linux host.
