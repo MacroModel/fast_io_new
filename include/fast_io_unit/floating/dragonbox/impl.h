@@ -1361,9 +1361,10 @@ inline constexpr void dragonbox_correct_shortest_roundtrip(
 				return;
 			}
 		}
-		auto [nearest_m10, nearest_e10] = ::fast_io::details::dragonbox_main<flt>(m2, e2);
-		auto [nearest_v, nearest_n] = ::fast_io::bitops::rtz_iec559(nearest_m10);
-		nearest_e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(nearest_n));
+		auto const nearest{::fast_io::details::da::trim_trailing_zeros(
+			::fast_io::details::dragonbox_main<flt>(m2, e2))};
+		auto const nearest_v{nearest.m10};
+		auto const nearest_e10{nearest.e10};
 		if (::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
 				nearest_v, nearest_e10, m2, e2, negative))
 		{
@@ -1426,10 +1427,9 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even && da_supported &&
 				  da_target_enabled)
 	{
-		auto [m10, e10]{::fast_io::details::da::to_decimal<flt>(m2, e2)};
-		auto [value, zeroes]{::fast_io::bitops::rtz_iec559(m10)};
-		e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(zeroes));
-		return {value, e10};
+		auto const result{::fast_io::details::da::trim_trailing_zeros(
+			::fast_io::details::da::to_decimal<flt>(m2, e2))};
+		return {result.m10, result.e10};
 	}
 	auto [m10, e10] =
 		[]([[maybe_unused]] typename iec559_traits<flt>::mantissa_type mantissa,
@@ -1445,19 +1445,18 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 			}
 		}(m2, e2, negative);
 	// m10 should not ==0
-	auto [v, n] = ::fast_io::bitops::rtz_iec559(m10);
-	e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(n));
+	auto trimmed{::fast_io::details::da::trim_trailing_zeros(
+		::fast_io::details::m10_result<decltype(m10)>{m10, e10})};
 	if constexpr (rounding != ::fast_io::manipulators::floating_rounding::nearest_to_even ||
 				  (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float)))
 	{
-		::fast_io::details::dragonbox_correct_shortest_roundtrip<flt, rounding>(v, e10, m2, e2, negative);
-		auto [v2, n2] = ::fast_io::bitops::rtz_iec559(v);
-		e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(n2));
-		return {v2, e10};
+		::fast_io::details::dragonbox_correct_shortest_roundtrip<flt, rounding>(
+			trimmed.m10, trimmed.e10, m2, e2, negative);
+		return ::fast_io::details::da::trim_trailing_zeros(trimmed);
 	}
 	else
 	{
-		return {v, e10};
+		return trimmed;
 	}
 }
 
@@ -1499,9 +1498,10 @@ inline constexpr void dragonbox_shorten_decimal_to_target(
 			{
 				m10 = candidate;
 				e10 = candidate_e10;
-				auto [trimmed, zeroes] = ::fast_io::bitops::rtz_iec559(m10);
-				m10 = trimmed;
-				e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(zeroes));
+				auto const trimmed{::fast_io::details::da::trim_trailing_zeros(
+					::fast_io::details::m10_result<decimal_type>{m10, e10})};
+				m10 = trimmed.m10;
+				e10 = trimmed.e10;
 				return true;
 			}
 			return false;
@@ -1752,11 +1752,7 @@ dragonbox_impl_narrow_hybrid(flt f, typename iec559_traits<flt>::mantissa_type m
 		if (direct.m10 &&
 			!::fast_io::details::dragonbox_narrow_raw_candidate_needs_fallback<flt>(m2, e2))
 		{
-			auto [trimmed, zeroes] = ::fast_io::bitops::rtz_iec559(direct.m10);
-			auto const trimmed_e10{
-				static_cast<::std::int_least32_t>(direct.e10 + static_cast<::std::int_least32_t>(
-																   static_cast<::std::uint_least32_t>(zeroes)))};
-			return {trimmed, trimmed_e10};
+			return ::fast_io::details::da::trim_trailing_zeros(direct);
 		}
 	}
 	else

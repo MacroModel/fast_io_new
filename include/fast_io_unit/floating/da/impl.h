@@ -16,6 +16,18 @@ struct decimal_result
 	::std::int_least32_t e10;
 };
 
+template <typename decimal_type>
+[[nodiscard]] inline constexpr decimal_type trim_trailing_zeros(decimal_type result) noexcept
+{
+	if (result.m10 % 10u == 0u) [[unlikely]]
+	{
+		auto const [m10, zeroes]{::fast_io::bitops::rtz_iec559(result.m10)};
+		result.m10 = m10;
+		result.e10 += static_cast<::std::int_least32_t>(static_cast<::std::uint_least32_t>(zeroes));
+	}
+	return result;
+}
+
 template <typename flt, typename mantissa_type>
 [[nodiscard]] inline constexpr decimal_result<flt> to_decimal(
 	mantissa_type mantissa, ::std::int_least32_t raw_exponent) noexcept
