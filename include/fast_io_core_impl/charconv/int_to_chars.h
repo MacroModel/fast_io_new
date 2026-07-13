@@ -21,7 +21,7 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_checked(char *firs
 	}
 	if (negative)
 	{
-		*first++ = '-';
+		*first++ = ::fast_io::char_literal_v<u8'-', char>;
 	}
 	if constexpr (base == 10u)
 	{
@@ -50,13 +50,13 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_decimal(char *firs
 	}
 	if (negative)
 	{
-		*first++ = '-';
+		*first++ = ::fast_io::char_literal_v<u8'-', char>;
 	}
-	if constexpr (sizeof(U) == sizeof(::std::uint_least64_t))
+	if constexpr (!::fast_io::details::is_ebcdic<char> && sizeof(U) == sizeof(::std::uint_least64_t))
 	{
 		if (!::std::is_constant_evaluated())
 		{
-			return {::fast_io::details::jeaiii::champagne_lemire_main(
+			return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
 						first, static_cast<::std::uint_least64_t>(value)),
 					{}};
 		}
@@ -77,16 +77,16 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_fixed_base(char *f
 	}
 	if (negative)
 	{
-		*first++ = '-';
+		*first++ = ::fast_io::char_literal_v<u8'-', char>;
 	}
 	if constexpr (base == 10u && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 	{
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-		if constexpr (sizeof(U) == sizeof(::std::uint_least64_t))
+		if constexpr (!::fast_io::details::is_ebcdic<char> && sizeof(U) == sizeof(::std::uint_least64_t))
 		{
 			if (!::std::is_constant_evaluated())
 			{
-				return {::fast_io::details::jeaiii::champagne_lemire_main(
+				return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
 							first, static_cast<::std::uint_least64_t>(value)),
 						{}};
 			}
@@ -182,7 +182,7 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_two_digits_table(c
 	}
 	if (negative)
 	{
-		*first++ = '-';
+		*first++ = ::fast_io::char_literal_v<u8'-', char>;
 	}
 	constexpr auto const *tb{::fast_io::details::digits_table<char, base, false>};
 	::std::size_t const index{static_cast<::std::size_t>(value) << 1u};
@@ -475,7 +475,7 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 		}
 		if (negative)
 		{
-			*first++ = '-';
+			*first++ = ::fast_io::char_literal_v<u8'-', char>;
 		}
 		return ::fast_io::details::jeaiii::jeaiii_main<false, false, char, ::fast_io::to_chars_result>(
 			first, magnitude);
@@ -493,7 +493,7 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 		}
 		if (negative)
 		{
-			*first++ = '-';
+			*first++ = ::fast_io::char_literal_v<u8'-', char>;
 		}
 		*first = ::fast_io::details::charliteralofnumber<char, false>(static_cast<char8_t>(magnitude));
 		return {first + 1u, {}};
@@ -527,7 +527,7 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 			}
 			if (negative)
 			{
-				*first++ = '-';
+				*first++ = ::fast_io::char_literal_v<u8'-', char>;
 			}
 			return ::fast_io::details::print_reserve_power_of_two_main<8u, false, char,
 																	   ::fast_io::to_chars_result>(first, magnitude);
@@ -543,7 +543,7 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 			}
 			if (negative)
 			{
-				*first++ = '-';
+				*first++ = ::fast_io::char_literal_v<u8'-', char>;
 			}
 			return ::fast_io::details::print_reserve_power_of_two_main<16u, false, char,
 																	   ::fast_io::to_chars_result>(first, magnitude);

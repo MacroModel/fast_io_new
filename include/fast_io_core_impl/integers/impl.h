@@ -2822,11 +2822,13 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 			else if constexpr (base == 10 && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 			{
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-				if constexpr (::std::same_as<char_type, char> && sizeof(T) == sizeof(::std::uint_least64_t))
+				if constexpr ((::std::same_as<char_type, char8_t> ||
+							   (::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)) &&
+							  sizeof(T) == sizeof(::std::uint_least64_t))
 				{
 					if (!::std::is_constant_evaluated())
 					{
-						return ::fast_io::details::jeaiii::champagne_lemire_main(
+						return ::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
 							first, static_cast<::std::uint_least64_t>(u));
 					}
 				}

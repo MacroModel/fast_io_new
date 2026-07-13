@@ -12,10 +12,8 @@ using champagne_lemire_i8x16 [[__gnu__::__vector_size__(16)]] = char;
 #if defined(__GNUC__) && !defined(__clang__)
 // Keep GCC's constant broadcasts as memory-source instructions.  Materializing them through GPRs
 // otherwise makes GCC spill a dead ZMM value and adds shuffle-port pressure to the hot path.
-[[__gnu__::__visibility__("hidden")]]
-inline constexpr ::std::uint_least64_t champagne_lemire_ten{10u};
-[[__gnu__::__visibility__("hidden")]]
-inline constexpr ::std::uint_least64_t champagne_lemire_zero{static_cast<::std::uint_least64_t>(u8'0')};
+static constexpr ::std::uint_least64_t champagne_lemire_ten{10u};
+static constexpr ::std::uint_least64_t champagne_lemire_zero{static_cast<::std::uint_least64_t>(u8'0')};
 #endif
 
 // Four IFMA operations set a fixed cost floor, so the scalar path wins for shorter values.
@@ -124,8 +122,8 @@ inline champagne_lemire_i8x16 champagne_lemire_16_digits_from_groups(::std::uint
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
-inline char *champagne_lemire_write_digits(char *iter, champagne_lemire_i8x16 digits,
-										   ::std::size_t length) noexcept
+inline char8_t *champagne_lemire_write_digits(char8_t *iter, champagne_lemire_i8x16 digits,
+											  ::std::size_t length) noexcept
 {
 	if (length == 16u)
 	{
@@ -145,7 +143,7 @@ inline char *champagne_lemire_write_digits(char *iter, champagne_lemire_i8x16 di
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
-inline char *champagne_lemire_main(char *iter, ::std::uint_least64_t value) noexcept
+inline char8_t *champagne_lemire_main(char8_t *iter, ::std::uint_least64_t value) noexcept
 {
 	constexpr ::std::uint_least64_t divisor{static_cast<::std::uint_least64_t>(100000000u)};
 	if (value >= static_cast<::std::uint_least64_t>(100000000000000u))
@@ -163,8 +161,8 @@ inline char *champagne_lemire_main(char *iter, ::std::uint_least64_t value) noex
 		::std::uint_least64_t const high{value / wide_divisor};
 		::std::uint_least64_t const middle{quotient - high * divisor};
 		champagne_lemire_i8x16 const digits{champagne_lemire_16_digits_from_groups(middle, low)};
-		char *const low_iter{high < 100u ? jeaiii_first_two(iter, static_cast<::std::uint_least32_t>(high))
-										 : jeaiii_range4(iter, static_cast<::std::uint_least32_t>(high))};
+		char8_t *const low_iter{high < 100u ? jeaiii_first_two(iter, static_cast<::std::uint_least32_t>(high))
+											: jeaiii_range4(iter, static_cast<::std::uint_least32_t>(high))};
 		return champagne_lemire_write_digits(low_iter, digits, 16u);
 	}
 	if (value < champagne_lemire_threshold)
@@ -176,6 +174,28 @@ inline char *champagne_lemire_main(char *iter, ::std::uint_least64_t value) noex
 	::std::uint_least64_t const low{value - quotient * divisor};
 	champagne_lemire_i8x16 const digits{champagne_lemire_16_digits_from_groups(quotient, low)};
 	return champagne_lemire_write_digits(iter, digits, length);
+}
+
+template <::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+inline char_type *champagne_lemire_main_for_char_type(char_type *iter, ::std::uint_least64_t value) noexcept
+{
+	if constexpr (::std::same_as<char_type, char8_t>)
+	{
+		return champagne_lemire_main(iter, value);
+	}
+	else
+	{
+		using char8_t_may_alias_ptr
+#if __has_cpp_attribute(__gnu__::__may_alias__)
+			[[__gnu__::__may_alias__]]
+#endif
+			= char8_t *;
+		char8_t_may_alias_ptr const u8iter{reinterpret_cast<char8_t_may_alias_ptr>(iter)};
+		return reinterpret_cast<char_type *>(champagne_lemire_main(u8iter, value));
+	}
 }
 
 } // namespace fast_io::details::jeaiii
