@@ -1751,15 +1751,163 @@ dragonbox_impl_narrow_hybrid(flt f, typename iec559_traits<flt>::mantissa_type m
 	}
 	else
 	{
-		auto direct{::fast_io::details::dragonbox_impl<flt, rounding>(m2, e2, negative)};
-		if (direct.m10 &&
-			::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
-				direct.m10, direct.e10, m2, e2, negative))
+		constexpr bool bfloat16{
+			iec559_traits<flt>::mbits == 7u && iec559_traits<flt>::ebits == 8u};
+		if constexpr (!bfloat16)
 		{
-			return direct;
+			auto direct{::fast_io::details::dragonbox_impl<flt, rounding>(m2, e2, negative)};
+			if (direct.m10 &&
+				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
+					direct.m10, direct.e10, m2, e2, negative))
+			{
+				return direct;
+			}
+		}
+		else if (e2 < dragonbox_bfloat16_high_fallback_min_exponent)
+		{
+			auto direct{::fast_io::details::dragonbox_impl<flt, rounding>(m2, e2, negative)};
+			if (direct.m10 &&
+				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
+					direct.m10, direct.e10, m2, e2, negative))
+			{
+				return direct;
+			}
 		}
 	}
 	return ::fast_io::details::dragonbox_impl_narrow_from_float<flt, rounding>(f, m2, e2, negative);
+}
+
+inline constexpr ::std::size_t dragonbox_narrow_shortest_page_shift{6u};
+inline constexpr ::std::size_t dragonbox_narrow_shortest_page_size{
+	static_cast<::std::size_t>(1u) << dragonbox_narrow_shortest_page_shift};
+inline constexpr ::std::size_t dragonbox_narrow_shortest_page_count{
+	static_cast<::std::size_t>(1u) << (15u - dragonbox_narrow_shortest_page_shift)};
+inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_m10_mask{0x7FFFu};
+inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_e10_mask{0x7Fu};
+inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_e10_shift{15u};
+inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_length_shift{22u};
+inline constexpr ::std::int_least32_t dragonbox_narrow_shortest_e10_bias{64};
+
+template <::std::size_t size>
+struct dragonbox_narrow_shortest_page
+{
+	::std::uint_least32_t values[size]{};
+};
+
+template <::std::size_t page_count, ::std::size_t page_size>
+struct alignas(64) dragonbox_narrow_shortest_table
+{
+	::std::uint_least32_t values[page_count * page_size]{};
+};
+
+template <typename flt, ::std::size_t page>
+[[nodiscard]] inline constexpr dragonbox_narrow_shortest_page<dragonbox_narrow_shortest_page_size>
+dragonbox_make_narrow_shortest_page() noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	dragonbox_narrow_shortest_page<dragonbox_narrow_shortest_page_size> result;
+	constexpr mantissa_type exponent_mask{(static_cast<mantissa_type>(1u) << trait::ebits) - 1u};
+	for (::std::size_t index{}; index != dragonbox_narrow_shortest_page_size; ++index)
+	{
+		auto const raw{static_cast<mantissa_type>((page << dragonbox_narrow_shortest_page_shift) | index)};
+		if (!raw)
+		{
+			continue;
+		}
+		auto const value{::std::bit_cast<flt>(raw)};
+		auto const binary{::fast_io::details::get_punned_result(value)};
+		if (binary.exponent == exponent_mask)
+		{
+			continue;
+		}
+		m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>> decimal;
+		if (::fast_io::details::dragonbox_narrow_raw_candidate_needs_fallback<flt>(
+				binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent)))
+		{
+			auto const float_binary{::fast_io::details::dragonbox_narrow_float_punned(
+				value, binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent), false)};
+			auto [m10, e10] = ::fast_io::details::dragonbox_impl<
+				float, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
+				float_binary.mantissa, static_cast<::std::int_least32_t>(float_binary.exponent), false);
+			::fast_io::details::dragonbox_shorten_decimal_to_target<
+				flt, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
+				m10, e10, binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent), false);
+			decimal = {m10, e10};
+		}
+		else
+		{
+			decimal = ::fast_io::details::da::trim_trailing_zeros(
+				::fast_io::details::dragonbox_main<flt>(
+					binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent)));
+		}
+		auto const length{static_cast<::std::uint_least32_t>(chars_len<10, true>(decimal.m10))};
+		result.values[index] = static_cast<::std::uint_least32_t>(decimal.m10) |
+							   (static_cast<::std::uint_least32_t>(decimal.e10 + dragonbox_narrow_shortest_e10_bias)
+								<< dragonbox_narrow_shortest_e10_shift) |
+							   (length << dragonbox_narrow_shortest_length_shift);
+	}
+	return result;
+}
+
+template <typename flt, ::std::size_t page>
+inline constexpr auto dragonbox_narrow_shortest_page_cache{
+	::fast_io::details::dragonbox_make_narrow_shortest_page<flt, page>()};
+
+template <::std::size_t page, ::std::size_t page_count, ::std::size_t page_size>
+inline constexpr void dragonbox_copy_narrow_shortest_page(
+	dragonbox_narrow_shortest_table<page_count, page_size> &table,
+	dragonbox_narrow_shortest_page<page_size> const &source) noexcept
+{
+	for (::std::size_t index{}; index != page_size; ++index)
+	{
+		table.values[page * page_size + index] = source.values[index];
+	}
+}
+
+template <typename flt, ::std::size_t... pages>
+[[nodiscard]] inline constexpr dragonbox_narrow_shortest_table<sizeof...(pages),
+															   dragonbox_narrow_shortest_page_size>
+	dragonbox_make_narrow_shortest_table(::std::index_sequence<pages...>) noexcept
+{
+	dragonbox_narrow_shortest_table<sizeof...(pages), dragonbox_narrow_shortest_page_size> result;
+	(::fast_io::details::dragonbox_copy_narrow_shortest_page<pages>(
+		 result, ::fast_io::details::dragonbox_narrow_shortest_page_cache<flt, pages>),
+	 ...);
+	return result;
+}
+
+template <typename flt>
+#if __has_cpp_attribute(__gnu__::__visibility__)
+[[__gnu__::__visibility__("hidden")]]
+#endif
+inline constexpr auto dragonbox_narrow_shortest_table_cache{
+	::fast_io::details::dragonbox_make_narrow_shortest_table<flt>(
+		::std::make_index_sequence<dragonbox_narrow_shortest_page_count>{})};
+
+template <typename flt>
+struct dragonbox_narrow_shortest_result
+{
+	::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10;
+	::std::int_least32_t e10;
+	::std::uint_least32_t length;
+};
+
+template <typename flt>
+[[nodiscard]] inline constexpr dragonbox_narrow_shortest_result<flt>
+dragonbox_narrow_shortest_lookup(typename iec559_traits<flt>::mantissa_type m2,
+								 ::std::int_least32_t e2) noexcept
+{
+	using decimal_type = ::fast_io::details::dragonbox_decimal_mantissa_type<flt>;
+	auto const raw{(static_cast<::std::uint_least32_t>(e2) << iec559_traits<flt>::mbits) |
+				   static_cast<::std::uint_least32_t>(m2)};
+	auto const packed{
+		::fast_io::details::dragonbox_narrow_shortest_table_cache<flt>.values[raw]};
+	return {static_cast<decimal_type>(packed & dragonbox_narrow_shortest_m10_mask),
+			static_cast<::std::int_least32_t>((packed >> dragonbox_narrow_shortest_e10_shift) &
+											  dragonbox_narrow_shortest_e10_mask) -
+				dragonbox_narrow_shortest_e10_bias,
+			packed >> dragonbox_narrow_shortest_length_shift};
 }
 
 template <typename flt, ::std::integral char_type>
@@ -1824,7 +1972,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decimal_commo
 {
 	if (m10len == 1) [[unlikely]]
 	{
-		*iter = ::fast_io::char_literal_add<char_type>(m10);
+		*iter = ::fast_io::char_literal_add<char_type>(static_cast<::std::uint_least32_t>(m10));
 		++iter;
 		return iter;
 	}
@@ -2017,9 +2165,29 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fixed_case2_all_point(char
 }
 
 template <typename flt, bool comma, bool json_float = false, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_fixed_decision_impl(char_type *iter,
-																					   ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-																					   ::std::int_least32_t e10) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_fixed_decision_with_length_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10, ::std::int_least32_t olength) noexcept
+{
+	::std::int_least32_t const real_exp(static_cast<::std::int_least32_t>(e10 + olength - 1));
+	if (olength <= real_exp)
+	{
+		return fixed_case0_full_integer_maybe_json<flt, comma, json_float>(iter, m10, olength, real_exp);
+	}
+	else if (0 <= real_exp && real_exp < olength)
+	{
+		return fixed_case1_integer_and_point_maybe_json<flt, comma, json_float>(iter, m10, olength, real_exp);
+	}
+	else
+	{
+		return fixed_case2_all_point<flt, comma>(iter, m10, olength, real_exp);
+	}
+}
+
+template <typename flt, bool comma, bool json_float = false, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_fixed_decision_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10) noexcept
 {
 	::std::int_least32_t olength(static_cast<::std::int_least32_t>(chars_len<10, true>(m10)));
 	::std::int_least32_t const real_exp(static_cast<::std::int_least32_t>(e10 + olength - 1));
@@ -2039,9 +2207,91 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_fixed_decisio
 
 template <typename flt, bool comma, bool uppercase_e, ::fast_io::manipulators::floating_format mt,
 		  bool json_float = false, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl(char_type *iter,
-																				 ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-																				 ::std::int_least32_t e10) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_with_length_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10, ::std::int_least32_t olength) noexcept
+{
+	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
+	{
+		if (-5 < e10 && e10 < 7)
+		{
+			return print_rsv_fp_fixed_decision_with_length_impl<flt, comma, json_float>(
+				iter, m10, e10, olength);
+		}
+		return print_rsv_fp_decision_with_length_impl<
+			flt, comma, uppercase_e, ::fast_io::manipulators::floating_format::scientific, false>(
+			iter, m10, e10, olength);
+	}
+	else if constexpr (mt == ::fast_io::manipulators::floating_format::scientific)
+	{
+		if (m10 < 10u) [[unlikely]]
+		{
+			*iter = ::fast_io::char_literal_add<char_type>(static_cast<::std::uint_least32_t>(m10));
+			++iter;
+		}
+		else
+		{
+			auto iterp1{iter};
+			++iterp1;
+			::fast_io::details::print_rsv_fp_digits_len<flt>(
+				iterp1, m10, static_cast<::std::uint_least32_t>(olength));
+			auto const new_iter{iterp1 + olength};
+			e10 += olength - 1;
+			*iter = *iterp1;
+			*iterp1 = char_literal_v < comma ? u8',' : u8'.', char_type > ;
+			iter = new_iter;
+		}
+		return print_rsv_fp_e_impl<flt, uppercase_e>(iter, e10);
+	}
+	else // decimal
+	{
+		::std::int_least32_t const real_exp{static_cast<::std::int_least32_t>(e10 + olength - 1)};
+		::std::uint_least32_t fixed_length{};
+		if (olength <= real_exp)
+		{
+			fixed_length = static_cast<::std::uint_least32_t>(real_exp + 1);
+		}
+		else if (0 <= real_exp && real_exp < olength)
+		{
+			fixed_length = static_cast<::std::uint_least32_t>(olength + 2);
+			if (olength == real_exp + 1)
+			{
+				--fixed_length;
+			}
+		}
+		else
+		{
+			fixed_length = static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(-real_exp) +
+															  static_cast<::std::uint_least32_t>(olength) + 1u);
+		}
+		::std::uint_least32_t scientific_length{
+			static_cast<::std::uint_least32_t>(olength == 1 ? olength + 3 : olength + 5)};
+		if (scientific_length < fixed_length)
+		{
+			// scientific decision
+			iter = print_rsv_fp_decimal_common_impl<comma>(iter, m10, static_cast<::std::uint_least32_t>(olength));
+			return print_rsv_fp_e_impl<flt, uppercase_e>(iter, real_exp);
+		}
+		if (olength <= real_exp)
+		{
+			return fixed_case0_full_integer_maybe_json<flt, comma, json_float>(iter, m10, olength, real_exp);
+		}
+		else if (0 <= real_exp)
+		{
+			return fixed_case1_integer_and_point_maybe_json<flt, comma, json_float>(iter, m10, olength, real_exp);
+		}
+		else
+		{
+			return fixed_case2_all_point<flt, comma>(iter, m10, olength, real_exp);
+		}
+	}
+}
+
+template <typename flt, bool comma, bool uppercase_e, ::fast_io::manipulators::floating_format mt,
+		  bool json_float = false, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10) noexcept
 {
 	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
 	{
@@ -2057,7 +2307,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 	{
 		if (m10 < 10u) [[unlikely]]
 		{
-			*iter = ::fast_io::char_literal_add<char_type>(m10);
+			*iter = ::fast_io::char_literal_add<char_type>(static_cast<::std::uint_least32_t>(m10));
 			++iter;
 		}
 		else
@@ -2072,7 +2322,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 		}
 		return print_rsv_fp_e_impl<flt, uppercase_e>(iter, e10);
 	}
-	else // decimal
+	else
 	{
 		::std::int_least32_t olength{static_cast<::std::int_least32_t>(chars_len<10, true>(m10))};
 		::std::int_least32_t const real_exp{static_cast<::std::int_least32_t>(e10 + olength - 1)};
@@ -2098,7 +2348,6 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 			static_cast<::std::uint_least32_t>(olength == 1 ? olength + 3 : olength + 5)};
 		if (scientific_length < fixed_length)
 		{
-			// scientific decision
 			iter = print_rsv_fp_decimal_common_impl<comma>(iter, m10, static_cast<::std::uint_least32_t>(olength));
 			return print_rsv_fp_e_impl<flt, uppercase_e>(iter, real_exp);
 		}
@@ -2549,12 +2798,154 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_defin
 	}
 }
 
+template <typename flt, bool comma, bool uppercase_e, ::fast_io::manipulators::floating_format mt,
+		  bool json_float, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_with_length_define_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10, ::std::uint_least32_t length) noexcept
+{
+	if constexpr (mt == ::fast_io::manipulators::floating_format::fixed)
+	{
+		return ::fast_io::details::print_rsv_fp_fixed_decision_with_length_impl<flt, comma, json_float>(
+			iter, m10, e10, static_cast<::std::int_least32_t>(length));
+	}
+	else
+	{
+		return ::fast_io::details::print_rsv_fp_decision_with_length_impl<
+			flt, comma, uppercase_e, mt, json_float>(
+			iter, m10, e10, static_cast<::std::int_least32_t>(length));
+	}
+}
+
+struct dragonbox_narrow_ascii_entry
+{
+	char bytes[10]{};
+	::std::uint_least8_t length{};
+};
+
+template <::std::size_t size>
+struct dragonbox_narrow_ascii_page
+{
+	dragonbox_narrow_ascii_entry values[size]{};
+};
+
+template <::std::size_t size>
+struct alignas(64) dragonbox_narrow_ascii_table
+{
+	dragonbox_narrow_ascii_entry values[size]{};
+};
+
+template <typename flt, ::std::size_t page>
+[[nodiscard]] inline constexpr dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size>
+dragonbox_make_narrow_ascii_page() noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size> result;
+	for (::std::size_t index{}; index != dragonbox_narrow_shortest_page_size; ++index)
+	{
+		auto const raw{static_cast<::std::uint_least32_t>(
+			(page << dragonbox_narrow_shortest_page_shift) | index)};
+		auto const exponent{raw >> trait::mbits};
+		if (!raw || exponent == ((static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u))
+		{
+			continue;
+		}
+		auto const packed{
+			::fast_io::details::dragonbox_narrow_shortest_page_cache<flt, page>.values[index]};
+		auto const m10{static_cast<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>(
+			packed & dragonbox_narrow_shortest_m10_mask)};
+		auto const e10{static_cast<::std::int_least32_t>(
+						   (packed >> dragonbox_narrow_shortest_e10_shift) & dragonbox_narrow_shortest_e10_mask) -
+					   dragonbox_narrow_shortest_e10_bias};
+		auto const length{packed >> dragonbox_narrow_shortest_length_shift};
+		auto const end{::fast_io::details::print_rsvflt_decimal_with_length_define_impl<
+			flt, false, false, ::fast_io::manipulators::floating_format::decimal, false>(
+			result.values[index].bytes, m10, e10, length)};
+		result.values[index].length = static_cast<::std::uint_least8_t>(end - result.values[index].bytes);
+	}
+	return result;
+}
+
+template <typename flt, ::std::size_t page>
+inline constexpr auto dragonbox_narrow_ascii_page_cache{
+	::fast_io::details::dragonbox_make_narrow_ascii_page<flt, page>()};
+
+template <::std::size_t page, ::std::size_t size>
+inline constexpr void dragonbox_copy_narrow_ascii_page(
+	dragonbox_narrow_ascii_table<size> &table,
+	dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size> const &source) noexcept
+{
+	for (::std::size_t index{}; index != dragonbox_narrow_shortest_page_size; ++index)
+	{
+		table.values[page * dragonbox_narrow_shortest_page_size + index] = source.values[index];
+	}
+}
+
+template <typename flt, ::std::size_t... pages>
+[[nodiscard]] inline constexpr dragonbox_narrow_ascii_table<
+	dragonbox_narrow_shortest_page_size * sizeof...(pages)>
+	dragonbox_make_narrow_ascii_table(::std::index_sequence<pages...>) noexcept
+{
+	dragonbox_narrow_ascii_table<dragonbox_narrow_shortest_page_size * sizeof...(pages)> result;
+	(::fast_io::details::dragonbox_copy_narrow_ascii_page<pages>(
+		 result, ::fast_io::details::dragonbox_narrow_ascii_page_cache<flt, pages>),
+	 ...);
+	return result;
+}
+
+template <typename flt>
+#if __has_cpp_attribute(__gnu__::__visibility__)
+[[__gnu__::__visibility__("hidden")]]
+#endif
+inline constexpr auto dragonbox_narrow_ascii_table_cache{
+	::fast_io::details::dragonbox_make_narrow_ascii_table<flt>(
+		::std::make_index_sequence<dragonbox_narrow_shortest_page_count>{})};
+
+template <typename flt>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::uint_least32_t dragonbox_narrow_runtime_index(
+	flt value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	auto const raw =
+#if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
+		__builtin_bit_cast(mantissa_type, value)
+#else
+		::fast_io::bit_cast<mantissa_type>(value)
+#endif
+		;
+	constexpr auto magnitude_mask{(static_cast<::std::uint_least32_t>(1u) << (trait::mbits + trait::ebits)) - 1u};
+	return static_cast<::std::uint_least32_t>(raw) & magnitude_mask;
+}
+
+template <typename flt>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char *dragonbox_narrow_ascii_lookup(
+	char *iter, ::std::uint_least32_t raw) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	auto const &entry{::fast_io::details::dragonbox_narrow_ascii_table_cache<flt>.values[raw]};
+	constexpr ::std::size_t copy_size{trait::m10digits + trait::e10digits + 3u};
+	if (__builtin_is_constant_evaluated())
+	{
+		::fast_io::details::my_copy_n(entry.bytes, copy_size, iter);
+	}
+	else
+	{
+#if FAST_IO_HAS_BUILTIN(__builtin_memcpy)
+		__builtin_memcpy(iter, entry.bytes, copy_size);
+#else
+		::fast_io::details::my_copy_n(entry.bytes, copy_size, iter);
+#endif
+	}
+	return iter + entry.length;
+}
+
 template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io::manipulators::floating_format mt,
 		  ::fast_io::manipulators::floating_rounding rounding =
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
 		  bool nan_show_sign = true, bool nan_show_type = false, bool json_float = false,
 		  typename flt, ::std::integral char_type>
-inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noexcept
 {
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
 	{
@@ -2591,6 +2982,21 @@ inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noe
 		constexpr ::std::size_t ebits{trait::ebits};
 		constexpr mantissa_type exponent_mask{(static_cast<mantissa_type>(1) << ebits) - 1};
 		constexpr ::std::uint_least32_t exponent_mask_u32{static_cast<::std::uint_least32_t>(exponent_mask)};
+		constexpr bool use_narrow_ascii{
+			::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float) &&
+			rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
+			mt == ::fast_io::manipulators::floating_format::decimal && !uppercase_e && !comma && !json_float &&
+			::std::same_as<char_type, char> && 'A' == 0x41};
+		[[maybe_unused]] auto const narrow_ascii_index{[&]() constexpr noexcept {
+			if constexpr (use_narrow_ascii)
+			{
+				return ::fast_io::details::dragonbox_narrow_runtime_index(f);
+			}
+			else
+			{
+				return ::std::uint_least32_t{};
+			}
+		}()};
 		auto [mantissa, exponent, sign] = get_punned_result(f);
 		if (exponent == exponent_mask_u32)
 		{
@@ -2614,24 +3020,42 @@ inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noe
 				return prsv_fp_dece0<uppercase>(iter);
 			}
 		}
-		auto [m10, e10] =
-			[]([[maybe_unused]] flt value,
-			   [[maybe_unused]] mantissa_type binary_mantissa,
-			   [[maybe_unused]] ::std::int_least32_t binary_exponent,
-			   [[maybe_unused]] bool negative) constexpr noexcept {
-				if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float))
-				{
-					return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
-						value, binary_mantissa, binary_exponent, negative);
-				}
-				else
-				{
-					return ::fast_io::details::dragonbox_impl<flt, rounding>(
-						binary_mantissa, binary_exponent, negative);
-				}
-			}(f, mantissa, static_cast<::std::int_least32_t>(exponent), sign);
-		return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
-			iter, m10, e10);
+		if constexpr (use_narrow_ascii)
+		{
+			return ::fast_io::details::dragonbox_narrow_ascii_lookup<flt>(iter, narrow_ascii_index);
+		}
+		else if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
+						   sizeof(flt) < sizeof(float) &&
+						   rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
+		{
+			auto const decimal{::fast_io::details::dragonbox_narrow_shortest_lookup<flt>(
+				mantissa, static_cast<::std::int_least32_t>(exponent))};
+			return ::fast_io::details::print_rsvflt_decimal_with_length_define_impl<
+				flt, comma, uppercase_e, mt, json_float>(
+				iter, decimal.m10, decimal.e10, decimal.length);
+		}
+		else
+		{
+			auto [m10, e10] =
+				[]([[maybe_unused]] flt value,
+				   [[maybe_unused]] mantissa_type binary_mantissa,
+				   [[maybe_unused]] ::std::int_least32_t binary_exponent,
+				   [[maybe_unused]] bool negative) constexpr noexcept {
+					if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
+								  sizeof(flt) < sizeof(float))
+					{
+						return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
+							value, binary_mantissa, binary_exponent, negative);
+					}
+					else
+					{
+						return ::fast_io::details::dragonbox_impl<flt, rounding>(
+							binary_mantissa, binary_exponent, negative);
+					}
+				}(f, mantissa, static_cast<::std::int_least32_t>(exponent), sign);
+			return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
+				iter, m10, e10);
+		}
 	}
 }
 
@@ -2642,8 +3066,8 @@ template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io:
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
 		  bool nan_show_sign = true, bool nan_show_type = false, bool json_float = false,
 		  typename flt, ::std::integral char_type>
-inline constexpr char_type *print_rsvflt_precision_define_impl(char_type *iter, flt f,
-															   ::std::size_t precision) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_precision_define_impl(
+	char_type *iter, flt f, ::std::size_t precision) noexcept
 {
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
 	{
@@ -2762,8 +3186,18 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(char_type *iter, 
 			   [[maybe_unused]] bool negative) constexpr noexcept {
 				if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float))
 				{
-					return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
-						value, binary_mantissa, binary_exponent, negative);
+					if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
+					{
+						auto const decimal{::fast_io::details::dragonbox_narrow_shortest_lookup<flt>(
+							binary_mantissa, binary_exponent)};
+						return m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>{
+							decimal.m10, decimal.e10};
+					}
+					else
+					{
+						return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
+							value, binary_mantissa, binary_exponent, negative);
+					}
 				}
 				else
 				{
