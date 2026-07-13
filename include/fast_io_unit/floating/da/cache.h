@@ -20,18 +20,30 @@ struct uint64x2
 [[nodiscard]] inline constexpr ::std::uint_least64_t umul64x64_add_high(
 	::std::uint_least64_t x, ::std::uint_least64_t y, ::std::uint_least64_t addend) noexcept
 {
+#if defined(__SIZEOF_INT128__)
+	auto const product{static_cast<__uint128_t>(x) * y + addend};
+	return static_cast<::std::uint_least64_t>(product >> 64u);
+#else
 	auto const product{::fast_io::details::da::umul64x64(x, y)};
 	auto const lo{static_cast<::std::uint_least64_t>(product.lo + addend)};
 	return static_cast<::std::uint_least64_t>(product.hi + (lo < product.lo));
+#endif
 }
 
 [[nodiscard]] inline constexpr uint64x2 umul64x128_high(::std::uint_least64_t x,
 														uint64x2 y) noexcept
 {
+#if defined(__SIZEOF_INT128__)
+	auto const upper{static_cast<__uint128_t>(x) * y.hi};
+	auto const upper_low{static_cast<::std::uint_least64_t>(upper)};
+	auto const lo{static_cast<::std::uint_least64_t>(upper_low + ::fast_io::intrinsics::umulh(x, y.lo))};
+	return {static_cast<::std::uint_least64_t>((upper >> 64u) + (lo < upper_low)), lo};
+#else
 	auto const upper{::fast_io::details::da::umul64x64(x, y.hi)};
 	auto const lower_high{::fast_io::intrinsics::umulh(x, y.lo)};
 	auto const lo{static_cast<::std::uint_least64_t>(upper.lo + lower_high)};
 	return {static_cast<::std::uint_least64_t>(upper.hi + (lo < upper.lo)), lo};
+#endif
 }
 
 inline constexpr ::std::uint_least64_t power10_minor[]{
@@ -127,8 +139,8 @@ struct power10_cache
 	{
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 		auto const base{data + size + minimum_exponent};
-		auto const index{static_cast<::std::size_t>(~exponent)};
-		return {base[index], base[index + size]};
+		auto const index{static_cast<::std::ptrdiff_t>(~exponent)};
+		return {base[index], base[index + static_cast<::std::ptrdiff_t>(size)]};
 #else
 		auto const index{static_cast<::std::size_t>(exponent - minimum_exponent) * 2u};
 		return {data[index], data[index + 1u]};
@@ -192,7 +204,15 @@ struct exponent_shift_cache
 	}
 };
 
-alignas(64) inline constexpr power10_cache cached_power10{};
-inline constexpr exponent_shift_cache cached_exponent_shifts{};
+struct cache
+{
+	exponent_shift_cache exponent_shifts;
+	alignas(64) power10_cache powers;
+};
+
+#if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
+[[__gnu__::__visibility__("hidden")]]
+#endif
+alignas(64) inline constexpr cache cached_data{};
 
 } // namespace fast_io::details::da

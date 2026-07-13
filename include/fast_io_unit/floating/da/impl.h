@@ -25,11 +25,13 @@ template <typename flt, typename mantissa_type>
 	constexpr ::std::int_least32_t exponent_offset{binary32 ? 150 : 1075};
 	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1) << significand_bits};
 	auto binary_exponent{raw_exponent - exponent_offset};
+	auto effective_raw_exponent{static_cast<::std::uint_least32_t>(raw_exponent)};
 	auto binary_significand{static_cast<::std::uint_least64_t>(mantissa)};
 	bool regular{true};
 	if (raw_exponent == 0)
 	{
 		++binary_exponent;
+		effective_raw_exponent = 1u;
 	}
 	else
 	{
@@ -44,11 +46,11 @@ template <typename flt, typename mantissa_type>
 	else if constexpr (binary32)
 	{
 		converted = ::fast_io::details::da::compute_binary32(
-			static_cast<::std::uint_least32_t>(binary_significand), binary_exponent);
+			static_cast<::std::uint_least32_t>(binary_significand), effective_raw_exponent);
 	}
 	else
 	{
-		converted = ::fast_io::details::da::compute_binary64(binary_significand, binary_exponent);
+		converted = ::fast_io::details::da::compute_binary64(binary_significand, effective_raw_exponent);
 	}
 	if (converted.has_last_digit)
 	{
