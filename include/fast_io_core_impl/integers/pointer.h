@@ -108,9 +108,9 @@ inline constexpr auto small_scatter(char_type const (&s)[n]) noexcept
 	using no_const_char_type = ::std::remove_const_t<char_type>;
 	constexpr ::std::size_t nm1{n - 1};
 	constexpr ::std::size_t boundary{64}, boundaryp1{boundary + 1};
-	if constexpr (n == 1)
+	if constexpr (n <= 1)
 	{
-		return basic_io_scatter_t<no_const_char_type>{s, 0};
+		return ::fast_io::io_null;
 	}
 	else if constexpr (n == 2)
 	{
@@ -207,9 +207,9 @@ inline constexpr auto print_alias_define(io_alias_t, T const &s) noexcept
 	static_assert(n != 0);
 	static_assert(not_char_literal, "The type is an array but not char array literal. Reject.");
 
-	if constexpr (n == 1)
+	if constexpr (n <= 1)
 	{
-		return basic_io_scatter_t<no_const_char_type>{s, 0};
+		return ::fast_io::io_null;
 	}
 	else if constexpr (n == 2)
 	{

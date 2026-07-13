@@ -2077,7 +2077,11 @@ inline constexpr void print_control_single(output outstm, T t)
 	}
 	else if constexpr (::std::same_as<::std::remove_cvref_t<value_type>, ::fast_io::io_null_t>)
 	{
-		// Null output intentionally emits nothing.
+		// Null output contributes no payload, but the line variant still emits its trailing newline.
+		if constexpr (line)
+		{
+			::fast_io::operations::decay::char_put_decay(outstm, lfch);
+		}
 	}
 	else
 	{
