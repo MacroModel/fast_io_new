@@ -1,4 +1,6 @@
 ﻿#pragma once
+
+#include "da/impl.h"
 /*
 Algorithm: Dragonbox
 Author: Jk Jeon
@@ -1418,7 +1420,17 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 	{
 		if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
 		{
-			return dragonbox_main<flt>(mantissa, exponent);
+			if constexpr ((::fast_io::details::iec559_traits<flt>::mbits == 23u &&
+						   ::fast_io::details::iec559_traits<flt>::ebits == 8u) ||
+						  (::fast_io::details::iec559_traits<flt>::mbits == 52u &&
+						   ::fast_io::details::iec559_traits<flt>::ebits == 11u))
+			{
+				return ::fast_io::details::da::to_decimal<flt>(mantissa, exponent);
+			}
+			else
+			{
+				return dragonbox_main<flt>(mantissa, exponent);
+			}
 		}
 		else
 		{
