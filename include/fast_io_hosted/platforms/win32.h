@@ -893,6 +893,20 @@ io_bytes_stream_ref_define(basic_win32_family_io_observer<family, ch_type> other
 }
 
 template <win32_family family, ::std::integral char_type>
+inline constexpr ::std::size_t scatter_fallback_full_output_threshold(
+	::fast_io::io_reserve_type_t<char_type,
+								 ::fast_io::basic_win32_family_io_observer<family, char_type>>) noexcept
+{
+	// Native Windows temporary-file measurements keep complete coalescing profitable beyond the hosted Windows
+	// 32 KiB stack budget: three WriteFile calls still win at 48 KiB and sixteen still win at 256 KiB. The platform
+	// policy exposes no more than the active stack budget; custom streams may still request a larger dynamic threshold.
+	constexpr ::std::size_t default_value{32u * 1024u / sizeof(char_type)};
+	constexpr ::std::size_t stack_value{
+		::fast_io::details::dynamic_reserve_default_static_stack_size<char_type>()};
+	return (::std::min)(default_value, stack_value);
+}
+
+template <win32_family family, ::std::integral char_type>
 inline constexpr ::std::conditional_t<family == win32_family::ansi_9x, nop_file_lock, nt_file_lock>
 file_lock(basic_win32_family_io_observer<family, char_type> wiob) noexcept
 {

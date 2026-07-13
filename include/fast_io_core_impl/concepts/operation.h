@@ -257,10 +257,12 @@ concept context_printable_with_static_buffer_size =
 
 /// @brief      scatter_fallback_full_output_threshold_stream
 /// @details    Customizes the maximum full-output size, in char_type units,
-///             for coalescing scatter output into a contiguous buffer before
-///             writing it once. The value must be a compile-time std::size_t.
+///             for coalescing emulated scatter output into a contiguous buffer
+///             before writing it once. This policy is used only when the stream
+///             has no direct scatter operation. The value must be a compile-time
+///             std::size_t.
 ///             Returning 0 disables this coalescing path for the stream.
-///             The print layer may cap large values before allocating stack storage.
+///             The print layer chooses stack or dynamic storage from this value.
 /// @fn         scatter_fallback_full_output_threshold
 /// @brief      Returns the scatter coalescing threshold, in char_type units.
 template <typename char_type, typename T>
@@ -270,6 +272,27 @@ concept scatter_fallback_full_output_threshold_stream =
 			scatter_fallback_full_output_threshold(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
 		{
 			scatter_fallback_full_output_threshold(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::size_t>;
+	};
+/// @brief      scatter_direct_full_output_coalesce_threshold_stream
+/// @details    Customizes the maximum complete scatter payload size, in
+///             char_type units, for replacing one native scatter operation
+///             with one contiguous write after copying every scatter element.
+///             This policy compares native scatter overhead with memcpy plus
+///             one write; it is intentionally independent of scatter fallback,
+///             which compares multiple emulated writes with one write.
+///             Returning 0 disables this coalescing path for the stream.
+/// @fn         scatter_direct_full_output_coalesce_threshold
+/// @brief      Returns the native-scatter-to-write coalescing threshold.
+template <typename char_type, typename T>
+concept scatter_direct_full_output_coalesce_threshold_stream =
+	::std::integral<char_type> && requires {
+		typename ::fast_io::details::reserve_static_stack_size_constant<
+			scatter_direct_full_output_coalesce_threshold(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
+		{
+			scatter_direct_full_output_coalesce_threshold(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::size_t>;
 	};
 
@@ -306,6 +329,42 @@ concept small_scatter_coalesce_threshold_stream =
 			small_scatter_coalesce_threshold(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
 		{
 			small_scatter_coalesce_threshold(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::size_t>;
+	};
+
+/// @brief      scatter_repack_chunk_size_stream
+/// @details    Customizes the maximum temporary chunk size, in char_type units,
+///             used while copying multiple small native scatter elements into
+///             one replacement descriptor. This is a storage policy and must
+///             not reuse either complete-output write threshold.
+///             Returning 0 disables native scatter repacking for the stream.
+/// @fn         scatter_repack_chunk_size
+/// @brief      Returns the native scatter repack chunk capacity.
+template <typename char_type, typename T>
+concept scatter_repack_chunk_size_stream =
+	::std::integral<char_type> && requires {
+		typename ::fast_io::details::reserve_static_stack_size_constant<
+			scatter_repack_chunk_size(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
+		{
+			scatter_repack_chunk_size(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::size_t>;
+	};
+
+/// @brief      scatter_repack_minimum_saved_scatter_count_stream
+/// @details    Customizes how many native scatter descriptors a repack plan
+///             must eliminate before its copying cost is accepted. The value
+///             is a descriptor count rather than a character or byte size.
+/// @fn         scatter_repack_minimum_saved_scatter_count
+/// @brief      Returns the minimum profitable native scatter reduction.
+template <typename char_type, typename T>
+concept scatter_repack_minimum_saved_scatter_count_stream =
+	::std::integral<char_type> && requires {
+		typename ::fast_io::details::reserve_static_stack_size_constant<
+			scatter_repack_minimum_saved_scatter_count(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
+		{
+			scatter_repack_minimum_saved_scatter_count(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::size_t>;
 	};
 
@@ -491,7 +550,7 @@ struct parameter_print_context
 	context_type state;
 
 	inline constexpr context_print_result<char_type *> print_context_define(parameter<value_type> para,
-																		   char_type *begin, char_type *end)
+																			char_type *begin, char_type *end)
 	{
 		return state.print_context_define(para.reference, begin, end);
 	}
@@ -509,7 +568,7 @@ inline constexpr auto print_context_type(io_reserve_type_t<char_type, parameter<
 template <::std::integral char_type, typename output, typename value_type>
 	requires(printable<char_type, ::std::remove_cvref_t<value_type>> && ::std::is_trivially_copyable_v<output>)
 inline constexpr void print_define(io_reserve_type_t<char_type, parameter<value_type>>, output out,
-							parameter<value_type> wrapper)
+								   parameter<value_type> wrapper)
 {
 	print_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, out, wrapper.reference);
 }
@@ -524,7 +583,7 @@ inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, p
 template <::std::integral char_type, typename value_type>
 	requires dynamic_reserve_printable<char_type, ::std::remove_cvref_t<value_type>>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, parameter<value_type>>,
-										   parameter<value_type> para)
+												  parameter<value_type> para)
 {
 	return print_reserve_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
@@ -549,7 +608,7 @@ template <::std::integral char_type, typename value_type>
 	requires(reserve_printable<char_type, ::std::remove_cvref_t<value_type>> ||
 			 dynamic_reserve_printable<char_type, ::std::remove_cvref_t<value_type>>)
 inline constexpr auto print_reserve_define(io_reserve_type_t<char_type, parameter<value_type>>, char_type *begin,
-									parameter<value_type> para)
+										   parameter<value_type> para)
 {
 	return print_reserve_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, para.reference);
 }
@@ -557,7 +616,7 @@ inline constexpr auto print_reserve_define(io_reserve_type_t<char_type, paramete
 template <::std::integral char_type, typename value_type, typename Iter>
 	requires(printable_internal_shift<char_type, ::std::remove_cvref_t<value_type>>)
 inline constexpr auto print_define_internal_shift(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin,
-										   parameter<value_type> para)
+												  parameter<value_type> para)
 {
 	return print_define_internal_shift(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin,
 									   para.reference);
@@ -566,7 +625,7 @@ inline constexpr auto print_define_internal_shift(io_reserve_type_t<char_type, p
 template <::std::integral char_type, typename value_type>
 	requires precise_reserve_printable<char_type, ::std::remove_cvref_t<value_type>>
 inline constexpr ::std::size_t print_reserve_precise_size(io_reserve_type_t<char_type, parameter<value_type>>,
-												   parameter<value_type> para)
+														  parameter<value_type> para)
 {
 	return print_reserve_precise_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
@@ -582,7 +641,7 @@ print_reserve_static_precise_size(io_reserve_type_t<char_type, parameter<value_t
 template <::std::integral char_type, typename value_type, typename Iter>
 	requires precise_reserve_printable<char_type, ::std::remove_cvref_t<value_type>>
 inline constexpr void print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin,
-											::std::size_t n, parameter<value_type> para)
+												   ::std::size_t n, parameter<value_type> para)
 {
 	print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 								 para.reference);

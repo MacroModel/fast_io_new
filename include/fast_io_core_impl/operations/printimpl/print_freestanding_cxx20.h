@@ -438,49 +438,67 @@ inline auto prrsvsct_byte_common_impl(io_scatter_t *pscatters, char_type *buffer
 /// @tparam   char_type the output character type
 /// @return   ::std::size_t the stack-buffer character limit for scatter fallback coalescing
 template <::std::integral char_type>
-inline constexpr ::std::size_t print_scatter_full_output_threshold_max_chars() noexcept
+inline constexpr ::std::size_t print_coalesce_threshold_max_chars() noexcept
 {
 	return ::fast_io::details::decay::print_stack_buffer_max_size<char_type>();
 }
 
-/// @brief    Computes the scatter fallback coalescing threshold for an output stream.
-/// @details  A stream-provided threshold is capped by the active stack-buffer policy; streams without the customization
-///           disable scatter fallback coalescing.
+/// @brief    Reads the scatter fallback coalescing threshold for an output stream.
+/// @details  Platform policies normally clamp their defaults to the active stack budget. A custom stream may return a
+///           larger threshold; callers then allocate the measured output size dynamically instead of using the stack.
+/// @tparam   char_type     the output character type
+/// @tparam   outputstmtype the decayed output stream reference type
+/// @return   ::std::size_t the threshold in characters, or zero when the stream does not opt in
+template <::std::integral char_type, typename outputstmtype>
+inline constexpr ::std::size_t print_scatter_fallback_full_output_threshold() noexcept
+{
+	if constexpr (::fast_io::scatter_fallback_full_output_threshold_stream<char_type, outputstmtype>)
+	{
+		// The customization is a required constant expression, so this branch produces a compile-time policy value.
+		return scatter_fallback_full_output_threshold(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<outputstmtype>>);
+	}
+	else
+	{
+		// Streams without the customization preserve the ordinary scatter-write fallback.
+		return 0u;
+	}
+}
+
+/// @brief    Computes the complete-output coalescing threshold for streams with direct scatter output.
+/// @details  This threshold models one native scatter operation versus copying the complete payload followed by one
+///           contiguous write. It is deliberately separate from the no-scatter fallback threshold.
 /// @tparam   char_type     the output character type
 /// @tparam   outputstmtype the decayed output stream reference type
 /// @return   ::std::size_t the threshold in characters, or zero when disabled
 template <::std::integral char_type, typename outputstmtype>
-inline constexpr ::std::size_t print_scatter_full_output_threshold() noexcept
+inline constexpr ::std::size_t print_scatter_direct_full_output_coalesce_threshold() noexcept
 {
-	if constexpr (::fast_io::scatter_fallback_full_output_threshold_stream<char_type, outputstmtype>)
+	if constexpr (::fast_io::scatter_direct_full_output_coalesce_threshold_stream<char_type, outputstmtype>)
 	{
-		// Stream-specific scatter fallback thresholds are honored but never allowed to exceed the stack budget.
 		constexpr ::std::size_t threshold{
-			scatter_fallback_full_output_threshold(
+			scatter_direct_full_output_coalesce_threshold(
 				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<outputstmtype>>)};
 		constexpr ::std::size_t max_threshold{
-			::fast_io::details::decay::print_scatter_full_output_threshold_max_chars<char_type>()};
+			::fast_io::details::decay::print_coalesce_threshold_max_chars<char_type>()};
 		if constexpr (threshold < max_threshold)
 		{
-			// The stream threshold already fits within the stack-buffer policy.
 			return threshold;
 		}
 		else
 		{
-			// The stack-buffer policy caps oversized stream thresholds.
 			return max_threshold;
 		}
 	}
 	else
 	{
-		// Streams without a scatter fallback threshold do not use stack coalescing for scatter fallback.
 		return 0u;
 	}
 }
 
 /// @brief    Computes the full-output coalescing threshold for an output stream.
-/// @details  Full-output coalescing has its own stream customization and falls back to the scatter fallback threshold
-///           only when the full-output customization is absent.
+/// @details  Full semantic-output coalescing has its own stream customization. Scatter fallback and native-scatter
+///           coalescing use different cost models and therefore do not supply a default for this threshold.
 /// @tparam   char_type     the output character type
 /// @tparam   outputstmtype the decayed output stream reference type
 /// @return   ::std::size_t the threshold in characters, or zero when both threshold paths are disabled
@@ -494,7 +512,7 @@ inline constexpr ::std::size_t print_full_output_coalesce_threshold() noexcept
 			full_output_coalesce_threshold(
 				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<outputstmtype>>)};
 		constexpr ::std::size_t max_threshold{
-			::fast_io::details::decay::print_scatter_full_output_threshold_max_chars<char_type>()};
+			::fast_io::details::decay::print_coalesce_threshold_max_chars<char_type>()};
 		if constexpr (threshold < max_threshold)
 		{
 			// The stream threshold already fits within the stack-buffer policy.
@@ -508,8 +526,8 @@ inline constexpr ::std::size_t print_full_output_coalesce_threshold() noexcept
 	}
 	else
 	{
-		// Without a full-output threshold, preserve the scatter fallback threshold behavior.
-		return ::fast_io::details::decay::print_scatter_full_output_threshold<char_type, outputstmtype>();
+		// Semantic whole-output coalescing is disabled unless the stream opts into this independent policy.
+		return 0u;
 	}
 }
 
@@ -599,8 +617,53 @@ inline constexpr ::std::size_t print_small_scatter_repack_size() noexcept
 	}
 }
 
-/// @brief    Minimum descriptor reduction required before small-scatter repacking is considered worthwhile.
-inline constexpr ::std::size_t print_scatter_repack_min_saved_scatters{8u};
+/// @brief    Returns the independently configured temporary chunk capacity for native scatter repacking.
+/// @tparam   char_type     the output character type
+/// @tparam   outputstmtype the decayed output stream reference type
+/// @return   ::std::size_t the bounded chunk capacity in characters, or zero when repacking is disabled
+template <::std::integral char_type, typename outputstmtype>
+inline constexpr ::std::size_t print_scatter_repack_chunk_size() noexcept
+{
+	if constexpr (::fast_io::scatter_repack_chunk_size_stream<char_type, outputstmtype>)
+	{
+		constexpr ::std::size_t requested{
+			scatter_repack_chunk_size(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<outputstmtype>>)};
+		constexpr ::std::size_t maximum{
+			::fast_io::details::decay::print_coalesce_threshold_max_chars<char_type>()};
+		if constexpr (requested < maximum)
+		{
+			return requested;
+		}
+		else
+		{
+			return maximum;
+		}
+	}
+	else
+	{
+		return 0u;
+	}
+}
+
+/// @brief    Returns the minimum descriptor reduction required by a native scatter repack plan.
+/// @details  Streams without a customization preserve the historical minimum of eight eliminated descriptors.
+/// @tparam   char_type     the output character type
+/// @tparam   outputstmtype the decayed output stream reference type
+/// @return   ::std::size_t the minimum number of scatter descriptors that must be removed
+template <::std::integral char_type, typename outputstmtype>
+inline constexpr ::std::size_t print_scatter_repack_minimum_saved_scatter_count() noexcept
+{
+	if constexpr (::fast_io::scatter_repack_minimum_saved_scatter_count_stream<char_type, outputstmtype>)
+	{
+		return scatter_repack_minimum_saved_scatter_count(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<outputstmtype>>);
+	}
+	else
+	{
+		return 8u;
+	}
+}
 
 /// @brief    Caps temporary scatter descriptor storage used by the repack emitter.
 /// @tparam   scatter_type the scatter descriptor type being emitted
@@ -635,11 +698,11 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 	outputstmtype outstm, ::fast_io::io_scatter_t const *scatters, ::std::size_t n)
 {
 	using char_type = typename outputstmtype::output_char_type;
-	constexpr ::std::size_t threshold_chars{
-		::fast_io::details::decay::print_scatter_full_output_threshold<char_type, outputstmtype>()};
+	constexpr ::std::size_t chunk_chars{
+		::fast_io::details::decay::print_scatter_repack_chunk_size<char_type, outputstmtype>()};
 	constexpr ::std::size_t small_chars{
 		::fast_io::details::decay::print_small_scatter_repack_size<char_type, outputstmtype>()};
-	if constexpr (threshold_chars == 0 || small_chars == 0 ||
+	if constexpr (chunk_chars == 0 || small_chars == 0 ||
 				  !::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>)
 	{
 		// Repacking requires both stream opt-in and a native byte-scatter output path.
@@ -647,8 +710,10 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 	}
 	else
 	{
-		constexpr ::std::size_t chunk_bytes{threshold_chars * sizeof(char_type) - 1u};
+		constexpr ::std::size_t chunk_bytes{chunk_chars * sizeof(char_type)};
 		constexpr ::std::size_t small_bytes{small_chars * sizeof(char_type)};
+		constexpr ::std::size_t minimum_saved_scatter_count{
+			::fast_io::details::decay::print_scatter_repack_minimum_saved_scatter_count<char_type, outputstmtype>()};
 		if constexpr (chunk_bytes == 0)
 		{
 			// A zero-capacity chunk cannot hold any repacked byte payload.
@@ -713,8 +778,7 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 				++current_count;
 			}
 			flush_plan();
-			if (!has_coalesced_chunk || output_count > n ||
-				n - output_count < print_scatter_repack_min_saved_scatters)
+			if (!has_coalesced_chunk || output_count > n || n - output_count < minimum_saved_scatter_count)
 			{
 				// Avoid extra copying unless the plan actually reduces enough scatter descriptors.
 				return false;
@@ -877,11 +941,11 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 	::fast_io::basic_io_scatter_t<typename outputstmtype::output_char_type> const *scatters, ::std::size_t n)
 {
 	using char_type = typename outputstmtype::output_char_type;
-	constexpr ::std::size_t threshold_chars{
-		::fast_io::details::decay::print_scatter_full_output_threshold<char_type, outputstmtype>()};
+	constexpr ::std::size_t chunk_chars{
+		::fast_io::details::decay::print_scatter_repack_chunk_size<char_type, outputstmtype>()};
 	constexpr ::std::size_t small_chars{
 		::fast_io::details::decay::print_small_scatter_repack_size<char_type, outputstmtype>()};
-	if constexpr (threshold_chars == 0 || small_chars == 0 ||
+	if constexpr (chunk_chars == 0 || small_chars == 0 ||
 				  !::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>)
 	{
 		// Repacking requires both stream opt-in and a native character-scatter output path.
@@ -889,7 +953,8 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 	}
 	else
 	{
-		constexpr ::std::size_t chunk_chars{threshold_chars - 1u};
+		constexpr ::std::size_t minimum_saved_scatter_count{
+			::fast_io::details::decay::print_scatter_repack_minimum_saved_scatter_count<char_type, outputstmtype>()};
 		if constexpr (chunk_chars == 0)
 		{
 			// A zero-capacity chunk cannot hold any repacked character payload.
@@ -955,8 +1020,7 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 				++current_count;
 			}
 			flush_plan();
-			if (!has_coalesced_chunk || output_count > n ||
-				n - output_count < print_scatter_repack_min_saved_scatters)
+			if (!has_coalesced_chunk || output_count > n || n - output_count < minimum_saved_scatter_count)
 			{
 				// Avoid extra copying unless the plan actually reduces enough scatter descriptors.
 				return false;
@@ -1106,7 +1170,8 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 
 /// @brief    Writes byte scatter descriptors, optionally coalescing small scatter runs first.
 /// @details  Empty and single-scatter runs are handled directly. Multi-scatter runs are copied into a bounded stack
-///           buffer only when the stream supports both direct byte writes and direct byte scatter writes.
+///           buffer according to either the direct-scatter or no-scatter fallback policy selected by stream
+///           capability.
 /// @tparam   outputstmtype the decayed output stream reference type
 /// @param    outstm        the output stream reference
 /// @param    scatters      the first byte scatter descriptor
@@ -1134,46 +1199,94 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 		return;
 	}
 	using char_type = typename outputstmtype::output_char_type;
+	constexpr bool has_direct_scatter{
+		::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>};
 	constexpr ::std::size_t threshold_chars{
-		::fast_io::details::decay::print_scatter_full_output_threshold<char_type, outputstmtype>()};
+		has_direct_scatter
+			? ::fast_io::details::decay::print_scatter_direct_full_output_coalesce_threshold<char_type,
+																							 outputstmtype>()
+			: ::fast_io::details::decay::print_scatter_fallback_full_output_threshold<char_type, outputstmtype>()};
 	if constexpr (threshold_chars != 0 &&
-				  ::fast_io::details::decay::print_has_direct_write_bytes_operations<outputstmtype> &&
-				  ::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>)
+				  ::fast_io::details::decay::print_has_direct_write_bytes_operations<outputstmtype>)
 	{
-		// Eligible multi-scatter byte runs first try bounded stack coalescing before using scatter write.
-		char_type buffer[threshold_chars];
-		auto curr{reinterpret_cast<::std::byte *>(buffer)};
-		auto const first{curr};
-		::std::size_t remaining{threshold_chars * sizeof(char_type) - 1u};
-		for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+		// The capability-specific policy permits this complete byte run to try one contiguous write.
+		if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<threshold_chars, char_type>)
 		{
-			::std::size_t const len{iter->len};
-			if (remaining < len)
+			// A threshold inside the stack budget uses one fixed character-aligned stack allocation.
+			char_type buffer[threshold_chars];
+			auto curr{reinterpret_cast<::std::byte *>(buffer)};
+			auto const first{curr};
+			::std::size_t remaining{threshold_chars * sizeof(char_type)};
+			for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
 			{
-				// The byte run exceeds the coalescing threshold, so preserve scatter output directly.
-				if (::fast_io::details::decay::print_scatter_write_all_bytes_try_repack_small(outstm, scatters, n))
+				::std::size_t const len{iter->len};
+				if (remaining < len)
 				{
+					// An oversized run preserves native scatter output or the ordinary per-scatter write fallback.
+					if (::fast_io::details::decay::print_scatter_write_all_bytes_try_repack_small(outstm, scatters,
+																								  n))
+					{
+						return;
+					}
+					::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
 					return;
 				}
-				::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
-				return;
+				if (len != 0)
+				{
+					// Non-empty byte scatter payloads are appended to the stack coalescing buffer.
+					curr = ::fast_io::details::decay::print_small_scatter_copy_n(
+						static_cast<::std::byte const *>(iter->base), len, curr);
+					remaining -= len;
+				}
 			}
-			if (len != 0)
+			if (curr != first)
 			{
-				// Non-empty byte scatter payloads are appended to the contiguous coalescing buffer.
-				curr = ::fast_io::details::decay::print_small_scatter_copy_n(
-					static_cast<::std::byte const *>(iter->base), len, curr);
-				remaining -= len;
+				// At least one byte payload was coalesced, so emit the compact stack range.
+				::fast_io::operations::decay::write_all_bytes_decay(outstm, first, curr);
 			}
 		}
-		if (curr != first)
+		else
 		{
-			// At least one byte payload was coalesced, so emit the compact contiguous byte range.
-			::fast_io::operations::decay::write_all_bytes_decay(outstm, first, curr);
+			// A threshold above the stack budget first measures the exact byte count for one dynamic allocation.
+			constexpr ::std::size_t threshold_bytes{
+				threshold_chars > SIZE_MAX / sizeof(char_type) ? SIZE_MAX : threshold_chars * sizeof(char_type)};
+			::std::size_t total_size{};
+			for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+			{
+				::std::size_t const len{iter->len};
+				if (threshold_bytes - total_size < len)
+				{
+					// A run above the dynamic threshold returns to native scatter or per-scatter output.
+					if (::fast_io::details::decay::print_scatter_write_all_bytes_try_repack_small(outstm, scatters,
+																								  n))
+					{
+						return;
+					}
+					::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
+					return;
+				}
+				total_size += len;
+			}
+			if (total_size != 0)
+			{
+				// Allocate exactly the measured bytes, copy every non-empty scatter, and write once.
+				::fast_io::details::local_operator_new_array_ptr<::std::byte> buffer(total_size);
+				::std::byte *curr{buffer.ptr};
+				for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+				{
+					if (iter->len != 0)
+					{
+						// Append this non-empty byte scatter to the dynamically allocated range.
+						curr = ::fast_io::details::decay::print_small_scatter_copy_n(
+							static_cast<::std::byte const *>(iter->base), iter->len, curr);
+					}
+				}
+				::fast_io::operations::decay::write_all_bytes_decay(outstm, buffer.ptr, curr);
+			}
 		}
 		return;
 	}
-	// Streams that cannot coalesce this path emit the original byte scatter descriptors directly.
+	// Streams that cannot coalesce this path preserve native scatter output or its normal write fallback.
 	if (::fast_io::details::decay::print_scatter_write_all_bytes_try_repack_small(outstm, scatters, n))
 	{
 		return;
@@ -1209,44 +1322,87 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 		}
 		return;
 	}
+	constexpr bool has_direct_scatter{
+		::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>};
 	constexpr ::std::size_t threshold_chars{
-		::fast_io::details::decay::print_scatter_full_output_threshold<char_type, outputstmtype>()};
+		has_direct_scatter
+			? ::fast_io::details::decay::print_scatter_direct_full_output_coalesce_threshold<char_type,
+																							 outputstmtype>()
+			: ::fast_io::details::decay::print_scatter_fallback_full_output_threshold<char_type, outputstmtype>()};
 	if constexpr (threshold_chars != 0 &&
-				  ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype> &&
-				  ::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>)
+				  ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype>)
 	{
-		// Eligible multi-scatter character runs first try bounded stack coalescing before scatter output.
-		char_type buffer[threshold_chars];
-		char_type *curr{buffer};
-		::std::size_t remaining{threshold_chars - 1u};
-		for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+		// The capability-specific policy permits this complete character run to try one contiguous write.
+		if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<threshold_chars, char_type>)
 		{
-			::std::size_t const len{iter->len};
-			if (remaining < len)
+			// A threshold inside the stack budget uses one fixed character buffer.
+			char_type buffer[threshold_chars];
+			char_type *curr{buffer};
+			::std::size_t remaining{threshold_chars};
+			for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
 			{
-				// The character run exceeds the coalescing threshold, so preserve scatter output directly.
-				if (::fast_io::details::decay::print_scatter_write_all_try_repack_small(outstm, scatters, n))
+				::std::size_t const len{iter->len};
+				if (remaining < len)
 				{
+					// An oversized run preserves native scatter output or the ordinary per-scatter write fallback.
+					if (::fast_io::details::decay::print_scatter_write_all_try_repack_small(outstm, scatters, n))
+					{
+						return;
+					}
+					::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
 					return;
 				}
-				::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
-				return;
+				if (len != 0)
+				{
+					// Non-empty character scatters are appended to the stack coalescing buffer.
+					curr = ::fast_io::details::decay::print_small_scatter_copy_n(iter->base, len, curr);
+					remaining -= len;
+				}
 			}
-			if (len != 0)
+			if (curr != buffer)
 			{
-				// Non-empty character scatter payloads are appended to the contiguous coalescing buffer.
-				curr = ::fast_io::details::decay::print_small_scatter_copy_n(iter->base, len, curr);
-				remaining -= len;
+				// At least one character payload was coalesced, so emit the compact stack range.
+				::fast_io::operations::decay::write_all_decay(outstm, buffer, curr);
 			}
 		}
-		if (curr != buffer)
+		else
 		{
-			// At least one character payload was coalesced, so emit the compact contiguous character range.
-			::fast_io::operations::decay::write_all_decay(outstm, buffer, curr);
+			// A threshold above the stack budget first measures the exact character count.
+			::std::size_t total_size{};
+			for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+			{
+				::std::size_t const len{iter->len};
+				if (threshold_chars - total_size < len)
+				{
+					// A run above the dynamic threshold returns to native scatter or per-scatter output.
+					if (::fast_io::details::decay::print_scatter_write_all_try_repack_small(outstm, scatters, n))
+					{
+						return;
+					}
+					::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
+					return;
+				}
+				total_size += len;
+			}
+			if (total_size != 0)
+			{
+				// Allocate exactly the measured characters, copy each non-empty scatter, and write once.
+				::fast_io::details::local_operator_new_array_ptr<char_type> buffer(total_size);
+				char_type *curr{buffer.ptr};
+				for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
+				{
+					if (iter->len != 0)
+					{
+						// Append this non-empty character scatter to the dynamically allocated range.
+						curr = ::fast_io::details::decay::print_small_scatter_copy_n(iter->base, iter->len, curr);
+					}
+				}
+				::fast_io::operations::decay::write_all_decay(outstm, buffer.ptr, curr);
+			}
 		}
 		return;
 	}
-	// Streams that cannot coalesce this path emit the original character scatter descriptors directly.
+	// Streams that cannot coalesce this path preserve native scatter output or its normal write fallback.
 	if (::fast_io::details::decay::print_scatter_write_all_try_repack_small(outstm, scatters, n))
 	{
 		return;
@@ -2668,12 +2824,25 @@ template <bool needprintlf, ::std::size_t position, ::std::integral char_type, t
 		  typename... Args>
 inline constexpr bool print_controls_scatters_try_materialize(outputstmtype optstm, T t, Args... args)
 {
+	constexpr bool has_direct_scatter{[]() constexpr {
+		if constexpr (
+			::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<outputstmtype>)
+		{
+			return ::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>;
+		}
+		else
+		{
+			return ::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>;
+		}
+	}()};
 	constexpr ::std::size_t threshold_chars{
-		::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, outputstmtype>()};
+		has_direct_scatter
+			? ::fast_io::details::decay::print_scatter_direct_full_output_coalesce_threshold<char_type,
+																							 outputstmtype>()
+			: ::fast_io::details::decay::print_scatter_fallback_full_output_threshold<char_type, outputstmtype>()};
 	if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> ||
 				  (threshold_chars != 0 &&
-				   ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype> &&
-				   ::fast_io::details::decay::print_stack_buffer_size_within_limit<threshold_chars, char_type>))
+				   ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype>))
 	{
 		// A coalescing-capable stream measures the complete scatter prefix before choosing storage.
 		::std::size_t const total_size{::fast_io::details::intrinsics::add_or_overflow_die(
@@ -2705,23 +2874,41 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype opts
 			}
 		}
 		if constexpr (threshold_chars != 0 &&
-					  ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype> &&
-					  ::fast_io::details::decay::print_stack_buffer_size_within_limit<threshold_chars, char_type>)
+					  ::fast_io::details::decay::print_has_direct_write_operations<outputstmtype>)
 		{
-			// Unbuffered streams can still coalesce into a bounded stack buffer.
+			// Unbuffered streams can coalesce into stack or dynamically allocated contiguous storage.
 			if (total_size <= threshold_chars)
 			{
-				// The full scatter prefix fits the stream's whole-output coalescing threshold.
-				char_type buffer[threshold_chars];
-				char_type *ptr{
-					::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(buffer, t, args...)};
-				if constexpr (needprintlf)
+				// The full scatter prefix fits the stream's whole-output coalescing policy.
+				if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<threshold_chars,
+																							  char_type>)
 				{
-					// The line variant appends the trailing newline before the stack buffer is written.
-					*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
-					++ptr;
+					// A policy threshold inside the stack budget uses one fixed stack buffer.
+					char_type buffer[threshold_chars];
+					char_type *ptr{::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(
+						buffer, t, args...)};
+					if constexpr (needprintlf)
+					{
+						// The line variant appends its newline inside the same stack allocation.
+						*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
+						++ptr;
+					}
+					::fast_io::operations::decay::write_all_decay(optstm, buffer, ptr);
 				}
-				::fast_io::operations::decay::write_all_decay(optstm, buffer, ptr);
+				else
+				{
+					// A policy threshold above the stack budget allocates only the measured output size.
+					::fast_io::details::local_operator_new_array_ptr<char_type> buffer(total_size);
+					char_type *ptr{::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(
+						buffer.ptr, t, args...)};
+					if constexpr (needprintlf)
+					{
+						// The line variant appends its newline inside the same dynamic allocation.
+						*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
+						++ptr;
+					}
+					::fast_io::operations::decay::write_all_decay(optstm, buffer.ptr, ptr);
+				}
 				return true;
 			}
 		}
@@ -7101,5 +7288,473 @@ inline constexpr void print_freestanding(output &&outstm, Args &&...args)
 }
 
 } // namespace operations
+
+} // namespace fast_io
+
+namespace fast_io
+{
+
+namespace details::decay
+{
+
+/// @brief    Owns one string literal as structural compile-time storage.
+/// @tparam   char_type the literal character type
+/// @tparam   n         the literal array extent including its terminator
+template <typename char_type, ::std::size_t n>
+struct basic_compiled_scatter_literal_storage
+{
+	char_type elements[n];
+
+	/// @brief Copies a string literal into the structural non-type template argument representation.
+	/// @param literal the source literal including its terminator
+	consteval basic_compiled_scatter_literal_storage(char_type const (&literal)[n]) noexcept
+	{
+		// Copy every code unit, including the terminator, so the object remains a structural value.
+		for (::std::size_t i{}; i != n; ++i)
+		{
+			elements[i] = literal[i];
+		}
+	}
+};
+
+/// @brief Marks types that are valid components of a compiled scatter plan.
+/// @tparam T the component type being classified
+template <typename T>
+struct compiled_scatter_component : ::std::false_type
+{};
+
+/// @brief Reports whether a type is a valid compiled scatter-plan component.
+/// @tparam T the component type being classified
+template <typename T>
+inline constexpr bool compiled_scatter_component_v{
+	::fast_io::details::decay::compiled_scatter_component<::std::remove_cvref_t<T>>::value};
+
+} // namespace details::decay
+
+namespace manipulators
+{
+
+/// @brief Represents one compile-time literal slot in a compiled scatter plan.
+/// @tparam literal the structural string-literal value
+template <::fast_io::details::decay::basic_compiled_scatter_literal_storage literal>
+struct compiled_scatter_literal_t
+{
+	using component_tag = void;
+	using char_type = ::std::remove_cvref_t<decltype(literal.elements[0])>;
+	static inline constexpr bool is_static{true};
+	static inline constexpr ::std::size_t size{sizeof(literal.elements) / sizeof(char_type) - 1u};
+	static inline constexpr auto storage
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+		__attribute__((visibility("hidden")))
+#endif
+		{literal};
+};
+
+/// @brief Represents one runtime-patched slot in a compiled scatter plan.
+/// @tparam index_value the zero-based runtime argument index used to fill the slot
+template <::std::size_t index_value>
+struct compiled_scatter_dynamic_t
+{
+	using component_tag = void;
+	static inline constexpr bool is_static{false};
+	static inline constexpr ::std::size_t index{index_value};
+};
+
+/// @brief Creates a compile-time literal component for make_scatter_plan.
+/// @tparam literal the string literal to store in the plan blueprint
+template <::fast_io::details::decay::basic_compiled_scatter_literal_storage literal>
+inline constexpr compiled_scatter_literal_t<literal> scatter_literal{};
+
+/// @brief Creates a runtime component for make_scatter_plan.
+/// @tparam index the zero-based runtime argument index used to patch this slot
+template <::std::size_t index>
+inline constexpr compiled_scatter_dynamic_t<index> scatter_dynamic{};
+
+} // namespace manipulators
+
+namespace details::decay
+{
+
+template <::fast_io::details::decay::basic_compiled_scatter_literal_storage literal>
+struct compiled_scatter_component<::fast_io::manipulators::compiled_scatter_literal_t<literal>> : ::std::true_type
+{};
+
+template <::std::size_t index>
+struct compiled_scatter_component<::fast_io::manipulators::compiled_scatter_dynamic_t<index>> : ::std::true_type
+{};
+
+/// @brief Materializes forwarded runtime values into an owning fast_io tuple.
+/// @tparam Args the forwarded runtime value types
+/// @param  args the values to store
+/// @return a tuple that owns the decayed runtime values
+template <typename... Args>
+[[nodiscard]] inline constexpr ::fast_io::containers::tuple<::std::remove_cvref_t<Args>...>
+compiled_scatter_plan_tuple(Args &&...args) noexcept
+{
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-braces"
+#endif
+	return ::fast_io::containers::tuple<::std::remove_cvref_t<Args>...>{
+		::std::forward<Args>(args)...};
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+}
+
+/// @brief Binds runtime values to a compiled plan for use as a normal printable object.
+/// @tparam plan_type     the compiled scatter plan type
+/// @tparam dynamic_types the owned runtime value types
+template <typename plan_type, typename... dynamic_types>
+struct compiled_scatter_plan_bound
+{
+	::fast_io::containers::tuple<dynamic_types...> dynamic_values;
+};
+
+/// @brief Builds the compile-time descriptor contributed by one plan component.
+/// @tparam char_type      the output character type
+/// @tparam scatter_type   void for byte lengths, otherwise the typed scatter character type
+/// @tparam component_type the static or dynamic plan component
+/// @return the literal descriptor, or a zero descriptor reserved for a dynamic slot
+template <::std::integral char_type, typename scatter_type, typename component_type>
+[[nodiscard]] inline consteval ::fast_io::basic_io_scatter_t<scatter_type>
+compiled_scatter_plan_static_descriptor() noexcept
+{
+	if constexpr (component_type::is_static)
+	{
+		// Literal components contribute their final address and length during constant evaluation.
+		static_assert(::std::same_as<char_type, typename component_type::char_type>);
+		if constexpr (::std::same_as<scatter_type, void>)
+		{
+			// Byte-scatter descriptors express the literal length in bytes.
+			return {component_type::storage.elements, component_type::size * sizeof(char_type)};
+		}
+		else
+		{
+			// Typed scatter descriptors express the literal length in character units.
+			return {component_type::storage.elements, component_type::size};
+		}
+	}
+	else
+	{
+		// Dynamic components leave a zero descriptor for the runtime patch pass.
+		return {};
+	}
+}
+
+/// @brief Builds the runtime descriptor for one static or dynamic plan component.
+/// @tparam char_type      the output character type
+/// @tparam scatter_type   void for byte lengths, otherwise the typed scatter character type
+/// @tparam component_type the plan component being materialized
+/// @tparam dynamic_tuple  the array or tuple containing runtime values
+/// @param  values         the runtime values indexed by dynamic components
+/// @return the fully materialized descriptor for this component
+template <::std::integral char_type, typename scatter_type, typename component_type, typename dynamic_tuple>
+[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<scatter_type>
+compiled_scatter_plan_runtime_descriptor(dynamic_tuple const &values) noexcept
+{
+	if constexpr (component_type::is_static)
+	{
+		// Static components reuse the descriptor produced entirely during constant evaluation.
+		return ::fast_io::details::decay::compiled_scatter_plan_static_descriptor<char_type, scatter_type,
+																				  component_type>();
+	}
+	else
+	{
+		// Dynamic components validate their argument index against either an array or tuple source.
+		static_assert([]() consteval {
+			using values_type = ::std::remove_cvref_t<dynamic_tuple>;
+			if constexpr (::std::is_bounded_array_v<values_type>)
+			{
+				// Direct plan.print calls store normalized runtime scatters in a bounded array.
+				return component_type::index < ::std::extent_v<values_type>;
+			}
+			else
+			{
+				// Bound printable plans own their normalized runtime values in a tuple.
+				return component_type::index < ::std::tuple_size_v<values_type>;
+			}
+		}());
+		auto const &value{[&]() constexpr -> decltype(auto) {
+			if constexpr (::std::is_bounded_array_v<::std::remove_cvref_t<dynamic_tuple>>)
+			{
+				// Array-backed values use ordinary compile-time indexing.
+				return values[component_type::index];
+			}
+			else
+			{
+				// Tuple-backed values use fast_io's compile-time tuple accessor.
+				return ::fast_io::containers::get<component_type::index>(values);
+			}
+		}()};
+		using value_type = ::std::remove_cvref_t<decltype(value)>;
+		static_assert(::fast_io::scatter_printable<char_type, value_type>);
+		::fast_io::basic_io_scatter_t<char_type> scatter{
+			print_scatter_define(::fast_io::io_reserve_type<char_type, value_type>, value)};
+		if constexpr (::std::same_as<scatter_type, void>)
+		{
+			// Byte-scatter output converts the normalized character count to bytes.
+			return {scatter.base, scatter.len * sizeof(char_type)};
+		}
+		else
+		{
+			// Typed scatter output preserves the normalized character descriptor.
+			return scatter;
+		}
+	}
+}
+
+/// @brief Builds every descriptor directly from its corresponding plan component.
+/// @details This is the compiler-friendly fallback used when copying a static blueprint is not profitable.
+/// @tparam char_type       the output character type
+/// @tparam scatter_type    the descriptor value type
+/// @tparam dynamic_tuple   the runtime value container
+/// @tparam component_types the ordered plan component types
+/// @tparam index           the expanded descriptor positions
+/// @param  scatters         the destination descriptor array
+/// @param  values           the runtime values used by dynamic components
+template <::std::integral char_type, typename scatter_type, typename dynamic_tuple, typename... component_types,
+		  ::std::size_t... index>
+inline constexpr void compiled_scatter_plan_build_direct(
+	::fast_io::basic_io_scatter_t<scatter_type> *scatters, dynamic_tuple const &values,
+	::std::index_sequence<index...>) noexcept
+{
+	((scatters[index] = ::fast_io::details::decay::compiled_scatter_plan_runtime_descriptor<
+		  char_type, scatter_type,
+		  ::fast_io::containers::details::pack_indexing_t_<index, component_types...>>(values)),
+	 ...);
+}
+
+/// @brief Patches only dynamic positions after copying the compile-time blueprint.
+/// @tparam char_type       the output character type
+/// @tparam scatter_type    the descriptor value type
+/// @tparam dynamic_tuple   the runtime value container
+/// @tparam component_types the ordered plan component types
+/// @tparam index           the expanded descriptor positions
+/// @param  scatters         the copied blueprint to patch
+/// @param  values           the runtime values used by dynamic components
+template <::std::integral char_type, typename scatter_type, typename dynamic_tuple, typename... component_types,
+		  ::std::size_t... index>
+inline constexpr void compiled_scatter_plan_patch_dynamic(
+	::fast_io::basic_io_scatter_t<scatter_type> *scatters, dynamic_tuple const &values,
+	::std::index_sequence<index...>) noexcept
+{
+	([&]() constexpr {
+		using component_type =
+			::fast_io::containers::details::pack_indexing_t_<index, component_types...>;
+		if constexpr (!component_type::is_static)
+		{
+			// Only dynamic components overwrite their pre-zeroed blueprint positions.
+			scatters[index] = ::fast_io::details::decay::compiled_scatter_plan_runtime_descriptor<
+				char_type, scatter_type, component_type>(values);
+		}
+	}(),
+	 ...);
+}
+
+} // namespace details::decay
+
+/// @brief Compiles a fixed scatter layout into static literal descriptors and runtime patch positions.
+/// @details Sparse plans on measured x86-64 targets and Clang/AArch64 copy a constant descriptor blueprint and patch
+///          only dynamic slots. Other targets build descriptors directly when constant stores remain faster.
+/// @tparam char_type       the output character type
+/// @tparam component_types the ordered literal and dynamic component types
+template <::std::integral char_type, typename... component_types>
+	requires(sizeof...(component_types) != 0 &&
+			 (::fast_io::details::decay::compiled_scatter_component_v<component_types> && ...))
+struct basic_compiled_scatter_plan
+{
+	using output_char_type = char_type;
+	static inline constexpr ::std::size_t scatter_count{sizeof...(component_types)};
+	static inline constexpr ::std::size_t dynamic_count{
+		(static_cast<::std::size_t>(!component_types::is_static) + ...)};
+	// Sparse blueprint copies win on measured x86-64 GCC/Clang targets and Clang/AArch64. GCC/AArch64 keeps its
+	// faster direct constant-store path until a profitable copy strategy is demonstrated for that target.
+#if defined(__x86_64__) || defined(__amd64__) || \
+	(defined(__clang__) && (defined(__aarch64__) || defined(__arm64__)))
+	static inline constexpr bool use_blueprint_copy{
+		scatter_count >= 64u && dynamic_count <= scatter_count / 16u};
+#else
+	static inline constexpr bool use_blueprint_copy{false};
+#endif
+
+	template <typename scatter_type>
+	static inline constexpr ::fast_io::basic_io_scatter_t<scatter_type> blueprint[scatter_count]
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+		__attribute__((visibility("hidden")))
+#endif
+		{
+			::fast_io::details::decay::compiled_scatter_plan_static_descriptor<char_type, scatter_type,
+																			   component_types>()...};
+
+	/// @brief Binds runtime values to this plan as a composable printable object.
+	/// @tparam Args the runtime argument types
+	/// @param  args the values referenced by scatter_dynamic components
+	/// @return an owning printable object that retains the normalized runtime values
+	template <typename... Args>
+	[[nodiscard]] inline constexpr auto operator()(Args &&...args) const noexcept
+	{
+		static_assert(sizeof...(Args) != 0 || dynamic_count == 0);
+		return [&]<typename... forwarded_types>(forwarded_types &&...forwarded) constexpr {
+			using plan_type = basic_compiled_scatter_plan;
+			return ::fast_io::details::decay::compiled_scatter_plan_bound<
+				plan_type, ::std::remove_cvref_t<forwarded_types>...>{
+				::fast_io::details::decay::compiled_scatter_plan_tuple(
+					::std::forward<forwarded_types>(forwarded)...)};
+		}(::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+	}
+
+	/// @brief Emits the compiled plan directly to an output stream.
+	/// @tparam output the output stream type
+	/// @tparam Args   the runtime argument types
+	/// @param  outstm the destination stream
+	/// @param  args   the values referenced by scatter_dynamic components
+	template <typename output, typename... Args>
+	inline constexpr void print(output &&outstm, Args &&...args) const
+	{
+		auto outref{::fast_io::operations::output_stream_ref(outstm)};
+		static_assert(::std::same_as<char_type, typename decltype(outref)::output_char_type>);
+		if constexpr (sizeof...(Args) == 0u)
+		{
+			// Fully static plans need no runtime scatter normalization.
+			static_assert(dynamic_count == 0u);
+			::fast_io::containers::tuple<> dynamic_values;
+			print_output(outref, dynamic_values);
+		}
+		else if constexpr ((::fast_io::scatter_printable<char_type, ::std::remove_cvref_t<Args>> && ...))
+		{
+			// Already scatter-printable values are normalized directly without alias wrappers.
+			::fast_io::basic_io_scatter_t<char_type> dynamic_values[]{print_scatter_define(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<Args>>, args)...};
+			print_output(outref, dynamic_values);
+		}
+		else
+		{
+			// Other public arguments first pass through the ordinary alias and character-aware forwarding protocol.
+			[&]<typename... forwarded_types>(forwarded_types &&...forwarded) constexpr {
+				static_assert((::fast_io::scatter_printable<
+								   char_type, ::std::remove_cvref_t<forwarded_types>> &&
+							   ...));
+				::fast_io::basic_io_scatter_t<char_type> dynamic_values[]{print_scatter_define(
+					::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<forwarded_types>>,
+					forwarded)...};
+				print_output(outref, dynamic_values);
+			}(
+				::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+		}
+	}
+
+	/// @brief Materializes descriptors and dispatches one complete scatter write.
+	/// @details Descriptor storage obeys the global print stack policy and switches to one dynamic allocation when the
+	///          fixed descriptor array would exceed the allowed stack size.
+	/// @tparam output        the decayed output stream reference type
+	/// @tparam dynamic_tuple the normalized runtime value container
+	/// @param  outstm        the destination stream reference
+	/// @param  values        the values used to fill dynamic positions
+	template <typename output, typename dynamic_tuple>
+	FAST_IO_GNU_ALWAYS_INLINE inline static constexpr void emit(output outstm,
+																dynamic_tuple const &values)
+	{
+		using scatter_type = ::std::conditional_t<
+			::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<output>,
+			::fast_io::io_scatter_t, ::fast_io::basic_io_scatter_t<char_type>>;
+		if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<scatter_count, scatter_type>)
+		{
+			// Descriptor arrays within the active byte budget stay on the stack.
+			scatter_type scatters[scatter_count];
+			build(scatters, values);
+			::fast_io::details::decay::print_scatter_write_all_dispatch(outstm, scatters, scatter_count);
+		}
+		else
+		{
+			// Descriptor arrays above the stack budget use one exact-size dynamic allocation.
+			::fast_io::details::local_operator_new_array_ptr<scatter_type> scatters(scatter_count);
+			build(scatters.ptr, values);
+			::fast_io::details::decay::print_scatter_write_all_dispatch(outstm, scatters.ptr, scatter_count);
+		}
+	}
+
+private:
+	/// @brief Applies output locking before emitting the compiled plan.
+	/// @tparam output        the decayed output stream reference type
+	/// @tparam dynamic_tuple the normalized runtime value container
+	/// @param  outstm        the destination stream reference
+	/// @param  values        the values used to fill dynamic positions
+	template <typename output, typename dynamic_tuple>
+	FAST_IO_GNU_ALWAYS_INLINE inline static constexpr void print_output(
+		output outstm, dynamic_tuple const &values)
+	{
+		if constexpr (
+			::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<output>)
+		{
+			// Mutex-bearing streams hold their lock across descriptor construction and the scatter write.
+			::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(outstm)};
+			print_output(::fast_io::operations::decay::output_stream_unlocked_ref_decay(outstm), values);
+		}
+		else
+		{
+			// Unlocked stream references can emit immediately.
+			emit(outstm, values);
+		}
+	}
+
+	/// @brief Builds the descriptor array using the selected compile-time strategy.
+	/// @tparam scatter_type  the destination descriptor type
+	/// @tparam dynamic_tuple the normalized runtime value container
+	/// @param  scatters      the destination descriptor array
+	/// @param  values        the values used to fill dynamic positions
+	template <typename scatter_type, typename dynamic_tuple>
+	inline static constexpr void build(scatter_type *scatters, dynamic_tuple const &values) noexcept
+	{
+		using scatter_value_type = typename scatter_type::value_type;
+		if constexpr (use_blueprint_copy)
+		{
+			// Profitable sparse plans copy all constant descriptors once and patch only dynamic positions.
+			::fast_io::freestanding::my_memcpy(
+				scatters, blueprint<scatter_value_type>, sizeof(scatter_type) * scatter_count);
+			::fast_io::details::decay::compiled_scatter_plan_patch_dynamic<
+				char_type, scatter_value_type, dynamic_tuple, component_types...>(
+				scatters, values, ::std::make_index_sequence<scatter_count>{});
+		}
+		else
+		{
+			// Other platforms and denser plans build each descriptor directly in final order.
+			::fast_io::details::decay::compiled_scatter_plan_build_direct<
+				char_type, scatter_value_type, dynamic_tuple, component_types...>(
+				scatters, values, ::std::make_index_sequence<scatter_count>{});
+		}
+	}
+};
+
+/// @brief Creates a compiled scatter plan from literal and dynamic components.
+/// @tparam char_type       the output character type
+/// @tparam component_types the deduced component types
+/// @return an empty stateless plan whose layout and blueprint are compile-time data
+template <::std::integral char_type, typename... component_types>
+	requires(sizeof...(component_types) != 0 &&
+			 (::fast_io::details::decay::compiled_scatter_component_v<component_types> && ...))
+[[nodiscard]] inline consteval auto make_scatter_plan(component_types...) noexcept
+{
+	return ::fast_io::basic_compiled_scatter_plan<char_type, ::std::remove_cvref_t<component_types>...>{};
+}
+
+/// @brief Emits a bound compiled scatter plan through the ordinary print customization protocol.
+/// @tparam char_type     the output character type
+/// @tparam output        the decayed output stream reference type
+/// @tparam plan_type     the compiled scatter plan type
+/// @tparam dynamic_types the owned runtime value types
+/// @param  outstm        the destination stream reference
+/// @param  bound         the plan and its normalized runtime values
+template <::std::integral char_type, typename output, typename plan_type, typename... dynamic_types>
+	requires(::std::same_as<char_type, typename plan_type::output_char_type>)
+inline constexpr void print_define(
+	::fast_io::io_reserve_type_t<char_type,
+								 ::fast_io::details::decay::compiled_scatter_plan_bound<plan_type, dynamic_types...>>,
+	output outstm,
+	::fast_io::details::decay::compiled_scatter_plan_bound<plan_type, dynamic_types...> bound)
+{
+	plan_type::emit(outstm, bound.dynamic_values);
+}
 
 } // namespace fast_io
