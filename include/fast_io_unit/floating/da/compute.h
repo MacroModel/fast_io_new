@@ -13,7 +13,7 @@ struct conversion_result
 	bool has_last_digit;
 };
 
-[[nodiscard]] inline constexpr conversion_result compute_irregular(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_irregular(
 	::std::uint_least64_t binary_significand, ::std::int_least32_t binary_exponent) noexcept
 {
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
@@ -40,12 +40,12 @@ struct conversion_result
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 }
 
-[[nodiscard]] inline constexpr conversion_result compute_binary32(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary32(
 	::std::uint_least32_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept
 {
 	constexpr ::std::uint_least8_t extra_shift{34u};
 	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 150};
-	auto const decimal_exponent{compute_decimal_exponent_binary32(binary_exponent)};
+	auto const decimal_exponent{compute_decimal_exponent_reduced(binary_exponent)};
 	auto const shift{static_cast<::std::uint_least8_t>(
 		cached_data.exponent_shifts.data[static_cast<::std::size_t>(raw_exponent + 925u)] +
 		(extra_shift - exponent_shift_cache::extra_shift))};
@@ -68,17 +68,18 @@ struct conversion_result
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 }
 
-[[nodiscard]] inline constexpr conversion_result compute_binary64(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary64(
 	::std::uint_least64_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept
 {
 	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 1075};
 	::std::int_least32_t decimal_exponent;
-#if defined(__APPLE__) && defined(__SIZEOF_INT128__)
+#if defined(__APPLE__) && defined(__SIZEOF_INT128__) && \
+	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	decimal_exponent = static_cast<::std::int_least32_t>(::fast_io::intrinsics::umulh(
 		static_cast<::std::uint_least64_t>(static_cast<::std::int_least64_t>(binary_exponent)),
 		static_cast<::std::uint_least64_t>(78913) << 46u));
 #else
-	decimal_exponent = compute_decimal_exponent(binary_exponent);
+	decimal_exponent = compute_decimal_exponent_reduced(binary_exponent);
 #endif
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
 	auto const shift{cached_data.exponent_shifts.data[raw_exponent]};

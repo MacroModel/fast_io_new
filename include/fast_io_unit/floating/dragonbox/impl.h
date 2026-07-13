@@ -1419,13 +1419,7 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 		 ::fast_io::details::iec559_traits<flt>::ebits == 8u) ||
 		(::fast_io::details::iec559_traits<flt>::mbits == 52u &&
 		 ::fast_io::details::iec559_traits<flt>::ebits == 11u)};
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64))
-	constexpr bool da_target_enabled{::fast_io::details::iec559_traits<flt>::mbits == 23u};
-#else
-	constexpr bool da_target_enabled{true};
-#endif
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even && da_supported &&
-				  da_target_enabled)
+	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even && da_supported)
 	{
 		auto const result{::fast_io::details::da::trim_trailing_zeros(
 			::fast_io::details::da::to_decimal<flt>(m2, e2))};
@@ -1814,8 +1808,8 @@ inline constexpr char_type *print_rsv_fp_digits(
 }
 
 template <bool comma, ::std::integral char_type, my_unsigned_integral U>
-inline constexpr char_type *print_rsv_fp_decimal_scientific_common_impl(char_type *iter, U m10,
-																		::std::uint_least32_t m10len) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decimal_scientific_common_impl(char_type *iter, U m10,
+																								  ::std::uint_least32_t m10len) noexcept
 {
 	auto itp1{iter + 1};
 	::fast_io::details::jeaiii::jeaiii_main_len<true>(itp1, m10, m10len);
@@ -1825,8 +1819,8 @@ inline constexpr char_type *print_rsv_fp_decimal_scientific_common_impl(char_typ
 }
 
 template <bool comma, ::std::integral char_type, my_unsigned_integral U>
-inline constexpr char_type *print_rsv_fp_decimal_common_impl(char_type *iter, U m10,
-															 ::std::uint_least32_t m10len) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decimal_common_impl(char_type *iter, U m10,
+																					   ::std::uint_least32_t m10len) noexcept
 {
 	if (m10len == 1) [[unlikely]]
 	{
@@ -1841,7 +1835,7 @@ inline constexpr char_type *print_rsv_fp_decimal_common_impl(char_type *iter, U 
 }
 
 template <typename flt, bool uppercase_e, ::std::integral char_type>
-inline constexpr char_type *print_rsv_fp_e_impl(char_type *iter, ::std::int_least32_t e10) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_e_impl(char_type *iter, ::std::int_least32_t e10) noexcept
 {
 	*iter = char_literal_v < uppercase_e ? u8'E' : u8'e', char_type > ;
 	++iter;
@@ -1860,7 +1854,7 @@ inline constexpr char_type *print_rsv_fp_e_impl(char_type *iter, ::std::int_leas
 }
 
 template <::std::integral char_type>
-inline constexpr char_type *fill_zeros_impl(char_type *iter, ::std::size_t n) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fill_zeros_impl(char_type *iter, ::std::size_t n) noexcept
 {
 	for (::std::size_t i{}; i != n; ++i)
 	{
@@ -1871,7 +1865,7 @@ inline constexpr char_type *fill_zeros_impl(char_type *iter, ::std::size_t n) no
 }
 
 template <bool comma, ::std::integral char_type>
-inline constexpr char_type *fill_zero_point_impl(char_type *iter) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fill_zero_point_impl(char_type *iter) noexcept
 {
 	if constexpr (comma)
 	{
@@ -1922,10 +1916,10 @@ inline constexpr char_type *fill_zero_point_impl(char_type *iter) noexcept
 }
 
 template <typename flt, ::std::integral char_type>
-inline constexpr char_type *fixed_case0_full_integer(char_type *iter,
-													 ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-													 ::std::int_least32_t olength,
-													 ::std::int_least32_t real_exp) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fixed_case0_full_integer(char_type *iter,
+																			   ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+																			   ::std::int_least32_t olength,
+																			   ::std::int_least32_t real_exp) noexcept
 {
 	::fast_io::details::print_rsv_fp_digits_len<flt>(iter, m10, static_cast<::std::uint_least32_t>(olength));
 	iter += olength;
@@ -1933,7 +1927,7 @@ inline constexpr char_type *fixed_case0_full_integer(char_type *iter,
 }
 
 template <bool comma, ::std::integral char_type>
-inline constexpr char_type *print_rsv_fp_append_json_float_zero(char_type *iter) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_append_json_float_zero(char_type *iter) noexcept
 {
 	*iter = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
 	++iter;
@@ -1943,7 +1937,7 @@ inline constexpr char_type *print_rsv_fp_append_json_float_zero(char_type *iter)
 }
 
 template <typename flt, bool comma, bool json_float, ::std::integral char_type>
-inline constexpr char_type *fixed_case0_full_integer_maybe_json(
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fixed_case0_full_integer_maybe_json(
 	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10, ::std::int_least32_t olength,
 	::std::int_least32_t real_exp) noexcept
 {
@@ -1959,7 +1953,7 @@ inline constexpr char_type *fixed_case0_full_integer_maybe_json(
 }
 
 template <typename flt, bool comma, ::std::integral char_type>
-inline constexpr char_type *
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 fixed_case1_integer_and_point(char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
 							  ::std::int_least32_t olength, ::std::int_least32_t real_exp) noexcept
 {
@@ -1982,7 +1976,7 @@ fixed_case1_integer_and_point(char_type *iter, ::fast_io::details::dragonbox_dec
 }
 
 template <typename flt, bool comma, bool json_float, ::std::integral char_type>
-inline constexpr char_type *
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 fixed_case1_integer_and_point_maybe_json(char_type *iter,
 										 ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
 										 ::std::int_least32_t olength,
@@ -2011,9 +2005,9 @@ fixed_case1_integer_and_point_maybe_json(char_type *iter,
 }
 
 template <typename flt, bool comma, ::std::integral char_type>
-inline constexpr char_type *fixed_case2_all_point(char_type *iter,
-												  ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-												  ::std::int_least32_t olength, ::std::int_least32_t real_exp) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fixed_case2_all_point(char_type *iter,
+																			::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+																			::std::int_least32_t olength, ::std::int_least32_t real_exp) noexcept
 {
 	iter = fill_zero_point_impl<comma>(iter);
 	iter = fill_zeros_impl(iter, static_cast<::std::uint_least32_t>(-real_exp - 1));
@@ -2023,9 +2017,9 @@ inline constexpr char_type *fixed_case2_all_point(char_type *iter,
 }
 
 template <typename flt, bool comma, bool json_float = false, ::std::integral char_type>
-inline constexpr char_type *print_rsv_fp_fixed_decision_impl(char_type *iter,
-															 ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-															 ::std::int_least32_t e10) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_fixed_decision_impl(char_type *iter,
+																					   ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+																					   ::std::int_least32_t e10) noexcept
 {
 	::std::int_least32_t olength(static_cast<::std::int_least32_t>(chars_len<10, true>(m10)));
 	::std::int_least32_t const real_exp(static_cast<::std::int_least32_t>(e10 + olength - 1));
@@ -2045,9 +2039,9 @@ inline constexpr char_type *print_rsv_fp_fixed_decision_impl(char_type *iter,
 
 template <typename flt, bool comma, bool uppercase_e, ::fast_io::manipulators::floating_format mt,
 		  bool json_float = false, ::std::integral char_type>
-inline constexpr char_type *print_rsv_fp_decision_impl(char_type *iter,
-													   ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
-													   ::std::int_least32_t e10) noexcept
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl(char_type *iter,
+																				 ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+																				 ::std::int_least32_t e10) noexcept
 {
 	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
 	{
@@ -2538,6 +2532,23 @@ inline constexpr char_type *print_rsv_fp_precision_decision_impl(
 	}
 }
 
+template <typename flt, bool comma, bool uppercase_e, ::fast_io::manipulators::floating_format mt,
+		  bool json_float, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_define_impl(
+	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
+	::std::int_least32_t e10) noexcept
+{
+	if constexpr (mt == ::fast_io::manipulators::floating_format::fixed)
+	{
+		return ::fast_io::details::print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(iter, m10, e10);
+	}
+	else
+	{
+		return ::fast_io::details::print_rsv_fp_decision_impl<flt, comma, uppercase_e, mt, json_float>(
+			iter, m10, e10);
+	}
+}
+
 template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io::manipulators::floating_format mt,
 		  ::fast_io::manipulators::floating_rounding rounding =
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
@@ -2619,14 +2630,8 @@ inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noe
 						binary_mantissa, binary_exponent, negative);
 				}
 			}(f, mantissa, static_cast<::std::int_least32_t>(exponent), sign);
-		if constexpr (mt == ::fast_io::manipulators::floating_format::fixed)
-		{
-			return print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(iter, m10, e10);
-		}
-		else
-		{
-			return print_rsv_fp_decision_impl<flt, comma, uppercase_e, mt, json_float>(iter, m10, e10);
-		}
+		return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
+			iter, m10, e10);
 	}
 }
 

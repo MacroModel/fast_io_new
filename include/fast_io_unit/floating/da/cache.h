@@ -9,15 +9,15 @@ struct uint64x2
 	::std::uint_least64_t lo;
 };
 
-[[nodiscard]] inline constexpr uint64x2 umul64x64(::std::uint_least64_t x,
-												  ::std::uint_least64_t y) noexcept
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr uint64x2 umul64x64(::std::uint_least64_t x,
+																			::std::uint_least64_t y) noexcept
 {
 	::std::uint_least64_t hi;
 	auto const lo{::fast_io::intrinsics::umul(x, y, hi)};
 	return {hi, lo};
 }
 
-[[nodiscard]] inline constexpr ::std::uint_least64_t umul64x64_add_high(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::uint_least64_t umul64x64_add_high(
 	::std::uint_least64_t x, ::std::uint_least64_t y, ::std::uint_least64_t addend) noexcept
 {
 #if defined(__SIZEOF_INT128__)
@@ -30,8 +30,8 @@ struct uint64x2
 #endif
 }
 
-[[nodiscard]] inline constexpr uint64x2 umul64x128_high(::std::uint_least64_t x,
-														uint64x2 y) noexcept
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr uint64x2 umul64x128_high(::std::uint_least64_t x,
+																				  uint64x2 y) noexcept
 {
 #if defined(__SIZEOF_INT128__)
 	auto const upper{static_cast<__uint128_t>(x) * y.hi};
@@ -154,7 +154,7 @@ struct power10_cache
 	return (binary_exponent * 315653 - static_cast<::std::int_least32_t>(!regular) * 131072) >> 20;
 }
 
-[[nodiscard]] inline constexpr ::std::int_least32_t compute_decimal_exponent_binary32(
+[[nodiscard]] inline constexpr ::std::int_least32_t compute_decimal_exponent_reduced(
 	::std::int_least32_t binary_exponent) noexcept
 {
 	return (binary_exponent * 78913) >> 18;
@@ -167,11 +167,11 @@ struct power10_cache
 	return static_cast<::std::uint_least8_t>(binary_exponent + power10_binary_exponent + 1);
 }
 
-inline constexpr bool verify_binary32_decimal_exponents() noexcept
+inline constexpr bool verify_reduced_decimal_exponents() noexcept
 {
-	for (::std::int_least32_t exponent{-149}; exponent <= 104; ++exponent)
+	for (::std::int_least32_t exponent{-1074}; exponent <= 971; ++exponent)
 	{
-		if (compute_decimal_exponent_binary32(exponent) != compute_decimal_exponent(exponent))
+		if (compute_decimal_exponent_reduced(exponent) != compute_decimal_exponent(exponent))
 		{
 			return false;
 		}
@@ -179,7 +179,7 @@ inline constexpr bool verify_binary32_decimal_exponents() noexcept
 	return true;
 }
 
-static_assert(verify_binary32_decimal_exponents());
+static_assert(verify_reduced_decimal_exponents());
 
 struct exponent_shift_cache
 {

@@ -128,6 +128,10 @@ template <::std::size_t>
 struct reserve_static_stack_size_constant
 {};
 
+template <::std::integral char_type, typename T>
+using staged_printable_state_t = typename ::std::remove_cvref_t<decltype(print_staged_type(
+	io_reserve_type<char_type, ::std::remove_cvref_t<T>>))>::type;
+
 template <::std::integral char_type, typename stack_policy = ::fast_io::details::default_print_stack_policy>
 inline constexpr ::std::size_t dynamic_reserve_default_static_stack_size() noexcept
 {
@@ -147,6 +151,50 @@ inline constexpr ::std::size_t dynamic_reserve_default_static_stack_size() noexc
 }
 
 } // namespace details
+
+/// @warning    UNSTABLE
+/// @brief      staged_printable
+/// @details    Describes a type whose preparation can be separated from emission. A print run may prepare several
+///             independent values before emitting them in order to expose instruction-level parallelism. Buffer
+///             sizing and non-staged fallback are orthogonal printing capabilities selected by the caller.
+/// @fn         print_staged_type
+/// @brief      Indicates the prepared state type returned by print_staged_prepare.
+/// @fn         print_staged_width
+/// @brief      Returns the nonzero compile-time preferred number of values in one staged run.
+/// @fn         print_staged_eligible
+/// @brief      Reports whether an object may use the staged path.
+/// @fn         print_staged_prepare
+/// @brief      Prepares one object without emitting characters.
+/// @fn         print_staged_define
+/// @brief      Emits one eligible object from its prepared state into a caller-provided contiguous buffer.
+template <typename char_type, typename T>
+concept staged_printable =
+	::std::integral<char_type> && requires(T const &t, char_type *ptr) {
+		typename ::fast_io::details::staged_printable_state_t<char_type, T>;
+		{
+			print_staged_type(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} noexcept;
+		requires ::std::default_initializable<::fast_io::details::staged_printable_state_t<char_type, T>>;
+		requires ::std::assignable_from<::fast_io::details::staged_printable_state_t<char_type, T> &,
+										::fast_io::details::staged_printable_state_t<char_type, T>>;
+		{
+			print_staged_width(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} noexcept -> ::std::same_as<::std::size_t>;
+		typename ::std::integral_constant<::std::size_t, print_staged_width(
+															 io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
+		requires(print_staged_width(io_reserve_type<char_type, ::std::remove_cvref_t<T>>) != 0u);
+		requires requires(::fast_io::details::staged_printable_state_t<char_type, T> const &state) {
+			{
+				print_staged_eligible(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t)
+			} noexcept -> ::std::same_as<bool>;
+			{
+				print_staged_prepare(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t)
+			} noexcept -> ::std::same_as<::fast_io::details::staged_printable_state_t<char_type, T>>;
+			{
+				print_staged_define(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, t, state)
+			} noexcept -> ::std::same_as<char_type *>;
+		};
+	};
 
 /// @brief      dynamic_reserve_with_possible_static_stack_size
 /// @details    That a type is dynamic reserve printable with a constexpr possible

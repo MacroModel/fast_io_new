@@ -16,8 +16,22 @@ struct decimal_result
 	::std::int_least32_t e10;
 };
 
+template <typename flt>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_result<flt> finalize(
+	conversion_result converted) noexcept
+{
+	if (converted.has_last_digit)
+	{
+		return {static_cast<decimal_mantissa_type<flt>>(
+					converted.significand * 10u + converted.last_digit),
+				converted.exponent};
+	}
+	return {static_cast<decimal_mantissa_type<flt>>(converted.significand), converted.exponent + 1};
+}
+
 template <typename decimal_type>
-[[nodiscard]] inline constexpr decimal_type trim_trailing_zeros(decimal_type result) noexcept
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_type trim_trailing_zeros(
+	decimal_type result) noexcept
 {
 	if (result.m10 % 10u == 0u) [[unlikely]]
 	{
@@ -29,7 +43,7 @@ template <typename decimal_type>
 }
 
 template <typename flt, typename mantissa_type>
-[[nodiscard]] inline constexpr decimal_result<flt> to_decimal(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_result<flt> to_decimal(
 	mantissa_type mantissa, ::std::int_least32_t raw_exponent) noexcept
 {
 	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
@@ -64,12 +78,9 @@ template <typename flt, typename mantissa_type>
 	{
 		converted = ::fast_io::details::da::compute_binary64(binary_significand, effective_raw_exponent);
 	}
-	if (converted.has_last_digit)
-	{
-		auto const decimal_significand{converted.significand * 10u + converted.last_digit};
-		return {static_cast<decimal_mantissa_type<flt>>(decimal_significand), converted.exponent};
-	}
-	return {static_cast<decimal_mantissa_type<flt>>(converted.significand), converted.exponent + 1};
+	return ::fast_io::details::da::finalize<flt>(converted);
 }
 
 } // namespace fast_io::details::da
+
+#include "ascii.h"

@@ -5451,6 +5451,242 @@ inline constexpr ::std::size_t print_semantic_precise_total_size(Args &&...args)
 	return total;
 }
 
+/// @brief    Describes the staged-printable members of one semantic argument run.
+/// @details  The recursive specializations count staged arguments and reject groups whose prepared-state types or
+///           preferred widths differ. Ordinary arguments remain in the run without consuming prepared-state slots
+///           when the semantic contiguous-buffer protocol can emit them.
+/// @tparam   char_type the destination character type
+/// @tparam   Args      the decayed semantic argument types
+template <::std::integral char_type, typename... Args>
+struct print_semantic_staged_group;
+
+/// @brief  Terminates staged-group analysis for an empty argument tail.
+/// @tparam char_type the destination character type
+template <::std::integral char_type>
+struct print_semantic_staged_group<char_type>
+{
+	using prepared_type = void;
+	inline static constexpr ::std::size_t count{};
+	inline static constexpr ::std::size_t width{};
+	inline static constexpr bool compatible{true};
+	inline static constexpr bool emittable{true};
+	inline static constexpr bool available{};
+};
+
+/// @brief  Propagates staged-group metadata across one ordinary, non-staged argument.
+/// @tparam char_type the destination character type
+/// @tparam T         the current non-staged argument type
+/// @tparam Args      the remaining argument types
+template <::std::integral char_type, typename T, typename... Args>
+	requires(!::fast_io::staged_printable<char_type, T>)
+struct print_semantic_staged_group<char_type, T, Args...>
+{
+	using tail = ::fast_io::operations::decay::print_semantic_staged_group<char_type, Args...>;
+	using prepared_type = typename tail::prepared_type;
+	inline static constexpr ::std::size_t count{tail::count};
+	inline static constexpr ::std::size_t width{tail::width};
+	inline static constexpr bool compatible{tail::compatible};
+	inline static constexpr bool emittable{
+		tail::emittable &&
+		::fast_io::details::decay::print_semantic_bounded_size_ok<char_type, T>::value};
+	inline static constexpr bool available{compatible && emittable && count != 0u && count >= width};
+};
+
+/// @brief    Adds one staged-printable argument to the compile-time group description.
+/// @details  A group remains compatible only when every staged member has the same prepared-state type and preferred
+///           width. It becomes available after the number of staged members reaches that width.
+/// @tparam   char_type the destination character type
+/// @tparam   T         the current staged-printable argument type
+/// @tparam   Args      the remaining argument types
+template <::std::integral char_type, typename T, typename... Args>
+	requires ::fast_io::staged_printable<char_type, T>
+struct print_semantic_staged_group<char_type, T, Args...>
+{
+	using tail = ::fast_io::operations::decay::print_semantic_staged_group<char_type, Args...>;
+	using prepared_type = ::fast_io::details::staged_printable_state_t<char_type, T>;
+	inline static constexpr ::std::size_t count{tail::count + 1u};
+	inline static constexpr ::std::size_t width{
+		print_staged_width(::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)};
+	inline static constexpr bool compatible{
+		tail::compatible &&
+		(tail::count == 0u ||
+		 (::std::same_as<prepared_type, typename tail::prepared_type> && width == tail::width))};
+	inline static constexpr bool emittable{tail::emittable};
+	inline static constexpr bool available{compatible && emittable && count >= width};
+};
+
+/// @brief    Tests whether one argument permits staged emission for its current value.
+/// @details  Ordinary arguments are neutral members of the all-eligible reduction. Staged arguments delegate the
+///           value-dependent decision to their print_staged_eligible customization.
+/// @tparam   char_type the destination character type
+/// @tparam   T         the argument type
+/// @param    t         the argument to test
+/// @return   bool true when this argument does not prevent staging the run
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_staged_eligible(T const &t) noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::fast_io::staged_printable<char_type, value_type>)
+	{
+		// A staged argument may reject exceptional or otherwise unsupported run-time values.
+		return print_staged_eligible(::fast_io::io_reserve_type<char_type, value_type>, t);
+	}
+	else
+	{
+		// An ordinary argument has no prepared state and therefore cannot invalidate the staged subset.
+		return true;
+	}
+}
+
+/// @brief    Maps one argument-pack position to its compact prepared-state index.
+/// @details  Only staged-printable arguments before position contribute to the resulting index.
+/// @tparam   char_type the destination character type
+/// @tparam   position  the argument-pack position being mapped
+/// @tparam   T         the current argument type
+/// @tparam   Args      the remaining argument types
+template <::std::integral char_type, ::std::size_t position, typename T, typename... Args>
+struct print_semantic_staged_position
+{
+	inline static constexpr ::std::size_t value{
+		static_cast<::std::size_t>(
+			::fast_io::staged_printable<char_type, T>) +
+		::fast_io::operations::decay::print_semantic_staged_position<char_type, position - 1u, Args...>::value};
+};
+
+/// @brief  Terminates prepared-state index calculation at the first argument-pack position.
+/// @tparam char_type the destination character type
+/// @tparam T         the first argument type
+/// @tparam Args      the remaining argument types
+template <::std::integral char_type, typename T, typename... Args>
+struct print_semantic_staged_position<char_type, 0u, T, Args...>
+{
+	inline static constexpr ::std::size_t value{};
+};
+
+/// @brief    Prepares one staged argument into its compact state slot.
+/// @details  Ordinary arguments deliberately perform no work because they are emitted by the regular semantic path.
+/// @tparam   char_type    the destination character type
+/// @tparam   position     the prepared-state slot assigned to this argument
+/// @tparam   prepared_type the common prepared-state type of the group
+/// @tparam   T            the argument type
+/// @param    prepared     the group prepared-state array
+/// @param    t            the argument to prepare
+template <::std::integral char_type, ::std::size_t position, typename prepared_type, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void print_semantic_staged_prepare_one(
+	prepared_type *prepared, T const &t) noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::fast_io::staged_printable<char_type, value_type>)
+	{
+		// Store only staged results so unrelated arguments do not create holes in the prepared-state array.
+		prepared[position] = print_staged_prepare(::fast_io::io_reserve_type<char_type, value_type>, t);
+	}
+}
+
+/// @brief    Prepares every staged-printable member of an argument run before any member is emitted.
+/// @details  Separating the prepare fold from the emit fold exposes independent conversion work to the instruction
+///           scheduler while preserving the original argument order during emission.
+/// @tparam   char_type     the destination character type
+/// @tparam   prepared_type the common prepared-state type of the group
+/// @tparam   positions     the original argument-pack positions
+/// @tparam   Args          the argument types
+/// @param    prepared      the group prepared-state array
+/// @param    <unnamed>     the index sequence selecting every argument
+/// @param    args          the arguments to prepare
+template <::std::integral char_type, typename prepared_type, ::std::size_t... positions, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void print_semantic_staged_prepare(
+	prepared_type *prepared, ::std::index_sequence<positions...>, Args const &...args) noexcept
+{
+	(::fast_io::operations::decay::print_semantic_staged_prepare_one<
+		 char_type,
+		 ::fast_io::operations::decay::print_semantic_staged_position<
+			 char_type, positions, ::std::remove_cvref_t<Args>...>::value>(prepared, args),
+	 ...);
+}
+
+/// @brief    Emits one member of a prepared semantic run.
+/// @details  Staged members consume their prepared state; ordinary members delegate to the existing unchecked
+///           semantic emitter with the caller's capacity policy unchanged.
+/// @tparam   char_type     the destination character type
+/// @tparam   bounded       true when the destination has the semantic upper-bound capacity
+/// @tparam   position      the prepared-state slot assigned to this argument
+/// @tparam   prepared_type the common prepared-state type of the group
+/// @tparam   T             the argument type
+/// @param    iter          the current output cursor
+/// @param    prepared      the group prepared-state array
+/// @param    t             the argument to emit
+/// @return   char_type* one past this argument's output
+template <::std::integral char_type, bool bounded, ::std::size_t position,
+		  typename prepared_type, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_semantic_staged_emit_one(
+	char_type *iter, prepared_type const *prepared, T &&t)
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::fast_io::staged_printable<char_type, value_type>)
+	{
+		// The staged customization completes formatting from the state prepared during the first fold.
+		return print_staged_define(
+			::fast_io::io_reserve_type<char_type, value_type>, iter, t, prepared[position]);
+	}
+	else
+	{
+		// Preserve the established semantic behavior for separators and every other ordinary argument.
+		return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
+			iter, ::std::forward<T>(t));
+	}
+}
+
+/// @brief    Emits a fully prepared argument run in its original order.
+/// @details  The compact prepared-state position is recomputed for each original argument-pack position, allowing
+///           staged and ordinary arguments to remain interleaved without changing observable output order.
+/// @tparam   char_type     the destination character type
+/// @tparam   bounded       true when the destination has the semantic upper-bound capacity
+/// @tparam   prepared_type the common prepared-state type of the group
+/// @tparam   positions     the original argument-pack positions
+/// @tparam   Args          the argument types
+/// @param    iter          the current output cursor
+/// @param    prepared      the group prepared-state array
+/// @param    <unnamed>     the index sequence selecting every argument
+/// @param    args          the arguments to emit
+/// @return   char_type* one past the complete run
+template <::std::integral char_type, bool bounded, typename prepared_type,
+		  ::std::size_t... positions, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_semantic_staged_emit(
+	char_type *iter, prepared_type const *prepared, ::std::index_sequence<positions...>, Args &&...args)
+{
+	((iter = ::fast_io::operations::decay::print_semantic_staged_emit_one<
+		  char_type, bounded,
+		  ::fast_io::operations::decay::print_semantic_staged_position<
+			  char_type, positions, ::std::remove_cvref_t<Args>...>::value>(
+		  iter, prepared, ::std::forward<Args>(args))),
+	 ...);
+	return iter;
+}
+
+/// @brief    Emits an ineligible staged group through the established per-argument semantic path.
+/// @details  Keeping this uncommon path cold and out of line prevents exceptional values from inflating the regular
+///           staged hot path while preserving all existing formatting and fallback rules.
+/// @tparam   char_type the destination character type
+/// @tparam   bounded   true when the destination has the semantic upper-bound capacity
+/// @tparam   Args      the argument types
+/// @param    iter      the current output cursor
+/// @param    args      the arguments to emit
+/// @return   char_type* one past the complete run
+template <::std::integral char_type, bool bounded, typename... Args>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline char_type *print_semantic_staged_fallback(char_type *iter, Args &&...args)
+{
+	((iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
+		  iter, ::std::forward<Args>(args))),
+	 ...);
+	return iter;
+}
+
 /// @brief    Emits a semantic print run into an already-sized contiguous buffer.
 /// @details  The bounded policy distinguishes buffers allocated from reserve upper bounds from buffers allocated at
 ///           exact emitted size, preventing precise-capable leaves from forcing unnecessary second measurements.
@@ -5462,12 +5698,43 @@ inline constexpr ::std::size_t print_semantic_precise_total_size(Args &&...args)
 /// @param    args      the arguments to emit in order
 /// @return   char_type* a pointer one past the emitted run
 template <bool line, ::std::integral char_type, bool bounded = false, typename... Args>
-inline constexpr char_type *print_semantic_emit_unchecked_run(char_type *iter, Args &&...args)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_semantic_emit_unchecked_run(
+	char_type *iter, Args &&...args)
 {
-	// Apply one consistent capacity policy to the complete run before appending the optional line terminator.
-	((iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
-		  iter, ::std::forward<Args>(args))),
-	 ...);
+	using staged_group =
+		::fast_io::operations::decay::print_semantic_staged_group<char_type, ::std::remove_cvref_t<Args>...>;
+	if constexpr (staged_group::available && bounded)
+	{
+		// A compatible group in an upper-bound-sized buffer can safely use the two-phase staged protocol.
+		using prepared_type = typename staged_group::prepared_type;
+		bool eligible{true};
+		// Evaluate every lane without short-circuit branches so the compiler can combine or vectorize the checks.
+		((eligible = eligible &
+					 ::fast_io::operations::decay::print_semantic_staged_eligible<char_type>(args)),
+		 ...);
+		if (eligible) [[likely]]
+		{
+			// Prepare every independent staged value first, then serialize the original argument run into the buffer.
+			prepared_type prepared[staged_group::count];
+			(::fast_io::operations::decay::print_semantic_staged_prepare<char_type>(
+				prepared, ::std::make_index_sequence<sizeof...(Args)>{}, args...));
+			iter = ::fast_io::operations::decay::print_semantic_staged_emit<char_type, bounded>(
+				iter, prepared, ::std::make_index_sequence<sizeof...(Args)>{}, ::std::forward<Args>(args)...);
+		}
+		else
+		{
+			// Any ineligible value sends the whole run to the original formatter so no partial output is observable.
+			iter = ::fast_io::operations::decay::print_semantic_staged_fallback<char_type, bounded>(
+				iter, ::std::forward<Args>(args)...);
+		}
+	}
+	else
+	{
+		// Small, incompatible, or exact-sized runs retain the established per-argument semantic emission path.
+		((iter = ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<char_type, bounded>(
+			  iter, ::std::forward<Args>(args))),
+		 ...);
+	}
 	if constexpr (line)
 	{
 		// The line variant appends a newline after the last emitted argument.
@@ -6707,9 +6974,12 @@ inline constexpr decltype(auto) print_freestanding_decay(outputstmtype optstm, A
 		return ::fast_io::operations::decay::print_freestanding_decay<line>(
 			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm), args...);
 	}
-	else if constexpr ((::fast_io::details::decay::print_semantic_node<Args> || ...))
+	else if constexpr (
+		(::fast_io::details::decay::print_semantic_node<Args> || ...) ||
+		::fast_io::operations::decay::print_semantic_staged_group<
+			typename outputstmtype::output_char_type, ::std::remove_cvref_t<Args>...>::available)
 	{
-		// Semantic nodes require the semantic-aware emitter before falling back to ordinary leaf output.
+		// Semantic nodes and available staged groups share the contiguous semantic emitter and its capacity policy.
 		using char_type = typename outputstmtype::output_char_type;
 		return ::fast_io::operations::decay::print_semantic_emit<line, true, char_type>(optstm, args...);
 	}
