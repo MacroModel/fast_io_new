@@ -1,6 +1,6 @@
 # Integer `fast_io::to_chars` correctness and performance on Apple M4
 
-This report was generated on 2026-07-12. Native timings apply only to this Apple M4 system; cross-target compilation and static scheduling analysis cannot replace native measurements on other processors.
+This report was generated on 2026-07-12 and updated with the Apple/traditional AArch64 split on 2026-07-13. Native timings apply only to this Apple M4 system; cross-target compilation and static scheduling analysis cannot replace native measurements on other processors.
 
 ## Environment
 
@@ -20,6 +20,8 @@ It checks complete 8-bit and 16-bit domains, radix-power boundaries, minimum and
 - 20,939,175 values passed.
 - 226,012 capacity and error-contract cases passed.
 - The three final logs have the same SHA-256: `5bd13e07773d965460c32b7ee465058d3cf03f09a4447ac7ce8e14b059493b51`.
+
+The platform-split validation adds exhaustive coverage of all 1,835,008 seven-digit octal `uint64_t` values for each of `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t`, plus 200,000 random values per character type and radix-power boundaries. It also compares 1,750,000 public base-2-through-base-36 conversions with `std::to_chars`, including insufficient-capacity behavior and the no-write-on-error contract. Native M4 Release, native M4 ASan+UBSan, and Rosetta x86-64 Release all pass.
 
 The performance harness also performs a byte-for-byte preflight against `std::to_chars` for every timed value and against fmt wherever fmt exposes the comparable core path.
 
@@ -71,6 +73,25 @@ The resolved-path MCA regions below include their range checks, address generati
 | Hexadecimal, 2 digits | Apple M4/M1 | 20 / 11 | 458 / 261 | 20 / 12 | 4.5 / 2.5 |
 | Hexadecimal, 2 digits | Cortex-A76/A57 | 20 / 11 | 706 / 409 | 20 / 12 | 7.0 / 4.0 |
 
+### Apple M-series and traditional AArch64 separation
+
+The seven-digit octal shortcut is now the only power-of-two kernel isolated by platform. It is enabled by `__APPLE__` together with the AArch64 target test. The one-through-six-digit octal kernels, all binary kernels, and all hexadecimal kernels remain shared AArch64 code because their resolved paths improve or preserve throughput on both Apple and Cortex/Neoverse models.
+
+The separation was tested against the established implementation and against the common fallback independently. On Apple M4, seven alternating baseline/candidate process pairs used 4,096 deterministic values at every octal length and eleven calibrated trials per process. The retained shortcut measured `1.292 ns/value` at seven digits; forcing that range through the common fallback measured `2.559 ns/value`, or `1.981x` the shortcut time. The final Apple source produces byte-identical resolved assembly for Apple M1, M2, M3, and M4; the M4 assembly SHA-256 is `b1e14697c78664db274f0cc72a805ba65b888adae1ed698fc01918c3942d3f33`.
+
+For non-Apple AArch64, the shortcut is absent. The resolved seven-digit path is machine-word identical to the parent common implementation on Cortex-A57, Cortex-A76, Neoverse N1, and Neoverse V1. LLVM-MCA favors that common path on every traditional model tested:
+
+| Model | Apple shortcut throughput | Common fallback throughput |
+|:---|---:|---:|
+| Cortex-A57 | 7.0 | 5.7 |
+| Cortex-A76 | 7.0 | 5.7 |
+| Neoverse N1 | 8.7 | 5.7 |
+| Neoverse V1 | 3.3 | 2.3 |
+
+Lower throughput is better. The Apple M1/M4 model also estimates `5.0` for the shortcut and `3.3` for the isolated fallback, but native M4 measures the opposite result. This is a useful model limitation: the resolved block omits the public dispatch context and cannot reproduce all front-end, table-locality, and layout effects. Native M4 measurement therefore selects the Apple path, while the traditional AArch64 decision uses the consistent A57/A76/Neoverse result. The earlier old/new octal row compares against the pre-optimization implementation, not against the newer common fallback used by this split.
+
+An Apple-only 3+4 digit grouping was also tested. It reduced the resolved M4 kernel from 21 instructions and `5.0` throughput to 16 instructions and `3.5` throughput, but nine native process pairs showed no seven-digit improvement (`0.999x`) and a repeatable four-digit layout regression (`1.163x`). The candidate was rejected and the established 1+3+3 kernel was restored byte for byte.
+
 Base 4 was investigated explicitly. A one-digit guard won that point in all 21 independent same-process runs, but repeatably cost 2% to 4% at established longer lengths. A 1-to-8-digit table path caused larger fallback regressions. Both candidates were rejected and the base-4 implementation was restored byte for byte.
 
 Cross-compilation passes for Apple M1 through M4, Cortex-A57/A76, and Neoverse N1/V1. x86-64 objects are byte-identical to the saved baseline for x86-64, Core 2, Nehalem, Sandy Bridge, Haswell, Skylake, Skylake-AVX512, Cascade Lake, Ice Lake client, Tiger Lake, Alder Lake, Sapphire Rapids, and Zen 1 through 4.
@@ -83,6 +104,9 @@ Cross-compilation passes for Apple M1 through M4, Cortex-A57/A76, and Neoverse N
 - `/tmp/fast_io_to_chars_paired_medians.csv`: `097b6355be02d45fd6779d25f4a3287c2431d26e6cff2fbb25740e3916fecb90`.
 - `/tmp/fast_io_to_chars_paired_base_summary.csv`: `292a3bd5790c191a2c51a76324ddd28942ce9e35e4b4cd098be955f61cc36ca0`.
 - `/tmp/fast_io_to_chars_correctness.cpp`: `9b0c3daf919d94e40e8e26a1a3ba5519411760dcf793ed554ec07f11f5e39c64`.
+- `/tmp/fast_io_m4_hex_focused_bench.cpp`: `240603e609a4f579382d220dad79bef91bfc243a02732f460c0ed1c804232c04`.
+- `/tmp/fast_io_power2_resolved_mca.csv`: `332a2f43f97b528266ba24113d4065b704946c44e209c338957aa11e8d8bcb3e`.
+- `/tmp/fast_io_apple_aarch64_correctness.cpp`: `3bc5cb4d217114b24db7df15d511a82f6accde0873121491e0f0b3c89e1c7f1c`.
 
 The benchmark was compiled with:
 
@@ -384,4 +408,3 @@ Each entry is `digit-length:fast_io-ns/std-ns=ratio`; no valid `uint64_t` length
 | 36 | d1:1.412/2.050=0.689x d2:2.086/2.901=0.719x d3:3.261/3.332=0.978x d4:3.520/4.579=0.769x d5:5.141/6.320=0.813x d6:5.609/7.249=0.774x d7:6.287/9.693=0.649x d8:6.400/11.574=0.553x d9:6.256/14.358=0.436x d10:6.295/15.992=0.394x d11:6.285/18.439=0.341x d12:6.771/20.219=0.335x d13:6.764/29.498=0.229x |
 
 Correctness preflight: `ok` for every timed value before measurement; no `std::errc` mismatch, length mismatch, or byte mismatch was observed.
-

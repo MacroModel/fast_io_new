@@ -1997,6 +1997,7 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 			non_overlapped_copy_n(table + low_index, 3u, first + 3u);
 			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
 		}
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
 		if constexpr (::std::numeric_limits<T>::digits > 18u)
 		{
 			if (value < static_cast<T>(2097152u))
@@ -2013,6 +2014,7 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 7u);
 			}
 		}
+#endif
 	}
 	else if constexpr (base == 16u)
 	{
