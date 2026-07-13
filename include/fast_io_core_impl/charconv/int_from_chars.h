@@ -33,6 +33,103 @@ from_chars_integral_map_result(::fast_io::parse_result<char const *> result,
 	}
 }
 
+#if (defined(__GNUC__) || defined(__clang__)) && \
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+template <::std::size_t base>
+	requires(2u <= base && base <= 10u)
+[[gnu::always_inline]] inline bool
+from_chars_x86_parse_four_digits(char const *first,
+								 ::std::uint_least64_t &value) noexcept
+{
+	::std::uint_least32_t chunk;
+	__builtin_memcpy(__builtin_addressof(chunk), first, sizeof(chunk));
+	chunk -= 0x30303030u;
+	constexpr auto limit_bias{static_cast<::std::uint_least32_t>(16u - base) *
+							  0x01010101u};
+	if ((chunk & 0xf0f0f0f0u) != 0u ||
+		((chunk + limit_bias) & 0x10101010u) != 0u) [[unlikely]]
+	{
+		return false;
+	}
+	auto const pairs{(chunk * base + (chunk >> 8u)) & 0x00ff00ffu};
+	value = (pairs * (base * base) + (pairs >> 16u)) & 0xffffu;
+	return true;
+}
+#endif
+
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__SSE4_1__) && \
+	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+template <::std::size_t base>
+	requires(5u <= base && base <= 36u)
+[[gnu::always_inline]] inline bool
+from_chars_x86_sse_parse_eight(char const *first,
+							   ::std::uint_least64_t &value) noexcept
+{
+	using namespace ::fast_io::intrinsics;
+	x86_64_v16qu chunk{};
+	__builtin_memcpy(__builtin_addressof(chunk), first, sizeof(::std::uint_least64_t));
+	x86_64_v16qu const lower{
+		chunk | x86_64_v16qu{0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+								 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20}};
+	x86_64_v16qs const schunk{(x86_64_v16qs)chunk};
+	constexpr char digit_upper{static_cast<char>(base <= 10u ? '0' + base : ':')};
+	x86_64_v16qs const digit_mask{
+		(schunk > x86_64_v16qs{'/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/', '/'}) &
+		(x86_64_v16qs{digit_upper, digit_upper, digit_upper, digit_upper,
+						 digit_upper, digit_upper, digit_upper, digit_upper,
+						 digit_upper, digit_upper, digit_upper, digit_upper,
+						 digit_upper, digit_upper, digit_upper, digit_upper} > schunk)};
+	x86_64_v16qs valid_vector{digit_mask};
+	x86_64_v16qu values{
+		chunk - x86_64_v16qu{'0', '0', '0', '0', '0', '0', '0', '0',
+								  '0', '0', '0', '0', '0', '0', '0', '0'}};
+	if constexpr (10u < base)
+	{
+		x86_64_v16qs const slower{(x86_64_v16qs)lower};
+		constexpr char alpha_last{static_cast<char>('a' + (base - 10u))};
+		x86_64_v16qs const alpha_mask{
+			(slower > x86_64_v16qs{'`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`', '`'}) &
+			(x86_64_v16qs{alpha_last, alpha_last, alpha_last, alpha_last,
+							 alpha_last, alpha_last, alpha_last, alpha_last,
+							 alpha_last, alpha_last, alpha_last, alpha_last,
+							 alpha_last, alpha_last, alpha_last, alpha_last} > slower)};
+		valid_vector |= alpha_mask;
+		x86_64_v16qu const alpha_values{
+			lower - x86_64_v16qu{'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10,
+								  'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10,
+								  'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10,
+								  'a' - 10, 'a' - 10, 'a' - 10, 'a' - 10}};
+		values = (values & (x86_64_v16qu)digit_mask) |
+				 (alpha_values & ~(x86_64_v16qu)digit_mask);
+	}
+	auto const valid_mask{static_cast<::std::uint_least16_t>(
+		__builtin_ia32_pmovmskb128((x86_64_v16qi)valid_vector))};
+	if (static_cast<::std::uint_least8_t>(valid_mask) != 0xffu) [[unlikely]]
+	{
+		return false;
+	}
+	values = (x86_64_v16qu)__builtin_ia32_pmaddubsw128(
+		(x86_64_v16qi)values,
+		x86_64_v16qi{base, 1, base, 1, base, 1, base, 1,
+						 base, 1, base, 1, base, 1, base, 1});
+	constexpr auto base_squared{static_cast<::std::uint_least16_t>(base * base)};
+	values = (x86_64_v16qu)__builtin_ia32_pmaddwd128(
+		(x86_64_v8hi)values,
+		x86_64_v8hi{base_squared, 1, base_squared, 1,
+						 base_squared, 1, base_squared, 1});
+	::std::uint_least64_t quads;
+	__builtin_memcpy(__builtin_addressof(quads), __builtin_addressof(values),
+					 sizeof(quads));
+	constexpr auto base_fourth{static_cast<::std::uint_least64_t>(base_squared) *
+								  static_cast<::std::uint_least64_t>(base_squared)};
+	value = static_cast<::std::uint_least32_t>(quads) * base_fourth +
+			(quads >> 32u);
+	return true;
+}
+#endif
+
 template <::std::size_t base, ::std::integral T>
 	requires(2u <= base && base <= 36u &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)
@@ -105,6 +202,113 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			}
 		}
 	}
+#if defined(__GNUC__) || defined(__clang__)
+	if constexpr (base <= 10u && ::std::unsigned_integral<T> &&
+				  sizeof(T) == sizeof(::std::uint_least64_t))
+	{
+		auto const swar_remaining{static_cast<::std::size_t>(last - first)};
+		if (!__builtin_is_constant_evaluated() && 4u <= swar_remaining &&
+			swar_remaining <= 7u) [[unlikely]]
+		{
+			::std::uint_least64_t accumulator;
+			if (::fast_io::details::from_chars_x86_parse_four_digits<base>(
+					first, accumulator)) [[likely]]
+			{
+				auto iter{first + 4u};
+				for (; iter != last; ++iter)
+				{
+					auto digit{static_cast<unsigned char>(*iter)};
+					digit -= static_cast<unsigned char>('0');
+					if (base <= digit) [[unlikely]]
+					{
+						break;
+					}
+					accumulator = accumulator * base + digit;
+				}
+				value = static_cast<T>(accumulator);
+				return {iter, {}};
+			}
+		}
+	}
+	if constexpr (base == 8u && ::std::unsigned_integral<T> &&
+				  sizeof(T) == sizeof(::std::uint_least64_t))
+	{
+		constexpr auto max_digits{
+			::fast_io::details::max_int_size_result<::std::uint_least64_t, base>};
+		auto const swar_eight_remaining{static_cast<::std::size_t>(last - first)};
+		if (!__builtin_is_constant_evaluated() && 8u <= swar_eight_remaining &&
+			(swar_eight_remaining != 8u ||
+			 ::fast_io::details::char_is_digit<static_cast<char8_t>(base), char>(
+				 static_cast<unsigned char>(last[-1]))) &&
+			(swar_eight_remaining < max_digits ||
+			 (swar_eight_remaining == max_digits &&
+			  !::fast_io::details::char_is_digit<static_cast<char8_t>(base), char>(
+				  static_cast<unsigned char>(last[-1]))))) [[likely]]
+		{
+			::std::uint_least64_t high;
+			::std::uint_least64_t low;
+			if (::fast_io::details::from_chars_x86_parse_four_digits<base>(first, high) &&
+				::fast_io::details::from_chars_x86_parse_four_digits<base>(first + 4u, low)) [[likely]]
+			{
+				constexpr auto base_squared{static_cast<::std::uint_least64_t>(base * base)};
+				constexpr auto base_fourth{base_squared * base_squared};
+				::std::uint_least64_t accumulator{high * base_fourth + low};
+				auto iter{first + 8u};
+				for (; iter != last; ++iter)
+				{
+					auto digit{static_cast<unsigned char>(*iter)};
+					digit -= static_cast<unsigned char>('0');
+					if (base <= digit) [[unlikely]]
+					{
+						break;
+					}
+					accumulator = accumulator * base + digit;
+				}
+				value = static_cast<T>(accumulator);
+				return {iter, {}};
+			}
+		}
+	}
+#if defined(__SSE4_1__)
+	if constexpr ((base == 5u || base == 6u || base == 7u || base == 9u ||
+				  base == 14u || 16u <= base) &&
+				  ::std::unsigned_integral<T> &&
+				  sizeof(T) == sizeof(::std::uint_least64_t))
+	{
+		constexpr auto max_digits{
+			::fast_io::details::max_int_size_result<::std::uint_least64_t, base>};
+		auto const remaining{static_cast<::std::size_t>(last - first)};
+		if (!__builtin_is_constant_evaluated() && 8u <= remaining &&
+			(remaining != 8u ||
+			 ::fast_io::details::char_is_digit<static_cast<char8_t>(base), char>(
+				 static_cast<unsigned char>(last[-1]))) &&
+			(remaining < max_digits ||
+			(remaining == max_digits &&
+			 !::fast_io::details::char_is_digit<static_cast<char8_t>(base), char>(
+				 static_cast<unsigned char>(last[-1]))))) [[likely]]
+		{
+			::std::uint_least64_t accumulator;
+			if (::fast_io::details::from_chars_x86_sse_parse_eight<base>(
+					first, accumulator)) [[likely]]
+			{
+				auto iter{first + 8u};
+				for (; iter != last; ++iter)
+				{
+					auto const digit{::fast_io::details::sto_ascii_digit_table_lookup<char>(
+						static_cast<unsigned char>(*iter))};
+					if (base <= digit) [[unlikely]]
+					{
+						break;
+					}
+					accumulator = accumulator * base + digit;
+				}
+				value = static_cast<T>(accumulator);
+				return {iter, {}};
+			}
+		}
+	}
+#endif
+#endif
 #endif
 	if constexpr (::std::unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  base == 8u)
