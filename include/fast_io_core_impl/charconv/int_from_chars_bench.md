@@ -152,6 +152,67 @@ that long signed inputs in these bases improve: exact public-API time decreases
 by 6.56% and terminated public-API time decreases by 6.40% relative to the
 pre-change M4 baseline.
 
+### Apple M-series versus traditional AArch64 follow-up
+
+The input path was audited again with a stricter platform-split rule: an
+optimization may be guarded by `__APPLE__` and AArch64 only when native M4
+improves and the traditional AArch64 path does not. If both processor families
+benefit, the optimization remains shared AArch64 code. The final integer input
+implementation contains no Apple-only branch. The 16-digit decimal NEON
+reduction, nine-digit inline limit, 20-digit scalar SWAR path, and first-digit
+accumulator therefore remain available to both Apple and traditional AArch64.
+
+The NEON decision uses both native M4 timing and llvm-mca. On M4, the existing
+16-digit NEON kernel measured 1.31--1.43 ns, while the scalar SWAR alternative
+measured 1.73--1.94 ns. Static block-throughput estimates also favor NEON on
+every tested model; lower is better:
+
+| Model | NEON | Scalar SWAR |
+|:---|---:|---:|
+| Apple M1--M4 | 5.5 | 12.0 |
+| Cortex-A53 | 18.0 | 21.0 |
+| Cortex-A76 | 11.3 | 14.0 |
+| Cortex-X1 | 4.3 | 7.0 |
+| Cortex-X4 | 3.7 | 4.5 |
+| Neoverse N1 | 12.7 | 21.0 |
+| Neoverse N2 | 8.5 | 8.8 |
+| Neoverse V2 | 6.2 | 7.2 |
+
+The generic nine-digit inline and first-digit-accumulator paths were checked by
+temporarily removing them from non-Apple AArch64. The Cortex-X4 assembly then
+reintroduced an out-of-line runtime scanner call for the base-2 nine-digit
+case, additional stack traffic, and an extra table load and loop iteration for
+non-overflowing bases above 16. Those changes are regressions on traditional
+AArch64, so the optimizations are intentionally not Apple-isolated.
+
+Four Apple-only candidates were measured and rejected. Each ratio below is
+baseline time divided by candidate time; values below one are regressions.
+
+| Candidate and measured range | Public API | Internal core | Decision |
+|:---|---:|---:|:---|
+| Arithmetic ASCII mapping, bases 17--36, all lengths | 0.892x | 0.767x | reject |
+| Exact one-digit early return, bases 17--36 only | 1.368x | 1.139x | local win |
+| Same early return, bases 17--36, complete matrix | 0.912x | 1.020x | reject |
+| Same early return, bases 5--9, complete matrix | 0.940x | 0.992x | reject |
+| SWAR invalid-block branch-layout change, bases 2--16 | 0.963x | 0.994x | reject |
+| Paired short-decimal unroll | 0.968x | 0.999x | reject |
+
+Moving the 16-digit NEON branch earlier improved long decimal inputs but
+repeatably regressed short internal-core inputs by 2.0--2.2%, so it was also
+rejected. A replacement NEON unzip/widen reduction was 0.3--0.8% slower than
+the retained kernel. No candidate was retained merely because one length or
+the public wrapper improved.
+
+After reverting the rejected candidates, fixed public and core wrappers for
+bases 2, 7, 8, 10, 16, 17, and 36 were compiled independently for Apple M4,
+Cortex-A53, Cortex-A76, Cortex-X1, Cortex-X4, Neoverse N1, Neoverse N2, and
+Neoverse V2. For every target the complete generated assembly is byte-for-byte
+identical to the pre-experiment baseline. The final 1,330-point native M4
+unsigned matrix (all valid lengths, bases 2--36, exact and terminated) also
+performed a correctness preflight against `std::from_chars` before timing.
+Across that follow-up matrix, fast_io was 2.463x faster than libc++ and 1.445x
+faster than `fast_float::from_chars` by geometric mean.
+
 ## llvm-mca scheduling model
 
 The full parser contains mutually exclusive length and error paths. Feeding the
@@ -305,6 +366,14 @@ Primary artifact SHA-256 values:
 - Negative signed exact CSV: `4e247062d9da3c6009acd6d1c16de2eeb857d78c6fe6443e6ba38945a638a915`.
 - Negative signed terminated CSV: `146f70ab27c02d914432cac2c0dee3c55f316387c3f2683c16ec68afac16bb14`.
 - llvm-mca region source: `84960af382516afe7edccf8808504279a087adb95073009d3b44c14e042baab1`.
+- Apple/traditional AArch64 follow-up CSV:
+  `395bb43a022af4643eeb02a6fbf010d6a2e5aeb4f568d79a25757d15556be389`.
+- Decimal-16 follow-up llvm-mca source and summary:
+  `eaa1e8f1a6f8df3cb27b549e1da48fc3a9850e118d5b96b4742050a393bc67cb`
+  and `d89607560b8000bc4371b5295ee75d8e81507bf42472c0b1e5849cc6760bf13a`.
+- Final Apple M4 and Cortex-X4 follow-up assembly:
+  `43a98071322ec4e35e92e90641923ebb5697e7d6a698e3c3a1aa64cb5aa01a33`
+  and `159d3799151f956379fcdba76598e1c8d08676de5340e092be704bda1a5a8c4a`.
 - Native x86 exact CSV: `cb8e271f6fe89ad06e904ef76f803ece956425e9f6a81ea2074a2af9df021299`.
 - Native x86 terminated CSV: `57de8a75d736050c68d92fdd4350774ea5127c48f96b43aa32cc31a4235ecf20`.
 - Native x86 fuzz logs, targets 0–8 respectively:
