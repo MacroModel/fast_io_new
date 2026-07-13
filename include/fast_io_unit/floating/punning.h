@@ -192,7 +192,7 @@ struct iec559_traits<_Float128>
 };
 #endif
 
-#if defined(__clang__) && defined(__aarch64__) && !defined(__STDCPP_BFLOAT16_T__)
+#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__)
 template <>
 struct iec559_traits<__bf16>
 {

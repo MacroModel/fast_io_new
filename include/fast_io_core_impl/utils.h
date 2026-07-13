@@ -173,7 +173,7 @@ concept my_floating_point = ::std::floating_point<T>
 #ifdef __SIZEOF_FLOAT128__
 							|| ::std::same_as<::std::remove_cv_t<T>, __float128>
 #endif
-#if defined(__clang__) && defined(__aarch64__) && !defined(__STDCPP_BFLOAT16_T__)
+#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__)
 							|| ::std::same_as<::std::remove_cv_t<T>, __bf16>
 #endif
 #ifdef __STDCPP_BFLOAT16_T__
