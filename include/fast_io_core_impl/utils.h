@@ -4,6 +4,20 @@
 #pragma GCC system_header
 #endif
 
+// Clang recognizes the __bf16 spelling on every target, but referencing it is a hard error when the selected ISA
+// lacks a BFloat16 type. Clang does not provide a target-aware __has_feature query for this extension, so keep every
+// reference behind the target and feature combinations verified by the compiler driver. ARM64EC uses its own target
+// macro instead of __aarch64__. LoongArch support starts in upstream Clang 21; x86 and 32-bit Arm additionally require
+// the features that make the type available.
+#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__) &&                                    \
+	(defined(__aarch64__) || defined(__arm64ec__) || defined(__riscv) || defined(__AMDGCN__) || \
+	 defined(__NVPTX__) ||                                                                      \
+	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__)) ||                       \
+	 (defined(__arm__) && defined(__ARM_FP)) ||                                                 \
+	 (defined(__loongarch__) && __clang_major__ >= 21))
+#define FAST_IO_CLANG_HAS_BFLOAT16_TYPE 1
+#endif
+
 namespace fast_io
 {
 
@@ -173,7 +187,7 @@ concept my_floating_point = ::std::floating_point<T>
 #ifdef __SIZEOF_FLOAT128__
 							|| ::std::same_as<::std::remove_cv_t<T>, __float128>
 #endif
-#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__)
+#if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE)
 							|| ::std::same_as<::std::remove_cv_t<T>, __bf16>
 #endif
 #ifdef __STDCPP_BFLOAT16_T__

@@ -7555,8 +7555,8 @@ inline constexpr void compiled_scatter_plan_patch_dynamic(
 } // namespace details::decay
 
 /// @brief Compiles a fixed scatter layout into static literal descriptors and runtime patch positions.
-/// @details Sparse plans on measured x86-64 targets and Clang/AArch64 copy a constant descriptor blueprint and patch
-///          only dynamic slots. Other targets build descriptors directly when constant stores remain faster.
+/// @details Sparse plans on every target copy a constant descriptor blueprint and patch only dynamic slots. Smaller
+///          or denser plans build descriptors directly so they do not pay for an unnecessary complete-array copy.
 /// @tparam char_type       the output character type
 /// @tparam component_types the ordered literal and dynamic component types
 template <::std::integral char_type, typename... component_types>
@@ -7568,15 +7568,10 @@ struct basic_compiled_scatter_plan
 	static inline constexpr ::std::size_t scatter_count{sizeof...(component_types)};
 	static inline constexpr ::std::size_t dynamic_count{
 		(static_cast<::std::size_t>(!component_types::is_static) + ...)};
-	// Sparse blueprint copies win on measured x86-64 GCC/Clang targets and Clang/AArch64. GCC/AArch64 keeps its
-	// faster direct constant-store path until a profitable copy strategy is demonstrated for that target.
-#if defined(__x86_64__) || defined(__amd64__) || \
-	(defined(__clang__) && (defined(__aarch64__) || defined(__arm64__)))
+	// Apply the same compile-time sparsity policy on every compiler and architecture. Backend-specific regressions are
+	// compiler issues and must not force otherwise profitable targets back to a complete runtime construction pass.
 	static inline constexpr bool use_blueprint_copy{
 		scatter_count >= 64u && dynamic_count <= scatter_count / 16u};
-#else
-	static inline constexpr bool use_blueprint_copy{false};
-#endif
 
 	template <typename scatter_type>
 	static inline constexpr ::fast_io::basic_io_scatter_t<scatter_type> blueprint[scatter_count]
