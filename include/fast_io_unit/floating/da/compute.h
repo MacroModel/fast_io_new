@@ -67,6 +67,44 @@ struct conversion_result
 	}
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 }
+/// @brief Converts one regular binary32 value while exposing a loop-invariant AArch64 power-table base.
+/// @details This variant is reserved for staged preparation; scalar formatting keeps its more compact address form.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary32_staged(
+	::std::uint_least32_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept
+{
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
+	constexpr ::std::uint_least8_t extra_shift{34u};
+	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 150};
+	auto const decimal_exponent{compute_decimal_exponent_reduced(binary_exponent)};
+	auto const shift{static_cast<::std::uint_least8_t>(
+		cached_data.exponent_shifts.data[static_cast<::std::size_t>(raw_exponent + 925u)] +
+		(extra_shift - exponent_shift_cache::extra_shift))};
+	auto base{cached_data.powers.data + power10_cache::size + power10_cache::minimum_exponent};
+	if (!::std::is_constant_evaluated())
+	{
+		__asm__("" : "+r"(base));
+	}
+	auto const power_high{base[static_cast<::std::ptrdiff_t>(decimal_exponent)]};
+	auto const product{::fast_io::intrinsics::umulh(
+		power_high + 1u, static_cast<::std::uint_least64_t>(binary_significand) << shift)};
+	constexpr ::std::uint_least64_t fractional_mask{(static_cast<::std::uint_least64_t>(1) << extra_shift) - 1u};
+	auto const fractional{product & fractional_mask};
+	auto const half_ulp{static_cast<::std::uint_least64_t>(
+		(power_high >> (65u - shift)) + (1u - (binary_significand & 1u)))};
+	auto const round_up{static_cast<bool>((fractional + half_ulp) >> extra_shift)};
+	auto const round_down{half_ulp > fractional};
+	auto const integral{static_cast<::std::uint_least64_t>((product >> extra_shift) + round_up)};
+	auto digit{static_cast<::std::uint_least32_t>(
+		(fractional * 10u + (static_cast<::std::uint_least64_t>(1) << (extra_shift - 1u))) >> extra_shift)};
+	if (fractional == (static_cast<::std::uint_least64_t>(1) << (extra_shift - 2u)))
+	{
+		digit = 2u;
+	}
+	return {integral, decimal_exponent, digit, !(round_up || round_down)};
+#else
+	return ::fast_io::details::da::compute_binary32(binary_significand, raw_exponent);
+#endif
+}
 
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary64(
 	::std::uint_least64_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept

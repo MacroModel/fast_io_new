@@ -128,7 +128,7 @@ print_staged_prepare(
 	::fast_io::details::da::conversion_result converted;
 	if constexpr (sizeof(floating_type) <= sizeof(float))
 	{
-		converted = ::fast_io::details::da::compute_binary32(
+		converted = ::fast_io::details::da::compute_binary32_staged(
 			static_cast<::std::uint_least32_t>(significand),
 			static_cast<::std::uint_least32_t>(exponent));
 	}
@@ -187,7 +187,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 				iter += static_cast<::std::size_t>(negative);
 			}
 			auto const result{
-				::fast_io::details::da::print_ascii_shortest<floating_type, flags>(iter, converted)};
+				::fast_io::details::da::print_ascii_shortest<floating_type, flags, true>(iter, converted)};
 			if (result != nullptr)
 			{
 				return result;

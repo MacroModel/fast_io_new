@@ -423,9 +423,31 @@ struct ascii_fixed_layout_cache
 #endif
 inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
+/// @brief Compact Clang x86 fixed/scientific decisions used before a full SIMD layout is needed.
+struct ascii_decimal_fixed_mask_cache
+{
+	::std::uint_least32_t data[static_cast<::std::size_t>(
+		ascii_fixed_layout_cache::maximum - ascii_fixed_layout_cache::minimum + 1)]{};
+
+	consteval ascii_decimal_fixed_mask_cache() noexcept
+	{
+		for (::std::size_t index{}; index != sizeof(data) / sizeof(*data); ++index)
+		{
+			data[index] = ascii_fixed_layouts.data[index].decimal_fixed_mask;
+		}
+	}
+};
+
+#if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
+[[__gnu__::__visibility__("hidden")]]
+#endif
+inline constexpr ascii_decimal_fixed_mask_cache ascii_decimal_fixed_masks{};
+#endif
+
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__)
-/// @brief Compile-time generated GCC x86 shuffle layouts for complete binary32 scientific output.
+	(defined(__GNUC__) || defined(__clang__))
+/// @brief Compile-time generated x86 shuffle layouts for complete binary32 scientific output.
 struct ascii_binary32_scientific_cache
 {
 	struct alignas(16) entry
@@ -667,7 +689,7 @@ template <typename flt, bool comma, bool json_float>
 }
 
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__)
+	(defined(__GNUC__) || defined(__clang__))
 template <bool comma, bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific_x86_binary32(
 	char *destination, ascii_x86_u8x16 unshuffled, ::std::uint_least32_t digit_span,
@@ -717,7 +739,7 @@ template <typename flt, bool comma, bool uppercase_e>
 	return ::fast_io::details::da::print_ascii_exponent<uppercase_e>(buffer, exponent);
 }
 
-template <typename flt, ::fast_io::manipulators::scalar_flags flags>
+template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest(
 	char *destination, conversion_result converted) noexcept
 {
@@ -747,12 +769,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(converted.significand)};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
-#if defined(__GNUC__) && !defined(__clang__)
 	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt>(converted.significand)};
 	auto const digits{digit_data.digits};
-#else
-	auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(converted.significand)};
-#endif
 #else
 	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(converted.significand)};
 #endif
@@ -778,9 +796,16 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 		if (ascii_fixed_layout_cache::minimum <= exponent &&
 			exponent <= ascii_fixed_layout_cache::maximum)
 		{
-			auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(exponent - ascii_fixed_layout_cache::minimum)]};
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
+			auto const fixed_mask{ascii_decimal_fixed_masks.data[static_cast<::std::size_t>(
+				exponent - ascii_fixed_layout_cache::minimum)]};
+#else
+			auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(
+				exponent - ascii_fixed_layout_cache::minimum)]};
+			auto const fixed_mask{layout.decimal_fixed_mask};
+#endif
 			use_fixed = static_cast<bool>(
-				(layout.decimal_fixed_mask >> (digit_count - 1u)) & 1u);
+				(fixed_mask >> (digit_count - 1u)) & 1u);
 		}
 	}
 	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
@@ -819,12 +844,19 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 		return nullptr;
 	}
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__)
+	(defined(__GNUC__) || defined(__clang__))
 	if constexpr (binary32)
 	{
-		return ::fast_io::details::da::print_ascii_scientific_x86_binary32<flags.comma, flags.uppercase_e>(
-			destination, digit_data.unshuffled, digits.span, exponent, has_extra_digit,
-			converted.last_digit, converted.has_last_digit);
+#if defined(__clang__)
+		if constexpr (!staged_emission)
+#else
+		if constexpr (staged_emission)
+#endif
+		{
+			return ::fast_io::details::da::print_ascii_scientific_x86_binary32<flags.comma, flags.uppercase_e>(
+				destination, digit_data.unshuffled, digits.span, exponent, has_extra_digit,
+				converted.last_digit, converted.has_last_digit);
+		}
 	}
 #endif
 	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(

@@ -3024,6 +3024,36 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 		{
 			return ::fast_io::details::dragonbox_narrow_ascii_lookup<flt>(iter, narrow_ascii_index);
 		}
+		else if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
+						   ((trait::mbits == 23u && trait::ebits == 8u) ||
+							(trait::mbits == 52u && trait::ebits == 11u)) &&
+						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
+						   ::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)
+		{
+			constexpr auto direct_flags{[]() constexpr noexcept {
+				auto value{::fast_io::manipulators::floating_point_default_scalar_flags};
+				value.uppercase = uppercase;
+				value.uppercase_e = uppercase_e;
+				value.comma = comma;
+				value.floating = mt;
+				value.json_float = json_float;
+				return value;
+			}()};
+			auto const converted{::fast_io::details::da::to_conversion_result<flt>(
+				mantissa, static_cast<::std::int_least32_t>(exponent))};
+			if (exponent != 0u)
+			{
+				auto const direct{::fast_io::details::da::print_ascii_shortest<flt, direct_flags>(iter, converted)};
+				if (direct != nullptr)
+				{
+					return direct;
+				}
+			}
+			auto const finalized{::fast_io::details::da::trim_trailing_zeros(
+				::fast_io::details::da::finalize<flt>(converted))};
+			return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
+				iter, finalized.m10, finalized.e10);
+		}
 		else if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
 						   sizeof(flt) < sizeof(float) &&
 						   rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)

@@ -35,12 +35,20 @@ inline constexpr bool staged_supported{
 template <typename flt>
 inline constexpr bool staged_prepares_sign{
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
-	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__)
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else
 	false
+#endif
+};
+
+/// @brief Indicates whether the direct scalar ASCII emitter is available for the current implementation.
+inline constexpr bool scalar_ascii_shortest_supported{
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__)
+	false
+#else
+	true
 #endif
 };
 
@@ -67,7 +75,24 @@ template <typename flt>
 [[nodiscard]] inline consteval ::std::size_t staged_width() noexcept
 {
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
-	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 4u;
+	return 6u;
+#elif (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__)
+	if constexpr (::std::same_as<::std::remove_cvref_t<flt>, float>)
+	{
+#if __GNUC__ == 13 || __GNUC__ >= 16
+		return 6u;
+#else
+		return 8u;
+#endif
+	}
+	else
+	{
+#if __GNUC__ >= 15
+		return 4u;
+#else
+		return 6u;
+#endif
+	}
 #else
 	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 6u;
 #endif
@@ -127,7 +152,7 @@ template <typename decimal_type>
 }
 
 template <typename flt, typename mantissa_type>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_result<flt> to_decimal(
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result to_conversion_result(
 	mantissa_type mantissa, ::std::int_least32_t raw_exponent) noexcept
 {
 	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
@@ -162,7 +187,15 @@ template <typename flt, typename mantissa_type>
 	{
 		converted = ::fast_io::details::da::compute_binary64(binary_significand, effective_raw_exponent);
 	}
-	return ::fast_io::details::da::finalize<flt>(converted);
+	return converted;
+}
+
+template <typename flt, typename mantissa_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr decimal_result<flt> to_decimal(
+	mantissa_type mantissa, ::std::int_least32_t raw_exponent) noexcept
+{
+	return ::fast_io::details::da::finalize<flt>(
+		::fast_io::details::da::to_conversion_result<flt>(mantissa, raw_exponent));
 }
 
 } // namespace fast_io::details::da
