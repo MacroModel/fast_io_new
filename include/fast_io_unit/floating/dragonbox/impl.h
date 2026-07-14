@@ -3564,6 +3564,197 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 	}
 }
 
+template <typename flt>
+[[nodiscard]] inline constexpr bool dragonbox_decimal_carrier_is_binary_exact(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type binary_mantissa,
+	::std::uint_least32_t raw_exponent,
+	::fast_io::details::dragonbox_decimal_mantissa_type<flt> decimal_mantissa,
+	::std::int_least32_t decimal_exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	if constexpr (sizeof(mantissa_type) > sizeof(::std::uint_least64_t))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::int_least32_t bias{
+			(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+		::std::int_least32_t binary_exponent{};
+		if (raw_exponent)
+		{
+			binary_mantissa |= static_cast<mantissa_type>(static_cast<mantissa_type>(1u) << trait::mbits);
+			binary_exponent = static_cast<::std::int_least32_t>(raw_exponent) - bias -
+				static_cast<::std::int_least32_t>(trait::mbits);
+		}
+		else
+		{
+			binary_exponent = 1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+		}
+		auto binary_odd{static_cast<::std::uint_least64_t>(binary_mantissa)};
+		for (; !(binary_odd & 1u); binary_odd >>= 1u)
+		{
+			++binary_exponent;
+		}
+
+		auto decimal_odd{static_cast<::std::uint_least64_t>(decimal_mantissa)};
+		auto decimal_binary_exponent{decimal_exponent};
+		if (decimal_exponent < 0)
+		{
+			auto count{static_cast<::std::uint_least32_t>(-decimal_exponent)};
+			for (; count; --count)
+			{
+				if (decimal_odd % 5u)
+				{
+					return false;
+				}
+				decimal_odd /= 5u;
+			}
+		}
+		else
+		{
+			constexpr auto uint64_max{(::std::numeric_limits<::std::uint_least64_t>::max)()};
+			auto count{static_cast<::std::uint_least32_t>(decimal_exponent)};
+			for (; count; --count)
+			{
+				if (uint64_max / 5u < decimal_odd)
+				{
+					return false;
+				}
+				decimal_odd *= 5u;
+			}
+		}
+		for (; !(decimal_odd & 1u); decimal_odd >>= 1u)
+		{
+			++decimal_binary_exponent;
+		}
+		return binary_odd == decimal_odd && binary_exponent == decimal_binary_exponent;
+	}
+}
+
+template <typename flt, bool comma, bool uppercase_e,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	bool json_float, ::std::integral char_type>
+inline constexpr char_type *print_rsvflt_fractional_tiny_zero_impl(
+	char_type *iter, ::std::size_t precision) noexcept
+{
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
+	*iter = char_literal_v<u8'0', char_type>;
+	++iter;
+	if constexpr (format == ::fast_io::manipulators::floating_format::general)
+	{
+		if (precision < 5u)
+		{
+			if constexpr (json_float)
+			{
+				return ::fast_io::details::print_rsv_fp_append_json_float_zero<comma>(iter);
+			}
+			return iter;
+		}
+		return ::fast_io::details::print_rsv_fp_e_impl<flt, uppercase_e>(
+			iter, -static_cast<::std::int_least32_t>(precision));
+	}
+	else
+	{
+		if constexpr (json_float)
+		{
+			if (!precision || !preserve)
+			{
+				return ::fast_io::details::print_rsv_fp_append_json_float_zero<comma>(iter);
+			}
+		}
+		if constexpr (preserve)
+		{
+			return ::fast_io::details::print_rsv_fp_append_point_zeros<comma>(iter, precision);
+		}
+		else
+		{
+			return iter;
+		}
+	}
+}
+
+template <typename flt, bool comma, bool uppercase_e,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	::fast_io::manipulators::floating_rounding rounding,
+	bool json_float, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
+	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
+	::fast_io::details::dragonbox_decimal_mantissa_type<flt> rounded_m10 = {},
+	::std::int_least32_t rounded_e10 = {}, ::std::size_t requested = {},
+	::std::size_t rounded_length = {}) noexcept
+{
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+	{
+		if (requested == rounded_length)
+		{
+			return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+				flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+				iter, rounded_m10, rounded_e10, precision, negative);
+		}
+	}
+
+	auto const [slow_m10, slow_e10]{::fast_io::details::dragonbox_impl<
+		flt, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
+		mantissa, static_cast<::std::int_least32_t>(exponent), negative)};
+	if constexpr (!::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>)
+	{
+		if (::fast_io::details::dragonbox_decimal_carrier_is_binary_exact<flt>(
+				mantissa, exponent, slow_m10, slow_e10))
+		{
+			return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+				flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+				iter, slow_m10, slow_e10, precision, negative);
+		}
+	}
+	if constexpr (::fast_io::details::floating_precision_is_fractional<precision_mode> &&
+			  format != ::fast_io::manipulators::floating_format::scientific)
+	{
+		constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+		if (precision <= static_cast<::std::size_t>(int32_max))
+		{
+			auto const slow_length{static_cast<::std::int_least32_t>(chars_len<10, true>(slow_m10))};
+			auto const slow_real_exponent{slow_e10 + slow_length - 1};
+			auto const quantum_distance{static_cast<::std::int_least64_t>(slow_real_exponent) +
+				static_cast<::std::int_least64_t>(precision)};
+			if (quantum_distance <= -2)
+			{
+				if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+				{
+					return ::fast_io::details::print_rsvflt_fractional_tiny_zero_impl<
+						flt, comma, uppercase_e, format, precision_mode, json_float>(iter, precision);
+				}
+				else if (::fast_io::details::floating_rounding_directed_round_up<rounding>(negative))
+				{
+					return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+						flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+						iter, static_cast<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>(1u),
+						-static_cast<::std::int_least32_t>(precision), precision, negative);
+				}
+				else
+				{
+					return ::fast_io::details::print_rsvflt_fractional_tiny_zero_impl<
+						flt, comma, uppercase_e, format, precision_mode, json_float>(iter, precision);
+				}
+			}
+		}
+	}
+	return ::fast_io::details::print_rsvflt_exact_precision_define_impl<
+		flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+		iter, mantissa, exponent, precision, negative);
+}
+
 template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io::manipulators::floating_format mt,
 		  ::fast_io::manipulators::floating_precision precision_mode =
 			  ::fast_io::manipulators::floating_precision::significant,
@@ -3745,8 +3936,11 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 					flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
 					iter, m10, e10, precision, sign);
 			}
+			return ::fast_io::details::print_rsvflt_precision_slow_path_impl<
+				flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
+				iter, mantissa, exponent, precision, sign, m10, e10, requested, length);
 		}
-		return ::fast_io::details::print_rsvflt_exact_precision_define_impl<
+		return ::fast_io::details::print_rsvflt_precision_slow_path_impl<
 			flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
 			iter, mantissa, exponent, precision, sign);
 	}
