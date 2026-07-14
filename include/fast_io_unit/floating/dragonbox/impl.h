@@ -3066,7 +3066,7 @@ template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io:
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
 		  bool nan_show_sign = true, bool nan_show_type = false, bool json_float = false,
 		  typename flt, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_precision_define_impl(
+inline constexpr char_type *print_rsvflt_precision_define_impl(
 	char_type *iter, flt f, ::std::size_t precision) noexcept
 {
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
