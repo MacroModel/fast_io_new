@@ -132,7 +132,7 @@ struct iec559_traits<__float128>
 
 #endif
 
-#ifdef __STDCPP_FLOAT16_T__
+#if defined(__STDCPP_FLOAT16_T__) || defined(__FLT16_MANT_DIG__)
 template <>
 struct iec559_traits<_Float16>
 {
@@ -207,7 +207,8 @@ struct iec559_traits<__bf16>
 };
 #endif
 
-#ifdef __STDCPP_BFLOAT16_T__
+#if defined(__STDCPP_BFLOAT16_T__) || \
+	(defined(__GNUC__) && !defined(__clang__) && defined(__BFLT16_MANT_DIG__))
 
 template <>
 struct iec559_traits<decltype(0.0bf16)>
