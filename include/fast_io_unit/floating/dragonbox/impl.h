@@ -2682,8 +2682,8 @@ inline constexpr void exact_precision_round(
 	decimal.exponent = target_exponent + keep;
 }
 
-template <typename flt>
-inline constexpr void exact_precision_trim(exact_precision_decimal<flt> &decimal) noexcept
+template <typename decimal_type>
+inline constexpr void exact_precision_trim(decimal_type &decimal) noexcept
 {
 	while (decimal.size != 1u && decimal.digits[decimal.size - 1u] == 0u)
 	{
@@ -2699,9 +2699,348 @@ inline constexpr void exact_precision_trim(exact_precision_decimal<flt> &decimal
 	return maximum - left < right ? maximum : left + right;
 }
 
-template <::std::integral char_type, typename flt>
+#if defined(__SIZEOF_INT128__)
+// Keep only the requested prefix, one guard digit, and a sticky bit. For a
+// finite binary value M*2^e, the prefix is obtained from
+// floor(M*2^e*10^(requested-1-real_exponent)); the discarded binary and
+// decimal remainders are combined into tail_nonzero. This avoids building the
+// complete (up to 1074-place) exact decimal expansion for a short precision.
+inline constexpr ::std::size_t exact_precision_window_digit_capacity{160u};
+inline constexpr ::std::size_t exact_precision_window_binary_limb_capacity{24u};
+inline constexpr ::std::size_t exact_precision_window_decimal_limb_capacity{40u};
+inline constexpr unsigned exact_precision_window_pow5_chunk{27u};
+inline constexpr ::std::uint_least64_t exact_precision_window_pow5_multiplier{
+	7450580596923828125ull};
+
+struct exact_precision_window_decimal
+{
+	unsigned char digits[exact_precision_window_digit_capacity];
+	::std::size_t size;
+	::std::int_least32_t exponent;
+};
+
+struct exact_precision_window_result
+{
+	exact_precision_window_decimal decimal;
+	::std::int_least32_t real_exponent;
+	bool tail_nonzero;
+	bool success;
+};
+
+inline constexpr bool exact_precision_window_multiply_small(
+	::std::uint_least64_t *limbs, ::std::size_t &size,
+	::std::uint_least64_t multiplier) noexcept
+{
+	__uint128_t carry{};
+	for (::std::size_t i{}; i != size; ++i)
+	{
+		auto const product{static_cast<__uint128_t>(limbs[i]) * multiplier + carry};
+		limbs[i] = static_cast<::std::uint_least64_t>(product);
+		carry = product >> 64u;
+	}
+	if (carry)
+	{
+		if (size == exact_precision_window_binary_limb_capacity)
+		{
+			return false;
+		}
+		limbs[size++] = static_cast<::std::uint_least64_t>(carry);
+	}
+	return true;
+}
+
+inline constexpr bool exact_precision_window_shift_left(
+	::std::uint_least64_t *limbs, ::std::size_t &size, unsigned shift) noexcept
+{
+	auto const word_shift{static_cast<::std::size_t>(shift / 64u)};
+	auto const bit_shift{shift % 64u};
+	if (exact_precision_window_binary_limb_capacity - size < word_shift + static_cast<unsigned>(bit_shift != 0u))
+	{
+		return false;
+	}
+	if (bit_shift)
+	{
+		::std::uint_least64_t carry{};
+		for (::std::size_t i{}; i != size; ++i)
+		{
+			auto const value{limbs[i]};
+			limbs[i] = static_cast<::std::uint_least64_t>((value << bit_shift) | carry);
+			carry = value >> (64u - bit_shift);
+		}
+		if (carry)
+		{
+			limbs[size++] = carry;
+		}
+	}
+	if (word_shift)
+	{
+		for (auto i{size}; i; --i)
+		{
+			limbs[i - 1u + word_shift] = limbs[i - 1u];
+		}
+		for (::std::size_t i{}; i != word_shift; ++i)
+		{
+			limbs[i] = 0u;
+		}
+		size += word_shift;
+	}
+	return true;
+}
+
+inline constexpr bool exact_precision_window_shift_right(
+	::std::uint_least64_t *limbs, ::std::size_t &size, unsigned shift) noexcept
+{
+	auto const word_shift{static_cast<::std::size_t>(shift / 64u)};
+	auto const bit_shift{shift % 64u};
+	bool tail_nonzero{};
+	if (size <= word_shift)
+	{
+		for (::std::size_t i{}; i != size; ++i)
+		{
+			tail_nonzero = tail_nonzero || limbs[i] != 0u;
+		}
+		size = 0u;
+		return tail_nonzero;
+	}
+	for (::std::size_t i{}; i != word_shift; ++i)
+	{
+		tail_nonzero = tail_nonzero || limbs[i] != 0u;
+	}
+	if (bit_shift)
+	{
+		auto const mask{(static_cast<::std::uint_least64_t>(1u) << bit_shift) - 1u};
+		tail_nonzero = tail_nonzero || (limbs[word_shift] & mask) != 0u;
+	}
+	auto const new_size{size - word_shift};
+	for (::std::size_t i{}; i != new_size; ++i)
+	{
+		auto value{limbs[i + word_shift] >> bit_shift};
+		if (bit_shift && i + word_shift + 1u != size)
+		{
+			value |= limbs[i + word_shift + 1u] << (64u - bit_shift);
+		}
+		limbs[i] = value;
+	}
+	size = new_size;
+	while (size && !limbs[size - 1u])
+	{
+		--size;
+	}
+	return tail_nonzero;
+}
+
+struct exact_precision_window_division
+{
+	::std::uint_least64_t quotient;
+	::std::uint_least64_t remainder;
+};
+
+[[nodiscard]] inline constexpr exact_precision_window_division
+exact_precision_window_divide_128_by_32(
+	::std::uint_least64_t high, ::std::uint_least64_t low) noexcept
+{
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+	if (!__builtin_is_constant_evaluated())
+	{
+		// high is the preceding base-1e9 remainder, so high < divisor and
+		// the quotient fits in one word. Spell the native division directly;
+		// otherwise x86 compilers lower this cold path to __udivti3.
+		::std::uint_least64_t quotient;
+		::std::uint_least64_t remainder;
+		constexpr auto divisor{static_cast<::std::uint_least64_t>(exact_precision_limb_base)};
+		__asm__("divq %4"
+				: "=&a"(quotient), "=&d"(remainder)
+				: "0"(low), "1"(high), "rm"(divisor)
+				: "cc");
+		return {quotient, remainder};
+	}
+#endif
+	auto const current{(static_cast<__uint128_t>(high) << 64u) | low};
+	return {static_cast<::std::uint_least64_t>(current / exact_precision_limb_base),
+			static_cast<::std::uint_least64_t>(current % exact_precision_limb_base)};
+}
+
+[[nodiscard]] inline constexpr ::std::uint_least32_t exact_precision_window_divide_decimal_limb(
+	::std::uint_least64_t *limbs, ::std::size_t &size) noexcept
+{
+	::std::uint_least64_t remainder{};
+	for (auto i{size}; i; --i)
+	{
+		auto const division{::fast_io::details::exact_precision_window_divide_128_by_32(
+			remainder, limbs[i - 1u])};
+		limbs[i - 1u] = division.quotient;
+		remainder = division.remainder;
+	}
+	while (size && !limbs[size - 1u])
+	{
+		--size;
+	}
+	return static_cast<::std::uint_least32_t>(remainder);
+}
+
+inline constexpr ::std::size_t exact_precision_window_decimal_limb_digits(
+	::std::uint_least32_t value) noexcept
+{
+	::std::size_t digits{1u};
+	for (; 10u <= value; value /= 10u)
+	{
+		++digits;
+	}
+	return digits;
+}
+
+inline constexpr exact_precision_window_result exact_precision_window_materialize(
+	::std::uint_least64_t *binary_limbs, ::std::size_t binary_size,
+	::std::size_t requested_digits, ::std::int_least32_t real_exponent,
+	bool tail_nonzero, bool use_integer_exponent) noexcept
+{
+	exact_precision_window_result result{};
+	::std::uint_least32_t decimal_limbs[exact_precision_window_decimal_limb_capacity];
+	::std::size_t decimal_size{};
+	while (binary_size)
+	{
+		if (decimal_size == exact_precision_window_decimal_limb_capacity)
+		{
+			return result;
+		}
+		decimal_limbs[decimal_size++] =
+			::fast_io::details::exact_precision_window_divide_decimal_limb(binary_limbs, binary_size);
+	}
+	if (!decimal_size)
+	{
+		return result;
+	}
+	auto const top_digits{::fast_io::details::exact_precision_window_decimal_limb_digits(
+		decimal_limbs[decimal_size - 1u])};
+	auto const total_digits{top_digits + (decimal_size - 1u) * exact_precision_limb_digits};
+	if (use_integer_exponent)
+	{
+		result.real_exponent = static_cast<::std::int_least32_t>(total_digits - 1u);
+	}
+	else
+	{
+		result.real_exponent = real_exponent + static_cast<::std::int_least32_t>(total_digits) -
+							   static_cast<::std::int_least32_t>(requested_digits);
+	}
+	auto const output_size{requested_digits < total_digits ? requested_digits : total_digits};
+	::std::size_t output_position{};
+	for (auto i{decimal_size}; i; --i)
+	{
+		auto const width{i == decimal_size ? top_digits : static_cast<::std::size_t>(exact_precision_limb_digits)};
+		auto const value{static_cast<::std::uint_least64_t>(decimal_limbs[i - 1u])};
+		if (output_position == output_size)
+		{
+			tail_nonzero = tail_nonzero || value != 0u;
+			continue;
+		}
+		auto const available{output_size - output_position};
+		auto const take{width < available ? width : available};
+		auto const skipped{width - take};
+		auto const divisor{::fast_io::details::print_rsv_fp_pow10_0_to_19_table[skipped]};
+		auto prefix{value / divisor};
+		auto const begin{output_position};
+		output_position += take;
+		for (auto position{output_position}; position != begin;)
+		{
+			result.decimal.digits[--position] = static_cast<unsigned char>(prefix % 10u);
+			prefix /= 10u;
+		}
+		if (skipped)
+		{
+			tail_nonzero = tail_nonzero || value % divisor != 0u;
+		}
+	}
+	for (; output_position != requested_digits; ++output_position)
+	{
+		result.decimal.digits[output_position] = 0u;
+	}
+	result.decimal.size = requested_digits;
+	result.decimal.exponent = result.real_exponent + 1 -
+							  static_cast<::std::int_least32_t>(requested_digits);
+	result.tail_nonzero = tail_nonzero;
+	result.success = true;
+	return result;
+}
+
+template <typename flt>
+inline constexpr exact_precision_window_result exact_precision_window_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t requested_digits,
+	::std::int_least32_t real_exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	static_assert(sizeof(mantissa_type) <= sizeof(::std::uint_least64_t));
+	exact_precision_window_result failure{};
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		mantissa |= static_cast<mantissa_type>(static_cast<mantissa_type>(1u) << trait::mbits);
+		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
+						  static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent = 1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	::std::uint_least64_t limbs[exact_precision_window_binary_limb_capacity]{};
+	limbs[0] = static_cast<::std::uint_least64_t>(mantissa);
+	::std::size_t size{1u};
+	if (0 <= binary_exponent)
+	{
+		if (!::fast_io::details::exact_precision_window_shift_left(
+				limbs, size, static_cast<unsigned>(binary_exponent)))
+		{
+			return failure;
+		}
+		return ::fast_io::details::exact_precision_window_materialize(
+			limbs, size, requested_digits, real_exponent, false, true);
+	}
+	auto const decimal_shift{static_cast<::std::int_least64_t>(requested_digits) - 1 -
+							 static_cast<::std::int_least64_t>(real_exponent)};
+	if (decimal_shift < 0 || 600 < decimal_shift)
+	{
+		return failure;
+	}
+	auto count{static_cast<unsigned>(decimal_shift)};
+	for (; exact_precision_window_pow5_chunk <= count; count -= exact_precision_window_pow5_chunk)
+	{
+		if (!::fast_io::details::exact_precision_window_multiply_small(
+				limbs, size, exact_precision_window_pow5_multiplier))
+		{
+			return failure;
+		}
+	}
+	if (count)
+	{
+		if (!::fast_io::details::exact_precision_window_multiply_small(
+				limbs, size, ::fast_io::details::exact_precision_small_power(5u, count)))
+		{
+			return failure;
+		}
+	}
+	auto const scaled_binary_exponent{static_cast<::std::int_least64_t>(binary_exponent) + decimal_shift};
+	bool tail_nonzero{};
+	if (scaled_binary_exponent < 0)
+	{
+		tail_nonzero = ::fast_io::details::exact_precision_window_shift_right(
+			limbs, size, static_cast<unsigned>(-scaled_binary_exponent));
+	}
+	else if (!::fast_io::details::exact_precision_window_shift_left(
+				 limbs, size, static_cast<unsigned>(scaled_binary_exponent)))
+	{
+		return failure;
+	}
+	return ::fast_io::details::exact_precision_window_materialize(
+		limbs, size, requested_digits, real_exponent, tail_nonzero, false);
+}
+#endif
+
+template <::std::integral char_type, typename decimal_type>
 inline constexpr char_type *exact_precision_copy(
-	char_type *iter, exact_precision_decimal<flt> const &decimal,
+	char_type *iter, decimal_type const &decimal,
 	::std::size_t first, ::std::size_t last) noexcept
 {
 	for (; first != last; ++first)
@@ -2712,9 +3051,9 @@ inline constexpr char_type *exact_precision_copy(
 	return iter;
 }
 
-template <bool comma, bool json_float, ::std::integral char_type, typename flt>
+template <bool comma, bool json_float, ::std::integral char_type, typename decimal_type>
 inline constexpr char_type *exact_precision_fixed(
-	char_type *iter, exact_precision_decimal<flt> const &decimal, ::std::size_t virtual_size,
+	char_type *iter, decimal_type const &decimal, ::std::size_t virtual_size,
 	bool force_fractional, ::std::size_t fractional_precision) noexcept
 {
 	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
@@ -2784,9 +3123,10 @@ inline constexpr char_type *exact_precision_fixed(
 	return iter;
 }
 
-template <typename flt, bool comma, bool uppercase_e, ::std::integral char_type>
+template <typename flt, bool comma, bool uppercase_e, ::std::integral char_type,
+		  typename decimal_type>
 inline constexpr char_type *exact_precision_scientific(
-	char_type *iter, exact_precision_decimal<flt> const &decimal,
+	char_type *iter, decimal_type const &decimal,
 	::std::size_t fractional_precision, bool preserve) noexcept
 {
 	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
@@ -2808,56 +3148,14 @@ inline constexpr char_type *exact_precision_scientific(
 template <typename flt, bool comma, bool uppercase_e,
 		  ::fast_io::manipulators::floating_format format,
 		  ::fast_io::manipulators::floating_precision precision_mode,
-		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
-		  ::std::integral char_type>
-#if __has_cpp_attribute(__gnu__::__cold__)
-[[__gnu__::__cold__]]
-#endif
-#if __has_cpp_attribute(__gnu__::__noinline__)
-[[__gnu__::__noinline__]]
-#endif
-inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
-	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
-	::std::uint_least32_t exponent, ::std::size_t precision, bool negative) noexcept
+		  bool json_float, ::std::integral char_type, typename decimal_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_precision_define_impl(
+	char_type *iter, decimal_type const &decimal, ::std::size_t precision,
+	::std::size_t significant) noexcept
 {
 	constexpr bool fractional{::fast_io::details::floating_precision_is_fractional<precision_mode>};
 	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
-	auto decimal{::fast_io::details::exact_precision_from_binary<flt>(mantissa, exponent)};
-	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
-	::std::size_t significant{};
-	::std::int_least32_t keep{};
-	if constexpr (fractional)
-	{
-		if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
-		{
-			significant = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
-			keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
-		}
-		else if (precision > static_cast<::std::size_t>(int32_max))
-		{
-			keep = int32_max;
-			significant = static_cast<::std::size_t>(keep);
-		}
-		else
-		{
-			auto const requested_keep{static_cast<::std::int_least64_t>(real_exponent) + 1 +
-									  static_cast<::std::int_least64_t>(precision)};
-			keep = int32_max < requested_keep ? int32_max : static_cast<::std::int_least32_t>(requested_keep);
-			significant = keep < 0 ? 0u : static_cast<::std::size_t>(keep);
-		}
-	}
-	else
-	{
-		significant = precision ? precision : 1u;
-		keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
-	}
-	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
-	if constexpr (!preserve)
-	{
-		::fast_io::details::exact_precision_trim(decimal);
-	}
-
 	if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
 	{
 		auto const fractional_digits{fractional ? precision : significant - 1u};
@@ -2919,6 +3217,212 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 	}
 	return ::fast_io::details::exact_precision_scientific<flt, comma, uppercase_e>(
 		iter, decimal, virtual_size - 1u, preserve);
+}
+
+#if defined(__SIZEOF_INT128__)
+template <::fast_io::manipulators::floating_rounding rounding>
+inline constexpr void exact_precision_window_round(
+	exact_precision_window_decimal &decimal, ::std::int_least32_t keep,
+	bool negative, bool tail_nonzero) noexcept
+{
+	auto const first{decimal.digits[static_cast<::std::size_t>(keep)]};
+	auto const discarded_nonzero{first != 0u || tail_nonzero};
+	bool round_up{};
+	if (discarded_nonzero)
+	{
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+		{
+			if (5u < first || (first == 5u && tail_nonzero))
+			{
+				round_up = true;
+			}
+			else if (first == 5u)
+			{
+				auto const rounded_down{keep ? decimal.digits[static_cast<::std::size_t>(keep) - 1u] : 0u};
+				round_up = ::fast_io::details::print_rsv_fp_decimal_tie_round_up<rounding>(
+					negative, rounded_down);
+			}
+		}
+		else
+		{
+			round_up = ::fast_io::details::floating_rounding_directed_round_up<rounding>(negative);
+		}
+	}
+	auto const target_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - keep};
+	if (!keep)
+	{
+		decimal.size = 1u;
+		decimal.digits[0] = static_cast<unsigned char>(round_up);
+		decimal.exponent = target_exponent;
+		return;
+	}
+	decimal.size = static_cast<::std::size_t>(keep);
+	decimal.exponent = target_exponent;
+	if (!round_up)
+	{
+		return;
+	}
+	for (auto i{decimal.size}; i; --i)
+	{
+		if (++decimal.digits[i - 1u] != 10u)
+		{
+			return;
+		}
+		decimal.digits[i - 1u] = 0u;
+	}
+	decimal.digits[0] = 1u;
+	decimal.size = 1u;
+	decimal.exponent = target_exponent + keep;
+}
+
+template <typename flt, bool comma, bool uppercase_e,
+		  ::fast_io::manipulators::floating_format format,
+		  ::fast_io::manipulators::floating_precision precision_mode,
+		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
+		  ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
+	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
+	::std::int_least32_t initial_real_exponent) noexcept
+{
+	constexpr bool fractional{::fast_io::details::floating_precision_is_fractional<precision_mode>};
+	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+	auto real_exponent{initial_real_exponent};
+	for (unsigned attempt{}; attempt != 2u; ++attempt)
+	{
+		::std::size_t significant{};
+		::std::int_least32_t keep{};
+		if constexpr (fractional)
+		{
+			if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
+			{
+				significant = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
+				if (exact_precision_window_digit_capacity <= significant)
+				{
+					return nullptr;
+				}
+				keep = static_cast<::std::int_least32_t>(significant);
+			}
+			else
+			{
+				if (precision > static_cast<::std::size_t>(int32_max))
+				{
+					return nullptr;
+				}
+				auto const requested_keep{static_cast<::std::int_least64_t>(real_exponent) + 1 +
+										  static_cast<::std::int_least64_t>(precision)};
+				if (requested_keep < 0 ||
+					exact_precision_window_digit_capacity <= static_cast<::std::uint_least64_t>(requested_keep))
+				{
+					return nullptr;
+				}
+				keep = static_cast<::std::int_least32_t>(requested_keep);
+				significant = static_cast<::std::size_t>(keep);
+			}
+		}
+		else
+		{
+			significant = precision ? precision : 1u;
+			if (exact_precision_window_digit_capacity <= significant)
+			{
+				return nullptr;
+			}
+			keep = static_cast<::std::int_least32_t>(significant);
+		}
+		auto generated{::fast_io::details::exact_precision_window_from_binary<flt>(
+			mantissa, exponent, static_cast<::std::size_t>(keep) + 1u, real_exponent)};
+		if (!generated.success)
+		{
+			return nullptr;
+		}
+		if (generated.real_exponent != real_exponent)
+		{
+			real_exponent = generated.real_exponent;
+			continue;
+		}
+		if (!generated.tail_nonzero)
+		{
+			::fast_io::details::exact_precision_trim(generated.decimal);
+		}
+		if (static_cast<::std::int_least32_t>(generated.decimal.size) > keep)
+		{
+			::fast_io::details::exact_precision_window_round<rounding>(
+				generated.decimal, keep, negative, generated.tail_nonzero);
+		}
+		if constexpr (!preserve)
+		{
+			::fast_io::details::exact_precision_trim(generated.decimal);
+		}
+		return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
+			flt, comma, uppercase_e, format, precision_mode, json_float>(
+			iter, generated.decimal, precision, significant);
+	}
+	return nullptr;
+}
+#endif
+
+template <typename flt, bool comma, bool uppercase_e,
+		  ::fast_io::manipulators::floating_format format,
+		  ::fast_io::manipulators::floating_precision precision_mode,
+		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
+		  ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
+	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative) noexcept
+{
+	constexpr bool fractional{::fast_io::details::floating_precision_is_fractional<precision_mode>};
+	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+	auto decimal{::fast_io::details::exact_precision_from_binary<flt>(mantissa, exponent)};
+	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	::std::size_t significant{};
+	::std::int_least32_t keep{};
+	if constexpr (fractional)
+	{
+		if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
+		{
+			significant = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
+			keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
+		}
+		else if (precision > static_cast<::std::size_t>(int32_max))
+		{
+			keep = int32_max;
+			significant = static_cast<::std::size_t>(keep);
+		}
+		else
+		{
+			auto const requested_keep{static_cast<::std::int_least64_t>(real_exponent) + 1 +
+									  static_cast<::std::int_least64_t>(precision)};
+			keep = int32_max < requested_keep ? int32_max : static_cast<::std::int_least32_t>(requested_keep);
+			significant = keep < 0 ? 0u : static_cast<::std::size_t>(keep);
+		}
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
+	}
+	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
+	if constexpr (!preserve)
+	{
+		::fast_io::details::exact_precision_trim(decimal);
+	}
+	return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
+		flt, comma, uppercase_e, format, precision_mode, json_float>(
+		iter, decimal, precision, significant);
 }
 
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding, bool preserve_trailing_zero = false>
@@ -3750,6 +4254,39 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 			}
 		}
 	}
+#if defined(__SIZEOF_INT128__)
+	if constexpr (::std::same_as<flt, double>)
+	{
+		auto const slow_length{static_cast<::std::int_least32_t>(chars_len<10, true>(slow_m10))};
+		auto const slow_real_exponent{slow_e10 + slow_length - 1};
+		bool use_window{};
+		if constexpr (::fast_io::details::floating_precision_is_fractional<precision_mode>)
+		{
+			// The non-scientific fractional cases either took the tiny-value
+			// shortcut above or retain the existing full-precision path, whose
+			// crossover is better for ordinary fixed output.
+			if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
+			{
+				use_window = precision < exact_precision_window_digit_capacity - 1u;
+			}
+		}
+		else
+		{
+			auto const significant{precision ? precision : 1u};
+			use_window = significant < exact_precision_window_digit_capacity;
+		}
+		if (use_window)
+		{
+			auto const window_result{::fast_io::details::print_rsvflt_exact_precision_window_impl<
+				flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+				iter, mantissa, exponent, precision, negative, slow_real_exponent)};
+			if (window_result)
+			{
+				return window_result;
+			}
+		}
+	}
+#endif
 	return ::fast_io::details::print_rsvflt_exact_precision_define_impl<
 		flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
 		iter, mantissa, exponent, precision, negative);
