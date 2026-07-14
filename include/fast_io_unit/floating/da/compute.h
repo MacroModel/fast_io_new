@@ -17,6 +17,7 @@ struct conversion_result
 	::std::uint_least64_t binary_significand, ::std::int_least32_t binary_exponent) noexcept
 {
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
+	constexpr auto uint64_max{(::std::numeric_limits<::std::uint_least64_t>::max)()};
 	auto const decimal_exponent{compute_decimal_exponent(binary_exponent, false)};
 	auto const shift{static_cast<::std::uint_least8_t>(
 		compute_exponent_shift(binary_exponent, decimal_exponent + 1) + extra_shift)};
@@ -26,13 +27,13 @@ struct conversion_result
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
 	auto const half_ulp{power.hi >> (extra_shift + 1u - shift)};
-	auto const round_up{half_ulp > UINT64_MAX - fractional};
+	auto const round_up{half_ulp > uint64_max - fractional};
 	auto const round_down{(half_ulp >> 1u) > fractional};
 	integral += round_up;
 	auto digit{static_cast<::std::uint_least32_t>(::fast_io::details::da::umul64x64_add_high(
 		fractional, 10u, (static_cast<::std::uint_least64_t>(1) << 63u) - 1u))};
 	auto const lower{static_cast<::std::uint_least32_t>(::fast_io::details::da::umul64x64_add_high(
-		fractional - (half_ulp >> 1u), 10u, UINT64_MAX))};
+		fractional - (half_ulp >> 1u), 10u, uint64_max))};
 	if (digit < lower)
 	{
 		digit = lower;

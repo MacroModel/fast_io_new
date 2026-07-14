@@ -2822,6 +2822,7 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 {
 	constexpr bool fractional{::fast_io::details::floating_precision_is_fractional<precision_mode>};
 	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
 	auto decimal{::fast_io::details::exact_precision_from_binary<flt>(mantissa, exponent)};
 	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
 	::std::size_t significant{};
@@ -2831,25 +2832,25 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 		if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
 		{
 			significant = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
-			keep = significant > static_cast<::std::size_t>(INT_LEAST32_MAX) ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(significant);
+			keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
 		}
-		else if (precision > static_cast<::std::size_t>(INT_LEAST32_MAX))
+		else if (precision > static_cast<::std::size_t>(int32_max))
 		{
-			keep = INT_LEAST32_MAX;
+			keep = int32_max;
 			significant = static_cast<::std::size_t>(keep);
 		}
 		else
 		{
 			auto const requested_keep{static_cast<::std::int_least64_t>(real_exponent) + 1 +
 									  static_cast<::std::int_least64_t>(precision)};
-			keep = INT_LEAST32_MAX < requested_keep ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(requested_keep);
+			keep = int32_max < requested_keep ? int32_max : static_cast<::std::int_least32_t>(requested_keep);
 			significant = keep < 0 ? 0u : static_cast<::std::size_t>(keep);
 		}
 	}
 	else
 	{
 		significant = precision ? precision : 1u;
-		keep = significant > static_cast<::std::size_t>(INT_LEAST32_MAX) ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(significant);
+		keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
 	}
 	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
 	if constexpr (!preserve)
@@ -2879,7 +2880,7 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 	}
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
-	if (virtual_padding <= static_cast<::std::size_t>(INT_LEAST32_MAX))
+	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{static_cast<::std::int_least64_t>(decimal.exponent) -
 									static_cast<::std::int_least64_t>(virtual_padding)};

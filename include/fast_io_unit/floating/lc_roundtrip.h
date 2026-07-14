@@ -2,6 +2,8 @@
 
 namespace fast_io::details
 {
+inline constexpr auto lc_roundtrip_size_max{(::std::numeric_limits<::std::size_t>::max)()};
+
 // let the compiler pick the best calling convention.
 template <::std::integral char_type, my_unsigned_integral U>
 inline constexpr char_type *lc_print_rsv_fp_dgs_common_decay_impl(char_type const *decimal_point_base,
@@ -192,7 +194,7 @@ grouping_handle_buffer_internal(srcIter first, srcIter last, destIter dest, ::st
 }
 
 template <::std::size_t digits, ::std::random_access_iterator srcIter, ::std::random_access_iterator destIter>
-	requires(digits < (SIZE_MAX >> 1u))
+	requires(digits < (lc_roundtrip_size_max >> 1u))
 inline constexpr destIter grouping_handle_buffer(srcIter first, srcIter last, destIter dest,
 												 ::std::size_t const *grouping_base, ::std::size_t grouping_len,
 												 ::std::iter_value_t<destIter> const *thousands_sep_base,
