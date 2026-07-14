@@ -2446,6 +2446,480 @@ template <::fast_io::manipulators::floating_rounding rounding>
 	}
 }
 
+using exact_precision_limb_type = ::std::uint_least32_t;
+using exact_precision_wide_type = ::std::uint_least64_t;
+using exact_precision_multiplier_type = ::std::uint_least64_t;
+inline constexpr exact_precision_multiplier_type exact_precision_limb_base{1000000000u};
+inline constexpr unsigned exact_precision_limb_digits{9u};
+inline constexpr unsigned exact_precision_pow5_chunk{14u};
+inline constexpr exact_precision_multiplier_type exact_precision_pow5_multiplier{6103515625ull};
+inline constexpr unsigned exact_precision_pow2_chunk{34u};
+inline constexpr exact_precision_multiplier_type exact_precision_pow2_multiplier{17179869184ull};
+
+[[nodiscard]] inline constexpr bool exact_precision_multiplier_fits(
+	exact_precision_multiplier_type multiplier) noexcept
+{
+	constexpr auto maximum{static_cast<exact_precision_wide_type>(-1)};
+	return multiplier <=
+		(maximum - (multiplier - 1u)) / (exact_precision_limb_base - 1u);
+}
+
+static_assert(::fast_io::details::exact_precision_multiplier_fits(exact_precision_pow5_multiplier));
+static_assert(::fast_io::details::exact_precision_multiplier_fits(exact_precision_pow2_multiplier));
+
+template <typename flt>
+inline constexpr ::std::size_t exact_precision_limb_capacity{
+	sizeof(flt) <= sizeof(float) ? 16u : 88u};
+
+template <typename flt>
+inline constexpr ::std::size_t exact_precision_digit_capacity{
+	exact_precision_limb_capacity<flt> * exact_precision_limb_digits};
+
+static_assert(exact_precision_digit_capacity<float> >= 114u);
+static_assert(exact_precision_digit_capacity<double> >= 768u);
+
+template <typename flt>
+struct exact_precision_decimal
+{
+	unsigned char digits[exact_precision_digit_capacity<flt>];
+	::std::size_t size;
+	::std::int_least32_t exponent;
+};
+
+inline constexpr void exact_precision_multiply_small(
+	exact_precision_limb_type *limbs, ::std::size_t &size, exact_precision_multiplier_type multiplier) noexcept
+{
+	exact_precision_wide_type carry{};
+	for (::std::size_t i{}; i != size; ++i)
+	{
+		auto const product{static_cast<exact_precision_wide_type>(limbs[i]) * multiplier + carry};
+		limbs[i] = static_cast<exact_precision_limb_type>(product % exact_precision_limb_base);
+		carry = product / exact_precision_limb_base;
+	}
+	for (; carry; carry /= exact_precision_limb_base)
+	{
+		limbs[size] = static_cast<exact_precision_limb_type>(carry % exact_precision_limb_base);
+		++size;
+	}
+}
+
+[[nodiscard]] inline constexpr exact_precision_multiplier_type exact_precision_small_power(
+	exact_precision_multiplier_type base, unsigned exponent) noexcept
+{
+	exact_precision_multiplier_type result{1u};
+	for (; exponent; --exponent)
+	{
+		result *= base;
+	}
+	return result;
+}
+
+template <typename flt>
+inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		mantissa |= static_cast<mantissa_type>(static_cast<mantissa_type>(1u) << trait::mbits);
+		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
+						  static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent = 1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+
+	exact_precision_limb_type limbs[exact_precision_limb_capacity<flt>]{};
+	::std::size_t limb_size{};
+	for (; mantissa; mantissa /= exact_precision_limb_base)
+	{
+		limbs[limb_size] = static_cast<exact_precision_limb_type>(mantissa % exact_precision_limb_base);
+		++limb_size;
+	}
+	auto decimal_exponent{binary_exponent < 0 ? binary_exponent : 0};
+	if (binary_exponent < 0)
+	{
+		auto count{static_cast<::std::uint_least32_t>(-binary_exponent)};
+		for (; exact_precision_pow5_chunk <= count; count -= exact_precision_pow5_chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, exact_precision_pow5_multiplier);
+		}
+		if (count)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, ::fast_io::details::exact_precision_small_power(5u, count));
+		}
+	}
+	else
+	{
+		auto count{static_cast<::std::uint_least32_t>(binary_exponent)};
+		for (; exact_precision_pow2_chunk <= count; count -= exact_precision_pow2_chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, exact_precision_pow2_multiplier);
+		}
+		if (count)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, static_cast<exact_precision_multiplier_type>(1u) << count);
+		}
+	}
+
+	exact_precision_decimal<flt> decimal{};
+	decimal.exponent = decimal_exponent;
+	auto top{limbs[limb_size - 1u]};
+	unsigned char reversed[exact_precision_limb_digits + 1u];
+	::std::size_t reversed_size{};
+	for (; top; top /= 10u)
+	{
+		reversed[reversed_size++] = static_cast<unsigned char>(top % 10u);
+	}
+	while (reversed_size)
+	{
+		decimal.digits[decimal.size++] = reversed[--reversed_size];
+	}
+	for (auto i{limb_size - 1u}; i; --i)
+	{
+		auto value{limbs[i - 1u]};
+		auto position{decimal.size + exact_precision_limb_digits};
+		decimal.size = position;
+		for (unsigned digit{}; digit != exact_precision_limb_digits; ++digit)
+		{
+			decimal.digits[--position] = static_cast<unsigned char>(value % 10u);
+			value /= 10u;
+		}
+	}
+	while (decimal.size != 1u && decimal.digits[decimal.size - 1u] == 0u)
+	{
+		--decimal.size;
+		++decimal.exponent;
+	}
+	return decimal;
+}
+
+template <::fast_io::manipulators::floating_rounding rounding, typename flt>
+[[nodiscard]] inline constexpr bool exact_precision_round_up(
+	exact_precision_decimal<flt> const &decimal, ::std::int_least32_t keep, bool negative) noexcept
+{
+	if (keep < 0)
+	{
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+		{
+			return false;
+		}
+		else
+		{
+			return ::fast_io::details::floating_rounding_directed_round_up<rounding>(negative);
+		}
+	}
+	auto const first{decimal.digits[static_cast<::std::size_t>(keep)]};
+	bool tail{};
+	for (auto i{static_cast<::std::size_t>(keep) + 1u}; i != decimal.size; ++i)
+	{
+		tail |= decimal.digits[i] != 0u;
+	}
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+	{
+		if (first < 5u)
+		{
+			return false;
+		}
+		if (5u < first || tail)
+		{
+			return true;
+		}
+		auto const rounded_down{keep ? decimal.digits[static_cast<::std::size_t>(keep) - 1u] : 0u};
+		return ::fast_io::details::print_rsv_fp_decimal_tie_round_up<rounding>(negative, rounded_down);
+	}
+	else
+	{
+		return ::fast_io::details::floating_rounding_directed_round_up<rounding>(negative);
+	}
+}
+
+template <::fast_io::manipulators::floating_rounding rounding, typename flt>
+inline constexpr void exact_precision_round(
+	exact_precision_decimal<flt> &decimal, ::std::int_least32_t keep, bool negative) noexcept
+{
+	if (static_cast<::std::int_least32_t>(decimal.size) <= keep)
+	{
+		return;
+	}
+	auto const round_up{::fast_io::details::exact_precision_round_up<rounding>(decimal, keep, negative)};
+	auto const old_size{decimal.size};
+	auto const target_exponent{static_cast<::std::int_least32_t>(
+		decimal.exponent + static_cast<::std::int_least32_t>(old_size) - keep)};
+	if (keep <= 0)
+	{
+		decimal.size = 1u;
+		decimal.digits[0] = static_cast<unsigned char>(round_up);
+		decimal.exponent = target_exponent;
+		return;
+	}
+	decimal.size = static_cast<::std::size_t>(keep);
+	decimal.exponent = target_exponent;
+	if (!round_up)
+	{
+		return;
+	}
+	for (auto i{decimal.size}; i; --i)
+	{
+		if (++decimal.digits[i - 1u] != 10u)
+		{
+			return;
+		}
+		decimal.digits[i - 1u] = 0u;
+	}
+	decimal.digits[0] = 1u;
+	decimal.size = 1u;
+	decimal.exponent = target_exponent + keep;
+}
+
+template <typename flt>
+inline constexpr void exact_precision_trim(exact_precision_decimal<flt> &decimal) noexcept
+{
+	while (decimal.size != 1u && decimal.digits[decimal.size - 1u] == 0u)
+	{
+		--decimal.size;
+		++decimal.exponent;
+	}
+}
+
+[[nodiscard]] inline constexpr ::std::size_t exact_precision_saturating_add(
+	::std::size_t left, ::std::size_t right) noexcept
+{
+	constexpr auto maximum{static_cast<::std::size_t>(-1)};
+	return maximum - left < right ? maximum : left + right;
+}
+
+template <::std::integral char_type, typename flt>
+inline constexpr char_type *exact_precision_copy(
+	char_type *iter, exact_precision_decimal<flt> const &decimal,
+	::std::size_t first, ::std::size_t last) noexcept
+{
+	for (; first != last; ++first)
+	{
+		*iter = ::fast_io::char_literal_add<char_type>(decimal.digits[first]);
+		++iter;
+	}
+	return iter;
+}
+
+template <bool comma, bool json_float, ::std::integral char_type, typename flt>
+inline constexpr char_type *exact_precision_fixed(
+	char_type *iter, exact_precision_decimal<flt> const &decimal, ::std::size_t virtual_size,
+	bool force_fractional, ::std::size_t fractional_precision) noexcept
+{
+	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	auto const point{real_exponent + 1};
+	bool wrote_point{};
+	if (point <= 0)
+	{
+		*iter++ = char_literal_v<u8'0', char_type>;
+		if (decimal.digits[0] != 0u || force_fractional)
+		{
+			*iter++ = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+			wrote_point = true;
+			iter = ::fast_io::details::fill_zeros_impl(iter, static_cast<::std::size_t>(-point));
+			iter = ::fast_io::details::exact_precision_copy(iter, decimal, 0u, decimal.size);
+			iter = ::fast_io::details::fill_zeros_impl(iter, virtual_size - decimal.size);
+		}
+	}
+	else
+	{
+		auto const integer_digits{static_cast<::std::size_t>(point)};
+		if (integer_digits < virtual_size)
+		{
+			auto const from_decimal{integer_digits < decimal.size ? integer_digits : decimal.size};
+			iter = ::fast_io::details::exact_precision_copy(iter, decimal, 0u, from_decimal);
+			if (from_decimal < integer_digits)
+			{
+				iter = ::fast_io::details::fill_zeros_impl(iter, integer_digits - from_decimal);
+			}
+			*iter++ = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+			wrote_point = true;
+			if (integer_digits < decimal.size)
+			{
+				iter = ::fast_io::details::exact_precision_copy(iter, decimal, integer_digits, decimal.size);
+			}
+			if (decimal.size < virtual_size)
+			{
+				iter = ::fast_io::details::fill_zeros_impl(iter, virtual_size -
+																	 (decimal.size < integer_digits ? integer_digits : decimal.size));
+			}
+		}
+		else
+		{
+			iter = ::fast_io::details::exact_precision_copy(iter, decimal, 0u, decimal.size);
+			iter = ::fast_io::details::fill_zeros_impl(iter, integer_digits - decimal.size);
+		}
+	}
+	if (force_fractional)
+	{
+		auto const present{point <= 0 ? static_cast<::std::size_t>(-point) + virtual_size : (point < static_cast<::std::int_least32_t>(virtual_size) ? virtual_size - static_cast<::std::size_t>(point) : 0u)};
+		if (!wrote_point && fractional_precision)
+		{
+			*iter++ = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+			wrote_point = true;
+		}
+		if (present < fractional_precision)
+		{
+			iter = ::fast_io::details::fill_zeros_impl(iter, fractional_precision - present);
+		}
+	}
+	if constexpr (json_float)
+	{
+		if (!wrote_point)
+		{
+			iter = ::fast_io::details::print_rsv_fp_append_json_float_zero<comma>(iter);
+		}
+	}
+	return iter;
+}
+
+template <typename flt, bool comma, bool uppercase_e, ::std::integral char_type>
+inline constexpr char_type *exact_precision_scientific(
+	char_type *iter, exact_precision_decimal<flt> const &decimal,
+	::std::size_t fractional_precision, bool preserve) noexcept
+{
+	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	*iter++ = ::fast_io::char_literal_add<char_type>(decimal.digits[0]);
+	auto const available{decimal.size - 1u};
+	auto const used{available < fractional_precision ? available : fractional_precision};
+	if (used || (preserve && fractional_precision))
+	{
+		*iter++ = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+		iter = ::fast_io::details::exact_precision_copy(iter, decimal, 1u, used + 1u);
+		if (preserve && used < fractional_precision)
+		{
+			iter = ::fast_io::details::fill_zeros_impl(iter, fractional_precision - used);
+		}
+	}
+	return ::fast_io::details::print_rsv_fp_e_impl<flt, uppercase_e>(iter, real_exponent);
+}
+
+template <typename flt, bool comma, bool uppercase_e,
+		  ::fast_io::manipulators::floating_format format,
+		  ::fast_io::manipulators::floating_precision precision_mode,
+		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
+		  ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
+	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative) noexcept
+{
+	constexpr bool fractional{::fast_io::details::floating_precision_is_fractional<precision_mode>};
+	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
+	auto decimal{::fast_io::details::exact_precision_from_binary<flt>(mantissa, exponent)};
+	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	::std::size_t significant{};
+	::std::int_least32_t keep{};
+	if constexpr (fractional)
+	{
+		if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
+		{
+			significant = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
+			keep = significant > static_cast<::std::size_t>(INT_LEAST32_MAX) ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(significant);
+		}
+		else if (precision > static_cast<::std::size_t>(INT_LEAST32_MAX))
+		{
+			keep = INT_LEAST32_MAX;
+			significant = static_cast<::std::size_t>(keep);
+		}
+		else
+		{
+			auto const requested_keep{static_cast<::std::int_least64_t>(real_exponent) + 1 +
+									  static_cast<::std::int_least64_t>(precision)};
+			keep = INT_LEAST32_MAX < requested_keep ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(requested_keep);
+			significant = keep < 0 ? 0u : static_cast<::std::size_t>(keep);
+		}
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		keep = significant > static_cast<::std::size_t>(INT_LEAST32_MAX) ? INT_LEAST32_MAX : static_cast<::std::int_least32_t>(significant);
+	}
+	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
+	if constexpr (!preserve)
+	{
+		::fast_io::details::exact_precision_trim(decimal);
+	}
+
+	if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
+	{
+		auto const fractional_digits{fractional ? precision : significant - 1u};
+		return ::fast_io::details::exact_precision_scientific<flt, comma, uppercase_e>(
+			iter, decimal, fractional_digits, preserve);
+	}
+	auto virtual_size{decimal.size};
+	if constexpr (preserve && !fractional)
+	{
+		if (virtual_size < significant)
+		{
+			virtual_size = significant;
+		}
+	}
+	if constexpr (format == ::fast_io::manipulators::floating_format::fixed ||
+				  (fractional && format == ::fast_io::manipulators::floating_format::decimal))
+	{
+		return ::fast_io::details::exact_precision_fixed<comma, json_float>(
+			iter, decimal, virtual_size, fractional && preserve, precision);
+	}
+	auto const virtual_padding{virtual_size - decimal.size};
+	bool fixed{};
+	if (virtual_padding <= static_cast<::std::size_t>(INT_LEAST32_MAX))
+	{
+		auto const virtual_exponent{static_cast<::std::int_least64_t>(decimal.exponent) -
+									static_cast<::std::int_least64_t>(virtual_padding)};
+		fixed = -5 < virtual_exponent && virtual_exponent < 7;
+	}
+	if constexpr (format == ::fast_io::manipulators::floating_format::decimal)
+	{
+		auto const rounded_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+		::std::size_t fixed_length{};
+		if (0 <= rounded_exponent)
+		{
+			auto const integer_digits{static_cast<::std::size_t>(rounded_exponent) + 1u};
+			if (virtual_size <= static_cast<::std::size_t>(rounded_exponent))
+			{
+				fixed_length = integer_digits;
+			}
+			else
+			{
+				fixed_length = ::fast_io::details::exact_precision_saturating_add(
+					virtual_size, virtual_size == integer_digits ? 1u : 2u);
+			}
+		}
+		else
+		{
+			fixed_length = ::fast_io::details::exact_precision_saturating_add(
+				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
+		}
+		auto const scientific_length{::fast_io::details::exact_precision_saturating_add(
+			virtual_size, virtual_size == 1u ? 3u : 5u)};
+		fixed = scientific_length >= fixed_length;
+	}
+	if (fixed)
+	{
+		return ::fast_io::details::exact_precision_fixed<comma, json_float>(
+			iter, decimal, virtual_size, false, precision);
+	}
+	return ::fast_io::details::exact_precision_scientific<flt, comma, uppercase_e>(
+		iter, decimal, virtual_size - 1u, preserve);
+}
+
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding, bool preserve_trailing_zero = false>
 inline constexpr void print_rsv_fp_round_to_significant(
 	::fast_io::details::dragonbox_decimal_mantissa_type<flt> &m10, ::std::int_least32_t &e10,
@@ -3144,6 +3618,12 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 		{
 			return prsv_fp_nan_impl<showpos, uppercase, nan_show_sign, nan_show_type, mbits>(iter, mantissa, sign);
 		}
+		if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float))
+		{
+			return ::fast_io::details::print_rsvflt_precision_define_impl<
+				showpos, uppercase, uppercase_e, comma, mt, precision_mode, rounding,
+				nan_show_sign, nan_show_type, json_float>(iter, static_cast<float>(f), precision);
+		}
 		iter = print_rsv_fp_sign_impl<showpos>(iter, sign);
 		if (!mantissa && !exponent)
 		{
@@ -3209,35 +3689,65 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 				return iter;
 			}
 		}
-		auto [m10, e10] =
-			[]([[maybe_unused]] flt value,
-			   [[maybe_unused]] mantissa_type binary_mantissa,
-			   [[maybe_unused]] ::std::int_least32_t binary_exponent,
-			   [[maybe_unused]] bool negative) constexpr noexcept {
-				if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float))
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+		{
+			auto const [m10, e10]{::fast_io::details::dragonbox_impl<flt, rounding>(
+				mantissa, static_cast<::std::int_least32_t>(exponent), sign)};
+			auto const length{static_cast<::std::size_t>(chars_len<10, true>(m10))};
+			::std::size_t requested{};
+			if constexpr (::fast_io::details::floating_precision_is_fractional<precision_mode>)
+			{
+				if constexpr (mt == ::fast_io::manipulators::floating_format::scientific)
 				{
-					if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
-					{
-						auto const decimal{::fast_io::details::dragonbox_narrow_shortest_lookup<flt>(
-							binary_mantissa, binary_exponent)};
-						return m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>{
-							decimal.m10, decimal.e10};
-					}
-					else
-					{
-						return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
-							value, binary_mantissa, binary_exponent, negative);
-					}
+					requested = ::fast_io::details::exact_precision_saturating_add(precision, 1u);
 				}
 				else
 				{
-					return ::fast_io::details::dragonbox_impl<flt, rounding>(
-						binary_mantissa, binary_exponent, negative);
+					auto const real_exponent{e10 + static_cast<::std::int_least32_t>(length) - 1};
+					if (0 <= real_exponent)
+					{
+						requested = ::fast_io::details::exact_precision_saturating_add(
+							::fast_io::details::exact_precision_saturating_add(
+								static_cast<::std::size_t>(real_exponent), precision),
+							1u);
+					}
+					else
+					{
+						auto const leading_fractional_zeros{static_cast<::std::size_t>(-real_exponent)};
+						if (leading_fractional_zeros <= precision)
+						{
+							requested = precision - leading_fractional_zeros + 1u;
+						}
+					}
 				}
-			}(f, mantissa, static_cast<::std::int_least32_t>(exponent), sign);
-		return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+			}
+			else
+			{
+				requested = precision ? precision : 1u;
+			}
+			bool carrier_is_exact_enough{};
+			if (requested && requested < length)
+			{
+				auto const cut{length - requested};
+				if (cut < 20u)
+				{
+					auto const divisor{::fast_io::details::print_rsv_fp_pow10_0_to_19_table[cut]};
+					auto const remainder{static_cast<::std::uint_least64_t>(m10 % divisor)};
+					auto const twice_remainder{remainder << 1u};
+					auto const distance{twice_remainder < divisor ? divisor - twice_remainder : twice_remainder - divisor};
+					carrier_is_exact_enough = 1u < distance;
+				}
+			}
+			if (carrier_is_exact_enough)
+			{
+				return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+					flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
+					iter, m10, e10, precision, sign);
+			}
+		}
+		return ::fast_io::details::print_rsvflt_exact_precision_define_impl<
 			flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
-			iter, m10, e10, precision, sign);
+			iter, mantissa, exponent, precision, sign);
 	}
 }
 
