@@ -3,7 +3,7 @@
 namespace fast_io::details::ryu
 {
 
-inline constexpr table_size{64};
+inline constexpr ::std::size_t table_size{64};
 
 inline constexpr ::std::uint_least16_t power_offset[table_size] = {
 	0, 2, 5, 8, 12, 16, 21, 26, 32, 39,
@@ -14,7 +14,7 @@ inline constexpr ::std::uint_least16_t power_offset[table_size] = {
 	769, 798, 828, 858, 889, 920, 952, 984, 1017, 1050,
 	1084, 1118, 1153, 1188};
 
-inline constexpr ::std::uint_last64_t pow10_split[1224][3] = {
+inline constexpr ::std::uint_least64_t pow10_split[1224][3] = {
 	{1u, 72057594037927936u, 0u},
 	{699646928636035157u, 72057594u, 0u},
 	{1u, 0u, 256u},

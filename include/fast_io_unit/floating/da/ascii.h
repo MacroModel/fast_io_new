@@ -15,6 +15,14 @@ inline constexpr ::std::uint_least64_t ascii_div10000_multiplier{static_cast<::s
 inline constexpr ::std::uint_least64_t ascii_div100_multiplier{static_cast<::std::uint_least64_t>(5243)};
 inline constexpr ::std::uint_least64_t ascii_div10_multiplier{static_cast<::std::uint_least64_t>(103)};
 
+inline constexpr bool ascii_x86_cached_bcd_constants_default{
+#if defined(__GNUC__) && !defined(__clang__)
+	__GNUC__ < 16
+#else
+	false
+#endif
+};
+
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::uint_least64_t
 ascii_bcd8(::std::uint_least64_t value) noexcept
 {
@@ -169,6 +177,23 @@ using ascii_x86_u32x4 [[gnu::vector_size(16)]] = unsigned int;
 using ascii_x86_i32x4 [[gnu::vector_size(16)]] = int;
 using ascii_x86_u64x2 [[gnu::vector_size(16)]] = unsigned long long;
 
+struct alignas(16) ascii_x86_bcd_constant_cache
+{
+	ascii_x86_u16x8 div100;
+	ascii_x86_u32x4 neg100;
+	ascii_x86_u16x8 div10;
+	ascii_x86_u16x8 neg10;
+};
+
+#if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
+[[__gnu__::__visibility__("hidden")]]
+#endif
+inline constexpr ascii_x86_bcd_constant_cache ascii_x86_bcd_constants{
+	{5243, 0, 5243, 0, 5243, 0, 5243, 0},
+	{65436u, 65436u, 65436u, 65436u},
+	{6554, 6554, 6554, 6554, 6554, 6554, 6554, 6554},
+	{246, 246, 246, 246, 246, 246, 246, 246}};
+
 struct ascii_x86_digit_data
 {
 	ascii_digit_block digits;
@@ -191,23 +216,46 @@ ascii_x86_mul_low_u32_to_u64(ascii_x86_u32x4 left, ascii_x86_u32x4 right) noexce
 														__builtin_bit_cast(ascii_x86_i32x4, right)));
 }
 
+template <bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_x86_u8x16
 ascii_x86_bcd4x4(ascii_x86_u32x4 value) noexcept
 {
-	auto const hundreds_words{::fast_io::details::da::ascii_x86_mul_high_u16(
-		__builtin_bit_cast(ascii_x86_u16x8, value),
-		ascii_x86_u16x8{5243, 0, 5243, 0, 5243, 0, 5243, 0})};
-	auto const hundreds{__builtin_bit_cast(ascii_x86_u32x4, hundreds_words) >> 3u};
-	auto const pairs{value + hundreds * ascii_x86_u32x4{65436u, 65436u, 65436u, 65436u}};
-	auto const tens{::fast_io::details::da::ascii_x86_mul_high_u16(
-		__builtin_bit_cast(ascii_x86_u16x8, pairs),
-		ascii_x86_u16x8{6554, 6554, 6554, 6554, 6554, 6554, 6554, 6554})};
-	return __builtin_bit_cast(ascii_x86_u8x16,
-							  __builtin_bit_cast(ascii_x86_u16x8, pairs) +
-								  tens * ascii_x86_u16x8{246, 246, 246, 246, 246, 246, 246, 246});
+	if constexpr (use_cached_constants)
+	{
+		auto constants{__builtin_addressof(ascii_x86_bcd_constants)};
+		if (!__builtin_is_constant_evaluated())
+		{
+			__asm__("" : "+r"(constants));
+		}
+		auto const hundreds_words{::fast_io::details::da::ascii_x86_mul_high_u16(
+			__builtin_bit_cast(ascii_x86_u16x8, value),
+			constants->div100)};
+		auto const hundreds{__builtin_bit_cast(ascii_x86_u32x4, hundreds_words) >> 3u};
+		auto const pairs{value + hundreds * constants->neg100};
+		auto const tens{::fast_io::details::da::ascii_x86_mul_high_u16(
+			__builtin_bit_cast(ascii_x86_u16x8, pairs),
+			constants->div10)};
+		return __builtin_bit_cast(ascii_x86_u8x16,
+			__builtin_bit_cast(ascii_x86_u16x8, pairs) +
+				tens * constants->neg10);
+	}
+	else
+	{
+		auto const hundreds_words{::fast_io::details::da::ascii_x86_mul_high_u16(
+			__builtin_bit_cast(ascii_x86_u16x8, value),
+			ascii_x86_u16x8{5243, 0, 5243, 0, 5243, 0, 5243, 0})};
+		auto const hundreds{__builtin_bit_cast(ascii_x86_u32x4, hundreds_words) >> 3u};
+		auto const pairs{value + hundreds * ascii_x86_u32x4{65436u, 65436u, 65436u, 65436u}};
+		auto const tens{::fast_io::details::da::ascii_x86_mul_high_u16(
+			__builtin_bit_cast(ascii_x86_u16x8, pairs),
+			ascii_x86_u16x8{6554, 6554, 6554, 6554, 6554, 6554, 6554, 6554})};
+		return __builtin_bit_cast(ascii_x86_u8x16,
+								  __builtin_bit_cast(ascii_x86_u16x8, pairs) +
+									  tens * ascii_x86_u16x8{246, 246, 246, 246, 246, 246, 246, 246});
+	}
 }
 
-template <typename flt>
+template <typename flt, bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_x86_digit_data
 make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 {
@@ -215,7 +263,7 @@ make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 	{
 		auto const pairs{value + static_cast<::std::uint_least64_t>(4294957296) *
 									 ((value * ascii_div10000_multiplier) >> 40u)};
-		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4(
+		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4<use_cached_constants>(
 			ascii_x86_u32x4{static_cast<unsigned int>(pairs),
 							static_cast<unsigned int>(pairs >> 32u), 0u, 0u})};
 		auto const raw{__builtin_bit_cast(ascii_x86_u64x2, unshuffled)[0]};
@@ -242,7 +290,7 @@ make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 		auto const pairs{limbs + ::fast_io::details::da::ascii_x86_mul_low_u32_to_u64(
 									 __builtin_bit_cast(ascii_x86_u32x4, quotients),
 									 ascii_x86_u32x4{4294957296u, 0u, 4294957296u, 0u})};
-		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4(
+		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4<use_cached_constants>(
 			__builtin_bit_cast(ascii_x86_u32x4, pairs))};
 		auto const nonzero_mask{static_cast<::std::uint_least32_t>(
 			__builtin_ia32_pmovmskb128(__builtin_bit_cast(ascii_x86_c8x16,
@@ -260,11 +308,11 @@ make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 	}
 }
 
-template <typename flt>
+template <typename flt, bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_digit_block
 make_ascii_digit_block_x86(::std::uint_least64_t value) noexcept
 {
-	return ::fast_io::details::da::make_ascii_digit_data_x86<flt>(value).digits;
+	return ::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(value).digits;
 }
 #endif
 
@@ -566,8 +614,9 @@ template <typename flt, bool comma, bool json_float>
 		auto const assembled{__builtin_bit_cast(
 			ascii_x86_u8x16,
 			__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, packed), shuffle))};
+		auto const trailing_digit{__builtin_bit_cast(ascii_x86_u8x16, packed)[15]};
 		__builtin_memcpy(buffer, __builtin_addressof(assembled), sizeof(assembled));
-		buffer[16u] = static_cast<char>(digits.high >> 56u);
+		buffer[16u] = static_cast<char>(trailing_digit);
 		destination[layout.point_position] = static_cast<char>(comma ? u8',' : u8'.');
 		buffer[layout.binary64_last_digit_position[extra]] =
 			static_cast<char>(u8'0' + (has_last_digit ? last_digit : 0u));
@@ -739,7 +788,8 @@ template <typename flt, bool comma, bool uppercase_e>
 	return ::fast_io::details::da::print_ascii_exponent<uppercase_e>(buffer, exponent);
 }
 
-template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false>
+template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false,
+	bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest(
 	char *destination, conversion_result converted) noexcept
 {
@@ -769,7 +819,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(converted.significand)};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
-	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt>(converted.significand)};
+	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(
+		converted.significand)};
 	auto const digits{digit_data.digits};
 #else
 	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(converted.significand)};
@@ -803,7 +854,7 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(
 				exponent - ascii_fixed_layout_cache::minimum)]};
 			auto const fixed_mask{layout.decimal_fixed_mask};
-#endif
+		#endif
 			use_fixed = static_cast<bool>(
 				(fixed_mask >> (digit_count - 1u)) & 1u);
 		}
@@ -863,5 +914,161 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		destination, digits, digit_count, exponent, has_extra_digit,
 		converted.last_digit, converted.has_last_digit);
 }
+
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 16
+template <typename flt, ::fast_io::manipulators::scalar_flags flags>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fixed_direct(
+	char *destination, conversion_result converted) noexcept
+{
+	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
+	constexpr ::std::uint_least64_t extra_digit_threshold{
+		binary32 ? static_cast<::std::uint_least64_t>(10000000) :
+			static_cast<::std::uint_least64_t>(1000000000000000)};
+	constexpr ::std::uint_least32_t block_size{binary32 ? 8u : 16u};
+	auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(
+		converted.significand)};
+	auto const has_extra_digit{converted.significand >= extra_digit_threshold};
+	auto const digit_count{converted.has_last_digit
+		? block_size + static_cast<::std::uint_least32_t>(has_extra_digit)
+		: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
+	auto const exponent{static_cast<::std::int_least32_t>(
+		converted.exponent + (binary32 ? 7 : 15) +
+		static_cast<::std::int_least32_t>(has_extra_digit))};
+	return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
+		destination, digits, digit_count, exponent, has_extra_digit,
+		converted.last_digit, converted.has_last_digit);
+}
+#endif
+
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 15
+template <typename flt, ::fast_io::manipulators::scalar_flags flags>
+[[nodiscard]]
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline char *print_ascii_fixed_split(
+	char *destination, ::std::uint_least64_t low, ::std::uint_least64_t high,
+	::std::uint_least32_t span, ::std::uint_least32_t digit_count,
+	::std::int_least32_t exponent, bool has_extra_digit,
+	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
+{
+	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
+	constexpr ::std::int_least32_t fast_fixed_maximum{
+		binary32 ? ascii_fixed_layout_cache::compact_maximum : ascii_fixed_layout_cache::binary64_shuffle_maximum};
+	ascii_digit_block const digits{low, high, span};
+	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
+	{
+		if (exponent <= fast_fixed_maximum)
+		{
+			return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
+				destination, digits, digit_count, exponent, has_extra_digit,
+				last_digit, has_last_digit);
+		}
+		return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
+			destination, digits, digit_count, exponent, has_extra_digit,
+			last_digit, has_last_digit);
+	}
+	else if (ascii_fixed_layout_cache::minimum <= exponent &&
+			 exponent <= fast_fixed_maximum)
+	{
+		return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
+			destination, digits, digit_count, exponent, has_extra_digit,
+			last_digit, has_last_digit);
+	}
+	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
+	{
+		return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
+			destination, digits, digit_count, exponent, has_extra_digit,
+			last_digit, has_last_digit);
+	}
+	else
+	{
+		return nullptr;
+	}
+}
+
+template <typename flt, ::fast_io::manipulators::scalar_flags flags>
+[[nodiscard]]
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline char *print_ascii_shortest_split(
+	char *destination, ::std::uint_least64_t significand,
+	::std::int_least32_t exponent, ::std::uint_least32_t last_digit,
+	bool has_last_digit) noexcept
+{
+#if __GNUC__ == 15
+	return ::fast_io::details::da::print_ascii_shortest<flt, flags>(
+		destination, {significand, exponent, last_digit, has_last_digit});
+#else
+	if constexpr (sizeof(flt) <= sizeof(float))
+	{
+		return ::fast_io::details::da::print_ascii_shortest<flt, flags>(
+			destination, {significand, exponent, last_digit, has_last_digit});
+	}
+	else
+	{
+		auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(significand)};
+		auto const has_extra_digit{
+			significand >= static_cast<::std::uint_least64_t>(1000000000000000)};
+		auto const digit_count{has_last_digit
+			? 16u + static_cast<::std::uint_least32_t>(has_extra_digit)
+			: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
+		auto const real_exponent{static_cast<::std::int_least32_t>(
+			exponent + 15 + static_cast<::std::int_least32_t>(has_extra_digit))};
+		bool use_fixed{};
+		if constexpr (flags.floating == ::fast_io::manipulators::floating_format::fixed)
+		{
+			use_fixed = true;
+		}
+		else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
+		{
+			auto const decimal_exponent{static_cast<::std::int_least32_t>(
+				real_exponent - static_cast<::std::int_least32_t>(digit_count) + 1)};
+			use_fixed = -5 < decimal_exponent && decimal_exponent < 7;
+		}
+		else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
+		{
+			if (ascii_fixed_layout_cache::minimum <= real_exponent &&
+				real_exponent <= ascii_fixed_layout_cache::maximum)
+			{
+				auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(
+					real_exponent - ascii_fixed_layout_cache::minimum)]};
+				use_fixed = static_cast<bool>(
+					(layout.decimal_fixed_mask >> (digit_count - 1u)) & 1u);
+			}
+		}
+		if (use_fixed)
+		{
+			return ::fast_io::details::da::print_ascii_fixed_split<flt, flags>(
+				destination, digits.low, digits.high, digits.span, digit_count,
+				real_exponent, has_extra_digit, last_digit, has_last_digit);
+		}
+		return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
+			destination, digits, digit_count, real_exponent, has_extra_digit,
+			last_digit, has_last_digit);
+	}
+#endif
+}
+
+#endif
+
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14
+template <typename flt, ::fast_io::manipulators::scalar_flags flags>
+[[nodiscard]]
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline char *print_ascii_shortest_regular_direct(
+	char *destination, ::std::uint_least64_t significand,
+	::std::uint_least32_t raw_exponent) noexcept
+{
+	auto const converted{::fast_io::details::da::compute_binary64(significand, raw_exponent)};
+	return ::fast_io::details::da::print_ascii_shortest<flt, flags>(destination, converted);
+}
+#endif
 
 } // namespace fast_io::details::da

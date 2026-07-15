@@ -45,11 +45,7 @@ inline constexpr bool staged_prepares_sign{
 
 /// @brief Indicates whether the direct scalar ASCII emitter is available for the current implementation.
 inline constexpr bool scalar_ascii_shortest_supported{
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__)
-	false
-#else
 	true
-#endif
 };
 
 struct signed_conversion_result
