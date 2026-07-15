@@ -5297,6 +5297,26 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 					flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
 					iter, m10, e10, precision, sign);
 			}
+			if constexpr (::fast_io::details::floating_precision_is_fractional<precision_mode> &&
+					  mt != ::fast_io::manipulators::floating_format::scientific)
+			{
+				// A leading digit at least two places below the requested quantum is strictly
+				// below its halfway boundary, so every nearest policy produces fractional zero.
+				constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+				if (precision <= static_cast<::std::size_t>(int32_max))
+				{
+					auto const real_exponent{
+						e10 + static_cast<::std::int_least32_t>(length) - 1};
+					auto const quantum_distance{
+						static_cast<::std::int_least64_t>(real_exponent) +
+						static_cast<::std::int_least64_t>(precision)};
+					if (quantum_distance <= -2)
+					{
+						return ::fast_io::details::print_rsvflt_fractional_tiny_zero_impl<
+							flt, comma, uppercase_e, mt, precision_mode, json_float>(iter, precision);
+					}
+				}
+			}
 			return ::fast_io::details::print_rsvflt_precision_slow_path_impl<
 				flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
 				iter, mantissa, exponent, precision, sign, m10, e10, requested, length);
