@@ -2119,7 +2119,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 		}
 	}
-#if defined(__SSE4_1__)
+// GCC duplicates this base-dependent SIMD graph aggressively; its smaller
+// scalar graph is faster once the complete base 2--36 scanner is instantiated.
+#if defined(__SSE4_1__) && \
+	!(defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__))
 	if constexpr ((base == 5u || base == 6u || base == 7u || base == 9u ||
 				  base == 14u || 16u <= base) &&
 				  my_unsigned_integral<T> &&

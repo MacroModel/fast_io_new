@@ -326,6 +326,139 @@ compiles the submitted kernels successfully with `-O3 -std=c++20
 -march=haswell`; the response contains direct `vpmaddubsw` and `vpmaddwd`
 instructions and no helper call.
 
+## GCC 13--16 high-ISA front-end follow-up
+
+This follow-up was performed on 2026-07-15 against commit
+`5df0a94736da0f7363c346d334e87d2e0d0d406e`. It addresses a GCC-only
+regression discovered by compiling the shared integer scanner for SSE4.1 and
+higher targets. The native machine was the same Intel Core i9-14900HX used
+above. Every timed process was pinned with `taskset -c 4` to one 5.8 GHz
+P-core, builds and runs were serialized, and no E-core result was used.
+
+The GCC matrix used GCC 13.4, 14.3, 15.2, and a GCC 16 development snapshot.
+GCC 14 and 16 were run from isolated unpacked toolchain roots. Clang 23.0.0git
+was the compiler control. Every executable used C++20, `-O3 -DNDEBUG
+-march=haswell`.
+The benchmark retained the 2,048 inputs, 128 timed passes, nine rotated samples,
+and per-point median described above. Thus every row below covers all 665
+unsigned `(base, digits)` points rather than a selected set of lengths.
+
+GCC expanded the generic eight-byte SSE4.1 template much more aggressively
+than Clang. In particular, every base specialization materialized several
+byte-splat constants, copied a complete SIMD validation and reduction graph,
+and retained the scalar retry graph. The result was a substantial instruction
+cache and decode footprint even though the isolated SIMD arithmetic block was
+competitive. The retained fix therefore disables only this generic eight-byte
+entry for GCC proper. The specialized base-8, base-10, and base-16 SIMD kernels
+remain enabled, as do the generic SSE kernel on Clang and other compilers.
+There is no new function, runtime dispatch, ISA probe, intrinsic header, or
+public-wrapper-only fast path.
+
+The paired baseline/candidate ratios below are geometric means. A
+baseline/candidate ratio above one is the speedup delivered by the change; the
+competitor/API ratios above one favor the final fast_io implementation.
+
+| Compiler | Range | Baseline/candidate API | Baseline/candidate core | std/API | fast_float/API |
+|:---|:---|---:|---:|---:|---:|
+| GCC 13.4 | exact | 1.312x | 1.309x | 1.430x | 1.163x |
+| GCC 13.4 | terminated | 1.419x | 1.471x | 1.503x | 1.090x |
+| GCC 14.3 | exact | 1.389x | 1.369x | 1.329x | 1.157x |
+| GCC 14.3 | terminated | 1.262x | 1.253x | 1.350x | 1.084x |
+| GCC 15.2 | exact | 1.324x | 1.323x | 1.326x | 1.304x |
+| GCC 15.2 | terminated | 1.242x | 1.309x | 1.200x | 1.114x |
+| GCC 16 | exact | 1.344x | 1.317x | 1.322x | 1.216x |
+| GCC 16 | terminated | 1.221x | 1.276x | 1.231x | 1.078x |
+
+The final independent matrix reproduced an aggregate lead over both comparison
+implementations for every GCC version and both range shapes. Pointwise misses
+remain, especially very short inputs and several decimal lengths; the table is
+an all-point geometric mean and is deliberately not presented as a claim that
+every individual duration is lower than both competitors.
+
+### Assembly size and front-end pressure
+
+The complete 665-wrapper executable shrank for every tested GCC release:
+
+| Compiler | Baseline `.text` | Final `.text` | Reduction |
+|:---|---:|---:|---:|
+| GCC 13.4 | 123,019 B | 97,387 B | 20.8% |
+| GCC 14.3 | 126,116 B | 98,428 B | 22.0% |
+| GCC 15.2 | 154,704 B | 127,168 B | 17.8% |
+| GCC 16 | 163,264 B | 132,424 B | 18.9% |
+
+For GCC 15 base 36, the public fixed-base instance fell from 1,253 bytes and
+304 instructions to 837 bytes and 213 instructions. The internal-core instance
+fell from 805 bytes and 204 instructions to 383 bytes and 115 instructions.
+This is the same parser used by internal scanning, so the core improvement is
+not hidden behind the public `from_chars` wrapper.
+
+llvm-mca 23 was run on the generated GCC 15 base-36 hot regions. The old region
+is one complete eight-digit SIMD setup/validation/reduction block; the new
+region is one scalar digit iteration. The final column multiplies the scalar
+block throughput by eight only to place the units on the same digit count.
+
+| Scheduling model | Old SIMD, 8 digits | Final scalar, 1 digit | Final scalar x8 |
+|:---|---:|---:|---:|
+| Haswell | 16.0 cycles | 2.5 cycles | 20.0 cycles |
+| Skylake | 14.0 cycles | 1.7 cycles | 13.6 cycles |
+| Alder Lake P-core | 14.0 cycles | 2.0 cycles | 16.0 cycles |
+| Sapphire Rapids | 14.0 cycles | 2.0 cycles | 16.0 cycles |
+| Zen 2 | 13.5 cycles | 2.5 cycles | 20.0 cycles |
+| Zen 4 | 10.5 cycles | 2.0 cycles | 16.0 cycles |
+
+These figures explain why the SIMD helper remains useful under Clang and why
+the specialized GCC kernels were not removed. They also show why llvm-mca
+alone cannot predict this fix: it models a selected steady-state region, not
+the 18--22% whole-program code-size reduction, instruction-cache residency,
+decode locality, or entry/fallback control-flow layout. Native full-matrix
+timing made the GCC decision; llvm-mca was used to prevent an incorrect claim
+that the isolated SIMD multiply-add sequence itself was slow.
+
+Three broader changes were measured and rejected. Disabling the specialized
+decimal kernel regressed the all-point matrix. Disabling the short hexadecimal
+or 16-byte octal/hexadecimal kernels improved aggregate layout slightly but
+regressed their target bases by up to approximately 11%. Marking the generic
+helper noinline retained the large call-site graph and did not recover
+throughput. A GCC `target("sse4.1,no-avx,no-avx2")` experiment was also rejected:
+cross-header `always_inline` helpers produce target-option mismatches, and
+spreading target attributes into unrelated character tables and containers
+would violate the required ISA isolation.
+
+### Compiler and AArch64 isolation
+
+The change is guarded by `__SSE4_1__` and GCC-proper detection. The following
+complete assembly comparisons are byte-for-byte identical to the unmodified
+HEAD baseline:
+
+- Apple Clang 21, `-mcpu=apple-m4`: 34,616 lines, SHA-256
+  `33df26da6364c6176b0960b0bdccbbb32f73d461570b1e98728101b25c447e12`.
+- Clang 23, x86-64 Haswell: SHA-256
+  `5fedb7d4da20d8b11b28bea66deff1f9f378461dde07ec5e56fd8d9f4e48095c`.
+- GCC 15, SSSE3 with SSE4.1 disabled: SHA-256
+  `26848b5c4e951368f6f76a6a6e58e8d0db8747be4dc46fde5721f857af1e786a`.
+
+Because AArch64 never defines `__SSE4_1__`, both Apple M-series and traditional
+AArch64 remain in the exact same preprocessed and generated path. A fresh
+single-process M4 matrix confirms the assembly result:
+
+| Range | core/API | std/API | API wins vs std | fast_float/API | API wins vs fast_float |
+|:---|---:|---:|---:|---:|---:|
+| exact | 0.979x | 1.997x | 660/665 | 1.349x | 624/665 |
+| terminated | 0.995x | 1.990x | 665/665 | 1.463x | 655/665 |
+
+### GCC-path correctness validation
+
+The GCC-specific branch cannot be exercised by Clang libFuzzer, so it received
+an additional differential driver compiled independently with GCC 13, 14, 15,
+and 16. Public `uint64_t` and shared-core signed/unsigned targets covered bases
+2 through 36, every length from one through the maximum base length, exact and
+terminated ranges, upper- and lower-case letters, an invalid character at
+every input position, and explicit overflow strings. Each binary then checked
+one million deterministic pseudo-random byte strings against
+`std::from_chars`. All eight compiler/target combinations passed. The affected
+GCC 15 public path also passed the same driver under AddressSanitizer and
+UndefinedBehaviorSanitizer.
+
 ## Reproduction
 
 The benchmark binaries were built with the following shape:
