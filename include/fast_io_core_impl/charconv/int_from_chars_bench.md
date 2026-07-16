@@ -794,3 +794,46 @@ one-minute-per-type production libFuzzer pass was rebuilt from the
 no-force-inline source with Clang 23, ASan, and UBSan.  All ten integer types
 completed successfully, totaling 112,377,389 executions; every artifact
 directory remained empty.
+
+## Public five-character API follow-up
+
+The public overload is now templated on its input code-unit type and directly
+supports `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t`.  The integer
+type remains the first template parameter, preserving explicit calls such as
+`from_chars<uint64_t>(...)`.  `basic_from_chars_result<Char>` carries the
+correct `Char const *` pointer; its `char` specialization is exactly
+`std::from_chars_result`, so the existing narrow API keeps its result type.
+No temporary narrow buffer, transcoding pass, allocation, or second parser is
+introduced.
+
+The final deterministic matrix contains all 50 integer/code-unit combinations:
+signed and unsigned 8-, 16-, 32-, 64-, and 128-bit integers, all bases 2--36,
+every valid digit length, signed minima, unsigned maxima, overflow, invalid
+input, and 0/1/2/3/7/8/15/31 trailing code units.  Native M4 Clang and x86-64
+GCC 15 on P-core 4 both pass 50/50.  GCC 15 also passes the same 50 combinations
+with IBM1047 execution and wide-execution character sets.  A constexpr
+round-trip is compiled for every public character type.
+
+The public-interface libFuzzer selects the character type, base, packed wide
+code units, arbitrary input bytes, and formatting value on every iteration.
+Clang 23 with ASan and UBSan ran each of the ten integer types for 60 seconds,
+totaling 76,388,264 executions.  All ten runs completed, all configured
+artifact directories remained empty, and no sanitizer diagnostic was found.
+
+The complete 665-point `uint64_t` native timing matrix measures fixed-base
+public/core ratios for exact and terminated input together.  A ratio above one
+is public overhead:
+
+| Host/compiler | `char` | `wchar_t` | `char8_t` | `char16_t` | `char32_t` |
+|:---|---:|---:|---:|---:|---:|
+| Apple M4, Apple Clang 21 | 1.013x | 0.995x | 1.000x | 1.004x | 0.993x |
+| i9-14900HX, GCC 15 | 0.998x | 1.002x | 1.000x | 0.996x | 0.999x |
+
+On final M4 assembly, representative `char16_t` base-16 public and core
+wrappers are both 92 instructions with no call.  Base-10 uses 53 versus 51
+instructions and both make the same single call; the two extra instructions
+implement the required `parse_code` to `std::errc` result mapping.  On GCC 15,
+both wrappers call the same specialized scanner.  The core call site is 0x4f
+bytes and the public call site is 0x68 bytes; the 25-byte difference is solely
+error-code mapping and has no measurable aggregate hot-success cost above the
+noise shown in the table.

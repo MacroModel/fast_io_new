@@ -488,3 +488,168 @@ signed minima, unsigned maxima, radix-power boundaries, and all five output
 character types.  The same preflight runs before every timed point, so no row
 whose output disagreed with the independent reference entered the performance
 summary.
+
+## Public five-character API follow-up
+
+`fast_io::to_chars` now deduces and directly writes `char`, `wchar_t`,
+`char8_t`, `char16_t`, or `char32_t`.  `basic_to_chars_result<Char>` returns the
+matching pointer type, while `basic_to_chars_result<char>` remains exactly
+`std::to_chars_result`.  The integer template parameter remains first for
+source compatibility with explicit `to_chars<uint64_t>(...)` calls.  Decimal,
+power-of-two, generic-radix, signed-magnitude, capacity, and two-digit-table
+paths operate on the destination code-unit type without transcoding.
+
+The AVX-512 Champagne--Lemire byte writer is restricted to one-byte,
+non-EBCDIC code units.  Wider outputs use the generic JEAIII character template,
+preventing packed byte stores from corrupting UTF-16/32 or `wchar_t` buffers.
+The complete 50-combination native M4, x86-64 GCC 15, and GCC 15 IBM1047
+matrices all pass, together with constexpr round trips for all five types.  The
+shared public-interface production fuzzer contributes 76,388,264 ASan/UBSan
+executions with no finding.
+
+The complete 665-point `uint64_t` fixed-base public/core ratios are:
+
+| Host/compiler | `char` | `wchar_t` | `char8_t` | `char16_t` | `char32_t` |
+|:---|---:|---:|---:|---:|---:|
+| Apple M4, Apple Clang 21 | 1.000x | 0.999x | 1.001x | 0.992x | 1.010x |
+| i9-14900HX, GCC 15 | 1.022x | 1.010x | 1.016x | 1.007x | 1.010x |
+
+The timing core intentionally omits capacity and sign checks; the GCC public
+cost therefore includes required API semantics.  When public wrappers are
+compared with the internal fixed-base helper carrying the same checks, GCC 15
+emits identical sizes for all five code-unit types at bases 10 and 16.  M4
+does the same: representative `char16_t` public/core pairs are 17/17
+instructions at base 10 and 31/31 at base 16, with identical call counts.
+Runtime-base measurements are kept separate because selecting among 35 radix
+specializations is genuine runtime work, not character-template wrapping.
+
+## Compact runtime-base dispatcher follow-up (2026-07-16)
+
+The public runtime-base formatter previously retained 35 fixed-base template
+specializations.  That made a single dynamic `uint64_t`/`char` entry occupy
+roughly 92--101 KiB.  The replacement has two explicitly different compiler
+outcomes:
+
+- A literal base is recognized with `__builtin_constant_p` and still enters the
+  corresponding fixed-base template.  It does not retain the compact runtime
+  kernel, its digit tables, its reciprocal tables, or its power-base dispatch.
+- A genuinely dynamic base enters one compact kernel.  Decimal retains JEAIII;
+  bases 2, 4, 8, 16, and 32 use shift-based output; all other bases share one
+  generic loop.  x86-64 uses branch-free multiply-high reciprocal division,
+  while AArch64 uses its measured-faster hardware division path.
+
+The isolated public probes for literal bases 3, 10, and 16 contain no dynamic
+jump table and no `to_chars_runtime_*` symbol on either M4 or x86-64.  Clang 21
+on x86-64 emits totals of 1,253, 3,565, and 1,153 bytes for those three probes,
+versus 6,241 bytes for the complete dynamic entry.  On M4 the corresponding
+totals are 678, 3,564, 2,336, and 4,956 bytes.  The platform difference comes
+from the established fixed-base power kernels, not from leaked runtime
+dispatch.
+
+### Runtime code size
+
+Section totals are `.text + .rodata` after function/data section splitting and
+`ld -r --gc-sections`.  The Linux probe uses C++20, `-O3`, `-march=haswell`, no
+exceptions, no RTTI, and no unwind tables.  Both Clang standard-library rows
+have the same result because the retained implementation is self-contained.
+
+| Compiler | Old bytes | Compact bytes | Reduction |
+|:---|---:|---:|---:|
+| GCC 13 | 98,201 | 7,111 | 92.8% |
+| GCC 14 | 92,085 | 7,316 | 92.1% |
+| GCC 15 | 91,806 | 7,247 | 92.1% |
+| GCC 16 | 93,271 | 7,115 | 92.4% |
+| Clang 18 | 101,646 | 6,143 | 94.0% |
+| Clang 19 | 101,297 | 6,247 | 93.8% |
+| Clang 20 | 101,266 | 6,241 | 93.8% |
+| Clang 21 | 101,260 | 6,241 | 93.8% |
+
+The retained x86-64 dynamic call graph contains 2,104 bytes of read-only data:
+the decimal table, 704 bytes of compact binary/octal/hexadecimal grouping
+tables, 36 digit code units, three 280-byte reciprocal tables, and the
+compiler's small dispatch table and alignment.  M4 does not reference or emit
+the x86 reciprocal tables; its linked dynamic entry contains 1,140 bytes of
+constants.
+
+GCC instantiates the fixed-base template references while compiling the
+`__builtin_constant_p` dispatcher, even when the caller supplies a dynamic
+base.  Consequently, a relocatable GCC object built without section GC can
+still contain about 52 KiB of unreferenced COMDAT tables.  They are not
+reachable from the dynamic function after optimization, and
+`-ffunction-sections -fdata-sections` with linker `--gc-sections` removes them,
+producing the 7.1--7.3 KiB totals above.  Clang suppresses those dead
+instantiations before object emission.  Removing the GCC literal template
+references made the raw object small but slowed fixed-base output by 57--90%
+in tested alternatives, so that regression was rejected.
+
+### Dynamic-base throughput
+
+This focused benchmark prevents constant propagation with an out-of-line call
+whose base is carried in the input object.  It covers every radix-power
+boundary for `uint64_t`, one value on both sides where representable, and 32
+deterministic random values per base.  Each reported process result is the
+median of five 2,000-repetition trials; the table below takes the median of
+three sequential processes.  The Linux processes were pinned to P-core 4 on an
+i9-14900HX.  `std/fast_io` greater than one favors fast_io.
+
+| Host/compiler | Group | fast_io ns | std ns | median `std/fast_io` |
+|:---|:---|---:|---:|---:|
+| Apple M4, Clang 20 | all bases | 10.554 | 11.814 | 1.118x |
+|  | decimal | 3.699 | 4.580 | 1.235x |
+|  | power of two | 7.269 | 9.777 | 1.345x |
+|  | other bases | 11.755 | 12.756 | 1.091x |
+| i9-14900HX, GCC 15 | all bases | 11.567 | 24.410 | 2.113x |
+|  | decimal | 3.281 | 7.104 | 2.162x |
+|  | power of two | 4.915 | 17.929 | 3.617x |
+|  | other bases | 13.413 | 26.143 | 1.949x |
+| i9-14900HX, Clang 21 | all bases | 11.128 | 26.097 | 2.357x |
+|  | decimal | 2.962 | 6.363 | 2.138x |
+|  | power of two | 5.960 | 15.262 | 2.561x |
+|  | other bases | 12.588 | 24.959 | 1.987x |
+
+The compact dynamic path is intentionally smaller than the former 35-kernel
+runtime expansion and is correspondingly slower than that approximately
+100-KiB expansion for some non-decimal values.  Fixed-base and literal-base
+performance is unchanged.  The compact path nevertheless remains faster than
+the tested standard-library dynamic path in every aggregate above.
+
+### Assembly and scheduling audit
+
+The M4 power loops write four binary digits or two octal/hexadecimal digits per
+iteration.  LLVM-MCA 23 reports block throughputs of 2.5, 2.5, and 3.0 cycles
+respectively.  The generic M4 digit loop is eight instructions and is dominated
+by the modeled 13-cycle `udiv`; native A/B testing rejected the reciprocal
+variant on M4.  On x86-64 the generic loop contains no `div`: one reciprocal
+computes the quotient by base squared and a second splits the two-digit
+remainder.  Each iteration writes two code units.  LLVM-MCA reports 5.0 cycles
+block throughput and 12.4 recurrence cycles per pair on Raptor Lake, and 4.8
+and 9.25 respectively on Zen 4.  The quotient recurrence, rather than
+front-end width, is the limiting dependency.  The grouped x86 power loops are
+1.2--1.5 cycles per iteration across those two models.
+
+The only runtime radix selection is the five-way power-of-two check.  M4 emits
+comparisons and direct branches; Clang x86 emits a 31-entry, 124-byte jump table
+whose non-power entries all share one target.  No such selection appears in a
+literal-base probe, so the fixed path pays neither the front-end footprint nor
+the runtime branch cost.
+
+### Final production validation
+
+The deterministic oracle covers all ten signed/unsigned 8-, 16-, 32-, 64-, and
+128-bit types, all five character types, bases 2--36, exact buffers, every
+short-buffer position, and zero through eight excess code units.  It passes the
+native M4 Release and ASan+UBSan runs, GCC 13--16, Clang 18--21 with libstdc++
+15 and libc++ 20, native x86-64 GCC 15, and GCC 13--16 with IBM1047 execution
+characters.
+
+The final M4 mutation pass used ten separately built libFuzzer+UBSan tasks, one
+per integer type.  Each task ran for 61 seconds and selected the character
+type, base, capacity, and full-width value from the fuzzer input.  It executed
+155,664,999 inputs with no sanitizer report or artifact.  After the x86
+two-digit kernel was added, ten Clang 21 libFuzzer+ASan+UBSan tasks repeated the
+same 61-second coverage sequentially on P-core 4 of the i9-14900HX and executed
+another 269,585,758 inputs.  A final parallel pass bound the ten tasks one each
+to E-cores 16--25.  It executed 134,239,245 more inputs with all ten normal
+exits, zero artifacts, and no sanitizer diagnostic.  The combined final count
+is 559,490,002 with no crash, timeout, out-of-memory artifact, or sanitizer
+finding.

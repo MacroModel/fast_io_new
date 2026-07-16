@@ -5,15 +5,32 @@
 namespace fast_io
 {
 
-using from_chars_result = ::std::from_chars_result;
+namespace details
+{
+
+template <::fast_io::details::character char_type>
+struct basic_from_chars_result_impl
+{
+	char_type const *ptr;
+	::std::errc ec;
+};
+
+} // namespace details
+
+template <::fast_io::details::character char_type>
+using basic_from_chars_result = ::std::conditional_t<
+	::std::same_as<char_type, char>, ::std::from_chars_result,
+	::fast_io::details::basic_from_chars_result_impl<char_type>>;
+
+using from_chars_result = ::fast_io::basic_from_chars_result<char>;
 
 namespace details
 {
 
-template <bool signed_integer>
-inline constexpr ::fast_io::from_chars_result
-from_chars_integral_map_result(::fast_io::parse_result<char const *> result,
-							   char const *original_first) noexcept
+template <bool signed_integer, ::fast_io::details::character char_type>
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
+from_chars_integral_map_result(::fast_io::parse_result<char_type const *> result,
+							   char_type const *original_first) noexcept
 {
 	if (result.code == ::fast_io::parse_code::ok) [[likely]]
 	{
@@ -33,16 +50,18 @@ from_chars_integral_map_result(::fast_io::parse_result<char const *> result,
 	}
 }
 
-template <::std::size_t base, ::fast_io::details::my_integral T>
+template <::std::size_t base, ::fast_io::details::my_integral T,
+		  ::fast_io::details::character char_type>
 	requires(2u <= base && base <= 36u &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
-from_chars_integral_fixed_base(char const *first, char const *last, T &value) noexcept
+[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+from_chars_integral_fixed_base(char_type const *first, char_type const *last, T &value) noexcept
 {
 #if !((defined(__GNUC__) || defined(__clang__)) &&                     \
 	  (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	  !(defined(__arm64ec__) || defined(_M_ARM64EC)))
-	if constexpr (::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
+	if constexpr (::std::same_as<char_type, char> &&
+				  ::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  base == 8u)
 	{
 		auto const remaining{static_cast<::std::size_t>(last - first)};
@@ -82,7 +101,8 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			}
 		}
 	}
-	if constexpr (::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
+	if constexpr (::std::same_as<char_type, char> &&
+				  ::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  (base == 3u || base == 4u || (11u <= base && base <= 16u)))
 	{
 		constexpr ::std::size_t short_limit{8u};
@@ -136,10 +156,10 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 		result, original_first);
 }
 
-template <::fast_io::details::my_integral T>
+template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
-from_chars_integral_runtime_base(char const *first, char const *last, T &value,
+[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+from_chars_integral_runtime_base(char_type const *first, char_type const *last, T &value,
 								 int base) noexcept
 {
 	switch (base)
@@ -221,10 +241,10 @@ from_chars_integral_runtime_base(char const *first, char const *last, T &value,
 
 } // namespace details
 
-template <::fast_io::details::my_integral T>
+template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
-from_chars(char const *first, char const *last, T &value, int base = 10) noexcept
+[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+from_chars(char_type const *first, char_type const *last, T &value, int base = 10) noexcept
 {
 #if __has_cpp_attribute(assume)
 	[[assume(2 <= base && base <= 36)]];
@@ -232,7 +252,8 @@ from_chars(char const *first, char const *last, T &value, int base = 10) noexcep
 	return ::fast_io::details::from_chars_integral_runtime_base(first, last, value, base);
 }
 
-inline ::fast_io::from_chars_result from_chars(char const *, char const *, bool &,
-											   int = 10) = delete;
+template <::fast_io::details::character char_type>
+inline ::fast_io::basic_from_chars_result<char_type>
+from_chars(char_type const *, char_type const *, bool &, int = 10) = delete;
 
 } // namespace fast_io
