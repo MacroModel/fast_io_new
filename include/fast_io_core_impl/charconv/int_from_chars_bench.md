@@ -313,9 +313,12 @@ artifact was produced.
 Deterministic exact and terminated tests pass for baseline SSE2 and Haswell
 builds, and a constant-evaluation static assertion covers the runtime fallback.
 Clang 21 compilation passes for Core 2, Nehalem, Sandy Bridge, Haswell,
-Skylake, Alder Lake, Sapphire Rapids, and Zen 1 through Zen 4. The complete
-665-wrapper Apple M4 assembly remains byte-for-byte identical to the saved
-pre-x86-change file. Pure MSVC builds do not enter the GCC/Clang builtin path.
+Skylake, Alder Lake, Sapphire Rapids, and Zen 1 through Zen 4. At this SSE
+follow-up stage, the complete 665-wrapper Apple M4 assembly remained
+byte-for-byte identical to the saved pre-x86-change file. Pure MSVC builds do
+not enter the GCC/Clang builtin path. The later production follow-up below
+records the intentional M4 layout change from removing whole-scanner forced
+inlining.
 
 llvm-mca models the valid four-digit SWAR block at 2.7 to 4.0 cycles and the
 valid eight-digit SSE block at 5.5 to 11.3 cycles across Haswell, Skylake,
@@ -426,9 +429,9 @@ would violate the required ISA isolation.
 
 ### Compiler and AArch64 isolation
 
-The change is guarded by `__SSE4_1__` and GCC-proper detection. The following
-complete assembly comparisons are byte-for-byte identical to the unmodified
-HEAD baseline:
+This specific GCC SSE change is guarded by `__SSE4_1__` and GCC-proper
+detection. At that stage, the following complete assembly comparisons were
+byte-for-byte identical to the unmodified HEAD baseline:
 
 - Apple Clang 21, `-mcpu=apple-m4`: 34,616 lines, SHA-256
   `33df26da6364c6176b0960b0bdccbbb32f73d461570b1e98728101b25c447e12`.
@@ -524,3 +527,270 @@ Primary artifact SHA-256 values:
 The corresponding sources, binaries, corpora, logs, assembly, llvm-mca output,
 and CSV files are retained under `/tmp/fast_io_production_fuzz`,
 `/tmp/fast_io_fullbench`, and `/tmp/fast_io_native_bench` on the Linux host.
+
+## 2026-07-16 complete integer-type and compiler matrix
+
+This production follow-up extends the earlier `uint64_t` work to unsigned and
+signed 8-, 16-, 32-, 64-, and 128-bit integers.  It covers every valid digit
+length in every base from 2 through 36 for `char`, `wchar_t`, `char8_t`,
+`char16_t`, and `char32_t`.  Exact input ranges and ranges containing one
+trailing non-digit are timed independently.  Correctness preflight additionally
+uses 0, 1, 2, 3, 7, 8, 15, and 31 trailing code units.
+
+The x86-64 measurements were collected on the Intel Core i9-14900HX host with
+each process pinned to P-core logical CPU 4.  Builds and runs were serialized.
+The compiler matrix is GCC 13.4, GCC 14.3, GCC 15.2, a GCC 16 development
+snapshot, Clang 22, upstream Clang 23, and the fast_io Clang 23 toolchain.  All
+executables use C++20, `-O3`, and `-march=native`.  The complete result contains
+115,620 rows per compiler: 77,080 input rows and 38,540 output rows.  The public
+standard-compatible API and `std::from_chars` comparison apply to `char`;
+wide-character rows exercise the same internal scanner used by fast_io input.
+
+Ratios above one favor fast_io.  The public/core columns quantify wrapper cost;
+the competitor/public columns are paired only where both APIs are available.
+
+| Compiler | public/core | runtime/core | std/public | fast_float/public |
+|:---|---:|---:|---:|---:|
+| GCC 13.4 | 1.023x | 1.210x | 1.372x | 0.968x |
+| GCC 14.3 | 1.023x | 1.105x | 1.430x | 0.961x |
+| GCC 15.2 | 1.007x | 1.075x | 0.933x | 1.033x |
+| GCC 16 development | 1.066x | 1.226x | 1.524x | 1.110x |
+| Clang 22 | 1.008x | 1.108x | 1.242x | 1.132x |
+| Clang 23 upstream | 0.996x | 1.060x | 1.239x | 1.172x |
+| Clang 23 fast_io | 0.999x | 1.061x | 1.238x | 1.179x |
+
+These complete-matrix results do not support a universal 30% claim.  The final
+data explicitly retains aggregate losses: GCC 13/14 lose to fast_float, and
+the final GCC 15 monolithic matrix loses to the standard-library instances
+that GCC re-inlines after the scanner layout shrinks.  Decimal and bases
+17--36 for 32- and 64-bit signed values remain limiting families.  Reporting
+these groups is important: an aggregate lead must not be presented as a
+pointwise guarantee, and a single large translation unit must not be mistaken
+for isolated-library code generation.
+
+### Retained x86-64 short high-base kernels
+
+The retained optimization is inside
+`integers/sto/sto_contiguous.h`, below both the public wrapper and internal
+fast_io scanning entry.  For bases 17--36 it uses bounded, overflow-safe kernels
+for 8-, 16-, and 32-bit destinations.  The maximum work is respectively two,
+four, and eight digits.  The scanner consumes the already validated first
+digit, accumulates in a wider integer, performs one final range check, and
+preserves the original overflow pointer by scanning any remaining digits.
+All five character types use the kernels when their code units carry ASCII or
+Unicode digit values; execution-EBCDIC `char` and `wchar_t` remain on their
+native character path.
+
+On the i9-14900HX, the Clang 23 candidate improved the complete `char` matrix by
+1.223x/1.265x for `uint8_t`/`int8_t`, 1.082x/1.119x for
+`uint16_t`/`int16_t`, and 1.078x/1.091x for `uint32_t`/`int32_t`.
+The corresponding base-17--36 improvements are 1.681x/1.643x,
+1.198x/1.303x, and 1.214x/1.215x.  Wide-character high-base gains reach
+1.80x for 8-bit destinations, 1.58x for 16-bit destinations, and 1.51x for
+32-bit destinations.
+
+A second pass removed a duplicate lookup of a known trailing non-digit.  It
+improves Clang trailing ranges by 6.8--9.4%, GCC signed-16 and 32-bit ranges by
+4.7--6.1% overall, and is deliberately disabled for GCC `uint16_t`: retaining
+state there regressed exact ranges by about 10%.  This is a compiler split, not
+a microarchitecture dispatch, and it remains in the same scanner function.
+
+Assembly explains both the gain and its limit.  Clang fully expands the bounded
+32-bit kernel; representative base-36 core instances are 439--466 bytes, while
+the standard and fast_float wrappers are approximately 200 bytes but retain
+loop control or staged overflow checks.  GCC keeps the digit loop compact, but
+the complete core instance is 698--760 bytes because its generic leading-zero
+graph remains present.  Re-enabling the previous generic GCC SSE4.1 graph was
+not beneficial.  A Clang four-way-unroll candidate was also rejected: it
+regressed the full `uint32_t` and `int32_t` matrices by 3.5% and 3.0%, and the
+high-base subsets by 7.9% and 6.6%.
+
+The per-digit llvm-mca regions contain 9 instructions for fast_io and
+fast_float and 12 for the early standard-library phase.  Modeled block
+throughput is 1.5/1.5/2.0 cycles on Skylake, 3.0/2.0/2.0 on Alder Lake and
+Sapphire Rapids, and 1.8/1.8/2.3 on Zen 3 and Zen 4.  Native results overrule
+the isolated Alder Lake region: complete expansion wins because it removes the
+dynamic loop backedge and length control that the single-region model cannot
+represent.
+
+### GCC decimal, signed hexadecimal, and nine-digit mid-base repair
+
+Pointwise analysis of the final GCC 15 and GCC 16 matrices exposed a second
+compiler-specific problem.  Unsigned 32-bit, nine-digit inputs in bases 12
+through 15 took approximately 6.7--7.2 ns and could lose to both competitors.
+The retained GCC-only x86-64 path loads the remaining eight digits
+independently, validates them together, and reduces them with a balanced
+pair/quad multiplication tree.  It is enabled only for GCC 15 and newer;
+Clang, GCC 13/14, EBCDIC, signed integers, and every non-x86 target retain their
+previous graph.
+
+Across GCC 15 and GCC 16, all sixteen measured exact/terminated base points now
+beat both `std::from_chars` and `fast_float::from_chars`.  Public times are
+3.15--3.69 ns.  The smallest measured advantages are 1.010x over the standard
+library and 1.016x over fast_float for a terminated GCC 15 base-12 input; the
+largest are 1.415x and 1.515x respectively for the corresponding GCC 16 input.
+The wide-character base-14 checks also remain wins, reaching 1.25--1.30x over
+fast_float for 16- and 32-bit code units.
+
+The arithmetic change shortens a dependency chain rather than increasing
+instruction-level parallel work.  GCC 15 emits 34 instructions and 34 uOps for
+both the serial and balanced regions.  llvm-mca reports that a single hot
+region falls from 45 to 29 cycles on Skylake, Alder Lake, Sapphire Rapids,
+Zen 3, and Zen 4.  Steady-state block throughput remains 9 cycles on Skylake
+and 8 cycles on the other models because lookup loads and front-end work still
+set the throughput bound.  At 100 iterations the modeled totals change from
+936 to 922 cycles on Skylake, 834 to 820 on Alder Lake and Sapphire Rapids,
+937 to 820 on Zen 3, and 933 to 820 on Zen 4.  The complete public base-14
+instance also shrinks from 1,396 to 1,289 bytes; the core instance shrinks by
+five bytes.
+
+An SSE4.1 candidate using the existing eight-digit `__builtin_ia32_*` reduction
+was rejected after native testing.  It required 9.0--10.6 ns, approximately
+three times the scalar-tree time, and achieved only 0.31--0.44x of competitor
+throughput.  The SIMD instruction count therefore did not compensate for its
+shuffle, widening, and reduction graph on this workload.
+
+Unsigned 32-bit decimal input had a different nine-digit problem.  The generic
+GCC path took approximately 3.3--3.5 ns for an exact range and 5.9--6.1 ns when
+the ninth digit was followed by a non-digit.  The final GCC 15+ x86-64 kernel
+performs one 64-bit load, parallel ASCII validation, and balanced 10/100/10000
+SWAR reductions.  It handles both exact nine-digit input and a ninth digit
+followed by a non-digit; valid ten-digit values and every other length continue
+through the existing overflow-aware path.  The code is guarded from constant
+evaluation, and a nine-digit public `from_chars` call is also compiled as a
+`static_assert`.
+
+After removal of the historical whole-scanner force-inline attribute, the
+final GCC 15 nine-digit public times are 2.634/2.639 ns for exact/terminated
+input.  They retain 1.496x/1.543x advantages over the standard library and
+1.080x/1.076x advantages over fast_float.  GCC 16 measures 2.698/2.668 ns in
+the focused no-force-inline run.  Public, internal-core, and runtime-base
+times are now within approximately one percent at this point because GCC emits
+one shared scanner body rather than duplicating the complete graph into each
+wrapper.  Complete-matrix values in the compiler table were regenerated from
+the final source; older force-inline timings must not be mixed with them.
+
+The arithmetic-only llvm-mca regions contain 25 instructions for the serial
+nine-digit dependency chain and 18 for SWAR.  Over 100 modeled iterations,
+Skylake changes from 812 to 445 cycles and from 8.0 to 3.2 cycles block
+throughput.  Alder Lake and Sapphire Rapids change from 1,608 to 620 cycles
+and from 16.0 to 6.0 cycles throughput.  Zen 3 and Zen 4 change from 831 to
+668 cycles and from 6.8 to 5.3 cycles throughput.  These regions deliberately
+exclude the shared validation/exit graph, so they describe the arithmetic
+gain rather than whole-parser latency.
+
+With the scanner no longer forcibly duplicated into every caller, GCC 15 emits
+a shared base-10 unsigned-32 scanner of 0x4a9 bytes before the final vectorizer
+tuning and 0x419 bytes afterwards.  The public and internal benchmark wrappers
+are both small call sites, so their measured cost is effectively equal.
+Placing the SWAR block after the existing short-input returns remains best;
+marking it cold and several earlier placements were rejected because their
+short-input layout losses outweighed the local benefit.
+
+### GCC 15 native-ISA front-end repair
+
+The final GCC-15-only x86-64 adjustment disables loop vectorization for the
+scanner when AVX is enabled.  GCC's SLP vectorizer remains enabled, explicit
+SSE builtins are unchanged, and no target attribute or microarchitecture
+dispatch is introduced.  The complete base-10 unsigned-32 scanner falls from
+0x4a9 to 0x419 bytes; in the all-type `char` executable, YMM/ZMM references
+fall from 2,061 to 1,378 and total text falls by about 28 KiB.  This reduces
+front-end and instruction-cache pressure without changing the scalar/SSE
+algorithm selected for any base.
+
+Two independent all-type `char` matrices reproduce the result.  Geometric-mean
+core/public/runtime times fall from 6.113/6.191/6.624 ns to
+6.052/6.094/6.503 ns, improvements of 1.0%, 1.6%, and 1.8%.  GCC 13 regresses
+and GCC 16 regresses in core/public mode, so the exception is deliberately
+limited to GCC 15 rather than generalized by ISA.  Disabling only SLP also
+regresses.  Function target attributes disabling AVX or AVX2 cost about 30%
+and were rejected.
+
+The final GCC 15 base-10 unsigned-32 assembly gives the internal and fixed
+public benchmark wrappers the same 0xda-byte body.  Each makes its only hot
+call at the same relative offset to the same shared scanner symbol; there is no
+public-only parsing kernel.  The noinline runtime-base benchmark body is
+0x49d bytes because it contains the base-2-through-36 selector, matching the
+remaining 1.075x runtime/core cost.
+
+The SSSE3 build still has lower absolute parser time on this host
+(5.903/5.975/6.412 ns).  A native build with
+`-mprefer-vector-width=128` narrows the final gap to approximately 1.6--2.2%,
+but does not reverse it.  This is not evidence for replacing the native
+algorithm: the same independently compiled runs move standard-library and
+fast_float time by 6--17%, and GCC materially changes their inlining and code
+size when the fast_io scanner layout changes.  Consequently ISA claims are
+reported with both absolute and competitor-normalized data; the report does
+not present cross-binary layout drift as a parser-kernel win.
+
+The signed 64-bit hexadecimal matrix revealed a separate GCC code-generation
+failure in the former SSE graph.  Restricting that graph away from signed
+destinations reduces the GCC 15 fixed-base core from 2,916 to 2,372 bytes and
+from 677 to 572 disassembled instructions, while the unsigned instance remains
+unchanged.  Native affected points improve by approximately 2.9--3.3x.
+
+The final targeted differential test ran with GCC 15 and GCC 16 for bases
+12--15, all five character types, exact and eight different trailing lengths,
+valid nine-digit values, overflow, an invalid digit at every position, wide
+code units above 255, and ten-digit overflow.  More than one billion cases
+passed.  GCC 15 repeated the complete targeted run under AddressSanitizer and
+UndefinedBehaviorSanitizer.  The decimal follow-up adds more than 70 million
+checks per compiler over nine-digit input, valid and overflowing ten-digit
+input, eight trailing lengths, invalid digits at every position, all five
+character types, and ten million arbitrary eight-byte prefixes tested as both
+exact and terminated input; GCC 15 repeated it under ASan and UBSan.  Finally,
+the complete 682-point `uint32_t` matrix and correctness preflight were rerun
+three times for each affected compiler.  The same differential driver passes
+with GCC 15 and GCC 16 at the x86-64 SSE2 baseline, confirming that the SWAR
+kernel has no AVX or native-ISA dependency.
+
+### Apple M4 and traditional AArch64 preservation
+
+The same 50-file matrix was run natively on Apple M4 with Apple Clang 21 and
+the local Clang 23 toolchain.  Paired public results are:
+
+| Compiler | public/core | runtime/core | std/public | fast_float/public |
+|:---|---:|---:|---:|---:|
+| Apple Clang 21 | 0.993x | 1.107x | 1.656x | 1.279x |
+| Clang 23 | 0.997x | 1.108x | 1.705x | 1.314x |
+
+All new bounded kernels and compiler exceptions are inside the x86-64
+preprocessor branch.  Removing the historical whole-scanner force-inline
+attribute intentionally changes M4 layout: wrapper text grows from 47,664 to
+48,004 bytes, but no new out-of-line scanner call appears.  Normalized core
+instruction sequences remain unchanged for all bases 2--36; public sequences
+change for bases 3, 4, 8, 11--18, 28--30, and 36 because Clang makes different
+ordinary inlining choices.  Three paired native quick matrices show a combined
+public change of about -0.2% and a core change of about -0.35%, both favorable
+and within layout noise.  The final no-force-inline M4 wrapper object has
+SHA-256
+`6d619991f4a0568ca0ba2e3b6b18629e6f07d458a6f19e3473e00af39ef70d9e`.
+The final GCC-15 vectorizer exception is x86-only; rebuilding after that change
+produces the same M4 object byte for byte.
+The shared wide-character table lookup remains enabled on Apple and traditional
+AArch64 because llvm-mca improves on every checked model: M4 block throughput
+falls from 4.8 to 2.5 cycles, Cortex-A710/A720 from 3.8 to 2.4, Neoverse N1
+from 6.3 to 4.0, and Neoverse V2 from 3.2 to 2.0.
+
+### EBCDIC and final correctness validation
+
+GCC 13 through 16 also ran the complete matrix with
+`-fexec-charset=IBM1047 -fwide-exec-charset=IBM1047`.  In this mode `char` and
+`wchar_t` use execution-EBCDIC values, whereas `char8_t`, `char16_t`, and
+`char32_t` retain Unicode code points.  The benchmark's standard-library leg is
+disabled because libstdc++ itself forms a negative index while instantiating
+its ASCII `<charconv>` table under IBM1047.  fast_io public/core ratios are
+1.006x, 1.003x, 1.004x, and 1.008x for GCC 13 through 16 respectively.
+
+This matrix found and fixed an execution-character bug in the SSE constants:
+numeric ASCII byte constants are now used instead of execution `char` literals.
+The final enhanced driver passed across every compiler matrix and all affected
+integer and character types, including the EBCDIC Unicode combinations.  It
+checks radix boundaries, signed minima, unsigned maxima, overflow, empty and
+sign-only ranges, leading plus, invalid input, wide code units above 255, and
+every requested trailing length.  The additional GCC 15/16 mid-base campaign
+described above contributes more than one billion targeted cases.  The final
+one-minute-per-type production libFuzzer pass was rebuilt from the
+no-force-inline source with Clang 23, ASan, and UBSan.  All ten integer types
+completed successfully, totaling 112,377,389 executions; every artifact
+directory remained empty.

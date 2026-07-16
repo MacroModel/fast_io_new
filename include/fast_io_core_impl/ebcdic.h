@@ -56,4 +56,23 @@ inline constexpr bool wexec_charset_is_utf_none_native_endian() noexcept
 
 inline constexpr bool wide_is_none_utf_endian{wexec_charset_is_utf_none_native_endian()};
 
+inline constexpr bool wexec_charset_is_ebcdic_none_native_endian() noexcept
+{
+	if constexpr (!::fast_io::details::is_ebcdic<wchar_t> || sizeof(wchar_t) == 1u)
+	{
+		return false;
+	}
+	else
+	{
+		using unsigned_wchar_type = ::std::make_unsigned_t<wchar_t>;
+		constexpr auto value{static_cast<unsigned_wchar_type>(L'A')};
+		constexpr auto swapped{::fast_io::byte_swap(value)};
+		return static_cast<unsigned_wchar_type>(0xffu) < value &&
+			   swapped <= static_cast<unsigned_wchar_type>(0xffu);
+	}
+}
+
+inline constexpr bool wide_is_none_ebcdic_endian{
+	wexec_charset_is_ebcdic_none_native_endian()};
+
 } // namespace fast_io::details

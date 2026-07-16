@@ -33,16 +33,16 @@ from_chars_integral_map_result(::fast_io::parse_result<char const *> result,
 	}
 }
 
-template <::std::size_t base, ::std::integral T>
+template <::std::size_t base, ::fast_io::details::my_integral T>
 	requires(2u <= base && base <= 36u &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)
 [[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
 from_chars_integral_fixed_base(char const *first, char const *last, T &value) noexcept
 {
-#if !((defined(__GNUC__) || defined(__clang__)) && \
+#if !((defined(__GNUC__) || defined(__clang__)) &&                     \
 	  (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	  !(defined(__arm64ec__) || defined(_M_ARM64EC)))
-	if constexpr (::std::unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
+	if constexpr (::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  base == 8u)
 	{
 		auto const remaining{static_cast<::std::size_t>(last - first)};
@@ -82,7 +82,7 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			}
 		}
 	}
-	if constexpr (::std::unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
+	if constexpr (::fast_io::details::my_unsigned_integral<T> && sizeof(T) == sizeof(::std::uint_least64_t) &&
 				  (base == 3u || base == 4u || (11u <= base && base <= 16u)))
 	{
 		constexpr ::std::size_t short_limit{8u};
@@ -92,7 +92,7 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 			 !::fast_io::details::char_is_digit<static_cast<char8_t>(base), char>(
 				 static_cast<unsigned char>(last[-1])))) [[likely]]
 		{
-			using unsigned_type = ::std::make_unsigned_t<T>;
+			using unsigned_type = ::fast_io::details::my_make_unsigned_t<T>;
 			unsigned_type accumulator{};
 			auto iter{first};
 			::std::size_t digits{};
@@ -132,11 +132,11 @@ from_chars_integral_fixed_base(char const *first, char const *last, T &value) no
 		::fast_io::details::scan_int_contiguous_none_space_part_define_impl<
 			static_cast<char8_t>(base), false, true, false, false, true>(
 			first, last, value);
-	return ::fast_io::details::from_chars_integral_map_result<::std::signed_integral<T>>(
+	return ::fast_io::details::from_chars_integral_map_result<::fast_io::details::my_signed_integral<T>>(
 		result, original_first);
 }
 
-template <::std::integral T>
+template <::fast_io::details::my_integral T>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
 [[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
 from_chars_integral_runtime_base(char const *first, char const *last, T &value,
@@ -221,7 +221,7 @@ from_chars_integral_runtime_base(char const *first, char const *last, T &value,
 
 } // namespace details
 
-template <::std::integral T>
+template <::fast_io::details::my_integral T>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
 [[gnu::always_inline]] inline constexpr ::fast_io::from_chars_result
 from_chars(char const *first, char const *last, T &value, int base = 10) noexcept

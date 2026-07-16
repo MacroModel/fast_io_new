@@ -408,3 +408,83 @@ Each entry is `digit-length:fast_io-ns/std-ns=ratio`; no valid `uint64_t` length
 | 36 | d1:1.412/2.050=0.689x d2:2.086/2.901=0.719x d3:3.261/3.332=0.978x d4:3.520/4.579=0.769x d5:5.141/6.320=0.813x d6:5.609/7.249=0.774x d7:6.287/9.693=0.649x d8:6.400/11.574=0.553x d9:6.256/14.358=0.436x d10:6.295/15.992=0.394x d11:6.285/18.439=0.341x d12:6.771/20.219=0.335x d13:6.764/29.498=0.229x |
 
 Correctness preflight: `ok` for every timed value before measurement; no `std::errc` mismatch, length mismatch, or byte mismatch was observed.
+
+## 2026-07-16 all-type, all-base compiler matrix
+
+The final production matrix uses the same value population as the input
+benchmark: unsigned and signed 8-, 16-, 32-, 64-, and 128-bit integers, every
+valid length in bases 2 through 36, and `char`, `wchar_t`, `char8_t`,
+`char16_t`, and `char32_t`.  The public `fast_io::to_chars` and
+`std::to_chars` comparison is available for `char`; the other character types
+exercise the reserve-print core that is used by fast_io formatting.
+
+The x86-64 host is an Intel Core i9-14900HX.  Each benchmark process was pinned
+to P-core logical CPU 4 and all builds and runs were serialized.  Compilers are
+GCC 13.4, GCC 14.3, GCC 15.2, a GCC 16 development snapshot, Clang 22,
+upstream Clang 23, and the fast_io Clang 23 toolchain, using C++20, `-O3`, and
+`-march=native`.  Ratios above one favor fast_io.
+
+| Compiler | public/core | runtime/core | std/public | direct JEAIII/core |
+|:---|---:|---:|---:|---:|
+| GCC 13.4 | 1.000x | 1.354x | 1.618x | 0.996x |
+| GCC 14.3 | 0.999x | 1.379x | 1.635x | 1.006x |
+| GCC 15.2 | 1.004x | 1.356x | 1.669x | 0.999x |
+| GCC 16 development | 1.001x | 1.334x | 1.654x | 1.001x |
+| Clang 22 | 0.997x | 1.319x | 1.448x | 1.001x |
+| Clang 23 upstream | 0.998x | 1.318x | 1.436x | 0.996x |
+| Clang 23 fast_io | 1.003x | 1.315x | 1.427x | 1.003x |
+
+The fixed public wrapper is effectively the same cost as the core: all final
+deviations are within approximately one percent.  Runtime-base dispatch costs
+30--36% on this benchmark's noinline
+boundary because it must select among 35 complete base specializations.  That
+cost is not present when the call is inlined with a constant base.  Direct
+JEAIII and the fast_io decimal core are equal because the retained decimal
+implementation is JEAIII; this comparison checks wrapper and selection cost,
+not two independent decimal algorithms.
+
+Apple M4 results preserve the same conclusion:
+
+| Compiler | public/core | runtime/core | std/public | direct JEAIII/core |
+|:---|---:|---:|---:|---:|
+| Apple Clang 21 | 1.016x | 1.423x | 1.643x | 0.999x |
+| Clang 23 | 1.018x | 1.363x | 1.546x | 1.000x |
+
+The public API now accepts the library's 128-bit integral concept rather than
+only standard-library integral types.  Power-of-two bases use the separated
+128-bit printer when required, preventing truncation through a 64-bit-only
+helper.  Fixed- and runtime-base public wrappers share the same checked
+capacity and signed-magnitude handling.  GCC otherwise leaves a separate
+public-wrapper call even for a literal base; the targeted GCC-only inline
+attribute is therefore confined to this public dispatcher and is not applied
+to the scanner or conversion kernels.
+
+### Champagne--Lemire AVX-512 path
+
+The native i9-14900HX does not expose AVX-512 IFMA and VBMI, so no
+Champagne--Lemire timing is reported for this host.  The AVX-512 decimal path
+was instead compiled independently with Clang 23 and GCC 15 for Sapphire
+Rapids and executed with Intel SDE 10.8 in `-spr` mode.  Each compiler passed
+300,080 comparisons over decimal power boundaries, signed limits, and 100,000
+deterministic random 64-bit values.  The test compares the direct
+Champagne--Lemire output, direct JEAIII output, `char8_t` output, and the public
+`to_chars` result byte for byte.  SDE is used only for correctness; emulator
+time is not presented as native throughput.
+
+### EBCDIC output validation
+
+GCC 13 through 16 ran the complete output matrix with IBM1047 execution and
+wide-execution character sets.  Public/core ratios are 1.000x, 0.997x, 0.998x,
+and 1.000x respectively; direct JEAIII/core ratios remain within about 0.8% of
+one.
+`char` and `wchar_t` use execution-EBCDIC values, while UTF character types use
+Unicode values.  Numeric ASCII constants are confined to the explicitly ASCII
+SIMD implementation, and the native EBCDIC formatter continues to obtain its
+digits through the character-literal abstraction.
+
+The final correctness pass covers exact capacity and every insufficient
+capacity, returned pointers, `value_too_large`, no-write-on-error behavior,
+signed minima, unsigned maxima, radix-power boundaries, and all five output
+character types.  The same preflight runs before every timed point, so no row
+whose output disagreed with the independent reference entered the performance
+summary.

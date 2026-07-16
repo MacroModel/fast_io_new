@@ -9,7 +9,7 @@ using to_chars_result = ::std::to_chars_result;
 namespace details
 {
 
-template <::std::size_t base, ::std::unsigned_integral U>
+template <::std::size_t base, ::fast_io::details::my_unsigned_integral U>
 inline constexpr ::fast_io::to_chars_result to_chars_integral_checked(char *first, char *last, U value,
 																	  bool negative) noexcept
 {
@@ -35,7 +35,7 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_checked(char *firs
 }
 
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-template <::std::unsigned_integral U>
+template <::fast_io::details::my_unsigned_integral U>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
@@ -65,7 +65,7 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_decimal(char *firs
 }
 #endif
 
-template <::std::size_t base, ::std::unsigned_integral U>
+template <::std::size_t base, ::fast_io::details::my_unsigned_integral U>
 inline constexpr ::fast_io::to_chars_result to_chars_integral_fixed_base(char *first, char *last, U value,
 																		 bool negative) noexcept
 {
@@ -96,13 +96,22 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_fixed_base(char *f
 	}
 	else if constexpr (base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
 	{
-		return ::fast_io::details::print_reserve_power_of_two_main<base, false, char,
-																   ::fast_io::to_chars_result>(first, value);
+		if constexpr (::fast_io::details::need_seperate_print<U>)
+		{
+			return {::fast_io::details::print_reserve_integral_withfull_main_impl<
+						false, base, false>(first, value),
+					{}};
+		}
+		else
+		{
+			return ::fast_io::details::print_reserve_power_of_two_main<base, false, char,
+																	   ::fast_io::to_chars_result>(first, value);
+		}
 	}
 	return {::fast_io::details::print_reserve_integral_withfull_main_impl<false, base, false>(first, value), {}};
 }
 
-template <::std::unsigned_integral U>
+template <::fast_io::details::my_unsigned_integral U>
 inline constexpr ::fast_io::to_chars_result to_chars_integral_runtime_base(char *first, char *last, U value,
 																		   bool negative, int base) noexcept
 {
@@ -281,17 +290,20 @@ inline constexpr ::fast_io::to_chars_result to_chars_integral_runtime_base_two_d
 
 } // namespace details
 
-template <::std::integral T>
+template <::fast_io::details::my_integral T>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
+#if defined(__GNUC__) && !defined(__clang__)
+[[gnu::always_inline]]
+#endif
 inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T value, int base = 10) noexcept
 {
 #if __has_cpp_attribute(assume)
 	[[assume(2 <= base && base <= 36)]];
 #endif
-	using unsigned_type = ::std::make_unsigned_t<T>;
+	using unsigned_type = ::fast_io::details::my_make_unsigned_t<T>;
 	bool negative{};
 	unsigned_type magnitude{static_cast<unsigned_type>(value)};
-	if constexpr (::std::signed_integral<T>)
+	if constexpr (::fast_io::details::my_signed_integral<T>)
 	{
 		if (value < 0)
 		{
@@ -518,35 +530,51 @@ inline constexpr ::fast_io::to_chars_result to_chars(char *first, char *last, T 
 		}
 		if (base == 8)
 		{
-			constexpr ::std::size_t maximum_octal_digits{
-				::fast_io::details::cal_max_int_size<unsigned_type, 8u>()};
-			if (static_cast<::std::size_t>(last - first) <
-				maximum_octal_digits + static_cast<::std::size_t>(negative)) [[unlikely]]
+			if constexpr (::fast_io::details::need_seperate_print<unsigned_type>)
 			{
-				return ::fast_io::details::to_chars_integral_fixed_base<8u>(first, last, magnitude, negative);
+				return ::fast_io::details::to_chars_integral_fixed_base<8u>(
+					first, last, magnitude, negative);
 			}
-			if (negative)
+			else
 			{
-				*first++ = ::fast_io::char_literal_v<u8'-', char>;
+				constexpr ::std::size_t maximum_octal_digits{
+					::fast_io::details::cal_max_int_size<unsigned_type, 8u>()};
+				if (static_cast<::std::size_t>(last - first) <
+					maximum_octal_digits + static_cast<::std::size_t>(negative)) [[unlikely]]
+				{
+					return ::fast_io::details::to_chars_integral_fixed_base<8u>(first, last, magnitude, negative);
+				}
+				if (negative)
+				{
+					*first++ = ::fast_io::char_literal_v<u8'-', char>;
+				}
+				return ::fast_io::details::print_reserve_power_of_two_main<8u, false, char,
+																		   ::fast_io::to_chars_result>(first, magnitude);
 			}
-			return ::fast_io::details::print_reserve_power_of_two_main<8u, false, char,
-																	   ::fast_io::to_chars_result>(first, magnitude);
 		}
 		if (base == 16)
 		{
-			constexpr ::std::size_t maximum_hexadecimal_digits{
-				::fast_io::details::cal_max_int_size<unsigned_type, 16u>()};
-			if (static_cast<::std::size_t>(last - first) <
-				maximum_hexadecimal_digits + static_cast<::std::size_t>(negative)) [[unlikely]]
+			if constexpr (::fast_io::details::need_seperate_print<unsigned_type>)
 			{
-				return ::fast_io::details::to_chars_integral_fixed_base<16u>(first, last, magnitude, negative);
+				return ::fast_io::details::to_chars_integral_fixed_base<16u>(
+					first, last, magnitude, negative);
 			}
-			if (negative)
+			else
 			{
-				*first++ = ::fast_io::char_literal_v<u8'-', char>;
+				constexpr ::std::size_t maximum_hexadecimal_digits{
+					::fast_io::details::cal_max_int_size<unsigned_type, 16u>()};
+				if (static_cast<::std::size_t>(last - first) <
+					maximum_hexadecimal_digits + static_cast<::std::size_t>(negative)) [[unlikely]]
+				{
+					return ::fast_io::details::to_chars_integral_fixed_base<16u>(first, last, magnitude, negative);
+				}
+				if (negative)
+				{
+					*first++ = ::fast_io::char_literal_v<u8'-', char>;
+				}
+				return ::fast_io::details::print_reserve_power_of_two_main<16u, false, char,
+																		   ::fast_io::to_chars_result>(first, magnitude);
 			}
-			return ::fast_io::details::print_reserve_power_of_two_main<16u, false, char,
-																	   ::fast_io::to_chars_result>(first, magnitude);
 		}
 		return ::fast_io::details::to_chars_integral_fixed_base<32u>(first, last, magnitude, negative);
 	}
