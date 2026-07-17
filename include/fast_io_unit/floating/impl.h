@@ -66,13 +66,63 @@ template <typename T>
 inline constexpr bool print_floating_decimal_via_float{
 	::fast_io::details::print_floating_decimal_via_float_impl<T>::value};
 
+template <::fast_io::manipulators::floating_format format>
+inline constexpr bool print_floating_format_valid{
+	format == ::fast_io::manipulators::floating_format::general ||
+	format == ::fast_io::manipulators::floating_format::scientific ||
+	format == ::fast_io::manipulators::floating_format::fixed ||
+	format == ::fast_io::manipulators::floating_format::decimal ||
+	format == ::fast_io::manipulators::floating_format::hexfloat};
+
+template <::fast_io::manipulators::floating_precision precision>
+inline constexpr bool print_floating_precision_valid{
+	precision == ::fast_io::manipulators::floating_precision::significant ||
+	precision == ::fast_io::manipulators::floating_precision::fractional ||
+	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero};
+
+template <::fast_io::manipulators::floating_rounding rounding>
+inline constexpr bool print_floating_rounding_valid{
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even ||
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_to_odd ||
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_toward_plus_infinity ||
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_toward_minus_infinity ||
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_toward_zero ||
+	rounding == ::fast_io::manipulators::floating_rounding::nearest_away_from_zero ||
+	rounding == ::fast_io::manipulators::floating_rounding::toward_plus_infinity ||
+	rounding == ::fast_io::manipulators::floating_rounding::toward_minus_infinity ||
+	rounding == ::fast_io::manipulators::floating_rounding::toward_zero ||
+	rounding == ::fast_io::manipulators::floating_rounding::away_from_zero ||
+	rounding == ::fast_io::manipulators::floating_rounding::current_environment};
+
+/*
+Reserve customization is a public capability query, so unsupported floating
+representations and forged enum values must be removed by constraints rather
+than diagnosed from a function-body static_assert.  Hexadecimal formatting
+requires a punned IEC 60559 field decomposition.  Decimal formatting further
+requires the exact binary64 ABI normalization, an exact binary32 widening, or
+one of the directly implemented binary32/binary64 domains.
+*/
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+inline constexpr bool print_floating_ordinary_supported{
+	flags.base == 10u &&
+	::fast_io::details::print_floating_format_valid<flags.floating> &&
+	::fast_io::details::print_floating_rounding_valid<flags.rounding> &&
+	::fast_io::details::print_floating_has_iec559_traits<flt> &&
+	(flags.floating == ::fast_io::manipulators::floating_format::hexfloat ||
+	 (::std::same_as<::std::remove_cvref_t<flt>, long double> &&
+	  sizeof(::std::remove_cvref_t<flt>) == sizeof(double)) ||
+	 ::fast_io::details::print_floating_decimal_via_float<flt> ||
+	 ::fast_io::details::print_floating_decimal_direct_supported<flt>)};
+
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 concept print_floating_staged_supported =
 	::fast_io::details::my_floating_point<flt> &&
 	(::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	 ::std::same_as<::std::remove_cvref_t<flt>, double>) &&
 	::fast_io::details::da::staged_supported<::std::remove_cvref_t<flt>> &&
-	flags.base == 10u && flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+	::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
 	flags.rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even;
 
 } // namespace details
@@ -92,6 +142,21 @@ inline constexpr ::std::size_t print_staged_width(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
 	return ::fast_io::details::da::staged_width<::std::remove_cvref_t<flt>>();
+}
+
+/// @brief Selects the audited staged fallback placement for one floating formatter type.
+/// @details The in-caller path is limited to ASCII `char` shortest-decimal format because that is the complete caller
+///          measured by the target policy. Wider characters, EBCDIC execution character sets, and other presentation
+///          formats retain the conservative cold fallback until separately audited. This customization changes only
+///          placement of the ordinary scalar formatter after eligibility fails; it cannot change emitted characters.
+template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires ::fast_io::details::print_floating_staged_supported<flags, flt>
+inline constexpr bool print_staged_fallback_inline(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
+{
+	return ::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type> &&
+		   flags.floating == ::fast_io::manipulators::floating_format::decimal &&
+		   ::fast_io::details::da::staged_inline_fallback_supported<::std::remove_cvref_t<flt>>;
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
@@ -209,7 +274,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10)
+	requires ::fast_io::details::print_floating_ordinary_supported<flags, flt>
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
@@ -289,7 +354,7 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10)
+	requires ::fast_io::details::print_floating_ordinary_supported<flags, flt>
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
 												 char_type *iter, manipulators::scalar_manip_t<flags, flt> f) noexcept
 {
@@ -496,7 +561,9 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10 && flags.floating == manipulators::floating_format::hexfloat)
+	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+			 flags.floating == manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
@@ -545,7 +612,9 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10 && flags.floating == manipulators::floating_format::hexfloat)
+	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+			 flags.floating == manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 	char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
@@ -592,7 +661,9 @@ inline constexpr char_type *print_reserve_define(
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10 && flags.floating != manipulators::floating_format::hexfloat)
+	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+			 flags.floating != manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
@@ -632,7 +703,9 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10 && flags.floating != manipulators::floating_format::hexfloat)
+	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+			 flags.floating != manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 	char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
@@ -669,3 +742,5 @@ inline constexpr char_type *print_reserve_define(
 	}
 }
 } // namespace fast_io
+
+#include "precise_size.h"

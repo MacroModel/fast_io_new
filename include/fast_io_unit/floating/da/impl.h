@@ -16,12 +16,17 @@ struct decimal_result
 	::std::int_least32_t e10;
 };
 
-/// @brief  Indicates whether the floating decimal type customization provides staged conversion on this ISA.
-/// @details This is a capability of the concrete floating implementation, not a condition in the generic
-///          staged_printable protocol or print orchestration.
+/// @brief  Indicates whether this floating customization provides staged conversion on the target ISA.
+/// @details Staging changes only evaluation order: each value still uses the same DA conversion and presentation
+///          rules.  It is enabled for binary32 and binary64 on AArch64 and x86-64 because those are the ISA families
+///          with complete conversion-plus-emission measurements and specialized ASCII emitters.  Apple M-series
+///          Clang and x86-64 System V GCC/Clang are the performance-audited combinations.  Other front ends on the
+///          same ISA families retain this correctness-equivalent capability without a performance claim; other ISAs
+///          use scalar orchestration until comparable whole-call evidence exists.  This target policy belongs to
+///          the floating customization rather than to the platform-independent staged_printable protocol.
 template <typename flt>
 inline constexpr bool staged_supported{
-#if defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)
 	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else
@@ -29,14 +34,68 @@ inline constexpr bool staged_supported{
 #endif
 };
 
+/// @brief Indicates whether an in-caller scalar fallback is profitable for a staged decimal value.
+/// @details This policy controls code placement after staged eligibility fails; it cannot change conversion or
+///          presentation semantics. Whole-call paired measurements used one ineligible normal power of two per
+///          group, retained the regular-normal corpus as a non-regression control, and inspected text size, frames,
+///          spills, and calls. The decision is both compiler- and floating-type-specific. On Apple M4, Apple Clang 21
+///          binary64 and GCC 15 binary32 regress the regular corpus by up to 1.8%; on Linux x86-64, GCC 13--15
+///          binary32 either regress or enlarge the complete hot body. GCC 16 binary32 improves in isolation, but
+///          removing its earlier cold specialization shifts the binary64 cold path and regresses a mixed
+///          binary32/binary64 object by 11--17%, so GCC 16 is excluded as a whole. These combinations retain the cold
+///          fallback. The accepted combinations improve the ineligible corpus with neutral or better regular timing
+///          and reduce the complete object. Closed major-version, operating-system, ISA, and LP64 gates prevent an
+///          unaudited optimizer or ABI from inheriting this code-placement decision. Re-audit complete callers before
+///          extending any gate.
+template <typename flt>
+inline constexpr bool staged_inline_fallback_supported{
+// Apple AArch64 is restricted to the three front ends measured on an Apple M4. Apple Clang is distinguished from
+// upstream Clang by __apple_build_version__ because both define the ordinary Clang compatibility macros.
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && defined(__apple_build_version__) && __clang_major__ == 21
+	::std::same_as<::std::remove_cvref_t<flt>, float>
+#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && !defined(__apple_build_version__) && __clang_major__ == 23
+	::std::same_as<::std::remove_cvref_t<flt>, float> ||
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+// Linux System V x86-64 LP64 uses the per-front-end and per-type decisions established by isolated same-process
+// AB/BA measurements. x32 and non-System-V targets have different argument and stack-placement costs.
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__clang__) && __clang_major__ == 23
+	::std::same_as<::std::remove_cvref_t<flt>, float> ||
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	::std::same_as<::std::remove_cvref_t<flt>, double>
+// Every unmeasured ISA, ABI, operating system, compiler, and compiler major keeps the size-bounded cold fallback.
+#else
+	false
+#endif
+};
+
 /// @brief Indicates whether the staged decimal state carries the original sign on this compiler target.
-/// @details Carrying the sign removes a second value load during emission when it improves the concrete staged
-///          schedule. Other compiler/type combinations retain the independent sign extraction in their emitter.
+/// @details This is a register-allocation policy, not part of the decimal result.  On Linux System V x86-64 LP64,
+///          Clang 23 reduces the six-value binary64 explicit stack allocation from 128 to 64 bytes when the sign is
+///          prepared, while GCC 15 improves complete two-, four- and six-value runs despite a larger frame.  GCC 13
+///          is deliberately excluded: paired runs make independent sign extraction 3--7% faster and reduce text;
+///          the four- and six-value bodies also have less stack traffic.  Closed compiler-version sets prevent an
+///          unmeasured future major or ABI from inheriting an empirical schedule.  x32, MinGW, non-Linux x86-64,
+///          native MSVC and clang-cl use the portable independent extraction.
+///          Re-audit the complete caller, not only sign extraction, before extending either version set.
 template <typename flt>
 inline constexpr bool staged_prepares_sign{
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
-	::std::same_as<::std::remove_cvref_t<flt>, double>
-#elif (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__)
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	((defined(__clang__) && __clang_major__ == 23) || \
+	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else
 	false
@@ -63,40 +122,30 @@ using staged_conversion_result = ::std::conditional_t<
 	::fast_io::details::da::signed_conversion_result,
 	::fast_io::details::da::conversion_result>;
 
-/// @brief  Returns the preferred number of independent conversions in one staged floating run.
-/// @details Target tuning belongs to the decimal implementation; it does not change whether a floating
-///          manipulator models staged_printable or alter the generic print orchestration.
+/// @brief  Returns the minimum compatible argument count that enables staged floating emission.
+/// @details This value is a threshold, not a fixed batch width: after the threshold is reached, the print core
+///          prepares and emits every staged member of the compatible group.  Two is the smallest count that exposes
+///          independent conversion work.  Complete two-value calls beat the ordinary per-value path for binary32
+///          and binary64 in decimal, general, fixed and scientific format on the measured Apple M4 Clang 23 and
+///          x86-64 GCC 13, GCC 15 and Clang 23 targets; widths two through eight were also checked for the default
+///          decimal format.  A one-value group cannot overlap independent conversions and remains scalar.  The
+///          threshold changes scheduling only and cannot change any emitted byte.
 /// @tparam flt the floating-point type
 template <typename flt>
 [[nodiscard]] inline consteval ::std::size_t staged_width() noexcept
 {
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
-	return 6u;
-#elif (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__)
-	if constexpr (::std::same_as<::std::remove_cvref_t<flt>, float>)
-	{
-#if __GNUC__ == 13 || __GNUC__ >= 16
-		return 6u;
-#else
-		return 8u;
-#endif
-	}
-	else
-	{
-#if __GNUC__ >= 15
-		return 4u;
-#else
-		return 6u;
-#endif
-	}
-#else
-	return ::std::same_as<::std::remove_cvref_t<flt>, float> ? 8u : 6u;
-#endif
+	return 2u;
 }
 
 /// @brief  Tests the regular-normal precondition required by the prepared decimal conversion.
-/// @details The Apple AArch64 constraint is a code-generation barrier only; every target evaluates the
-///          same mantissa and exponent predicate.
+/// @details For an IEC 60559 encoding, `1 <= exponent < exponent_mask` selects finite normal values.  Unsigned
+///          subtraction expresses both strict bounds without a short-circuit branch: zero wraps and the all-ones
+///          special exponent maps exactly to the rejected upper endpoint.  A nonzero explicit mantissa additionally
+///          selects the regular-boundary DA case; exact powers of two use the existing scalar irregular-boundary
+///          path.  The bitwise conjunction intentionally evaluates both independent predicates and is identical on
+///          every target.  A former Apple-only empty-asm barrier was removed after whole-call M4 measurements at the
+///          two-value threshold and at six/eight values showed both a regression and larger binary64 bodies, so this
+///          semantic predicate contains no ISA policy.
 /// @tparam flt           the floating-point type
 /// @tparam mantissa_type the unsigned representation used by the floating mantissa
 /// @tparam exponent_type the unsigned representation used by the raw exponent
@@ -108,15 +157,6 @@ template <typename flt, typename mantissa_type, typename exponent_type>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool staged_eligible(
 	mantissa_type mantissa, exponent_type exponent, mantissa_type exponent_mask) noexcept
 {
-#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-	if constexpr (sizeof(::std::remove_cvref_t<flt>) > sizeof(float))
-	{
-		if (!::std::is_constant_evaluated())
-		{
-			__asm__("" : "+r"(mantissa), "+r"(exponent));
-		}
-	}
-#endif
 	return (mantissa != 0u) &
 		   (static_cast<mantissa_type>(exponent - 1u) < exponent_mask - 1u);
 }

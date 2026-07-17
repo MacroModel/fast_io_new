@@ -3,6 +3,21 @@
 namespace fast_io::details::da
 {
 
+// ASCII-only emission backend for DA carriers.  Callers select this file only
+// when the execution character set represents '0', '.', ',', 'e', 'E', '+' and
+// '-' with their ASCII byte values.  EBCDIC and non-char destinations remain on
+// the character-generic floating writers, so none of the byte packing below is
+// allowed to leak into those paths.
+//
+// Several routines intentionally store a complete 8- or 16-byte scratch block
+// and return an earlier logical end.  Their destination is therefore the full
+// reserve-print buffer, not a buffer sized to the returned character count.
+// This physical-store contract is stated again at each public local writer.
+
+// Up to sixteen ASCII digits in destination byte order.  low contains the first
+// eight bytes, high the next eight, and span is the logical digit count after
+// suppressing leading zeroes.  Bytes outside that span are initialized scratch
+// bytes and may still be written by a fixed-width store.
 struct ascii_digit_block
 {
 	::std::uint_least64_t low;
@@ -15,14 +30,36 @@ inline constexpr ::std::uint_least64_t ascii_div10000_multiplier{static_cast<::s
 inline constexpr ::std::uint_least64_t ascii_div100_multiplier{static_cast<::std::uint_least64_t>(5243)};
 inline constexpr ::std::uint_least64_t ascii_div10_multiplier{static_cast<::std::uint_least64_t>(103)};
 
+// Splitting a binary64 DA carrier at 10^8 uses
+// C = 0xabcc77118461cefd = ceil(2^90 / 10^8).  Write
+// C * 10^8 = 2^90 + 875776.  For every reachable 0 <= x < 10^16,
+// x * 875776 < 2^90; the reciprocal perturbation is therefore smaller than one
+// 10^-8 quotient step.  Hence floor(x * C / 2^90) = floor(x / 10^8).  This is
+// the exact domain used by both SIMD backends below, not an approximation.
+
+// GCC 13--15 Linux System V x86-64 assembly audits select one aligned SIMD
+// divisor object; GCC 16 and Clang 23 keep the immediate/rematerialized spelling
+// without enlarging the surrounding live range.  This is a closed code-
+// generation policy, not arithmetic: both forms execute the same reciprocal
+// division identities.  x32, MinGW, the Microsoft ABI, non-Linux x86-64 and
+// unmeasured compiler majors use rematerialized constants.  Extending the set
+// requires whole-caller constant-load, spill, call, dependency-chain and linked-
+// text-size evidence.
 inline constexpr bool ascii_x86_cached_bcd_constants_default{
-#if defined(__GNUC__) && !defined(__clang__)
-	__GNUC__ < 16
+	// The unselected configuration does not instantiate the opaque cached-address
+	// dependency.  It computes the same quotients and emits the same bytes.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15
+	true
 #else
 	false
 #endif
 };
 
+// Convert 0 <= value < 10^8 to eight unpacked numeric bytes.  The reciprocal
+// stages form exact quotient/remainder pairs for 10^4, 10^2 and 10 without a
+// division instruction.  The returned word contains bytes in [0, 9], not
+// character codes; adding ascii_zeroes converts all eight lanes to ASCII.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::uint_least64_t
 ascii_bcd8(::std::uint_least64_t value) noexcept
 {
@@ -46,7 +83,26 @@ ascii_bcd8_span(::std::uint_least64_t bcd) noexcept
 		8u - static_cast<::std::uint_least32_t>(::std::countl_zero(bcd) >> 3u));
 }
 
-#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
+// The AArch64 backend uses vector arithmetic because four independent
+// quotient/remainder lanes map directly to sqdmulh and narrowing/shuffle
+// instructions.  Compiler builtins are used instead of the vendor intrinsics
+// header, so this freestanding header acquires no hosted-header dependency.
+//
+// The byte-layout proof for this backend is deliberately little-endian: the
+// explicit shuffle indices, the vector-to-u64 bit_cast, and packed[0]/packed[1]
+// all use the AArch64 little-endian correspondence between increasing vector
+// byte indices and increasing destination addresses.  Lane arithmetic itself
+// is endian-neutral, but those representation steps are not.  Therefore an
+// AArch64 big-endian translation unit must use the scalar writer until it has a
+// separately proved shuffle/store mapping.  Only Clang and GCC are admitted:
+// the implementation below names frontend-specific builtin spellings exercised
+// by the current compile matrix, so a third-party frontend that merely defines
+// an AArch64 target macro must not be assumed to provide either spelling.  These
+// builtins are an internal source dependency, not a stable cross-frontend ABI
+// contract.  The scalar implementation is the semantic fallback on every other
+// ISA or unsupported compiler ABI.
+#if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	(defined(__clang__) || defined(__GNUC__))
 using ascii_i8x16 [[gnu::vector_size(16)]] = signed char;
 using ascii_u8x16 [[gnu::vector_size(16)]] = unsigned char;
 using ascii_u8x8 [[gnu::vector_size(8)]] = unsigned char;
@@ -57,9 +113,17 @@ using ascii_i32x2 [[gnu::vector_size(8)]] = int;
 using ascii_i32x4 [[gnu::vector_size(16)]] = int;
 using ascii_u64x2 [[gnu::vector_size(16)]] = unsigned long long;
 
+// Clang and GCC expose different builtin spellings for the same signed,
+// saturating, doubling high multiply.  Saturation is unreachable for the BCD
+// input bounds below; consequently both branches return the identical lane-wise
+// high product.  The preprocessor split expresses builtin availability only.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_i32x4
 ascii_qdmulh(ascii_i32x4 value, int multiplier) noexcept
 {
+	// Semantic equivalence: for the nonnegative bounded BCD lanes used here,
+	// saturation cannot occur, so both builtin spellings compute the same four
+	// signed doubling-high products.  The split expresses frontend builtin
+	// availability; it is not a target-performance claim.
 #if defined(__clang__)
 	return __builtin_bit_cast(ascii_i32x4,
 							  __builtin_neon_vqdmulhq_v(__builtin_bit_cast(ascii_i8x16, value),
@@ -72,6 +136,10 @@ ascii_qdmulh(ascii_i32x4 value, int multiplier) noexcept
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_i32x2
 ascii_qdmulh(ascii_i32x2 value, int multiplier) noexcept
 {
+	// Semantic equivalence is the same as for the four-lane overload: the proved
+	// BCD domain excludes the sole signed saturation case.  Clang requires its
+	// raw NEON builtin spelling while GCC exposes the AArch64 vector builtin;
+	// choosing the spelling does not change the two lane results.
 #if defined(__clang__)
 	using i8x8 [[gnu::vector_size(8)]] = signed char;
 	return __builtin_bit_cast(ascii_i32x2,
@@ -85,6 +153,10 @@ ascii_qdmulh(ascii_i32x2 value, int multiplier) noexcept
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_i16x8
 ascii_qdmulh(ascii_i16x8 value, short multiplier) noexcept
 {
+	// Semantic equivalence: every input lane and multiplier is inside the
+	// nonsaturating BCD range, hence both builtins return the identical eight
+	// signed doubling-high products.  This conditional selects a compiler API,
+	// not a different arithmetic algorithm.
 #if defined(__clang__)
 	return __builtin_bit_cast(ascii_i16x8,
 							  __builtin_neon_vqdmulhq_v(__builtin_bit_cast(ascii_i8x16, value),
@@ -100,7 +172,19 @@ ascii_qdmulh(ascii_i16x8 value, short multiplier) noexcept
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_u8x16
 ascii_bcd4x4(ascii_i32x4 value) noexcept
 {
-#if defined(__GNUC__)
+	// Semantic identity: an empty assembly statement with one read/write vector
+	// operand cannot alter any lane.  Apple Clang 23/M4 disassembly is the retained
+	// code-generation evidence: the opaque use preserves one vector value across
+	// the sqdmulh stages instead of rematerializing lanes.  Other GNU-compatible
+	// AArch64 frontends selected here inherit that placement as an unmeasured
+	// compiler-family hypothesis and require their own assembly audit.
+	// GNU extended assembly is admitted only in GNU-driver modes.  `_MSC_VER`
+	// excludes clang-cl, whose source and ABI contracts are not covered by the
+	// retained assembly artifact.  This empty read/write barrier changes register
+	// placement only; omitting it leaves every vector lane and emitted byte
+	// unchanged.
+#if !defined(_MSC_VER) && \
+	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__)))
 	__asm__("" : "+w"(value));
 #endif
 	auto const hundreds{::fast_io::details::da::ascii_qdmulh(value, 21475328)};
@@ -111,6 +195,8 @@ ascii_bcd4x4(ascii_i32x4 value) noexcept
 							  pairs + tens * ascii_i16x8{246, 246, 246, 246, 246, 246, 246, 246});
 }
 
+// Each input lane is in [0, 9999].  The result contains four unpacked numeric
+// digits per lane; the later byte shuffle establishes destination order.
 template <typename flt>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_digit_block
 make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
@@ -131,10 +217,16 @@ make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
 	}
 	else
 	{
+		// Mathematical equivalence: on 0 <= value < 10^16 the reciprocal
+		// identity proved above gives exactly floor(value / 10^8).  Native u128
+		// merely spells the multiply-and-shift directly; the fallback division
+		// computes the same quotient.  This is a capability gate, not empirical
+		// compiler scheduling policy.
 #if defined(__SIZEOF_INT128__)
 		auto const high_value{static_cast<::std::uint_least64_t>(
 			(static_cast<__uint128_t>(value) * static_cast<::std::uint_least64_t>(0xabcc77118461cefd)) >> 90u)};
 #else
+		// Semantic fallback for targets without a native 128-bit integer type.
 		auto const high_value{value / static_cast<::std::uint_least64_t>(100000000)};
 #endif
 		auto const low_value{value - high_value * static_cast<::std::uint_least64_t>(100000000)};
@@ -166,6 +258,14 @@ make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
 
 #endif
 
+// pshufb requires SSSE3, but the adjacent four-lane BCD conversion also needs
+// 32-bit lane multiplication.  Without SSE4.1, Clang 23 and GCC 13/15 synthesize
+// it from several SSE2 pmuludq operations.  A 2026-07 i9-14900HX CPU8 paired
+// audit regressed f32 by 10--15% and GCC 15 f64 by 15%, and enlarged the probe
+// object by 2.7--5.3%.  SSE4.1 is therefore the measured backend-selection
+// floor, not a formatting-correctness requirement.  Revalidate latency, table
+// footprint, frames and spills before changing this predicate.  Other x86
+// targets use the byte-identical scalar backend.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 using ascii_x86_i8x16 [[gnu::vector_size(16)]] = signed char;
@@ -185,6 +285,12 @@ struct alignas(16) ascii_x86_bcd_constant_cache
 	ascii_x86_u16x8 neg10;
 };
 
+// Hidden visibility prevents an inline cache from becoming an interposable
+// load on object formats that implement the GNU attribute.  The mode is a
+// narrow string literal; GCC advertises the attribute under IBM1047 but rejects
+// the execution-set translation of "hidden".  Therefore the ASCII conjunct is
+// required for attribute syntax, while the surrounding ISA/backend guard
+// independently determines whether these constants are consumed.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
@@ -225,7 +331,17 @@ ascii_x86_bcd4x4(ascii_x86_u32x4 value) noexcept
 		auto constants{__builtin_addressof(ascii_x86_bcd_constants)};
 		if (!__builtin_is_constant_evaluated())
 		{
+			// Code-generation barrier only: keep the four divisor vectors behind
+			// one opaque base address.  GCC 13-15 otherwise duplicate address or
+			// constant materialization in the audited hot path.  Arithmetic is
+			// unchanged; revalidate loads, spills and calls before removing it.
+#if !defined(_MSC_VER) && \
+	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__)))
+			// GNU extended assembly is unavailable in native MSVC and is not part of
+			// the clang-cl source contract audited here.  Omitting this empty barrier
+			// can only rematerialize the address; it cannot change a divisor or digit.
 			__asm__("" : "+r"(constants));
+#endif
 		}
 		auto const hundreds_words{::fast_io::details::da::ascii_x86_mul_high_u16(
 			__builtin_bit_cast(ascii_x86_u16x8, value),
@@ -274,10 +390,15 @@ make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 	}
 	else
 	{
+		// Mathematical equivalence is identical to the AArch64 split: the proved
+		// reciprocal returns floor(value / 10^8) throughout the carrier domain,
+		// and exact division is the semantic fallback.  __SIZEOF_INT128__ selects
+		// only the available source spelling and carries no ISA performance claim.
 #if defined(__SIZEOF_INT128__)
 		auto const high_value{static_cast<::std::uint_least64_t>(
 			(static_cast<__uint128_t>(value) * static_cast<::std::uint_least64_t>(0xabcc77118461cefd)) >> 90u)};
 #else
+		// Exact, ISA-independent fallback when the compiler has no u128 type.
 		auto const high_value{value / static_cast<::std::uint_least64_t>(100000000)};
 #endif
 		auto const low_value{value - high_value * static_cast<::std::uint_least64_t>(100000000)};
@@ -338,6 +459,10 @@ make_ascii_digit_block(::std::uint_least64_t value) noexcept
 	}
 }
 
+// Compile-time generated encodings for every finite binary64 scientific
+// exponent in [-324, 308].  Bytes 0..4 contain e[+-]dd[d] in destination order
+// and byte 7 contains the logical length.  The cache is ASCII-only; the writer
+// below loads and stores all eight bytes even when only four or five are logical.
 struct ascii_exponent_cache
 {
 	inline static constexpr ::std::int_least32_t minimum{-324};
@@ -371,17 +496,30 @@ struct ascii_exponent_cache
 	}
 };
 
+// As above, hidden visibility protects direct table addressing when the
+// execution set can spell the GNU attribute's narrow "hidden" argument.  The
+// writer, not this optional linkage decoration, selects character encoding.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_exponent_cache ascii_exponents{};
 
+// Generated fixed-layout metadata indexed by the scientific exponent.  Each
+// entry records the leading-zero start, decimal-point slot, digit shift, logical
+// end for coefficient lengths 1..17, and decimal's fixed/scientific decision.
+// decimal_fixed_mask bit (length - 1) is one exactly when fixed is no longer
+// than scientific; equality deliberately selects fixed.  The x86-only members
+// additionally describe one-pshufb binary64 layouts.
 struct ascii_fixed_layout_cache
 {
 	inline static constexpr ::std::int_least32_t minimum{-4};
 	inline static constexpr ::std::int_least32_t compact_maximum{6};
 	inline static constexpr ::std::int_least32_t binary64_shuffle_maximum{15};
 	inline static constexpr ::std::int_least32_t maximum{22};
+	// One SIMD entry occupies a cache-line-sized 64-byte slot so both shuffle
+	// masks and scalar metadata share one indexed base.  The portable entry needs
+	// only 32-byte alignment.  This changes physical layout, never formatting;
+	// changes require checking address generation and cache footprint in assembly.
 	inline static constexpr ::std::size_t entry_alignment{
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
@@ -393,6 +531,9 @@ struct ascii_fixed_layout_cache
 
 	struct alignas(entry_alignment) entry
 	{
+		// These fields exist only when the x86 pshufb writer below is available.
+		// Their absence on other targets halves each metadata entry and avoids an
+		// unused architecture-specific table payload.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 		::std::uint_least8_t binary64_shuffle[2][16]{};
@@ -412,6 +553,9 @@ struct ascii_fixed_layout_cache
 		for (auto exponent{minimum}; exponent <= maximum; ++exponent)
 		{
 			auto &layout{data[static_cast<::std::size_t>(exponent - minimum)]};
+			// Generate exactly the fields consumed by the guarded binary64 pshufb
+			// writer.  Compiling this loop elsewhere would create dead table data;
+			// the scalar metadata below is generated for every target.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 			for (::std::uint_least32_t extra{}; extra != 2u; ++extra)
@@ -466,13 +610,32 @@ struct ascii_fixed_layout_cache
 	}
 };
 
+// Hidden visibility has the same direct-addressing purpose as for
+// ascii_exponents.  The ASCII test is required because the GNU attribute mode
+// itself is a narrow string literal, not because table semantics depend on the
+// execution character set.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
-/// @brief Compact Clang x86 fixed/scientific decisions used before a full SIMD layout is needed.
+// Clang 23 Linux System V x86-64 reads a dense projection of decimal_fixed_mask
+// before selecting a writer, including in scalar-feature builds.  This
+// deliberately duplicates 108 bytes so the decision does not scale the index
+// by a 32- or 64-byte entry
+// and does not materialize the full-layout address on the scientific branch.
+// Baseline, SSE4.1 and native Clang assembly all preserve a branch-free mask
+// calculation before the unavoidable writer branch.  Replacing it with the
+// closed-form length predicate introduces an additional exponent-dependent
+// branch, while reading the canonical entry adds index/address work before
+// notation is known.  The consteval copy proves bit identity with
+// ascii_fixed_layouts.  Retain this compiler-specific space-for-latency tradeoff
+// only in the closed measured compiler/ABI set.  x32, MinGW, the Microsoft ABI,
+// non-Linux x86-64 and other Clang majors reuse the canonical layout instead of
+// owning this duplicate data.  Re-audit text/data size, loads and spills before
+// widening the predicate.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__clang__) && __clang_major__ == 23
 struct ascii_decimal_fixed_mask_cache
 {
 	::std::uint_least32_t data[static_cast<::std::size_t>(
@@ -487,15 +650,23 @@ struct ascii_decimal_fixed_mask_cache
 	}
 };
 
+// This projection follows the same non-interposable linkage policy as its
+// source table.  It owns distinct compact data by design, not a second layout;
+// the ASCII conjunct only keeps the GNU narrow attribute argument valid.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_decimal_fixed_mask_cache ascii_decimal_fixed_masks{};
 #endif
 
+// Compile-time generated complete binary32 scientific shuffles.  The index is
+// (digit_span - 1) * 4 + has_last_digit * 2 + has_extra_digit.  Source lanes
+// 0..7 contain digits, 8..11 the packed exponent, 12 the optional last digit,
+// and 13 the decimal point.  shuffle[15] is metadata holding the logical length
+// and is outside every logical output.  This table exists only with its x86
+// pshufb consumer, preventing unused ISA-specific data on other targets.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
-/// @brief Compile-time generated x86 shuffle layouts for complete binary32 scientific output.
 struct ascii_binary32_scientific_cache
 {
 	struct alignas(16) entry
@@ -551,12 +722,20 @@ struct ascii_binary32_scientific_cache
 	}
 };
 
+// Hidden visibility gives the pshufb consumer a direct table address.  The
+// surrounding backend/ISA guard determines whether these ASCII lanes are
+// consumed; the ASCII conjunct exists because the GNU visibility mode is a
+// narrow string literal and is rejected by GCC after IBM1047 translation.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_binary32_scientific_cache ascii_binary32_scientific_layouts{};
 #endif
 
+// Write eight bytes for a binary32 carrier and sixteen for a binary64 carrier.
+// digits.span and drop_leading_zero affect the logical contents/end only; they
+// never reduce the physical store width.  The caller must supply the complete
+// reserve-print buffer extent.
 template <typename flt>
 FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 	char *destination, ascii_digit_block digits, bool drop_leading_zero) noexcept
@@ -580,6 +759,9 @@ FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 	}
 }
 
+// exponent must be in [-324, 308].  The cached word stores eight bytes although
+// the returned logical length is four or five; all eight destination bytes must
+// be writable.  Uppercase changes only the cached e byte.
 template <bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_exponent(
 	char *destination, ::std::int_least32_t exponent) noexcept
@@ -594,6 +776,11 @@ template <bool uppercase_e>
 	return destination + length;
 }
 
+// Requires digit_count in [1, 17] and exponent in
+// [ascii_fixed_layout_cache::minimum, ascii_fixed_layout_cache::maximum].  The
+// routine initializes scratch bytes past the returned logical end.  On SIMD x86
+// a binary64 coefficient is assembled with one full 16-byte pshufb store; the
+// scalar path uses the same generated point/end metadata.
 template <typename flt, bool comma, bool json_float>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_fixed(
 	char *destination, ascii_digit_block digits, ::std::uint_least32_t digit_count,
@@ -603,6 +790,10 @@ template <typename flt, bool comma, bool json_float>
 	__builtin_memcpy(destination, __builtin_addressof(ascii_zeroes), sizeof(ascii_zeroes));
 	auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(exponent - ascii_fixed_layout_cache::minimum)]};
 	auto buffer{destination + layout.start_position};
+// The SIMD branch exists only with the table fields generated above.  It emits
+// the same logical spelling as the scalar memmove path but protects the audited
+// one-shuffle binary64 assembly shape; binary32 continues through the scalar
+// layout because its shorter block does not use this shuffle metadata.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 	if constexpr (sizeof(flt) > sizeof(float))
@@ -653,6 +844,10 @@ template <typename flt, bool comma, bool json_float>
 	return end;
 }
 
+// Extended fixed notation handles positive exponents beyond the compact layout
+// writer.  Its callers constrain exponent and digit_count so at most six zeroes
+// are appended and the decimal point lies within the reserved coefficient
+// scratch area.  Like store_ascii_digits, it may write beyond the logical end.
 template <typename flt, bool comma, bool json_float>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_fixed_extended(
 	char *destination, ascii_digit_block digits, ::std::uint_least32_t digit_count,
@@ -737,6 +932,11 @@ template <typename flt, bool comma, bool json_float>
 	return destination + digit_count + 1u;
 }
 
+// x86 binary32 scientific emission consumes the unshuffled digit vector before
+// it becomes scalar words.  It emits one complete 16-byte pshufb result;
+// layout.shuffle[15] contains the shorter logical length and byte 15 is outside
+// every result.  The destination must nevertheless permit all sixteen bytes.
+// The ISA guard matches the producer and the generated shuffle table exactly.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 template <bool comma, bool uppercase_e>
@@ -771,6 +971,11 @@ template <bool comma, bool uppercase_e>
 }
 #endif
 
+// Generic scientific assembly for a finite binary32/binary64 carrier.  exponent
+// must lie in [-324, 308], and the coefficient arguments describe at least one
+// significant digit.  store_ascii_digits and print_ascii_exponent perform their
+// documented fixed-width scratch stores; the returned pointer is the logical
+// end after exponent punctuation.
 template <typename flt, bool comma, bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific(
 	char *destination, ascii_digit_block digits, ::std::uint_least32_t digit_count,
@@ -788,12 +993,28 @@ template <typename flt, bool comma, bool uppercase_e>
 	return ::fast_io::details::da::print_ascii_exponent<uppercase_e>(buffer, exponent);
 }
 
+// Render one DA shortest carrier using the ASCII layout tables.  The fields have
+// conversion_result's meaning from compute.h.  General chooses fixed for decimal
+// exponents [-4, 6].  Decimal chooses the shorter complete spelling, with ties
+// in favor of fixed.  A fixed request outside the covered layout range returns
+// nullptr without promising a complete logical result; its caller then invokes
+// the character-generic writer.
+//
+// ISA branches below change only digit materialization and punctuation layout:
+// every branch consumes the same carrier and must emit byte-identical results.
+// The AArch64 and x86 forms preserve their audited SIMD instruction shapes; the
+// scalar form is the correctness reference for unsupported ISA feature sets.
 template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false,
 	bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest(
-	char *destination, conversion_result converted) noexcept
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fields(
+	char *destination, ::std::uint_least64_t significand,
+	::std::int_least32_t converted_exponent, ::std::uint_least32_t last_digit,
+	bool has_last_digit) noexcept
 {
 	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
+	// SIMD x86 can insert a binary64 decimal point with one 16-byte shuffle
+	// through exponent 15.  Other implementations use the compact metadata
+	// through exponent 6 and delegate larger fixed fields to the extended writer.
 	constexpr ::std::int_least32_t fast_fixed_maximum{
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
@@ -807,30 +1028,46 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	constexpr ::std::uint_least32_t block_size{binary32 ? 8u : 16u};
 	if constexpr (binary32)
 	{
-		if (converted.significand < static_cast<::std::uint_least64_t>(1000000)) [[unlikely]]
+		if (significand < static_cast<::std::uint_least64_t>(1000000)) [[unlikely]]
 		{
-			converted.significand = converted.significand * 10u +
-									(converted.has_last_digit ? converted.last_digit : 0u);
-			converted.has_last_digit = false;
-			--converted.exponent;
+			// A regular binary32 carrier normally contains seven or eight digits.
+			// At the six-digit boundary, consume the optional interval digit now and
+			// decrement the decimal exponent.  Multiplying the coefficient by ten
+			// while subtracting one from its exponent preserves the exact value and
+			// keeps every SIMD digit/layout index in its proved range.
+			significand = significand * 10u + (has_last_digit ? last_digit : 0u);
+			has_last_digit = false;
+			--converted_exponent;
 		}
 	}
-#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
-	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(converted.significand)};
+	// Little-endian AArch64 uses the sqdmulh vector lanes proved above; AArch64
+	// big-endian deliberately follows the scalar branch because reversing scalar
+	// words cannot repair the SIMD path's vector-index-to-address assumptions.
+	// x86 uses the guarded pshufb pipeline, and all remaining targets use the
+	// scalar reciprocal implementation.  Keep this guard identical to the SIMD
+	// definition guard so an unavailable or unproved backend cannot be named.
+	// The choice is confined to type/ISA customization and does not alter format
+	// policy or the emitted character sequence.  The final compiler predicate
+	// deliberately matches the declaration guard: it names only the Clang/GCC
+	// builtin spellings exercised by the compile matrix, without claiming a
+	// stable cross-frontend ABI contract.
+#if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	(defined(__clang__) || defined(__GNUC__))
+	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(significand)};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(
-		converted.significand)};
+		significand)};
 	auto const digits{digit_data.digits};
 #else
-	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(converted.significand)};
+	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(significand)};
 #endif
-	auto const has_extra_digit{converted.significand >= extra_digit_threshold};
-	auto const digit_count{converted.has_last_digit
-							   ? block_size + static_cast<::std::uint_least32_t>(has_extra_digit)
-							   : digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
+	auto const has_extra_digit{significand >= extra_digit_threshold};
+	auto const digit_count{has_last_digit
+								? block_size + static_cast<::std::uint_least32_t>(has_extra_digit)
+								: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
 	auto const exponent{static_cast<::std::int_least32_t>(
-		converted.exponent + (binary32 ? 7 : 15) + static_cast<::std::int_least32_t>(has_extra_digit))};
+		converted_exponent + (binary32 ? 7 : 15) + static_cast<::std::int_least32_t>(has_extra_digit))};
 	bool use_fixed{};
 	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::fixed)
 	{
@@ -847,14 +1084,19 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		if (ascii_fixed_layout_cache::minimum <= exponent &&
 			exponent <= ascii_fixed_layout_cache::maximum)
 		{
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__clang__)
+			// The closed Clang-23 Linux x86 set uses the compact projection documented
+			// above to avoid addressing the full 64-byte SIMD layout before the
+			// notation decision.  Every other configuration reads the authoritative
+			// mask from the full layout entry and emits the identical characters.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__clang__) && __clang_major__ == 23
 			auto const fixed_mask{ascii_decimal_fixed_masks.data[static_cast<::std::size_t>(
 				exponent - ascii_fixed_layout_cache::minimum)]};
 #else
 			auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(
 				exponent - ascii_fixed_layout_cache::minimum)]};
 			auto const fixed_mask{layout.decimal_fixed_mask};
-		#endif
+#endif
 			use_fixed = static_cast<bool>(
 				(fixed_mask >> (digit_count - 1u)) & 1u);
 		}
@@ -867,11 +1109,11 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			{
 				return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
 					destination, digits, digit_count, exponent, has_extra_digit,
-					converted.last_digit, converted.has_last_digit);
+					last_digit, has_last_digit);
 			}
 			return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
 				destination, digits, digit_count, exponent, has_extra_digit,
-				converted.last_digit, converted.has_last_digit);
+				last_digit, has_last_digit);
 		}
 	}
 	else if (use_fixed && ascii_fixed_layout_cache::minimum <= exponent &&
@@ -879,7 +1121,7 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	{
 		return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
 			destination, digits, digit_count, exponent, has_extra_digit,
-			converted.last_digit, converted.has_last_digit);
+			last_digit, has_last_digit);
 	}
 	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
 	{
@@ -887,17 +1129,29 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		{
 			return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
 				destination, digits, digit_count, exponent, has_extra_digit,
-				converted.last_digit, converted.has_last_digit);
+				last_digit, has_last_digit);
 		}
 	}
 	if (use_fixed)
 	{
 		return nullptr;
 	}
+	// Complete binary32 pshufb assembly has opposite profitable placement in the
+	// audited compiler pipelines: Clang uses it while conversion/emission are in
+	// one scalar call, whereas GCC uses it after staged preparation shortens the
+	// surrounding live range.  Both branches emit identical bytes.  Revalidate
+	// pshufb count, frame, spills and calls when staged preparation or compiler
+	// support changes; this polarity is not part of formatting semantics.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__))
 	if constexpr (binary32)
 	{
+		// Both placements feed the same carrier fields to the same pshufb writer,
+		// so the returned pointer and bytes are semantically identical.  Paired
+		// x86 measurements and assembly inspection established the non-staged
+		// placement for Clang 23 and the staged placement for GCC 16.0.1.  Other
+		// compiler majors selected by these open family branches inherit the
+		// polarity as an unmeasured code-generation hypothesis.
 #if defined(__clang__)
 		if constexpr (!staged_emission)
 #else
@@ -906,34 +1160,49 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		{
 			return ::fast_io::details::da::print_ascii_scientific_x86_binary32<flags.comma, flags.uppercase_e>(
 				destination, digit_data.unshuffled, digits.span, exponent, has_extra_digit,
-				converted.last_digit, converted.has_last_digit);
+				last_digit, has_last_digit);
 		}
 	}
 #endif
 	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
 		destination, digits, digit_count, exponent, has_extra_digit,
-		converted.last_digit, converted.has_last_digit);
+		last_digit, has_last_digit);
 }
 
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 16
+template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false,
+	bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest(
+	char *destination, conversion_result converted) noexcept
+{
+	return ::fast_io::details::da::print_ascii_shortest_fields<
+		flt, flags, staged_emission, use_cached_constants>(destination, converted.significand,
+			converted.exponent, converted.last_digit, converted.has_last_digit);
+}
+
+// GCC 14-15 Linux System V x86-64 binary64 fixed-direct entry.  Keeping the
+// selected fixed band out of the general layout decision shortens the live range
+// between DA conversion and pshufb emission.  It is semantically identical to
+// print_ascii_shortest.  Other ABIs and compiler majors retain the compact
+// generic entry; extending this closed set requires frame, spill, call, constant-
+// load, branch and linked-text-size evidence.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
+	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 15
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fixed_direct(
 	char *destination, conversion_result converted) noexcept
 {
-	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
-	constexpr ::std::uint_least64_t extra_digit_threshold{
-		binary32 ? static_cast<::std::uint_least64_t>(10000000) :
-			static_cast<::std::uint_least64_t>(1000000000000000)};
-	constexpr ::std::uint_least32_t block_size{binary32 ? 8u : 16u};
+	static_assert(sizeof(flt) > sizeof(float));
+	static_assert(flags.floating == ::fast_io::manipulators::floating_format::decimal);
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(
 		converted.significand)};
-	auto const has_extra_digit{converted.significand >= extra_digit_threshold};
+	auto const has_extra_digit{
+		converted.significand >= static_cast<::std::uint_least64_t>(1000000000000000)};
 	auto const digit_count{converted.has_last_digit
-		? block_size + static_cast<::std::uint_least32_t>(has_extra_digit)
+		? 16u + static_cast<::std::uint_least32_t>(has_extra_digit)
 		: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
 	auto const exponent{static_cast<::std::int_least32_t>(
-		converted.exponent + (binary32 ? 7 : 15) +
+		converted.exponent + 15 +
 		static_cast<::std::int_least32_t>(has_extra_digit))};
 	return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
 		destination, digits, digit_count, exponent, has_extra_digit,
@@ -941,56 +1210,27 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 }
 #endif
 
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 15
+// Semantic equivalence: the outlined binary32 entry forwards the same scalar
+// carrier fields to print_ascii_shortest_fields, so outlining cannot change the
+// selected notation, emitted bytes, or returned pointer.  GCC 16.0.1
+// measurements on CPU 8 (physical core 4 of the i9-14900HX) and its generated
+// assembly showed that this boundary prevents DA conversion state and SIMD
+// layout state from sharing an oversized live range and avoids the
+// aggregate-transfer regression.  No binary64 caller reaches it, so the former
+// binary64 split was dead.
+//
+// This boundary is intentionally closed to the measured GCC 16 Linux System V
+// LP64 artifact.  Other ABIs and compiler majors use the inline field writer;
+// both paths consume the same carrier and emit identical bytes.  Extending the
+// predicate requires call, frame, spill, pshufb-placement, complete-call timing
+// and linked-text-size evidence.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
+	!defined(__clang__) && __GNUC__ == 16
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]]
-#if __has_cpp_attribute(__gnu__::__noinline__)
-[[__gnu__::__noinline__]]
-#endif
-inline char *print_ascii_fixed_split(
-	char *destination, ::std::uint_least64_t low, ::std::uint_least64_t high,
-	::std::uint_least32_t span, ::std::uint_least32_t digit_count,
-	::std::int_least32_t exponent, bool has_extra_digit,
-	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
-{
-	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
-	constexpr ::std::int_least32_t fast_fixed_maximum{
-		binary32 ? ascii_fixed_layout_cache::compact_maximum : ascii_fixed_layout_cache::binary64_shuffle_maximum};
-	ascii_digit_block const digits{low, high, span};
-	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
-	{
-		if (exponent <= fast_fixed_maximum)
-		{
-			return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
-				destination, digits, digit_count, exponent, has_extra_digit,
-				last_digit, has_last_digit);
-		}
-		return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
-			destination, digits, digit_count, exponent, has_extra_digit,
-			last_digit, has_last_digit);
-	}
-	else if (ascii_fixed_layout_cache::minimum <= exponent &&
-			 exponent <= fast_fixed_maximum)
-	{
-		return ::fast_io::details::da::print_ascii_fixed<flt, flags.comma, flags.json_float>(
-			destination, digits, digit_count, exponent, has_extra_digit,
-			last_digit, has_last_digit);
-	}
-	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
-	{
-		return ::fast_io::details::da::print_ascii_fixed_extended<flt, flags.comma, flags.json_float>(
-			destination, digits, digit_count, exponent, has_extra_digit,
-			last_digit, has_last_digit);
-	}
-	else
-	{
-		return nullptr;
-	}
-}
-
-template <typename flt, ::fast_io::manipulators::scalar_flags flags>
-[[nodiscard]]
+// noinline is the live-range boundary described above, not an ISA semantic.
+// Use the GNU spelling only where the compiler advertises it.
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
@@ -999,76 +1239,11 @@ inline char *print_ascii_shortest_split(
 	::std::int_least32_t exponent, ::std::uint_least32_t last_digit,
 	bool has_last_digit) noexcept
 {
-#if __GNUC__ == 15
-	return ::fast_io::details::da::print_ascii_shortest<flt, flags>(
-		destination, {significand, exponent, last_digit, has_last_digit});
-#else
-	if constexpr (sizeof(flt) <= sizeof(float))
-	{
-		return ::fast_io::details::da::print_ascii_shortest<flt, flags>(
-			destination, {significand, exponent, last_digit, has_last_digit});
-	}
-	else
-	{
-		auto const digits{::fast_io::details::da::make_ascii_digit_block_x86<flt>(significand)};
-		auto const has_extra_digit{
-			significand >= static_cast<::std::uint_least64_t>(1000000000000000)};
-		auto const digit_count{has_last_digit
-			? 16u + static_cast<::std::uint_least32_t>(has_extra_digit)
-			: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
-		auto const real_exponent{static_cast<::std::int_least32_t>(
-			exponent + 15 + static_cast<::std::int_least32_t>(has_extra_digit))};
-		bool use_fixed{};
-		if constexpr (flags.floating == ::fast_io::manipulators::floating_format::fixed)
-		{
-			use_fixed = true;
-		}
-		else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
-		{
-			auto const decimal_exponent{static_cast<::std::int_least32_t>(
-				real_exponent - static_cast<::std::int_least32_t>(digit_count) + 1)};
-			use_fixed = -5 < decimal_exponent && decimal_exponent < 7;
-		}
-		else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
-		{
-			if (ascii_fixed_layout_cache::minimum <= real_exponent &&
-				real_exponent <= ascii_fixed_layout_cache::maximum)
-			{
-				auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(
-					real_exponent - ascii_fixed_layout_cache::minimum)]};
-				use_fixed = static_cast<bool>(
-					(layout.decimal_fixed_mask >> (digit_count - 1u)) & 1u);
-			}
-		}
-		if (use_fixed)
-		{
-			return ::fast_io::details::da::print_ascii_fixed_split<flt, flags>(
-				destination, digits.low, digits.high, digits.span, digit_count,
-				real_exponent, has_extra_digit, last_digit, has_last_digit);
-		}
-		return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
-			destination, digits, digit_count, real_exponent, has_extra_digit,
-			last_digit, has_last_digit);
-	}
-#endif
+	static_assert(sizeof(flt) <= sizeof(float));
+	return ::fast_io::details::da::print_ascii_shortest_fields<flt, flags>(
+		destination, significand, exponent, last_digit, has_last_digit);
 }
 
-#endif
-
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14
-template <typename flt, ::fast_io::manipulators::scalar_flags flags>
-[[nodiscard]]
-#if __has_cpp_attribute(__gnu__::__noinline__)
-[[__gnu__::__noinline__]]
-#endif
-inline char *print_ascii_shortest_regular_direct(
-	char *destination, ::std::uint_least64_t significand,
-	::std::uint_least32_t raw_exponent) noexcept
-{
-	auto const converted{::fast_io::details::da::compute_binary64(significand, raw_exponent)};
-	return ::fast_io::details::da::print_ascii_shortest<flt, flags>(destination, converted);
-}
 #endif
 
 } // namespace fast_io::details::da

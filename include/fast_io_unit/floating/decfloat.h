@@ -262,6 +262,11 @@ template <typename T>
 	return false;
 }
 
+// The Clinger shortcut evaluates a small decimal with native floating multiply
+// or divide and is exact only under its assumed nearest-even environment.  When
+// fast_io exposes the mutable C floating-point environment, keep conversion in
+// the integer rounding pipeline selected by current_floating_rounding(); this
+// avoids making the result depend on an unmodelled ambient rounding mode.
 inline constexpr bool scan_decfloat_clinger_environment_independent{
 #if defined(FAST_IO_HAS_FLOATING_POINT_ENVIRONMENT)
 	false
@@ -892,7 +897,12 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 	return ::fast_io::parse_code::ok;
 }
 
-#ifdef __SIZEOF_INT128__
+	// The exact midpoint comparator needs arbitrary-precision multiplication but
+	// not a native 128-bit scalar.  Keep its limb layer available on every target:
+	// intrinsics::umul supplies the complete 64-by-64 product as two words, and
+	// the explicit carry recurrence below is mathematically identical to adding
+	// the incoming carry to a native-u128 product.  Only the quotient materializer,
+	// which actually stores a 128-bit quotient, remains capability-gated below.
 	inline constexpr ::std::size_t scan_decfloat_bigint_limb_capacity{288u};
 
 	struct scan_decfloat_bigint
@@ -930,15 +940,34 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 		value.size = word == 0u ? 0u : 1u;
 	}
 
-	[[nodiscard]] inline constexpr bool scan_decfloat_bigint_mul_small(scan_decfloat_bigint &value,
-																	   ::std::uint_least32_t multiplier) noexcept
+	// Let B=2^64 and x*y=p_low+B*p_high.  For an incoming carry c<B,
+	// (p_low+c) mod B is the next limb and p_high+[p_low+c>=B] is the next
+	// carry.  Moreover x*y+c <= (B-1)^2+(B-1)=B^2-B, so that high-word
+	// addition cannot overflow.  This proves exact equivalence to the former
+	// native-u128 multiply-add recurrence.
+	[[nodiscard]] inline constexpr ::std::uint_least64_t
+	scan_decfloat_bigint_mul_add_carry(::std::uint_least64_t left,
+									 ::std::uint_least64_t right,
+									 ::std::uint_least64_t &carry) noexcept
 	{
-		__uint128_t carry{};
+		::std::uint_least64_t product_high{};
+		auto product_low{::fast_io::intrinsics::umul(left, right, product_high)};
+		auto const low_before_carry{product_low};
+		product_low = static_cast<::std::uint_least64_t>(product_low + carry);
+		product_high = static_cast<::std::uint_least64_t>(
+			product_high + static_cast<::std::uint_least64_t>(product_low < low_before_carry));
+		carry = product_high;
+		return product_low;
+	}
+
+	[[nodiscard]] inline constexpr bool scan_decfloat_bigint_mul_small(scan_decfloat_bigint &value,
+															   ::std::uint_least32_t multiplier) noexcept
+	{
+		::std::uint_least64_t carry{};
 		for (::std::size_t index{}; index != value.size; ++index)
 		{
-			auto const product{static_cast<__uint128_t>(value.limb[index]) * multiplier + carry};
-			value.limb[index] = static_cast<::std::uint_least64_t>(product);
-			carry = product >> 64u;
+			value.limb[index] = ::fast_io::details::scan_decfloat_bigint_mul_add_carry(
+				value.limb[index], static_cast<::std::uint_least64_t>(multiplier), carry);
 		}
 		if (carry)
 		{
@@ -960,12 +989,11 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 			::fast_io::details::scan_decfloat_bigint_clear(value);
 			return true;
 		}
-		__uint128_t carry{};
+		::std::uint_least64_t carry{};
 		for (::std::size_t index{}; index != value.size; ++index)
 		{
-			auto const product{static_cast<__uint128_t>(value.limb[index]) * multiplier + carry};
-			value.limb[index] = static_cast<::std::uint_least64_t>(product);
-			carry = product >> 64u;
+			value.limb[index] = ::fast_io::details::scan_decfloat_bigint_mul_add_carry(
+				value.limb[index], multiplier, carry);
 		}
 		if (carry)
 		{
@@ -987,14 +1015,13 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 			::fast_io::details::scan_decfloat_bigint_set_u64(value, addend);
 			return true;
 		}
-		__uint128_t sum{static_cast<__uint128_t>(value.limb[0]) + addend};
-		value.limb[0] = static_cast<::std::uint_least64_t>(sum);
-		auto carry{sum >> 64u};
+		auto const first_before_add{value.limb[0]};
+		value.limb[0] = static_cast<::std::uint_least64_t>(first_before_add + addend);
+		bool carry{value.limb[0] < first_before_add};
 		for (::std::size_t index{1u}; carry && index != value.size; ++index)
 		{
-			sum = static_cast<__uint128_t>(value.limb[index]) + carry;
-			value.limb[index] = static_cast<::std::uint_least64_t>(sum);
-			carry = sum >> 64u;
+			++value.limb[index];
+			carry = value.limb[index] == 0u;
 		}
 		if (carry)
 		{
@@ -1020,14 +1047,13 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 			::fast_io::details::scan_decfloat_bigint_set_u64(value, addend);
 			return true;
 		}
-		__uint128_t sum{static_cast<__uint128_t>(value.limb[0]) + addend};
-		value.limb[0] = static_cast<::std::uint_least64_t>(sum);
-		auto carry{sum >> 64u};
+		auto const first_before_add{value.limb[0]};
+		value.limb[0] = static_cast<::std::uint_least64_t>(first_before_add + addend);
+		bool carry{value.limb[0] < first_before_add};
 		for (::std::size_t index{1u}; carry && index != value.size; ++index)
 		{
-			sum = static_cast<__uint128_t>(value.limb[index]) + carry;
-			value.limb[index] = static_cast<::std::uint_least64_t>(sum);
-			carry = sum >> 64u;
+			++value.limb[index];
+			carry = value.limb[index] == 0u;
 		}
 		if (carry)
 		{
@@ -1246,35 +1272,23 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 		return true;
 	}
 
-	inline constexpr ::std::uint_least64_t scan_decfloat_pow5_0_to_27_table[]{
-		1u,
-		5u,
-		25u,
-		125u,
-		625u,
-		3125u,
-		15625u,
-		78125u,
-		390625u,
-		1953125u,
-		9765625u,
-		48828125u,
-		244140625u,
-		1220703125u,
-		6103515625u,
-		30517578125u,
-		152587890625u,
-		762939453125u,
-		3814697265625u,
-		19073486328125u,
-		95367431640625u,
-		476837158203125u,
-		2384185791015625u,
-		11920928955078125u,
-		59604644775390625u,
-		298023223876953125u,
-		1490116119384765625u,
-		7450580596923828125u};
+	inline constexpr auto scan_decfloat_generate_pow5_0_to_27_table() noexcept
+	{
+		::fast_io::freestanding::array<::std::uint_least64_t, 28u> table{};
+		table.index_unchecked(0u) = 1u;
+		for (::std::size_t index{1u}; index != 28u; ++index)
+		{
+			table.index_unchecked(index) =
+				static_cast<::std::uint_least64_t>(table.index_unchecked(index - 1u) * 5u);
+		}
+		return table;
+	}
+
+	// 5^27 = 7,450,580,596,923,828,125 < 2^63, so every multiplication in
+	// this constant-initialization recurrence is representable in uint_least64_t.
+	// Generation preserves the exact chunk constants without a handwritten table.
+	inline constexpr auto scan_decfloat_pow5_0_to_27_table{
+		::fast_io::details::scan_decfloat_generate_pow5_0_to_27_table()};
 
 	[[nodiscard]] inline constexpr bool scan_decfloat_bigint_mul_pow5(scan_decfloat_bigint &value,
 																	  ::std::uint_least64_t exponent) noexcept
@@ -1336,6 +1350,13 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 		return exponent;
 	}
 
+	// The full exact materializer accumulates as many as 113 quotient bits for
+	// binary128.  Keep this representation-specific quotient layer behind the
+	// native-u128 capability macro; the portable midpoint comparator below uses
+	// only the common limb operations and remains available without it.  Removing
+	// this gate would require a proved two-word quotient implementation, not merely
+	// a compiler spelling substitution.
+#if defined(__SIZEOF_INT128__)
 	struct scan_decfloat_bigint_div_result
 	{
 		__uint128_t quotient{};
@@ -1442,6 +1463,7 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 				   ::fast_io::details::floating_rounding_directed_round_up<rounding>(negative);
 		}
 	}
+#endif
 
 	template <typename T>
 	[[nodiscard]] inline constexpr ::std::uint_least64_t
@@ -1629,6 +1651,15 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 		return ::fast_io::parse_code::overflow;
 	}
 
+	// Assigning an arbitrary exact decimal consumes the native-u128 quotient layer
+	// above.  Targets without it retain the compute/native-wide fallbacks.  For a
+	// compute-supported type, an interval that those fallbacks cannot collapse is
+	// deliberately reported as partial: the portable comparator resolves only an
+	// exact nearest-even comparison with a negative decimal exponent and a fully
+	// retained exact digit sequence.  Positive decimal exponents, digits beyond
+	// scan_decfloat_exact_digit_capacity, and other unresolved rounding policies
+	// are not claimed equivalent to the u128 materializer.
+#if defined(__SIZEOF_INT128__)
 	template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 							  ::fast_io::manipulators::floating_rounding::nearest_to_even>
 	[[nodiscard]] inline constexpr ::fast_io::parse_code
@@ -1960,7 +1991,15 @@ scan_decfloat_skip_after_exact_limit_simd(char_type const *first, char_type cons
 	using signed_char_type = ::std::make_signed_t<unsigned_char_type>;
 	constexpr unsigned N{vec_size / sizeof(char_type)};
 	using simd_vector_type = ::fast_io::intrinsics::simd_vector<signed_char_type, N>;
-#if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
+	// std::bit_cast preserves every byte of the character array, so both branches
+	// construct the same vector on every ISA.  Clang 22 and 23 were additionally
+	// verified to lower the constant form to the same x86-64 instructions as
+	// load(); Clang 21 and older keep the load fallback because their constexpr
+	// vector lowering remains unmeasured.  Admitting later Clang releases and
+	// non-Clang frontends is a conservative code-generation hypothesis based on
+	// that semantic identity, not a claim that every future target was measured;
+	// their emitted objects must be re-audited before relying on performance.
+#if (__cpp_lib_bit_cast >= 201806L) && (!defined(__clang__) || __clang_major__ >= 22)
 	constexpr simd_vector_type zeroes{
 		::std::bit_cast<simd_vector_type>(::fast_io::details::characters_array_impl<u8'0', char_type, N>)};
 	constexpr simd_vector_type nines{

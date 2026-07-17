@@ -21,14 +21,15 @@ inline constexpr ::std::size_t lc_print_rsv_iec559_size(basic_lc_all<char_type> 
 		constexpr ::std::size_t digits{trait::e10max + trait::m10digits};
 		static_assert(digits != 0);
 		constexpr ::std::size_t digitsm1{digits - 1};
-		auto const sz{sum + digitsm1 + all->numeric.decimal_point.len + digitsm1 * all->numeric.thousands_sep.len};
+		auto const sz{sum + digitsm1 + all->numeric.decimal_point.length +
+			digitsm1 * all->numeric.thousands_sep.length};
 		constexpr ::std::size_t special_sz{print_rsv_fp_special_size_cache<nan_show_type>};
 		return sz < special_sz ? special_sz : sz;
 	}
 	else if constexpr (mf == ::fast_io::manipulators::floating_format::scientific)
 	{
 		constexpr ::std::size_t sum{print_rsv_cache<flt, mf>};
-		auto const sz{sum + all->numeric.decimal_point.len};
+		auto const sz{sum + all->numeric.decimal_point.length};
 		constexpr ::std::size_t special_sz{print_rsv_fp_special_size_cache<nan_show_type>};
 		return sz < special_sz ? special_sz : sz;
 	}
@@ -36,8 +37,8 @@ inline constexpr ::std::size_t lc_print_rsv_iec559_size(basic_lc_all<char_type> 
 	{
 		constexpr ::std::size_t sum{3 + trait::e10digits};
 		constexpr ::std::size_t digitsplus3{trait::m10digits + 3};
-		auto const sz{sum + digitsplus3 + all->numeric.decimal_point.len +
-					  digitsplus3 * all->numeric.thousands_sep.len};
+		auto const sz{sum + digitsplus3 + all->numeric.decimal_point.length +
+					  digitsplus3 * all->numeric.thousands_sep.length};
 		constexpr ::std::size_t special_sz{print_rsv_fp_special_size_cache<nan_show_type>};
 		return sz < special_sz ? special_sz : sz;
 	}
@@ -57,7 +58,7 @@ inline constexpr ::std::size_t lc_print_reserve_float_size_impl(basic_lc_all<cha
 			print_reserve_size(io_reserve_type<char_type, manipulators::scalar_manip_t<flags, flt>>)};
 		static_assert(non_lc_reserve_size != 0);
 		constexpr ::std::size_t non_lc_reserve_size_m1{non_lc_reserve_size - 1u};
-		auto const sz{all->numeric.decimal_point.len + non_lc_reserve_size_m1};
+		auto const sz{all->numeric.decimal_point.length + non_lc_reserve_size_m1};
 		constexpr ::std::size_t special_sz{print_rsv_fp_special_size_cache<flags.nan_show_type>};
 		return sz < special_sz ? special_sz : sz;
 	}
@@ -107,7 +108,8 @@ inline constexpr char_type *print_reserve_define(basic_lc_all<char_type> const *
 
 	if constexpr (flags.floating == manipulators::floating_format::hexfloat)
 	{
-		auto decimal_point{all->numeric.decimal_point};
+		auto const decimal_point{::fast_io::details::lc_resolve_scatter(
+			all, all->numeric.decimal_point)};
 		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double>
 #if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
 					  || ::std::same_as<::std::remove_cvref_t<flt>, __float128>

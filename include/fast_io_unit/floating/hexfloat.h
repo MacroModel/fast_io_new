@@ -427,7 +427,14 @@ scan_hexfloat_skip_after_storage_limit_simd(char_type const *first, char_type co
 	using signed_char_type = ::std::make_signed_t<unsigned_char_type>;
 	constexpr unsigned N{vec_size / sizeof(char_type)};
 	using simd_vector_type = ::fast_io::intrinsics::simd_vector<signed_char_type, N>;
-#if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
+	// std::bit_cast preserves every byte of each character array, so both branches
+	// construct identical vectors on every ISA.  Clang 22 and 23 were additionally
+	// verified to lower the constants to the same x86-64 instructions as load();
+	// Clang 21 and older keep the load fallback because their constexpr-vector
+	// lowering remains unmeasured.  Later Clang releases and non-Clang frontends
+	// are admitted only as a conservative code-generation hypothesis justified by
+	// semantic identity; their target objects require a fresh performance audit.
+#if (__cpp_lib_bit_cast >= 201806L) && (!defined(__clang__) || __clang_major__ >= 22)
 	constexpr simd_vector_type zeroes{
 		::std::bit_cast<simd_vector_type>(::fast_io::details::characters_array_impl<u8'0', char_type, N>)};
 	constexpr simd_vector_type nines{
@@ -1251,6 +1258,40 @@ scan_hexfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 				significand_state.significant_hex_digits, significand_state.truncated_nonzero, binary_exponent)};
 }
 
+/*
+A hexadecimal floating fraction has a fixed field width, unlike an integer.
+When its carrier is wider than the integral writer's preferred unsigned type,
+split it into high and low limbs while retaining the requested letter case for
+both.  If len exceeds the low-limb capacity, the first call writes exactly
+len - low_digits high positions and the second writes exactly low_digits low
+positions.  Otherwise the value fits in the low limb and only the second call
+is needed.  Concatenating those fixed-width radix-16 expansions is the unique
+len-digit representation of mantissa, including required leading zeroes.
+*/
+template <bool uppercase, ::std::integral char_type, my_unsigned_integral mantissa_type>
+inline constexpr void print_rsvhexfloat_mantissa_fixed_impl(char_type *last, mantissa_type mantissa,
+	::std::size_t len) noexcept
+{
+	if constexpr (need_seperate_print<mantissa_type>)
+	{
+		constexpr ::std::size_t low_digits{
+			::fast_io::details::cal_max_int_size<optimal_print_unsigned_type, 16u>()};
+		optimal_print_unsigned_type high;
+		auto const low{
+			::fast_io::details::intrinsics::unpack_generic<mantissa_type, optimal_print_unsigned_type>(mantissa, high)};
+		if (low_digits < len)
+		{
+			print_reserve_integral_main_impl<16u, uppercase>(last - low_digits, high, len - low_digits);
+			len = low_digits;
+		}
+		print_reserve_integral_main_impl<16u, uppercase>(last, low, len);
+	}
+	else
+	{
+		print_reserve_integral_main_impl<16u, uppercase>(last, mantissa, len);
+	}
+}
+
 template <bool showbase, bool showbase_uppercase, bool showpos, bool uppercase, bool uppercase_e, bool comma,
 		  bool nan_show_sign = true, bool nan_show_type = false, typename flt, ::std::integral char_type>
 inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f) noexcept
@@ -1300,7 +1341,8 @@ inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f
 		{
 			iter = prsv_fp_hex1d<comma>(iter);
 		}
-		print_reserve_integral_main_impl<16, uppercase>(iter += mantissa_len, mantissa, mantissa_len);
+		::fast_io::details::print_rsvhexfloat_mantissa_fixed_impl<uppercase>(
+			iter += mantissa_len, mantissa, mantissa_len);
 	}
 	else
 	{
@@ -1416,7 +1458,8 @@ inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *i
 		::std::size_t total_precision{precision};
 		if constexpr (fractional_precision)
 		{
-			if (total_precision != static_cast<::std::size_t>(-1))
+			constexpr auto size_max{(::std::numeric_limits<::std::size_t>::max)()};
+			if (total_precision != size_max)
 			{
 				++total_precision;
 			}

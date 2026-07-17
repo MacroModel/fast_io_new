@@ -207,9 +207,9 @@ struct iec559_traits<__bf16>
 };
 #endif
 
-#if defined(__STDCPP_BFLOAT16_T__) || \
-	(defined(__GNUC__) && !defined(__clang__) && defined(__BFLT16_MANT_DIG__))
-
+// A standardized C++23 bfloat16 implementation provides the literal suffix,
+// making its exact language type available without relying on a vendor name.
+#if defined(__STDCPP_BFLOAT16_T__)
 template <>
 struct iec559_traits<decltype(0.0bf16)>
 {
@@ -224,15 +224,48 @@ struct iec559_traits<decltype(0.0bf16)>
 };
 #endif
 
+// GCC exposes __bf16 together with __BFLT16_MANT_DIG__ in C++20, one language
+// version before the standard bf16 literal suffix.  Naming the vendor type
+// directly avoids a -Wpedantic C++23-extension diagnostic while describing the
+// same 7-fraction-bit, 8-exponent-bit representation.  Clang has its separately
+// capability-tested __bf16 specialization above, so the frontend exclusion also
+// prevents a duplicate specialization in GNU-compatibility mode.
+#if defined(__GNUC__) && !defined(__clang__) && defined(__BFLT16_MANT_DIG__) && \
+	!defined(__STDCPP_BFLOAT16_T__)
+template <>
+struct iec559_traits<__bf16>
+{
+	using mantissa_type = ::std::uint_least16_t;
+	inline static constexpr ::std::size_t mbits{7};
+	inline static constexpr ::std::size_t ebits{8};
+	inline static constexpr ::std::uint_least32_t m10digits{4};
+	inline static constexpr ::std::uint_least32_t m2hexdigits{3};
+	inline static constexpr ::std::uint_least32_t e10digits{2};
+	inline static constexpr ::std::uint_least32_t e2hexdigits{3};
+	inline static constexpr ::std::uint_least32_t e10max{38};
+};
+#endif
+
 template <my_unsigned_integral T>
+// Native MSVC is the only frontend selected for its vendor inlining attribute.
+// Clang can define _MSC_VER in clang-cl mode, so the explicit frontend exclusion
+// prevents an ABI-compatibility macro from being mistaken for compiler identity.
+// The attribute-availability test keeps older MSVC releases source-compatible;
+// this annotation changes only the inlining request, not the function contract.
 #if defined(_MSC_VER) && !defined(__clang__)
 #if __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
 #endif
-inline constexpr int my_countr_zero_unchecked(T x) noexcept // contract: t cannot be zero
+inline constexpr int my_countr_zero_unchecked(T x) noexcept
 {
-// referenced from libstdc++
+	// Precondition: x != 0. Every __builtin_ctz* operation is undefined for zero.
+	// Nd is the value width of T. Select the narrowest builtin operand type that
+	// covers all of T, so integral conversion cannot discard a possible low set
+	// bit. For a wider (at most 128-bit) T, inspect the low unsigned-long-long
+	// limb first. If that limb is zero, the precondition proves that the high limb
+	// is nonzero and therefore valid input to __builtin_ctzll. The standard-library
+	// fallback has the same result for every value admitted by this contract.
 #if defined(__GNUC__) || defined(__clang__)
 	constexpr auto Nd = ::std::numeric_limits<char>::digits * sizeof(T);
 	constexpr auto Nd_ull = ::std::numeric_limits<unsigned long long>::digits;
