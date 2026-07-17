@@ -2,6 +2,11 @@
 
 This report was generated on 2026-07-12 and updated with the Apple/traditional AArch64 split on 2026-07-13. Native timings apply only to this Apple M4 system; cross-target compilation and static scheduling analysis cannot replace native measurements on other processors.
 
+> This body preserves dated evidence from earlier source snapshots.  The
+> current production conclusions are recorded in the
+> [2026-07-17 production addendum](#production-addendum-frozen-integer-output-snapshot-2026-07-17),
+> which supersedes unqualified uses of "final" below.
+
 ## Environment
 
 - System: Apple M4, macOS 26.5.1 (25F80).
@@ -15,13 +20,13 @@ This report was generated on 2026-07-12 and updated with the Apple/traditional A
 
 The independent correctness harness covers bases 2 through 36 and fifteen standard integer types: `char`, signed and unsigned character types, `wchar_t`, `char8_t`, `char16_t`, `char32_t`, and all standard signed and unsigned integer widths.
 
-It checks complete 8-bit and 16-bit domains, radix-power boundaries, minimum and maximum values, fixed-seed random values, exact-capacity buffers, every insufficient capacity, returned pointers, `value_too_large`, and the no-write-on-error contract. Clang Release, Apple Clang ASan+UBSan, and GCC 15 produced the same result:
+It checks complete 8-bit and 16-bit domains, radix-power boundaries, minimum and maximum values, fixed-seed random values, exact-capacity buffers, every insufficient capacity, returned pointers, `std::errc::value_too_large`, and fast_io's stronger tested invariant that a too-small destination range remains unchanged. Clang Release, Apple Clang ASan+UBSan, and GCC 15 produced the same result:
 
 - 20,939,175 values passed.
 - 226,012 capacity and error-contract cases passed.
 - The three final logs have the same SHA-256: `5bd13e07773d965460c32b7ee465058d3cf03f09a4447ac7ce8e14b059493b51`.
 
-The platform-split validation adds exhaustive coverage of all 1,835,008 seven-digit octal `uint64_t` values for each of `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t`, plus 200,000 random values per character type and radix-power boundaries. It also compares 1,750,000 public base-2-through-base-36 conversions with `std::to_chars`, including insufficient-capacity behavior and the no-write-on-error contract. Native M4 Release, native M4 ASan+UBSan, and Rosetta x86-64 Release all pass.
+The platform-split validation adds exhaustive coverage of all 1,835,008 seven-digit octal `uint64_t` values for each of `char`, `wchar_t`, `char8_t`, `char16_t`, and `char32_t`, plus 200,000 random values per character type and radix-power boundaries. It also compares 1,750,000 public base-2-through-base-36 conversions with `std::to_chars`, including standard insufficient-capacity results and the same stronger fast_io range-preservation invariant. Native M4 Release, native M4 ASan+UBSan, and Rosetta x86-64 Release all pass.
 
 The performance harness also performs a byte-for-byte preflight against `std::to_chars` for every timed value and against fmt wherever fmt exposes the comparable core path.
 
@@ -77,7 +82,7 @@ The resolved-path MCA regions below include their range checks, address generati
 
 The seven-digit octal shortcut is now the only power-of-two kernel isolated by platform. It is enabled by `__APPLE__` together with the AArch64 target test. The one-through-six-digit octal kernels, all binary kernels, and all hexadecimal kernels remain shared AArch64 code because their resolved paths improve or preserve throughput on both Apple and Cortex/Neoverse models.
 
-The separation was tested against the established implementation and against the common fallback independently. On Apple M4, seven alternating baseline/candidate process pairs used 4,096 deterministic values at every octal length and eleven calibrated trials per process. The retained shortcut measured `1.292 ns/value` at seven digits; forcing that range through the common fallback measured `2.559 ns/value`, or `1.981x` the shortcut time. The final Apple source produces byte-identical resolved assembly for Apple M1, M2, M3, and M4; the M4 assembly SHA-256 is `b1e14697c78664db274f0cc72a805ba65b888adae1ed698fc01918c3942d3f33`.
+The separation was tested against the established implementation and against the common fallback independently. On Apple M4, seven alternating baseline/candidate process pairs used 4,096 deterministic values at every octal length and eleven calibrated trials per process. The retained shortcut measured `1.292 ns/value` at seven digits; forcing that range through the common fallback measured `2.559 ns/value`, or `1.981x` the shortcut time. The source snapshot tested in this section produces byte-identical resolved assembly for Apple M1, M2, M3, and M4; the M4 assembly SHA-256 is `b1e14697c78664db274f0cc72a805ba65b888adae1ed698fc01918c3942d3f33`.
 
 For non-Apple AArch64, the shortcut is absent. The resolved seven-digit path is machine-word identical to the parent common implementation on Cortex-A57, Cortex-A76, Neoverse N1, and Neoverse V1. LLVM-MCA favors that common path on every traditional model tested:
 
@@ -411,14 +416,14 @@ Correctness preflight: `ok` for every timed value before measurement; no `std::e
 
 ## 2026-07-16 all-type, all-base compiler matrix
 
-The final production matrix uses the same value population as the input
+The 2026-07-16 production matrix uses the same value population as the input
 benchmark: unsigned and signed 8-, 16-, 32-, 64-, and 128-bit integers, every
 valid length in bases 2 through 36, and `char`, `wchar_t`, `char8_t`,
 `char16_t`, and `char32_t`.  The public `fast_io::to_chars` and
 `std::to_chars` comparison is available for `char`; the other character types
 exercise the reserve-print core that is used by fast_io formatting.
 
-The x86-64 host is an Intel Core i9-14900HX.  Each benchmark process was pinned
+The historical x86-64 host is an Intel Core i9-14900HX.  Each benchmark process was pinned
 to P-core logical CPU 4 and all builds and runs were serialized.  Compilers are
 GCC 13.4, GCC 14.3, GCC 15.2, a GCC 16 development snapshot, Clang 22,
 upstream Clang 23, and the fast_io Clang 23 toolchain, using C++20, `-O3`, and
@@ -434,16 +439,22 @@ upstream Clang 23, and the fast_io Clang 23 toolchain, using C++20, `-O3`, and
 | Clang 23 upstream | 0.998x | 1.318x | 1.436x | 0.996x |
 | Clang 23 fast_io | 1.003x | 1.315x | 1.427x | 1.003x |
 
-The fixed public wrapper is effectively the same cost as the core: all final
-deviations are within approximately one percent.  Runtime-base dispatch costs
-30--36% on this benchmark's noinline
-boundary because it must select among 35 complete base specializations.  That
-cost is not present when the call is inlined with a constant base.  Direct
-JEAIII and the fast_io decimal core are equal because the retained decimal
+For this historical 2026-07-16 noinline benchmark, the fixed public wrapper is
+effectively the same cost as the core: all retained deviations are within
+approximately one percent.  Runtime-base dispatch costs 30--36% on this
+benchmark's noinline boundary because it must select among 35 complete base
+specializations.  That cost is not present when the call is inlined with a
+constant base.  Direct JEAIII and the fast_io decimal core are equal because
+the retained decimal
 implementation is JEAIII; this comparison checks wrapper and selection cost,
 not two independent decimal algorithms.
 
-Apple M4 results preserve the same conclusion:
+The preceding x86 conclusion and the M4 table immediately below are specific
+to the 2026-07-16 benchmark shape.  The 2026-07-17 production matrix below
+reports a `1.1475x` fixed/core latency multiplier and supersedes them for the
+frozen implementation.
+
+The same historical benchmark shape gave similar Apple M4 ratios:
 
 | Compiler | public/core | runtime/core | std/public | direct JEAIII/core |
 |:---|---:|---:|---:|---:|
@@ -482,12 +493,13 @@ Unicode values.  Numeric ASCII constants are confined to the explicitly ASCII
 SIMD implementation, and the native EBCDIC formatter continues to obtain its
 digits through the character-literal abstraction.
 
-The final correctness pass covers exact capacity and every insufficient
-capacity, returned pointers, `value_too_large`, no-write-on-error behavior,
-signed minima, unsigned maxima, radix-power boundaries, and all five output
-character types.  The same preflight runs before every timed point, so no row
-whose output disagreed with the independent reference entered the performance
-summary.
+The correctness pass covers exact capacity and every insufficient capacity,
+returned pointers, `std::errc::value_too_large`, and fast_io's stronger tested
+short-buffer range-preservation behavior.  The latter is not generalized into
+a C++ standard guarantee.  Signed minima, unsigned maxima, radix-power
+boundaries, and all five output character types are also covered.  The same
+preflight runs before every timed point, so no row whose output disagreed with
+the independent reference entered the performance summary.
 
 ## Public five-character API follow-up
 
@@ -610,8 +622,9 @@ i9-14900HX.  `std/fast_io` greater than one favors fast_io.
 The compact dynamic path is intentionally smaller than the former 35-kernel
 runtime expansion and is correspondingly slower than that approximately
 100-KiB expansion for some non-decimal values.  Fixed-base and literal-base
-performance is unchanged.  The compact path nevertheless remains faster than
-the tested standard-library dynamic path in every aggregate above.
+performance is unchanged.  The compact path was faster than the tested
+standard-library dynamic path in each focused 2026-07-16 aggregate above.  This
+is not a current all-matrix claim; see the production addendum.
 
 ### Assembly and scheduling audit
 
@@ -633,7 +646,7 @@ whose non-power entries all share one target.  No such selection appears in a
 literal-base probe, so the fixed path pays neither the front-end footprint nor
 the runtime branch cost.
 
-### Final production validation
+### Historical 2026-07-16 production validation
 
 The deterministic oracle covers all ten signed/unsigned 8-, 16-, 32-, 64-, and
 128-bit types, all five character types, bases 2--36, exact buffers, every
@@ -642,7 +655,7 @@ native M4 Release and ASan+UBSan runs, GCC 13--16, Clang 18--21 with libstdc++
 15 and libc++ 20, native x86-64 GCC 15, and GCC 13--16 with IBM1047 execution
 characters.
 
-The final M4 mutation pass used ten separately built libFuzzer+UBSan tasks, one
+That 2026-07-16 M4 mutation pass used ten separately built libFuzzer+UBSan tasks, one
 per integer type.  Each task ran for 61 seconds and selected the character
 type, base, capacity, and full-width value from the fuzzer input.  It executed
 155,664,999 inputs with no sanitizer report or artifact.  After the x86
@@ -650,6 +663,6 @@ two-digit kernel was added, ten Clang 21 libFuzzer+ASan+UBSan tasks repeated the
 same 61-second coverage sequentially on P-core 4 of the i9-14900HX and executed
 another 269,585,758 inputs.  A final parallel pass bound the ten tasks one each
 to E-cores 16--25.  It executed 134,239,245 more inputs with all ten normal
-exits, zero artifacts, and no sanitizer diagnostic.  The combined final count
+exits, zero artifacts, and no sanitizer diagnostic.  The combined historical count
 is 559,490,002 with no crash, timeout, out-of-memory artifact, or sanitizer
 finding.

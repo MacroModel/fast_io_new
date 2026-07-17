@@ -73,6 +73,32 @@ print_alias_define(io_alias_t, basic_os_str_known_size_without_null_terminated<c
 	return {bas.ptr, bas.n};
 }
 
+/// @brief Preserves the explicit lifetime contract of the non-owning C-string wrappers through aliasing.
+/// @details These wrappers contain only a caller-supplied character pointer (and, where applicable, its extent).
+///          `print_alias_define` neither materializes characters nor redirects the pointer to scratch storage, so a
+///          retained scatter has exactly the same lifetime obligation as the wrapper itself. The opt-in is deliberately
+///          attached to these explicit pointer-view types instead of to arbitrary contiguous ranges.
+template <::std::integral char_type>
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_os_c_str<char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_os_c_str_with_known_size<char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	io_reserve_type_t<char_type, basic_os_str_known_size_without_null_terminated<char_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type>
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c_str(char_type const *ch, ::std::size_t n) noexcept
 {
@@ -225,6 +251,20 @@ inline constexpr auto print_alias_define(io_alias_t, T const &s) noexcept
 	}
 }
 
+/// @brief Proves that a character-array alias borrows the array's own storage.
+/// @details The long-literal branch above returns a bare scatter, while its shorter branches use specialized proxy
+///          types. In every branch the address is the original array address: no helper owns temporary characters and
+///          no subsequent alias call can overwrite the array. An lvalue array remains owned by its caller, while an
+///          array temporary bound for a print expression remains alive through that full expression; either lifetime
+///          encloses the operation for which the descriptor may be retained.
+template <::std::integral char_type, typename source_char_type, ::std::size_t n>
+	requires(::std::same_as<char_type, ::std::remove_cv_t<source_char_type>>)
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char_type, source_char_type[n]>) noexcept
+{
+	return {};
+}
+
 template <typename T>
 	requires(::std::ranges::contiguous_range<T> && requires(T &&t) { t.substr(); })
 inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::ranges::range_value_t<T>>>
@@ -232,6 +272,11 @@ print_alias_define(io_alias_t, T &&svw) noexcept
 {
 	return {::std::ranges::data(svw), ::std::ranges::size(svw)};
 }
+
+// Deliberately no generic `print_borrowed_scatter_source` accompanies this extension point. `contiguous_range` proves
+// pointer arithmetic and `substr()` proves only an interface shape; neither states that a third-party view's `data()`
+// is independent of mutable scratch reused by the next range element. Concrete standard and fast_io string/view types
+// provide their own source-side proof where that stronger lifetime property is known.
 
 template <::std::integral char_type, ::std::integral pchar_type>
 inline constexpr ::std::size_t

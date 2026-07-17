@@ -72,6 +72,17 @@ inline constexpr char_type *jeaiii_first_two(char_type *iter, ::std::uint_least3
 	return iter + 1u + !single;
 }
 
+/*
+jeaiii_range4, jeaiii_range6, and jeaiii_range8 are bounded arithmetic leaves
+whose callers have already selected the represented digit range.  Requesting
+GNU always-inline changes only whether their multiply/table graph is placed in
+the caller; the range proofs and returned pointer are unchanged.  A frontend
+without the attribute uses ordinary inline semantics as the exact fallback.
+No retained artifact isolates the profitability of these three attributes over
+the complete supported compiler set, so they remain a conservative legacy
+layout policy pending native revalidation and carry no numeric claim for
+unmeasured frontends.
+*/
 template <::std::integral char_type>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
@@ -271,6 +282,15 @@ inline constexpr char_type *jeaiii_f(char_type *iter, ::std::uint_least32_t u) n
 }
 
 template <::std::size_t left, ::std::size_t right, ::std::integral char_type>
+/*
+Outlining this bounded classification tree changes code placement only; every
+leaf still calls the same exact-width JEAIII formatter and returns the same end
+pointer.  GNU and MSVC attribute spellings express the same request, while an
+unsupported frontend retains ordinary inline semantics.  The audited reports
+do not contain an isolated native comparison for this boundary, so no
+front-end or throughput benefit is claimed: it is a conservative legacy
+code-size policy pending native revalidation.
+*/
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #elif __has_cpp_attribute(msvc::noinline)
@@ -537,6 +557,14 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				128-bit carriers regressed to 0.9548x--0.9734x and AArch64 code grew by
 				about 36--39%.  The shared range layout is therefore retained; the
 				Cortex/Neoverse size figures are static code generation, not native timing.
+
+				No retained native x86 A/B result isolates the positive value of the
+				exact-width arm.  It remains a conservative legacy x86 code-generation
+				policy pending native revalidation; admitted but unmeasured x86 compilers
+				and cores inherit only the range proof, not a numeric speed claim.  This
+				branch contains no x86 intrinsic, so an environment that defines _M_X64
+				for ARM64EC is semantically safe but receives no native-x86 claim.  The
+				range4/range6/range8 arm is the equivalent fallback.
 				*/
 #if defined(__x86_64__) || defined(_M_X64)
 				if (u < 10000u)
@@ -585,7 +613,10 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				Intel models, so the whole-call native result, rather than the isolated
 				static region, selects the path.  Removing Zen tune exclusions prevents
 				microarchitecture names from changing the algorithm under the same ISA
-				contract.
+				contract.  Frontends and compiler versions outside GCC 13--16 and Clang
+				18--21 inherit the semantically equivalent AVX-VNNI choice without a
+				native performance claim; targets without the feature macro retain
+				range10.
 				*/
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
 				return jeaiii_result<result_type>(jeaiii_f<8>(iter, static_cast<::std::uint_least32_t>(n)));
@@ -707,7 +738,9 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				// Mirror the uint_least64_t-storage-width split above.  Exact bounds
 				// prove every fixed-width call; the branch admitted by the
 				// __x86_64__/_M_X64 guard and the range-helper branch are semantically
-				// equivalent.
+				// equivalent.  It inherits the legacy-policy status, ARM64EC
+				// classification, pending x86 revalidation, and no-performance-claim
+				// boundary recorded at the primary split.
 #if defined(__x86_64__) || defined(_M_X64)
 				if (n < 10000u)
 				{
@@ -730,8 +763,13 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				return jeaiii_result<result_type>(jeaiii_range8(iter, n));
 #endif
 			}
-			// Mirror the ISA-wide AVX-VNNI nine-digit choice above for the
-			// narrower-integer branch; the exact same bound proves the fixed width.
+			/*
+			Mirror the ISA-wide AVX-VNNI nine-digit choice above for the narrower
+			integer branch; the exact same bound proves the fixed width.  It inherits
+			the GCC 13--16/Clang 18--21 native matrix, static-size result, llvm-mca
+			disagreement, and unmeasured-frontend caveat recorded above.  Without
+			AVX-VNNI, range10 remains the semantically equivalent fallback below.
+			*/
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{

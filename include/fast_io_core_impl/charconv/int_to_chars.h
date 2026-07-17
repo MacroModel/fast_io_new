@@ -287,7 +287,11 @@ to_chars_integral_decimal_unchecked(char_type *first, U value) noexcept
 	an unsigned type whose storage width matches uint_least64_t; constant
 	evaluation and all other cases use JEAIII.  This is target dispatch, not
 	run-time CPUID.  SDE correctness and assembly inspection exist, but no native
-	throughput claim is made for the opaque virtualized host.
+	throughput claim is made for the opaque virtualized host.  llvm-mca did not
+	select this path; compiler and microarchitecture combinations not named by
+	the recorded checks inherit only the semantic ISA contract, not a throughput
+	claim.  They retain the scalar JEAIII fallback whenever any feature, type,
+	encoding, or constant-evaluation condition is false.
 	*/
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
@@ -307,7 +311,13 @@ to_chars_integral_decimal_unchecked(char_type *first, U value) noexcept
 }
 
 // Define this capacity-fast wrapper only when its AVX-512 consumer can be
-// formed.  Other builds call the fixed decimal/JEAIII path directly.
+// formed.  Other builds call the fixed decimal/JEAIII path directly.  The
+// force-inline request changes call placement only: the capacity proof and the
+// selected decimal writer are identical when an implementation does not expose
+// the attribute and therefore uses ordinary inline semantics.  No retained
+// isolated wrapper A/B result selects this attribute; it is a conservative
+// wrapper-collapse policy pending native compiler revalidation and adds no
+// throughput claim to the AVX-512 evidence recorded above.
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 template <::fast_io::details::my_unsigned_integral U, ::fast_io::details::character char_type>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -326,6 +336,9 @@ to_chars_integral_decimal(char_type *first, char_type *last, U value, bool negat
 	{
 		*first++ = ::fast_io::char_literal_v<u8'-', char_type>;
 	}
+	// The semantic proof, measured compiler set, static AArch64 evidence,
+	// unmeasured-target caveat, and conservative arm are documented at
+	// to_chars_use_decimal_unchecked_helper.
 	if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
 	{
 		return ::fast_io::details::to_chars_integral_decimal_unchecked(first, value);
@@ -370,6 +383,8 @@ to_chars_integral_fixed_base(char_type *first, char_type *last, U value, bool ne
 	}
 	if constexpr (base == 10u && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 	{
+		// Consume the documented decimal-layout policy; targets outside its
+		// measured set keep the conservative result-core placement.
 		if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
 		{
 			return ::fast_io::details::to_chars_integral_decimal_unchecked(first, value);
@@ -600,6 +615,15 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 		generation, and ARM64EC is not treated as native x86-64.  M4 native screening
 		rejected widening this reciprocal graph; traditional AArch64 evidence is
 		static only and therefore does not justify widening the gate.
+
+		The retained x86 compact-dispatch report measured the complete dynamic entry
+		on an i9-14900HX with GCC 15 and Clang 21 and inspected the reciprocal loop
+		with Raptor-Lake and Zen-4 llvm-mca models.  Those whole-entry results do not
+		isolate reciprocal division from the rest of dispatch, and llvm-mca is static
+		scheduling evidence.  The x86 selection is therefore a conservative
+		code-generation policy, not a universal throughput claim: other x86 cores and
+		frontends inherit only the complete-domain quotient proof.  The direct
+		`temporary /= divisor4` arm remains the semantically equivalent fallback.
 		*/
 #if (defined(__x86_64__) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -631,7 +655,9 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 	The output loop applies the documented complete-domain reciprocal identity
 	first to base^2 and then to base, reconstructing each remainder as
 	n-quotient*divisor.  Each digit index is therefore in [0, base).  The fallback
-	direct-division loop has the same text and end-pointer semantics.
+	direct-division loop has the same text and end-pointer semantics.  This second
+	x86 guard consumes the evidence boundary and unmeasured-target caveat stated
+	at the base^4 length loop above; it adds no independent performance claim.
 	*/
 #if (defined(__x86_64__) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -915,6 +941,8 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 		{
 			*first++ = ::fast_io::char_literal_v<u8'-', char_type>;
 		}
+		// Consume the documented decimal-layout policy; this call site adds no
+		// performance claim beyond the native/static scope recorded there.
 		if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
 		{
 			return ::fast_io::details::to_chars_integral_decimal_unchecked(first, magnitude);

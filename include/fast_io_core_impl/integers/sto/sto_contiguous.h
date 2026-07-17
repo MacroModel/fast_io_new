@@ -287,7 +287,13 @@ __INTEL_COMPILER macro use raw __builtin_ia32_* vector operations.  The
 fallback branch uses the equivalent x86-intrinsic spelling; both implement the
 same lane algebra.
 Native x86 timing and Haswell-through-Zen4 llvm-mca support the retained
-family, with llvm-mca understood only as static scheduling evidence.
+family, with llvm-mca understood only as static scheduling evidence.  The
+retained native reports use an i9-14900HX and whole 665-point matrices rather
+than an isolated 32-byte decimal A/B, so they do not establish a universal
+threshold.  Other SSE4.1 cores and frontends inherit only the lane proof.  The
+32-byte entry remains a conservative specialized-kernel policy pending an
+isolated native revalidation; shorter, constexpr, non-SSE, and non-native-x86
+inputs use scan_int_contiguous_none_simd_space_part_define_impl instead.
 */
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 
@@ -318,6 +324,10 @@ inline ::std::uint_least32_t detect_length(char unsigned const *buffer) noexcept
 }
 
 template <bool char_execharset>
+	// Overflow digit skipping is an error-only continuation.  Marking it cold
+	// changes section/outlining policy, never the digits consumed.  No retained
+	// isolated A/B selects the attribute; implementations without it use ordinary
+	// placement as the semantic fallback, and no unmeasured-frontend gain is claimed.
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
@@ -341,6 +351,10 @@ inline ::std::size_t sse_skip_overflow_digits(char unsigned const *buffer,
 }
 
 template <bool char_execharset, bool less_than_64_bits>
+	// This is the normal full-block decimal entry, so the hot attribute is the
+	// complement of the overflow-only helper above.  It changes placement only;
+	// the unsupported-attribute fallback is the same ordinary inline function.
+	// The policy remains conservative pending an isolated native layout A/B.
 #if __has_cpp_attribute(__gnu__::__hot__)
 [[__gnu__::__hot__]]
 #endif
@@ -496,6 +510,10 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 #endif
 
 template <char8_t base, ::std::integral char_type>
+	// skip_digits is reached after overflow or a caller-proved continuation.  The
+	// cold request affects layout only and an unsupported frontend executes the
+	// identical loop with ordinary placement.  No isolated native result is
+	// retained, so this legacy hint makes no performance claim.
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
@@ -508,6 +526,11 @@ inline constexpr char_type const *skip_digits(char_type const *first, char_type 
 }
 
 template <char8_t base, ::std::integral char_type, my_unsigned_integral T>
+	// The overflow checker is a thin continuation shared by scalar/SWAR entries.
+	// Force-inlining changes only its call boundary; the ordinary-inline fallback
+	// performs the same recurrence and pointer scan.  This is a conservative
+	// legacy layout policy pending native compiler revalidation, with no numeric
+	// claim for an unmeasured frontend.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -627,6 +650,10 @@ inline constexpr char_type const *scan_ascii_hex_digits_scalar(char_type const *
 }
 
 template <::std::integral char_type, my_unsigned_integral T>
+	// This wrapper selects the same bounded hexadecimal core with or without a
+	// force-inline attribute.  Attribute-disabled compilers retain ordinary inline
+	// semantics; no retained isolated wrapper A/B exists, so this is a conservative
+	// call-boundary policy rather than a cross-compiler throughput claim.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -705,7 +732,10 @@ compatibility macro __ARM_NEON__ remains set).
 The one-byte, non-EBCDIC constraint is an internal ASCII precondition, not
 merely a property of the current caller.
 Native M4 timings favor this kernel; Cortex/Neoverse llvm-mca results are
-static-only evidence.
+static-only evidence.  Other AArch64 cores and GNU-compatible frontend
+versions admitted by the feature gate inherit the proved arithmetic without a
+native throughput claim; unsupported compilers and targets cannot form this
+helper and stay on the scalar parser.
 */
 #if (defined(__aarch64__) || defined(__arm64__)) &&                     \
 	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
@@ -1587,9 +1617,22 @@ raw __builtin_ia32_* operations; the fallback branch uses the equivalent
 x86-intrinsic spelling.  ASCII-only constants and call-site EBCDIC guards
 keep execution-character encodings on the scalar path.  SSE4.1 is the minimum
 compile target and there is no run-time ISA probe.
+
+On the retained i9-14900HX GCC 13--16 follow-up, removing the specialized
+short-hexadecimal and sixteen-byte octal/hexadecimal kernels improved aggregate
+layout slightly but regressed their target bases by as much as approximately
+11%, so those kernels were kept.  That is native whole-matrix evidence on one
+host, not a pointwise or cross-core guarantee.  Other SSE4.1 compilers and
+processors inherit only the arithmetic proof and no numeric throughput claim.
+The family remains a conservative capability-gated policy pending broader
+native revalidation; unsupported ISA, constant evaluation, wide/EBCDIC input,
+and ineligible lengths retain the scalar/shared scanners.
 */
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 template <::std::integral char_type, my_integral T>
+	// All three helpers below consume the family-level placement and evidence
+	// policy above.  Force-inlining changes the call boundary only; an unavailable
+	// attribute leaves the same helper ordinarily inline.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -1706,6 +1749,8 @@ scan_int_contiguous_x86_sse_hex8_space_part_define_impl(
 }
 
 template <::std::integral char_type, my_integral T>
+	// Same force-inline capability policy, ordinary-inline fallback, and
+	// unmeasured-frontend caveat as the hexadecimal/octal family comment above.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -1828,6 +1873,8 @@ scan_int_contiguous_x86_sse_hex16_space_part_define_impl(
 }
 
 template <::std::integral char_type, my_integral T>
+	// Same force-inline capability policy, ordinary-inline fallback, and
+	// unmeasured-frontend caveat as the hexadecimal/octal family comment above.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -2150,6 +2197,16 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	first_digit and returning next is exactly the general result.  Keeping it
 	below the public wrapper makes internal input and from_chars share the path;
 	other inputs continue through the remaining x86 specializations.
+
+	The high-base 8-, 16-, and 32-bit bounded kernels were measured on the native
+	i9-14900HX with Clang 23.  Across bases 17--36 their complete char-matrix gains
+	were 1.64x--1.68x for 8-bit, 1.20x--1.30x for 16-bit, and about 1.21x for
+	32-bit destinations; the reports also record smaller but positive complete-
+	matrix gains.  Those numbers do not establish the one-digit decimal arm or an
+	unmeasured compiler/core.  Such configurations inherit only the range and
+	overflow proofs, not a numeric performance claim.  The decimal shortcut is a
+	conservative x86 code-generation policy pending isolated native revalidation;
+	all nonmatching inputs resume at the shared scanner after this region.
 	*/
 #if (defined(__GNUC__) || defined(__clang__)) &&                      \
 	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
@@ -2398,6 +2455,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	if constexpr (17u <= base && sizeof(T) == 4u &&
 				  !::fast_io::details::is_ebcdic<char_type>)
 	{
+		// This is the 32-bit member of the bounded high-base family documented at
+		// the enclosing native-x86 guard; it inherits that measurement scope,
+		// unmeasured-target caveat, and shared-scanner fallback.
 		if (!use_bounded_u32_midbase ||
 			(9u <= static_cast<::std::size_t>(last - first) &&
 			 char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[8u]))))
@@ -2704,6 +2764,14 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	four-digit early returns fit even signed 64-bit T because 16^4-1 < 2^63;
 	later bounded paths retain the shared signed range check.  Other architectures
 	use the equivalent generic short loop.
+
+	No retained artifact isolates a positive native A/B for this expanded base-8/
+	base-16 layout.  It is a conservative legacy code-generation policy pending
+	native revalidation, and admitted but unmeasured targets inherit no numeric
+	performance claim.  These scalar operations require no x86 ISA instruction;
+	if an ARM64EC environment defines one of the admitted x86-64 macros, it
+	inherits only the semantic proof.  The generic bounded short loop below is the
+	exact fallback.
 	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 		if constexpr ((base == 8u || base == 16u) && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
@@ -2893,9 +2961,16 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		{
 			::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
 			auto short_iter{first + 1};
-			// x86 spells the bounded octal recurrence as explicit groups.  Each
-			// digit is range-checked before committing, so it is equivalent to the
-			// generic loop and cannot read past last.
+			/*
+			x86 spells the bounded octal recurrence as explicit groups.  Each digit is
+			range-checked before committing, so it is equivalent to the generic loop
+			and cannot read past last.  No retained report isolates a positive native
+			A/B for this second expansion; it is a conservative legacy layout policy
+			pending revalidation, and no unmeasured compiler/core receives a speed
+			claim.  The ordinary loop in the non-x86 arm is the exact fallback.  The
+			body uses no x86 instruction, so any ARM64EC configuration admitted by an
+			x86-64 macro inherits only this semantic proof.
+			*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 			if constexpr (base == 8u)
 			{
@@ -3107,7 +3182,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	and reduces one safe full block, then preserves the existing overflow and
 	end-pointer checks.  The threshold proves the vector load is in range.  The
 	scalar x86 hexadecimal arm below remains a semantically identical fallback
-	for shorter or non-SSE configurations.
+	for shorter or non-SSE configurations.  This call site consumes the scoped
+	i9-14900HX GCC 13--16 retention result, single-host limitation, unmeasured-
+	target caveat, and shared-scalar fallback documented at the helper family;
+	it adds no wider performance claim.
 	*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 		if constexpr (base == 8u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
@@ -3127,10 +3205,18 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 		}
 #endif
-	// Targets admitted by this x86-64 macro guard retain an explicitly bounded
-	// scalar hexadecimal fallback.  Its shift-by-four recurrence is exact after
-	// char_digit_to_literal validates each nibble; other targets reach the common
-	// scanner with the same contract.
+	/*
+	Targets admitted by this x86-64 macro guard retain an explicitly bounded
+	scalar hexadecimal fallback.  Its shift-by-four recurrence is exact after
+	char_digit_to_literal validates each nibble; other targets reach the common
+	scanner with the same contract.  On the retained i9-14900HX GCC 15 signed-
+	u64 hexadecimal study, withholding the former SSE graph reduced the fixed-
+	base core from 2916 to 2372 bytes and improved affected points by about
+	2.9x--3.3x; the unsigned specialization remained unchanged.  This is one
+	compiler/host/range result, not an ISA-wide guarantee.  Other admitted
+	frontends, cores, and any ARM64EC environment inherit only the semantic
+	fallback policy and no numeric performance claim.
+	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 		if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
@@ -3235,7 +3321,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	validates any scalar suffix.  Exact 20-digit input stays on the dedicated
 	overflow-aware 8+8+4 path, and the terminated 15-digit shape avoids a failed
 	vector attempt.  Every other shape falls through unchanged.  Native M4 and
-	cross-model llvm-mca evidence are reported separately.
+	cross-model llvm-mca evidence are reported separately.  Other AArch64 cores
+	and admitted frontend versions inherit the semantically proved route without
+	a native performance claim.
 	*/
 #if (defined(__aarch64__) || defined(__arm64__)) &&                     \
 	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
@@ -3285,6 +3373,12 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	first_digit is already validated and mapped, seeding the accumulator with it
 	removes one equivalent scanner iteration.  Other ranges retain the zero-seeded
 	overflow path.  This applies to targets admitted by the x86-64 macro guard.
+
+	The retained reports do not isolate this seed from the surrounding x86 parser,
+	so the selection is a conservative legacy code-generation policy pending
+	native revalidation.  Unmeasured x86 frontends/cores and any ARM64EC
+	configuration admitted by these macros inherit only the no-wrap proof, not a
+	numeric speed claim.  The zero-seeded shared scanner is the exact fallback.
 	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 	if constexpr (sizeof(char_type) == sizeof(char8_t) &&
@@ -3340,7 +3434,11 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	target builtins and therefore uses the scalar scanner.  The SIMD result is
 	range-checked before narrowing, preserving overflow and returned-pointer
 	semantics for smaller destination types.  The threshold also proves every
-	vector load used by the entry block is in range.
+	vector load used by the entry block is in range.  The family-level comment
+	above records the i9-14900HX whole-matrix scope, Haswell-through-Zen4 static
+	llvm-mca scope, lack of an isolated threshold A/B, and the no-claim rule for
+	unmeasured targets.  Shorter, constexpr, and non-SSE inputs call
+	scan_int_contiguous_none_simd_space_part_define_impl as the exact fallback.
 	*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	if constexpr (base == 10 && sizeof(char_type) == 1 && sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
@@ -3499,11 +3597,23 @@ inline constexpr auto scan_context_type_impl_int() noexcept
 	struct scan_integer_context
 	{
 		::fast_io::freestanding::array<char_type, max_size> buffer;
+		/*
+		size counts semantic payload retained in buffer: an optional minus sign
+		followed by value digits.  prefix_progress instead counts characters already
+		consumed from a required radix prefix while the machine is in prefix.  These
+		states cannot share one integer: the value one would mean either "minus sign
+		stored" or "first prefix character consumed", and a resumed parser could not
+		reconstruct which transition occurred.  Keeping them independent also means
+		the prefix helper never observes sign storage and the digit helper receives
+		the original sign offset unchanged.
+		*/
 		::std::uint_least8_t size{};
+		::std::uint_least8_t prefix_progress{};
 		scan_integral_context_phase integer_phase{};
 		inline constexpr void reset() noexcept
 		{
 			size = 0;
+			prefix_progress = 0;
 			integer_phase = scan_integral_context_phase::space;
 		}
 	};
@@ -3638,6 +3748,14 @@ sc_int_ctx_prefix_phase(::std::uint_least8_t &sz, char_type const *first, char_t
 		}
 		else
 		{
+			/*
+			size_cache denotes how many characters of the generic 0[base]
+			prefix have already been consumed.  A chunk-ending transition stores
+			the next stage in sz; a same-chunk transition must advance this local
+			copy instead.  This keeps both paths on the identical state sequence
+			0 -> 1 -> 2 -> 3 [-> 4] -> complete.  Every dereference below is
+			guarded by the initial non-empty test or a post-increment end test.
+			*/
 			if (size_cache == 1)
 			{
 				if (*first != char_literal_v<u8'[', char_type>) [[unlikely]]
@@ -3649,6 +3767,7 @@ sc_int_ctx_prefix_phase(::std::uint_least8_t &sz, char_type const *first, char_t
 					sz = 2;
 					return {first, parse_code::partial};
 				}
+				size_cache = 2;
 			}
 			constexpr auto digit0{char_literal_v<u8'0' + (base < 10 ? base : base / 10), char_type>};
 			if (size_cache == 2)
@@ -3662,6 +3781,7 @@ sc_int_ctx_prefix_phase(::std::uint_least8_t &sz, char_type const *first, char_t
 					sz = 3;
 					return {first, parse_code::partial};
 				}
+				size_cache = 3;
 			}
 			if constexpr (10 < base)
 			{
@@ -3677,6 +3797,7 @@ sc_int_ctx_prefix_phase(::std::uint_least8_t &sz, char_type const *first, char_t
 						sz = 4;
 						return {first, parse_code::partial};
 					}
+					size_cache = 4;
 				}
 			}
 			constexpr ::std::uint_least8_t last_index{base < 10 ? 3 : 4};
@@ -3743,6 +3864,11 @@ inline constexpr parse_result<char_type const *> sc_int_ctx_zero_phase(scan_inte
 }
 
 template <char8_t base, bool oct_c2y, ::std::integral char_type, typename State, my_integral T>
+	// This context-phase wrapper copies a bounded digit suffix and then calls the
+	// same contiguous parser.  Force-inlining affects only that phase boundary;
+	// unsupported compilers retain ordinary inline semantics.  No retained native
+	// A/B isolates the attribute, so it is a conservative legacy layout policy
+	// pending revalidation and carries no cross-frontend speed claim.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -3795,7 +3921,13 @@ inline constexpr parse_result<char_type const *> sc_int_ctx_zero_invalid_phase(c
 	{
 		return {first, parse_code::partial};
 	}
-	++first;
+	/*
+	The preceding chunk already consumed the zero that selected zero_invalid, so
+	first denotes the first unconsumed continuation character.  A delimiter ends
+	the value without being consumed; another digit makes the spelling invalid at
+	that same iterator.  The non-empty test above is therefore both the complete
+	dereference precondition and the reason no pointer increment belongs here.
+	*/
 	if (!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(*first))) [[likely]]
 	{
 		return {first, parse_code::ok};
@@ -3819,11 +3951,27 @@ inline constexpr parse_result<char_type const *> scan_context_define_parse_impl(
 																				char_type const *last, T &t) noexcept
 {
 	auto phase{st.integer_phase};
+	/*
+	State-transition proof for the optimizer assumptions below:
+
+	* sign is written only by sc_int_ctx_sign_phase when its input ends.  That
+	  helper is called only when T is signed or leading plus is enabled; therefore
+	  an unsigned, no-plus instantiation cannot resume in sign.
+	* prefix is written only inside the shbase && base != 10 arm in this switch;
+	  every other instantiation therefore cannot resume in prefix.
+	* sc_int_ctx_zero_phase writes zero_skip exactly when skipzero is true and
+	  writes zero_invalid exactly when it is false.  The opposite state is
+	  unreachable for each specialization.
+
+	The space state is intentionally not excluded for a noskipws specialization.
+	Value-initialization and reset() both select space, while noskipws suppresses
+	only the whitespace-consumption operation.  The space arm must consequently
+	remain reachable on the first call and falls through without consuming input.
+	An assumption to the contrary would be false for every freshly initialized
+	noskipws context.  When the attribute is unavailable, the full switch is the
+	semantically exact fallback.
+	*/
 #if __has_cpp_attribute(assume)
-	if constexpr (noskipws)
-	{
-		[[assume(phase != scan_integral_context_phase::space)]];
-	}
 	if constexpr (my_unsigned_integral<T> && !allow_leading_plus)
 	{
 		[[assume(phase != scan_integral_context_phase::sign)]];
@@ -3874,7 +4022,14 @@ inline constexpr parse_result<char_type const *> scan_context_define_parse_impl(
 		if constexpr (shbase && base != 10)
 		{
 			st.integer_phase = scan_integral_context_phase::prefix;
-			auto phase_ret = sc_int_ctx_prefix_phase<base, oct_c2y>(st.size, first, last);
+			/*
+			The helper advances only prefix_progress.  st.size remains the sign
+			offset (zero or one) until digit copying begins, so both same-buffer and
+			cross-buffer prefix completion preserve a stored minus sign exactly.
+			Unsigned and positive inputs have a zero sign offset; no-showbase and
+			base-10 specializations discard this arm at compile time.
+			*/
+			auto phase_ret = sc_int_ctx_prefix_phase<base, oct_c2y>(st.prefix_progress, first, last);
 			if (phase_ret.code != ongoing_parse_code) [[unlikely]]
 			{
 				return phase_ret;
@@ -3949,12 +4104,23 @@ inline constexpr parse_result<char_type const *> scan_context_define_parse_impl(
 }
 
 template <char8_t base, bool noskipws, bool shbase, bool skipzero, bool oct_c2y, typename State, my_integral T>
+	// EOF handling is a terminal/error-only phase.  The cold attribute changes
+	// section placement only; an unsupported frontend executes the identical
+	// switch with ordinary placement.  No isolated native A/B is retained, so the
+	// hint is a conservative legacy policy without an unmeasured-frontend claim.
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
 inline constexpr parse_code scan_context_eof_define_parse_impl(State &st, T &t) noexcept
 {
 	auto phase{st.integer_phase};
+	/*
+	zero_skip is assigned only by sc_int_ctx_zero_phase<..., true>; an
+	instantiation with skipzero == false can assign zero_invalid but never
+	zero_skip, and neither value initialization nor reset introduces zero_skip.
+	The EOF assumption is therefore implied by all state writes.  Without
+	[[assume]], the unchanged switch remains the exact semantic fallback.
+	*/
 #if __has_cpp_attribute(assume)
 	if constexpr (!skipzero)
 	{

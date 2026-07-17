@@ -5,6 +5,11 @@ This report was generated on 2026-07-13 from fast_io commit
 separately for Apple M4 and Intel Core i9-14900HX. The Cortex-X4 results are
 static scheduling estimates, not native measurements.
 
+> This body preserves dated evidence from earlier source snapshots.  The
+> current production conclusions are recorded in the
+> [2026-07-17 production addendum](#production-addendum-frozen-integer-input-snapshot-2026-07-17),
+> which supersedes unqualified uses of "final" below.
+
 ## Apple M4 environment
 
 - Processor: Apple M4, 10 logical CPUs, 16 GiB memory.
@@ -157,12 +162,16 @@ pre-change M4 baseline.
 The input path was audited again with a stricter platform-split rule: an
 optimization may be guarded by `__APPLE__` and AArch64 only when native M4
 improves and the traditional AArch64 path does not. If both processor families
-benefit, the optimization remains shared AArch64 code. The final integer input
-implementation contains no Apple-only branch. The 16-digit decimal NEON
-reduction, nine-digit inline limit, 20-digit scalar SWAR path, and first-digit
-accumulator therefore remain available to both Apple and traditional AArch64.
+benefit, the optimization remains shared AArch64 code.  At the time of this
+follow-up, the implementation contained no Apple-only input branch.  The later
+2026-07-17 snapshot deliberately adds one isolated Apple-AArch64 base-2 mask;
+see the production addendum.  The decimal AdvSIMD helper, nine-digit inline
+limit, 20-digit scalar SWAR path, and first-digit accumulator remain shared
+AArch64 code.
 
-The NEON decision uses both native M4 timing and llvm-mca. On M4, the existing
+The following table is the static evidence recorded for that historical
+snapshot.  The current frozen-source values are reported in the production
+addendum.  The NEON decision uses both native M4 timing and llvm-mca. On M4, the existing
 16-digit NEON kernel measured 1.31--1.43 ns, while the scalar SWAR alternative
 measured 1.73--1.94 ns. Static block-throughput estimates also favor NEON on
 every tested model; lower is better:
@@ -177,6 +186,10 @@ every tested model; lower is better:
 | Neoverse N1 | 12.7 | 21.0 |
 | Neoverse N2 | 8.5 | 8.8 |
 | Neoverse V2 | 6.2 | 7.2 |
+
+The fresh 2026-07-17 regions report `5.7/12.0` cycles for M4,
+`11.7/14.0` for Cortex-A76, and `8.5/8.8` for Neoverse-N2.  The N2 result is
+near parity, not evidence of a large static win.
 
 The generic nine-digit inline and first-digit-accumulator paths were checked by
 temporarily removing them from non-Apple AArch64. The Cortex-X4 assembly then
@@ -236,7 +249,7 @@ paths, and must not be read as native Cortex-X4 benchmark results.
 
 ## x86-64 Clang optimization pass
 
-The final x86-64 measurements were collected natively on an Intel Core
+The historical measurements in this section were collected natively on an Intel Core
 i9-14900HX under Ubuntu, kernel 6.17.0-29-generic. The benchmark was compiled
 with Ubuntu Clang 21.1.8, C++20, `-O3 -DNDEBUG -march=native`, libstdc++ 15.2,
 and the same fast_float revision used by the M4 benchmark. The process was
@@ -537,7 +550,7 @@ length in every base from 2 through 36 for `char`, `wchar_t`, `char8_t`,
 trailing non-digit are timed independently.  Correctness preflight additionally
 uses 0, 1, 2, 3, 7, 8, 15, and 31 trailing code units.
 
-The x86-64 measurements were collected on the Intel Core i9-14900HX host with
+The historical 2026-07-16 x86-64 measurements were collected on the Intel Core i9-14900HX host with
 each process pinned to P-core logical CPU 4.  Builds and runs were serialized.
 The compiler matrix is GCC 13.4, GCC 14.3, GCC 15.2, a GCC 16 development
 snapshot, Clang 22, upstream Clang 23, and the fast_io Clang 23 toolchain.  All
@@ -754,8 +767,10 @@ the local Clang 23 toolchain.  Paired public results are:
 | Apple Clang 21 | 0.993x | 1.107x | 1.656x | 1.279x |
 | Clang 23 | 0.997x | 1.108x | 1.705x | 1.314x |
 
-All new bounded kernels and compiler exceptions are inside the x86-64
-preprocessor branch.  Removing the historical whole-scanner force-inline
+The bounded kernels and compiler exceptions introduced by this 2026-07-16 x86
+follow-up are inside the x86-64 branch.  This historical statement does not
+cover the later Apple-AArch64 base-2 mask documented in the 2026-07-17
+production addendum.  Removing the historical whole-scanner force-inline
 attribute intentionally changes M4 layout: wrapper text grows from 47,664 to
 48,004 bytes, but no new out-of-line scanner call appears.  Normalized core
 instruction sequences remain unchanged for all bases 2--36; public sequences
@@ -829,7 +844,8 @@ is public overhead:
 | Apple M4, Apple Clang 21 | 1.013x | 0.995x | 1.000x | 1.004x | 0.993x |
 | i9-14900HX, GCC 15 | 0.998x | 1.002x | 1.000x | 0.996x | 0.999x |
 
-On final M4 assembly, representative `char16_t` base-16 public and core
+On the assembly produced for that follow-up snapshot, representative
+`char16_t` base-16 public and core
 wrappers are both 92 instructions with no call.  Base-10 uses 53 versus 51
 instructions and both make the same single call; the two extra instructions
 implement the required `parse_code` to `std::errc` result mapping.  On GCC 15,
