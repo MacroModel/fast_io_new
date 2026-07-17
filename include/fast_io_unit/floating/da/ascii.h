@@ -743,7 +743,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 	if constexpr (sizeof(flt) <= sizeof(float))
 	{
 		auto const shifted{drop_leading_zero ? digits.low >> 8u : digits.low};
-		__builtin_memcpy(destination, __builtin_addressof(shifted), sizeof(shifted));
+		::fast_io::freestanding::my_memcpy(
+			destination, __builtin_addressof(shifted), sizeof(shifted));
 	}
 	else
 	{
@@ -754,8 +755,10 @@ FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 			low = (low >> 8u) | (high << 56u);
 			high >>= 8u;
 		}
-		__builtin_memcpy(destination, __builtin_addressof(low), sizeof(low));
-		__builtin_memcpy(destination + sizeof(low), __builtin_addressof(high), sizeof(high));
+		::fast_io::freestanding::my_memcpy(
+			destination, __builtin_addressof(low), sizeof(low));
+		::fast_io::freestanding::my_memcpy(
+			destination + sizeof(low), __builtin_addressof(high), sizeof(high));
 	}
 }
 
@@ -772,7 +775,8 @@ template <bool uppercase_e>
 	{
 		packed ^= static_cast<::std::uint_least64_t>(u8'e' ^ u8'E');
 	}
-	__builtin_memcpy(destination, __builtin_addressof(packed), sizeof(packed));
+	::fast_io::freestanding::my_memcpy(
+		destination, __builtin_addressof(packed), sizeof(packed));
 	return destination + length;
 }
 
@@ -787,7 +791,8 @@ template <typename flt, bool comma, bool json_float>
 	::std::int_least32_t exponent, bool has_extra_digit,
 	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
 {
-	__builtin_memcpy(destination, __builtin_addressof(ascii_zeroes), sizeof(ascii_zeroes));
+	::fast_io::freestanding::my_memcpy(
+		destination, __builtin_addressof(ascii_zeroes), sizeof(ascii_zeroes));
 	auto const &layout{ascii_fixed_layouts.data[static_cast<::std::size_t>(exponent - ascii_fixed_layout_cache::minimum)]};
 	auto buffer{destination + layout.start_position};
 // The SIMD branch exists only with the table fields generated above.  It emits
@@ -801,12 +806,14 @@ template <typename flt, bool comma, bool json_float>
 		auto const extra{static_cast<::std::uint_least32_t>(has_extra_digit)};
 		auto const packed{ascii_x86_u64x2{digits.low, digits.high}};
 		ascii_x86_c8x16 shuffle;
-		__builtin_memcpy(__builtin_addressof(shuffle), layout.binary64_shuffle[extra], sizeof(shuffle));
+		::fast_io::freestanding::my_memcpy(
+			__builtin_addressof(shuffle), layout.binary64_shuffle[extra], sizeof(shuffle));
 		auto const assembled{__builtin_bit_cast(
 			ascii_x86_u8x16,
 			__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, packed), shuffle))};
 		auto const trailing_digit{__builtin_bit_cast(ascii_x86_u8x16, packed)[15]};
-		__builtin_memcpy(buffer, __builtin_addressof(assembled), sizeof(assembled));
+		::fast_io::freestanding::my_memcpy(
+			buffer, __builtin_addressof(assembled), sizeof(assembled));
 		buffer[16u] = static_cast<char>(trailing_digit);
 		destination[layout.point_position] = static_cast<char>(comma ? u8',' : u8'.');
 		buffer[layout.binary64_last_digit_position[extra]] =
@@ -828,8 +835,8 @@ template <typename flt, bool comma, bool json_float>
 	constexpr ::std::uint_least32_t block_size{sizeof(flt) <= sizeof(float) ? 8u : 16u};
 	buffer[block_size + static_cast<::std::uint_least32_t>(has_extra_digit) - 1u] =
 		static_cast<char>(u8'0' + (has_last_digit ? last_digit : 0u));
-	__builtin_memmove(destination + layout.shift_position,
-					  destination + layout.point_position, block_size);
+	::fast_io::freestanding::my_memmove(destination + layout.shift_position,
+										destination + layout.point_position, block_size);
 	destination[layout.point_position] = static_cast<char>(comma ? u8',' : u8'.');
 	auto end{buffer + layout.end_position[digit_count - 1u]};
 	if constexpr (json_float)
@@ -911,14 +918,16 @@ template <typename flt, bool comma, bool json_float>
 		else
 		{
 			::std::uint_least64_t high_digits;
-			__builtin_memcpy(__builtin_addressof(high_digits), destination + 8u, sizeof(high_digits));
+			::fast_io::freestanding::my_memcpy(
+				__builtin_addressof(high_digits), destination + 8u, sizeof(high_digits));
 			auto const last_high_digit{static_cast<char>(high_digits >> 56u)};
 			auto const shift{static_cast<::std::uint_least32_t>((point_position - 8u) * 8u)};
 			auto const lower_mask{(static_cast<::std::uint_least64_t>(1u) << shift) - 1u};
 			high_digits = (high_digits & lower_mask) |
 						  ((high_digits & ~lower_mask) << 8u) |
 						  (static_cast<::std::uint_least64_t>(static_cast<unsigned char>(decimal_point)) << shift);
-			__builtin_memcpy(destination + 8u, __builtin_addressof(high_digits), sizeof(high_digits));
+			::fast_io::freestanding::my_memcpy(
+				destination + 8u, __builtin_addressof(high_digits), sizeof(high_digits));
 			if (digit_count == 17u)
 			{
 				destination[17u] = trailing_digit;
@@ -962,11 +971,13 @@ template <bool comma, bool uppercase_e>
 					 static_cast<::std::uint_least32_t>(has_extra_digit)};
 	auto const &layout{ascii_binary32_scientific_layouts.data[index]};
 	ascii_x86_c8x16 shuffle;
-	__builtin_memcpy(__builtin_addressof(shuffle), layout.shuffle, sizeof(shuffle));
+	::fast_io::freestanding::my_memcpy(
+		__builtin_addressof(shuffle), layout.shuffle, sizeof(shuffle));
 	auto const assembled{__builtin_bit_cast(
 		ascii_x86_u8x16,
 		__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, source), shuffle))};
-	__builtin_memcpy(destination, __builtin_addressof(assembled), sizeof(assembled));
+	::fast_io::freestanding::my_memcpy(
+		destination, __builtin_addressof(assembled), sizeof(assembled));
 	return destination + layout.shuffle[15];
 }
 #endif
@@ -978,7 +989,7 @@ template <bool comma, bool uppercase_e>
 // end after exponent punctuation.
 template <typename flt, bool comma, bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific(
-	char *destination, ascii_digit_block digits, ::std::uint_least32_t digit_count,
+	char *destination, ascii_digit_block digits,
 	::std::int_least32_t exponent, bool has_extra_digit,
 	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
 {
@@ -1165,7 +1176,7 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	}
 #endif
 	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
-		destination, digits, digit_count, exponent, has_extra_digit,
+		destination, digits, exponent, has_extra_digit,
 		last_digit, has_last_digit);
 }
 
@@ -1212,21 +1223,22 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 
 // Semantic equivalence: the outlined binary32 entry forwards the same scalar
 // carrier fields to print_ascii_shortest_fields, so outlining cannot change the
-// selected notation, emitted bytes, or returned pointer.  GCC 16.0.1
-// measurements on CPU 8 (physical core 4 of the i9-14900HX) and its generated
-// assembly showed that this boundary prevents DA conversion state and SIMD
-// layout state from sharing an oversized live range and avoids the
-// aggregate-transfer regression.  No binary64 caller reaches it, so the former
-// binary64 split was dead.
+// selected notation, emitted bytes, or returned pointer.  GCC 15.2 and GCC
+// 16.0.1 measurements on CPU 8 (physical core 4 of the i9-14900HX) show that
+// this boundary prevents DA conversion state and SIMD layout state from sharing
+// an oversized live range.  After the integer sign-carrier fix, paired GCC 15
+// AB/BA runs improved regular, finite and boundary binary32 by 2.9--4.9%; the
+// wrapper plus outlined callee also removed 75 text bytes.  GCC 16 retains its
+// previously audited split.  No binary64 caller reaches this template.
 //
-// This boundary is intentionally closed to the measured GCC 16 Linux System V
-// LP64 artifact.  Other ABIs and compiler majors use the inline field writer;
+// The predicate is intentionally closed to the two measured GCC Linux System V
+// LP64 artifacts.  Other ABIs and compiler majors use the inline field writer;
 // both paths consume the same carrier and emit identical bytes.  Extending the
-// predicate requires call, frame, spill, pshufb-placement, complete-call timing
+// predicate requires call, frame, spill, pshufb placement, complete-call timing
 // and linked-text-size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && __GNUC__ == 16
+	!defined(__clang__) && 15 <= __GNUC__ && __GNUC__ <= 16
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]]
 // noinline is the live-range boundary described above, not an ISA semantic.

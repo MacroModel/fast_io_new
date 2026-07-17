@@ -220,19 +220,19 @@ inline constexpr auto const &pow10_float64_table{pow10_float64_tb.values};
 // changes; object-level tests additionally compare the emitted byte streams.
 [[nodiscard]] inline consteval bool verify_generated_dragonbox_power10_tables() noexcept
 {
-	::std::uint_least64_t float32_hash{UINT64_C(1469598103934665603)};
+	::std::uint_least64_t float32_hash{static_cast<::std::uint_least64_t>(1469598103934665603ULL)};
 	for (auto const value : pow10_float32_table)
 	{
-		float32_hash = (float32_hash ^ value) * UINT64_C(1099511628211);
+		float32_hash = (float32_hash ^ value) * static_cast<::std::uint_least64_t>(1099511628211ULL);
 	}
-	::std::uint_least64_t float64_hash{UINT64_C(1469598103934665603)};
+	::std::uint_least64_t float64_hash{static_cast<::std::uint_least64_t>(1469598103934665603ULL)};
 	for (auto const value : pow10_float64_table)
 	{
-		float64_hash = (float64_hash ^ value.hi) * UINT64_C(1099511628211);
-		float64_hash = (float64_hash ^ value.lo) * UINT64_C(1099511628211);
+		float64_hash = (float64_hash ^ value.hi) * static_cast<::std::uint_least64_t>(1099511628211ULL);
+		float64_hash = (float64_hash ^ value.lo) * static_cast<::std::uint_least64_t>(1099511628211ULL);
 	}
-	return float32_hash == UINT64_C(0xb554955490599626) &&
-		float64_hash == UINT64_C(0x5133d9e69fcf8818);
+	return float32_hash == static_cast<::std::uint_least64_t>(0xb554955490599626ULL) &&
+		float64_hash == static_cast<::std::uint_least64_t>(0x5133d9e69fcf8818ULL);
 }
 
 static_assert(verify_generated_dragonbox_power10_tables());
@@ -246,22 +246,22 @@ inline constexpr auto const &float64_mod5_table{float64_mod5_tb.values};
 // below additionally compares emitted bytes, symbols and relocations.
 [[nodiscard]] inline consteval bool verify_generated_dragonbox_mod5_tables() noexcept
 {
-	::std::uint_least64_t float32_hash{UINT64_C(1469598103934665603)};
+	::std::uint_least64_t float32_hash{static_cast<::std::uint_least64_t>(1469598103934665603ULL)};
 	for (::std::size_t index{}; index != 11u; ++index)
 	{
 		auto const value{float_mod5_table[index]};
-		float32_hash = (float32_hash ^ value.hi) * UINT64_C(1099511628211);
-		float32_hash = (float32_hash ^ value.lo) * UINT64_C(1099511628211);
+		float32_hash = (float32_hash ^ value.hi) * static_cast<::std::uint_least64_t>(1099511628211ULL);
+		float32_hash = (float32_hash ^ value.lo) * static_cast<::std::uint_least64_t>(1099511628211ULL);
 	}
-	::std::uint_least64_t float64_hash{UINT64_C(1469598103934665603)};
+	::std::uint_least64_t float64_hash{static_cast<::std::uint_least64_t>(1469598103934665603ULL)};
 	for (::std::size_t index{}; index != 24u; ++index)
 	{
 		auto const value{float64_mod5_table[index]};
-		float64_hash = (float64_hash ^ value.hi) * UINT64_C(1099511628211);
-		float64_hash = (float64_hash ^ value.lo) * UINT64_C(1099511628211);
+		float64_hash = (float64_hash ^ value.hi) * static_cast<::std::uint_least64_t>(1099511628211ULL);
+		float64_hash = (float64_hash ^ value.lo) * static_cast<::std::uint_least64_t>(1099511628211ULL);
 	}
-	return float32_hash == UINT64_C(0x01ca5dd06f009800) &&
-		float64_hash == UINT64_C(0x6f8a5d3fed1adca2);
+	return float32_hash == static_cast<::std::uint_least64_t>(0x01ca5dd06f009800ULL) &&
+		float64_hash == static_cast<::std::uint_least64_t>(0x6f8a5d3fed1adca2ULL);
 }
 
 static_assert(verify_generated_dragonbox_mod5_tables());
@@ -333,10 +333,10 @@ struct pow10_float64_scan_low_table_type
 
 	inline constexpr pow10_float64_scan_low_table_type() noexcept
 	{
-		values[0] = {UINT64_C(0xeef453d6923bd65a), UINT64_C(0x113faa2906a13b40)};
+		values[0] = {static_cast<::std::uint_least64_t>(0xeef453d6923bd65aULL), static_cast<::std::uint_least64_t>(0x113faa2906a13b40ULL)};
 		// Bits 47 and 48 are zero; retaining 49 addressable positions states the
 		// complete transition domain rather than only the bitmap's numeric width.
-		constexpr ::std::uint_least64_t correction_bits{UINT64_C(0x4d8c9ca29a54)};
+		constexpr ::std::uint_least64_t correction_bits{static_cast<::std::uint_least64_t>(0x4d8c9ca29a54ULL)};
 		for (::std::size_t index{}; index != 49u; ++index)
 		{
 			auto const low_product{multiply_word_by_ten(values[index].lo)};
@@ -372,7 +372,7 @@ inline constexpr auto const &pow10_float64_scan_low_table{
 
 [[nodiscard]] inline consteval bool verify_generated_pow10_float64_scan_low_table() noexcept
 {
-	::std::uint_least64_t hash{UINT64_C(1469598103934665603)};
+	::std::uint_least64_t hash{static_cast<::std::uint_least64_t>(1469598103934665603ULL)};
 	for (auto const value : pow10_float64_scan_low_tb.values)
 	{
 		// Every historical endpoint is normalized.  Besides pinning that
@@ -382,10 +382,10 @@ inline constexpr auto const &pow10_float64_scan_low_table{
 		{
 			return false;
 		}
-		hash = (hash ^ value.hi) * UINT64_C(1099511628211);
-		hash = (hash ^ value.lo) * UINT64_C(1099511628211);
+		hash = (hash ^ value.hi) * static_cast<::std::uint_least64_t>(1099511628211ULL);
+		hash = (hash ^ value.lo) * static_cast<::std::uint_least64_t>(1099511628211ULL);
 	}
-	return hash == UINT64_C(0x186321208d0ed723);
+	return hash == static_cast<::std::uint_least64_t>(0x186321208d0ed723ULL);
 }
 
 static_assert(sizeof(pow10_float64_scan_low_table_type) == sizeof(uint64x2) * 50u);
@@ -1870,7 +1870,8 @@ dragonbox_bfloat16_high_fallback_nearest_to_even(
 
 template <typename flt>
 [[nodiscard]] inline constexpr punning_result<float> dragonbox_narrow_float_punned(
-	flt f, typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32_t e2, bool negative) noexcept
+	typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32_t e2,
+	bool negative) noexcept
 {
 	using trait = ::fast_io::details::iec559_traits<flt>;
 	if constexpr (trait::mbits == 7u && trait::ebits == 8u)
@@ -1887,8 +1888,51 @@ template <typename flt>
 						static_cast<::std::uint_least32_t>(m2) << 13u),
 					static_cast<::std::uint_least32_t>(e2 + 112), negative};
 		}
+		if (m2)
+		{
+			// A binary16 subnormal is m2 * 2^-24.  If k is the index of
+			// its leading bit, its normalized binary32 exponent is k-24;
+			// biasing by 127 gives k+103.  Shifting that leading bit to
+			// binary32's implicit position constructs the exact mantissa,
+			// without executing a floating conversion instruction.
+			auto const leading_bit{static_cast<::std::uint_least32_t>(
+				::std::bit_width(static_cast<::std::uint_least32_t>(m2)) - 1u)};
+			constexpr ::std::uint_least32_t float_mantissa_mask{0x7FFFFFu};
+			return {
+				(static_cast<::std::uint_least32_t>(m2) << (23u - leading_bit)) &
+					float_mantissa_mask,
+				leading_bit + 103u, negative};
+		}
+		return {0u, 0u, negative};
 	}
-	return get_punned_result(static_cast<float>(f));
+	else
+	{
+		static_assert(trait::mbits == 7u || trait::mbits == 10u,
+			"narrow binary32 widening requires the binary16 or bfloat16 field layout");
+		return {0u, 0u, negative};
+	}
+}
+
+template <typename flt>
+[[nodiscard]] inline constexpr float dragonbox_narrow_float_from_fields(
+	typename iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	auto const widened{
+		::fast_io::details::dragonbox_narrow_float_punned<flt>(
+			mantissa, static_cast<::std::int_least32_t>(exponent), negative)};
+	constexpr ::std::uint_least32_t float_sign_shift{31u};
+	constexpr ::std::uint_least32_t float_exponent_shift{23u};
+	auto const raw{
+		(static_cast<::std::uint_least32_t>(widened.sign) << float_sign_shift) |
+		(widened.exponent << float_exponent_shift) |
+		static_cast<::std::uint_least32_t>(widened.mantissa)};
+	// The field construction above is an exact representation mapping, so the
+	// final operation is a bit copy rather than a floating conversion.  This is
+	// essential for bfloat16 subnormals: a target narrowing instruction is
+	// permitted to flush the intermediate binary32 subnormal before a later
+	// widening could recover the original value.
+	return ::fast_io::bit_cast<float>(raw);
 }
 
 // The hybrid narrow path calls this widening-and-shortening repair only after a
@@ -1906,11 +1950,11 @@ template <typename flt, ::fast_io::manipulators::floating_rounding rounding>
 [[__gnu__::__noinline__]]
 #endif
 inline constexpr m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
-dragonbox_impl_narrow_from_float(flt f, typename iec559_traits<flt>::mantissa_type m2,
+dragonbox_impl_narrow_from_float(typename iec559_traits<flt>::mantissa_type m2,
 								 ::std::int_least32_t e2, bool negative) noexcept
 {
 	auto [float_mantissa, float_exponent, float_sign] =
-		::fast_io::details::dragonbox_narrow_float_punned(f, m2, e2, negative);
+		::fast_io::details::dragonbox_narrow_float_punned<flt>(m2, e2, negative);
 	auto [m10, e10] = ::fast_io::details::dragonbox_impl<float, rounding>(
 		float_mantissa, static_cast<::std::int_least32_t>(float_exponent), float_sign);
 	::fast_io::details::dragonbox_shorten_decimal_to_target<flt, rounding>(m10, e10, m2, e2, negative);
@@ -1988,8 +2032,8 @@ template <typename flt>
 
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding>
 inline constexpr m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
-dragonbox_impl_narrow_hybrid(flt f, typename iec559_traits<flt>::mantissa_type m2,
-							 ::std::int_least32_t e2, bool negative) noexcept
+dragonbox_impl_narrow_hybrid(typename iec559_traits<flt>::mantissa_type m2,
+								 ::std::int_least32_t e2, bool negative) noexcept
 {
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
 	{
@@ -2049,7 +2093,7 @@ dragonbox_impl_narrow_hybrid(flt f, typename iec559_traits<flt>::mantissa_type m
 			}
 		}
 	}
-	return ::fast_io::details::dragonbox_impl_narrow_from_float<flt, rounding>(f, m2, e2, negative);
+	return ::fast_io::details::dragonbox_impl_narrow_from_float<flt, rounding>(m2, e2, negative);
 }
 
 inline constexpr ::std::size_t dragonbox_narrow_shortest_page_shift{6u};
@@ -2100,8 +2144,8 @@ dragonbox_make_narrow_shortest_page() noexcept
 		if (::fast_io::details::dragonbox_narrow_raw_candidate_needs_fallback<flt>(
 				binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent)))
 		{
-			auto const float_binary{::fast_io::details::dragonbox_narrow_float_punned(
-				value, binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent), false)};
+			auto const float_binary{::fast_io::details::dragonbox_narrow_float_punned<flt>(
+				binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent), false)};
 			auto [m10, e10] = ::fast_io::details::dragonbox_impl<
 				float, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
 				float_binary.mantissa, static_cast<::std::int_least32_t>(float_binary.exponent), false);
@@ -2682,13 +2726,52 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 inline constexpr auto const &print_rsv_fp_pow10_0_to_19_table{
 	::fast_io::details::da::uint64_power10_table};
 
+// MSVC x64 has the two-word multiplication primitives required by the proved
+// P16--P17 DA carrier even though it has no language-level unsigned 128-bit
+// scalar.  Keep the runtime selector in one non-inlined COMDAT so the two
+// precision cases are not cloned into every presentation and precision mode.
+// A failed interval proof writes nothing and leaves the limb-based exact
+// formatter authoritative; success contains exactly `significant` digits and
+// the scientific exponent of their leading digit.
+//
+// The closed P16--P17 range is intentional.  MSVC 19.51 Compiler Explorer
+// differential runs accepted 2.2 million values across all four decimal
+// presentations, both significant modes and all six nearest policies.  The
+// attempted P18--P19 extension did not preserve the byte stream and was
+// rejected; those precisions therefore retain the exact fallback until their
+// complete carrier-to-character boundary has an independent proof.
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
+	!defined(__SIZEOF_INT128__)
+[[msvc::noinline]]
+[[nodiscard]] inline constexpr ::fast_io::details::da::binary64_scientific_precision_result
+binary64_scientific_precision_msvc_runtime(
+	::std::uint_least64_t mantissa, ::std::uint_least32_t exponent,
+	::std::size_t significant) noexcept
+{
+	constexpr ::std::uint_least64_t implicit_bit{
+		static_cast<::std::uint_least64_t>(1u) << 52u};
+	auto const binary_significand{mantissa | implicit_bit};
+	switch (significant)
+	{
+	case 16u:
+		return ::fast_io::details::da::
+			compute_binary64_scientific_precision<16u>(binary_significand, exponent);
+	case 17u:
+		return ::fast_io::details::da::
+			compute_binary64_scientific_precision<17u>(binary_significand, exponent);
+	default:
+		return {};
+	}
+}
+#endif
+
 // This precision specialization is attached to the native-u128 exact backend:
 // P20-P33 and accepted partial-P34 results require u128 coefficients, while
-// P16-P19 share the same dispatch and fallback infrastructure.  P16-P19 are
-// mathematically representable in u64 but are deliberately not exposed as a
-// separate partial backend on targets
-// without __int128; those targets retain exact materialization.  Wide carriers
-// must never be enabled by narrowing their coefficient.
+// P16-P19 share the same dispatch and fallback infrastructure.  All four are
+// mathematically representable in u64; the separately proved MSVC-x64 P16-P17
+// carrier above is the only no-u128 exception.  P18-P19 and every other target
+// without native u128 retain exact materialization.  Wide carriers must never
+// be enabled by narrowing their coefficient.
 // The prefix-window backend uses u128 limbs to retain exactly the requested
 // decimal prefix, one guard digit and sticky state.  When u128 is unavailable,
 // the enclosing floating implementation keeps the older exact expansion; this
@@ -2702,7 +2785,7 @@ print_rsvflt_binary64_scientific_precision_impl(
 	::std::uint_least32_t exponent) noexcept
 {
 	static_assert(16u <= digits && digits <= 19u);
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	// The fixed-width proof uses the normalized 53-bit significand.
 	// Subnormal values retain the exact-window fallback until their wider
 	// coefficient range has a separate compile-time normalization proof; the
@@ -2924,7 +3007,35 @@ static_assert(::fast_io::details::exact_precision_multiplier_fits(exact_precisio
 
 template <typename flt>
 inline constexpr ::std::size_t exact_precision_limb_capacity{
-	sizeof(flt) <= sizeof(float) ? 16u : 88u};
+	sizeof(flt) <= sizeof(float)
+		? 16u
+		: (::fast_io::details::iec559_traits<flt>::mbits <=
+				  ::fast_io::details::iec559_traits<double>::mbits &&
+			   ::fast_io::details::iec559_traits<flt>::ebits <=
+				  ::fast_io::details::iec559_traits<double>::ebits
+			   ? 88u
+			   : []() constexpr noexcept {
+					 using trait = ::fast_io::details::iec559_traits<flt>;
+					 constexpr ::std::size_t bias{
+						 (static_cast<::std::size_t>(1u) << (trait::ebits - 1u)) - 1u};
+					 constexpr ::std::size_t denominator_power{
+						 bias + trait::mbits - 1u};
+					 /*
+					 The smallest subnormal is 2^-(bias+mbits-1), so its exact
+					 decimal coefficient is at most (2^(mbits+1)-1)*5^k.  The
+					 strict rational bounds log10(5) < 7/10 and log10(2) < 1/3
+					 give a compile-time upper bound without floating arithmetic.
+					 Two guard digits and one guard limb cover both ceilings.  For
+					 binary80 and binary128 this yields 1283 and 1289 limbs,
+					 respectively, enough for every finite exact expansion.
+					 */
+					 constexpr ::std::size_t coefficient_digits{
+						 (denominator_power * 7u + 9u) / 10u +
+						 (trait::mbits + 3u) / 3u + 2u};
+					 return (coefficient_digits + exact_precision_limb_digits - 1u) /
+							   exact_precision_limb_digits +
+						   1u;
+				   }())};
 
 template <typename flt>
 inline constexpr ::std::size_t exact_precision_digit_capacity{
@@ -2934,9 +3045,26 @@ static_assert(exact_precision_digit_capacity<float> >= 114u);
 static_assert(exact_precision_digit_capacity<double> >= 768u);
 
 template <typename flt>
+inline constexpr bool exact_precision_is_wide_binary{
+	::fast_io::details::iec559_traits<double>::mbits <
+		::fast_io::details::iec559_traits<flt>::mbits ||
+	::fast_io::details::iec559_traits<double>::ebits <
+		::fast_io::details::iec559_traits<flt>::ebits};
+
+template <typename flt>
 struct exact_precision_decimal
 {
 	unsigned char digits[exact_precision_digit_capacity<flt>];
+	::std::size_t size;
+	::std::int_least32_t exponent;
+};
+
+// A directed tiny-value result needs only one coefficient digit.  This compact
+// view satisfies the established decimal presentation contract without
+// allocating the complete binary80/binary128 exact-expansion buffer.
+struct exact_precision_single_digit_decimal
+{
+	unsigned char digits[1u];
 	::std::size_t size;
 	::std::int_least32_t exponent;
 };
@@ -2955,6 +3083,59 @@ inline constexpr void exact_precision_multiply_small(
 	{
 		limbs[size] = static_cast<exact_precision_limb_type>(carry % exact_precision_limb_base);
 		++size;
+	}
+}
+
+inline constexpr void exact_precision_add_small(
+	exact_precision_limb_type *limbs, ::std::size_t &size,
+	exact_precision_multiplier_type addend) noexcept
+{
+	exact_precision_wide_type carry{addend};
+	for (::std::size_t index{}; carry && index != size; ++index)
+	{
+		auto const sum{static_cast<exact_precision_wide_type>(limbs[index]) + carry};
+		limbs[index] = static_cast<exact_precision_limb_type>(sum % exact_precision_limb_base);
+		carry = sum / exact_precision_limb_base;
+	}
+	for (; carry; carry /= exact_precision_limb_base)
+	{
+		limbs[size++] = static_cast<exact_precision_limb_type>(carry % exact_precision_limb_base);
+	}
+}
+
+template <typename mantissa_type>
+inline constexpr void exact_precision_initialize_wide_limbs(
+	exact_precision_limb_type *limbs, ::std::size_t &size,
+	mantissa_type mantissa) noexcept
+{
+	static_assert(sizeof(exact_precision_multiplier_type) < sizeof(mantissa_type));
+	/*
+	 A native binary128 mantissa must not use `% 1000000000` or
+	 `/ 1000000000`: both operations lower to __umodti3/__udivti3 on
+	 current GCC and Clang x86-64 runtimes.  Horner conversion in four
+	 base-2^32 words is exact because the base-1e9 accumulator already
+	 proves multiplication by 2^32 fits its uint64_t product.  It has a
+	 fixed four-word cost and introduces no target-specific intrinsic.
+	 */
+	constexpr unsigned word_bits{32u};
+	constexpr auto word_mask{static_cast<mantissa_type>(0xffffffffu)};
+	constexpr exact_precision_multiplier_type word_base{
+		static_cast<exact_precision_multiplier_type>(1u) << word_bits};
+	constexpr auto word_count{
+		(sizeof(mantissa_type) * ::std::numeric_limits<unsigned char>::digits +
+		 word_bits - 1u) /
+		word_bits};
+	size = 1u;
+	for (::std::size_t index{word_count}; index; --index)
+	{
+		::fast_io::details::exact_precision_multiply_small(limbs, size, word_base);
+		auto const word{static_cast<exact_precision_multiplier_type>(
+			(mantissa >> ((index - 1u) * word_bits)) & word_mask)};
+		::fast_io::details::exact_precision_add_small(limbs, size, word);
+	}
+	while (1u < size && !limbs[size - 1u])
+	{
+		--size;
 	}
 }
 
@@ -2992,24 +3173,31 @@ inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 
 	exact_precision_limb_type limbs[exact_precision_limb_capacity<flt>]{};
 	::std::size_t limb_size{};
-	// Perform the base-1e9 quotient in a type that can represent both the
-	// original mantissa and the divisor.  This is semantically the same integer
-	// division as the former compound assignment, but makes its narrowing proof
-	// explicit for binary16/bfloat16 front ends: the quotient never exceeds the
-	// input mantissa.  A native-u128 mantissa deliberately remains u128, so this
-	// representation rule also avoids truncating a future binary128 exact path.
-	using division_type = ::std::conditional_t<
-		(sizeof(mantissa_type) < sizeof(exact_precision_multiplier_type)),
-		exact_precision_multiplier_type, mantissa_type>;
-	constexpr auto division_base{static_cast<division_type>(exact_precision_limb_base)};
-	for (; mantissa;)
+	if constexpr (sizeof(mantissa_type) <= sizeof(exact_precision_multiplier_type))
 	{
-		auto const current{static_cast<division_type>(mantissa)};
-		// The remainder is in [0, 1e9), exactly the limb_type domain.
-		limbs[limb_size] = static_cast<exact_precision_limb_type>(
-			current % division_base);
-		++limb_size;
-		mantissa = static_cast<mantissa_type>(current / division_base);
+		// Perform the base-1e9 quotient in a type that can represent both the
+		// original mantissa and the divisor.  This is semantically the same integer
+		// division as the former compound assignment, but makes its narrowing proof
+		// explicit for binary16/bfloat16 front ends: the quotient never exceeds the
+		// input mantissa.
+		using division_type = ::std::conditional_t<
+			(sizeof(mantissa_type) < sizeof(exact_precision_multiplier_type)),
+			exact_precision_multiplier_type, mantissa_type>;
+		constexpr auto division_base{static_cast<division_type>(exact_precision_limb_base)};
+		for (; mantissa;)
+		{
+			auto const current{static_cast<division_type>(mantissa)};
+			// The remainder is in [0, 1e9), exactly the limb_type domain.
+			limbs[limb_size] = static_cast<exact_precision_limb_type>(
+				current % division_base);
+			++limb_size;
+			mantissa = static_cast<mantissa_type>(current / division_base);
+		}
+	}
+	else
+	{
+		::fast_io::details::exact_precision_initialize_wide_limbs(
+			limbs, limb_size, mantissa);
 	}
 	auto decimal_exponent{binary_exponent < 0 ? binary_exponent : 0};
 	if (binary_exponent < 0)
@@ -3294,13 +3482,13 @@ struct exact_precision_binary32_negative_power10_table_type
 				++significand;
 			}
 			auto exponent_field{static_cast<::std::uint_least32_t>(binary_exponent + 127)};
-			if (significand == (UINT64_C(1) << 24u))
+			if (significand == (static_cast<::std::uint_least64_t>(1ULL) << 24u))
 			{
 				significand >>= 1u;
 				++exponent_field;
 			}
 			values[index] = (exponent_field << 23u) |
-				static_cast<::std::uint_least32_t>(significand - (UINT64_C(1) << 23u));
+				static_cast<::std::uint_least32_t>(significand - (static_cast<::std::uint_least64_t>(1ULL) << 23u));
 		}
 	}
 
@@ -3385,7 +3573,7 @@ exact_precision_correct_binary32_raw_negative_real_exponent(
 	::std::int_least32_t binary_exponent{};
 	if (exponent)
 	{
-		mantissa |= UINT32_C(1) << mantissa_bits;
+		mantissa |= static_cast<::std::uint_least32_t>(1U) << mantissa_bits;
 		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias - mantissa_bits;
 	}
 	else
@@ -3411,7 +3599,7 @@ inline constexpr void exact_precision_copy_character_digits_numeric(
 		// cannot borrow across byte lanes on either little- or big-endian targets.
 		::std::uint_least64_t packed;
 		__builtin_memcpy(__builtin_addressof(packed), source, sizeof(packed));
-		packed -= UINT64_C(0x0101010101010101) * zero;
+		packed -= static_cast<::std::uint_least64_t>(0x0101010101010101ULL) * zero;
 		__builtin_memcpy(destination, __builtin_addressof(packed), sizeof(packed));
 		destination += 8u;
 		source += 8u;
@@ -3463,8 +3651,8 @@ inline constexpr void exact_precision_copy_character_digits_numeric(
 		auto const left_low{static_cast<::std::uint_least64_t>(value)};
 		auto const left_high{static_cast<::std::uint_least64_t>(value >> 64u)};
 		::std::uint_least64_t middle;
-		constexpr auto right_low{UINT64_C(0x31680A88F8953031)};
-		constexpr auto right_high{UINT64_C(0x89705F4136B4A597)};
+		constexpr auto right_low{static_cast<::std::uint_least64_t>(0x31680A88F8953031ULL)};
+		constexpr auto right_high{static_cast<::std::uint_least64_t>(0x89705F4136B4A597ULL)};
 		::std::uint_least64_t scratch;
 		::std::uint_least64_t high;
 		// Independent BMI2 products and explicit adc operations form limb 2;
@@ -3490,7 +3678,7 @@ inline constexpr void exact_precision_copy_character_digits_numeric(
 	{
 		multiplied = static_cast<::std::uint_least64_t>(
 			::fast_io::details::exact_precision_window_umul256_high(
-				value, UINT64_C(0x89705F4136B4A597), UINT64_C(0x31680A88F8953031)));
+				value, static_cast<::std::uint_least64_t>(0x89705F4136B4A597ULL), static_cast<::std::uint_least64_t>(0x31680A88F8953031ULL)));
 	}
 	auto const shifted{static_cast<::std::uint_least32_t>(multiplied >> 29u)};
 	return static_cast<::std::uint_least32_t>(value) - 1000000000u * shifted;
@@ -3730,7 +3918,7 @@ print_rsvflt_binary64_scientific_wide_precision_impl(
 	::std::uint_least32_t exponent) noexcept
 {
 	static_assert(20u <= digits && digits <= 33u);
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const converted{::fast_io::details::da::
 		compute_binary64_scientific_wide_precision<digits>(
 			mantissa | implicit_bit, exponent)};
@@ -3768,7 +3956,7 @@ print_rsvflt_binary64_scientific_p34_partial_precision_impl(
 	char_type *iter, ::std::uint_least64_t mantissa,
 	::std::uint_least32_t exponent) noexcept
 {
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const converted{::fast_io::details::da::
 		compute_binary64_scientific_p34_partial_precision(
 			mantissa | implicit_bit, exponent)};
@@ -3821,7 +4009,7 @@ print_rsvflt_binary64_scientific_wide_precision_runtime_impl(
 	// evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const extra_digit_multiplier{
 		print_rsv_fp_pow10_0_to_19_table[significant - 16u]};
 	constexpr __uint128_t decimal_limb{exact_precision_window_decimal_limb_base};
@@ -3931,7 +4119,7 @@ print_rsvflt_binary64_scientific_extended_precision_runtime_impl(
 		break;
 	}
 #endif
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const extra_digit_multiplier{
 		print_rsv_fp_pow10_0_to_19_table[significant - 16u]};
 	constexpr __uint128_t decimal_limb{exact_precision_window_decimal_limb_base};
@@ -4051,7 +4239,7 @@ print_rsvflt_binary64_fixed_fractional_da_narrow_impl(
 	char_type *iter, ::std::uint_least64_t mantissa,
 	::std::uint_least32_t exponent, ::std::size_t fractional_precision) noexcept
 {
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const converted{::fast_io::details::da::
 		compute_binary64_fixed_fractional_precision(
 			mantissa | implicit_bit, exponent, fractional_precision)};
@@ -4075,7 +4263,7 @@ print_rsvflt_binary64_fixed_fractional_da_wide_impl(
 	char_type *iter, ::std::uint_least64_t mantissa,
 	::std::uint_least32_t exponent, ::std::size_t fractional_precision) noexcept
 {
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const converted{::fast_io::details::da::
 		compute_binary64_fixed_fractional_precision(
 			mantissa | implicit_bit, exponent, fractional_precision)};
@@ -4243,6 +4431,473 @@ inline constexpr exact_precision_window_result exact_precision_window_materializ
 	result.success = true;
 	return result;
 }
+
+/*
+Binary80 and binary128 can require more than eleven thousand exact coefficient
+digits even when the caller requests only a short scientific field.  The
+bounded window below encloses positive 5^s by two normalized 512-bit dyadic
+endpoints.  The integration gate currently admits only subnormals, for which
+s is proved positive; the reciprocal construction is documented separately
+but deliberately does not add a second runtime table here.  The code accepts a
+prefix only when shifting both endpoints produces the same integer.
+Consequently approximation affects only
+the acceptance rate: an accepted prefix is the exact floor.
+
+For a requested window of r decimal digits and k=floor(log10(x)), set
+
+  s = r - 1 - k,  y = x*10^s = M*2^(e+s)*5^s.
+
+The window stores one guard digit, so r<=130 for every P1--P128 precision
+request.  Since y<10^130<2^432, the 512-bit interval leaves at least eighty
+bits beyond the result.  Each outward-rounded multiplication changes the
+endpoint ratio by less than 1+2^-508.  At most thirteen power-table levels are
+needed because |s|<=5095 for every finite binary80/binary128 value.  Induction
+over interval multiplication bounds the final relative width by
+
+  (1 + 2^-508)^(4*5095-1) - 1 < 2^-493,
+
+and hence its absolute width after decimal scaling by less than 2^-61.  The
+equality test remains authoritative even on the rare integer boundary where
+that narrow interval could straddle two floors.
+
+The power table is generated by constexpr squaring from exact 5 and contains no
+handwritten numeric cache.  The same arithmetic serves every output character
+type, punctuation choice, format and rounding policy; only the existing
+presentation layer interprets the prefix, guard and sticky state.
+*/
+#if defined(__SIZEOF_INT128__)
+inline constexpr ::std::size_t exact_precision_wide_window_limb_count{8u};
+inline constexpr ::std::size_t exact_precision_wide_window_product_limb_count{16u};
+inline constexpr ::std::size_t exact_precision_wide_window_power_count{13u};
+inline constexpr ::std::size_t exact_precision_wide_window_maximum_digits{130u};
+
+struct exact_precision_wide_window_interval
+{
+	::std::uint_least64_t lower[exact_precision_wide_window_limb_count]{};
+	::std::uint_least64_t upper[exact_precision_wide_window_limb_count]{};
+	::std::int_least32_t exponent{};
+};
+
+struct exact_precision_wide_window_product
+{
+	::std::uint_least64_t limbs[exact_precision_wide_window_product_limb_count]{};
+};
+
+[[nodiscard]] inline constexpr unsigned exact_precision_wide_window_bit_width(
+	::std::uint_least64_t value) noexcept
+{
+	return value ? static_cast<unsigned>(64u - ::std::countl_zero(value)) : 0u;
+}
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_product
+exact_precision_wide_window_multiply_endpoint(
+	::std::uint_least64_t const *left,
+	::std::uint_least64_t const *right) noexcept
+{
+	exact_precision_wide_window_product result{};
+	for (::std::size_t left_index{};
+		 left_index != exact_precision_wide_window_limb_count; ++left_index)
+	{
+		__uint128_t carry{};
+		for (::std::size_t right_index{};
+			 right_index != exact_precision_wide_window_limb_count; ++right_index)
+		{
+			auto const output_index{left_index + right_index};
+			auto const product{
+				static_cast<__uint128_t>(left[left_index]) * right[right_index] +
+				result.limbs[output_index] + carry};
+			result.limbs[output_index] =
+				static_cast<::std::uint_least64_t>(product);
+			carry = product >> 64u;
+		}
+		result.limbs[left_index + exact_precision_wide_window_limb_count] =
+			static_cast<::std::uint_least64_t>(carry);
+	}
+	return result;
+}
+
+[[nodiscard]] inline constexpr unsigned exact_precision_wide_window_product_bit_width(
+	exact_precision_wide_window_product const &product) noexcept
+{
+	for (auto index{exact_precision_wide_window_product_limb_count}; index; --index)
+	{
+		auto const value{product.limbs[index - 1u]};
+		if (value)
+		{
+			return static_cast<unsigned>((index - 1u) * 64u) +
+				::fast_io::details::exact_precision_wide_window_bit_width(value);
+		}
+	}
+	return 0u;
+}
+
+struct exact_precision_wide_window_shifted_endpoint
+{
+	::std::uint_least64_t limbs[exact_precision_wide_window_limb_count]{};
+	bool overflow{};
+};
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_shifted_endpoint
+exact_precision_wide_window_shift_endpoint(
+	exact_precision_wide_window_product const &product,
+	unsigned shift, bool round_up) noexcept
+{
+	exact_precision_wide_window_shifted_endpoint result{};
+	auto const word_shift{static_cast<::std::size_t>(shift / 64u)};
+	auto const bit_shift{shift % 64u};
+	for (::std::size_t index{}; index != exact_precision_wide_window_limb_count;
+		 ++index)
+	{
+		auto const source{word_shift + index};
+		if (source >= exact_precision_wide_window_product_limb_count)
+		{
+			break;
+		}
+		auto value{product.limbs[source] >> bit_shift};
+		if (bit_shift && source + 1u < exact_precision_wide_window_product_limb_count)
+		{
+			value |= product.limbs[source + 1u] << (64u - bit_shift);
+		}
+		result.limbs[index] = value;
+	}
+	if (!round_up || !shift)
+	{
+		return result;
+	}
+	bool discarded{};
+	for (::std::size_t index{};
+		 index != word_shift && index != exact_precision_wide_window_product_limb_count;
+		 ++index)
+	{
+		discarded = discarded || product.limbs[index] != 0u;
+	}
+	if (bit_shift && word_shift < exact_precision_wide_window_product_limb_count)
+	{
+		auto const mask{
+			(static_cast<::std::uint_least64_t>(1u) << bit_shift) - 1u};
+		discarded = discarded || (product.limbs[word_shift] & mask) != 0u;
+	}
+	if (!discarded)
+	{
+		return result;
+	}
+	for (::std::size_t index{}; index != exact_precision_wide_window_limb_count;
+		 ++index)
+	{
+		if (++result.limbs[index])
+		{
+			return result;
+		}
+	}
+	result.overflow = true;
+	return result;
+}
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_multiply_interval(
+	exact_precision_wide_window_interval const &left,
+	exact_precision_wide_window_interval const &right) noexcept
+{
+	auto product{::fast_io::details::exact_precision_wide_window_multiply_endpoint(
+		left.upper, right.upper)};
+	auto const product_bits{
+		::fast_io::details::exact_precision_wide_window_product_bit_width(product)};
+	auto shift{product_bits <= 512u ? 0u : product_bits - 512u};
+	auto upper{::fast_io::details::exact_precision_wide_window_shift_endpoint(
+		product, shift, true)};
+	if (upper.overflow)
+	{
+		++shift;
+		upper = ::fast_io::details::exact_precision_wide_window_shift_endpoint(
+			product, shift, true);
+	}
+	product = ::fast_io::details::exact_precision_wide_window_multiply_endpoint(
+		left.lower, right.lower);
+	auto const lower{::fast_io::details::exact_precision_wide_window_shift_endpoint(
+		product, shift, false)};
+	exact_precision_wide_window_interval result{};
+	for (::std::size_t index{}; index != exact_precision_wide_window_limb_count;
+		 ++index)
+	{
+		result.lower[index] = lower.limbs[index];
+		result.upper[index] = upper.limbs[index];
+	}
+	result.exponent = left.exponent + right.exponent +
+		static_cast<::std::int_least32_t>(shift);
+	return result;
+}
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_one() noexcept
+{
+	exact_precision_wide_window_interval result{};
+	result.lower[exact_precision_wide_window_limb_count - 1u] =
+		static_cast<::std::uint_least64_t>(1u) << 63u;
+	result.upper[exact_precision_wide_window_limb_count - 1u] =
+		static_cast<::std::uint_least64_t>(1u) << 63u;
+	result.exponent = -511;
+	return result;
+}
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_power_base() noexcept
+{
+	exact_precision_wide_window_interval result{};
+	// 5*2^509 is an exact normalized 512-bit significand.  The admitted
+	// subnormal domain proves a positive decimal shift, so no reciprocal cache
+	// is instantiated or stored.
+	result.lower[exact_precision_wide_window_limb_count - 1u] =
+		(static_cast<::std::uint_least64_t>(1u) << 63u) |
+		(static_cast<::std::uint_least64_t>(1u) << 61u);
+	result.upper[exact_precision_wide_window_limb_count - 1u] =
+		result.lower[exact_precision_wide_window_limb_count - 1u];
+	result.exponent = -509;
+	return result;
+}
+
+struct exact_precision_wide_window_power_table_type
+{
+	exact_precision_wide_window_interval values[
+		exact_precision_wide_window_power_count]{};
+
+	inline constexpr exact_precision_wide_window_power_table_type() noexcept
+	{
+		values[0] = ::fast_io::details::exact_precision_wide_window_power_base();
+		for (::std::size_t index{1u};
+			 index != exact_precision_wide_window_power_count; ++index)
+		{
+			values[index] = ::fast_io::details::
+				exact_precision_wide_window_multiply_interval(
+					values[index - 1u], values[index - 1u]);
+		}
+	}
+};
+
+inline constexpr exact_precision_wide_window_power_table_type
+	exact_precision_wide_window_positive_power_table{};
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_power5(unsigned exponent) noexcept
+{
+	auto result{::fast_io::details::exact_precision_wide_window_one()};
+	for (::std::size_t index{}; exponent; ++index, exponent >>= 1u)
+	{
+		if (exponent & 1u)
+		{
+			auto const &factor{
+				exact_precision_wide_window_positive_power_table.values[index]};
+			result = ::fast_io::details::exact_precision_wide_window_multiply_interval(
+				result, factor);
+		}
+	}
+	return result;
+}
+
+struct exact_precision_wide_window_mantissa_product
+{
+	::std::uint_least64_t limbs[10u]{};
+};
+
+template <typename mantissa_type>
+[[nodiscard]] inline constexpr exact_precision_wide_window_mantissa_product
+exact_precision_wide_window_multiply_mantissa(
+	::std::uint_least64_t const *endpoint, mantissa_type mantissa) noexcept
+{
+	static_assert(sizeof(mantissa_type) <= sizeof(__uint128_t));
+	auto const wide{static_cast<__uint128_t>(mantissa)};
+	::std::uint_least64_t const words[2u]{
+		static_cast<::std::uint_least64_t>(wide),
+		static_cast<::std::uint_least64_t>(wide >> 64u)};
+	exact_precision_wide_window_mantissa_product result{};
+	for (::std::size_t word_index{}; word_index != 2u; ++word_index)
+	{
+		__uint128_t carry{};
+		for (::std::size_t factor_index{};
+			 factor_index != exact_precision_wide_window_limb_count; ++factor_index)
+		{
+			auto const output_index{word_index + factor_index};
+			auto const product{static_cast<__uint128_t>(words[word_index]) *
+				endpoint[factor_index] + result.limbs[output_index] + carry};
+			result.limbs[output_index] =
+				static_cast<::std::uint_least64_t>(product);
+			carry = product >> 64u;
+		}
+		result.limbs[word_index + exact_precision_wide_window_limb_count] =
+			static_cast<::std::uint_least64_t>(carry);
+	}
+	return result;
+}
+
+inline constexpr void exact_precision_wide_window_shift_mantissa_product(
+	::std::uint_least64_t *output,
+	exact_precision_wide_window_mantissa_product const &product,
+	unsigned shift) noexcept
+{
+	auto const word_shift{static_cast<::std::size_t>(shift / 64u)};
+	auto const bit_shift{shift % 64u};
+	for (::std::size_t index{}; index != 10u; ++index)
+	{
+		auto const source{word_shift + index};
+		if (10u <= source)
+		{
+			output[index] = 0u;
+			continue;
+		}
+		auto value{product.limbs[source] >> bit_shift};
+		if (bit_shift && source + 1u < 10u)
+		{
+			value |= product.limbs[source + 1u] << (64u - bit_shift);
+		}
+		output[index] = value;
+	}
+}
+
+template <typename mantissa_type>
+[[nodiscard]] inline constexpr unsigned exact_precision_wide_window_mantissa_bit_width(
+	mantissa_type mantissa) noexcept
+{
+	auto const wide{static_cast<__uint128_t>(mantissa)};
+	auto const high{static_cast<::std::uint_least64_t>(wide >> 64u)};
+	if (high)
+	{
+		return 64u + ::fast_io::details::exact_precision_wide_window_bit_width(high);
+	}
+	return ::fast_io::details::exact_precision_wide_window_bit_width(
+		static_cast<::std::uint_least64_t>(wide));
+}
+
+template <typename mantissa_type>
+[[nodiscard]] inline constexpr unsigned exact_precision_wide_window_mantissa_countr_zero(
+	mantissa_type mantissa) noexcept
+{
+	auto const wide{static_cast<__uint128_t>(mantissa)};
+	auto const low{static_cast<::std::uint_least64_t>(wide)};
+	if (low)
+	{
+		return static_cast<unsigned>(::std::countr_zero(low));
+	}
+	return 64u + static_cast<unsigned>(::std::countr_zero(
+		static_cast<::std::uint_least64_t>(wide >> 64u)));
+}
+
+[[nodiscard]] inline constexpr ::std::int_least32_t
+exact_precision_wide_window_log10_pow2_seed(
+	::std::int_least32_t binary_exponent) noexcept
+{
+	auto const product{static_cast<::std::int_least64_t>(binary_exponent) * 1262611};
+	constexpr ::std::int_least64_t denominator{
+		static_cast<::std::int_least64_t>(1u) << 22u};
+	if (0 <= product)
+	{
+		return static_cast<::std::int_least32_t>(product / denominator);
+	}
+	return static_cast<::std::int_least32_t>(
+		-((-product + denominator - 1u) / denominator));
+}
+
+// Outlining keeps the 512-bit interval state outside each presentation caller;
+// the attribute affects placement only and cannot change an accepted prefix.
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+[[nodiscard]] inline constexpr exact_precision_window_result
+exact_precision_wide_subnormal_window_from_binary(
+	__uint128_t mantissa, unsigned mantissa_bits,
+	::std::size_t requested_digits) noexcept
+{
+	exact_precision_window_result failure{};
+	if (!mantissa || (mantissa_bits != 63u && mantissa_bits != 112u) ||
+		!requested_digits ||
+		exact_precision_wide_window_maximum_digits < requested_digits)
+	{
+		return failure;
+	}
+	constexpr ::std::int_least32_t bias{16383};
+	auto const binary_exponent{1 - bias -
+		static_cast<::std::int_least32_t>(mantissa_bits)};
+	auto const binary_floor{binary_exponent + static_cast<::std::int_least32_t>(
+		::fast_io::details::exact_precision_wide_window_mantissa_bit_width(mantissa) - 1u)};
+	auto real_exponent{
+		::fast_io::details::exact_precision_wide_window_log10_pow2_seed(binary_floor)};
+	for (unsigned attempt{}; attempt != 4u; ++attempt)
+	{
+		auto const decimal_shift64{
+			static_cast<::std::int_least64_t>(requested_digits) - 1 - real_exponent};
+		// Every binary80/binary128 subnormal is below 2^-16382.  With at
+		// most 130 requested digits, s=r-1-k is therefore strictly positive.
+		if (decimal_shift64 <= 0 || 8191 < decimal_shift64)
+		{
+			return failure;
+		}
+		auto const decimal_shift{static_cast<::std::int_least32_t>(decimal_shift64)};
+		auto const required_binary_factors{
+			-static_cast<::std::int_least64_t>(binary_exponent) - decimal_shift};
+		if (required_binary_factors <= 0 ||
+			static_cast<::std::int_least64_t>(
+				::fast_io::details::exact_precision_wide_window_mantissa_countr_zero(
+					mantissa)) >= required_binary_factors)
+		{
+			// An exact grid point is left to the complete fallback.  In the admitted
+			// subnormal domain this is only a defensive representation check.
+			return failure;
+		}
+		auto const power{::fast_io::details::exact_precision_wide_window_power5(
+			static_cast<unsigned>(decimal_shift))};
+		auto const scaled_exponent{
+			static_cast<::std::int_least64_t>(power.exponent) + binary_exponent +
+			decimal_shift};
+		if (0 <= scaled_exponent || scaled_exponent < -640)
+		{
+			return failure;
+		}
+		auto const lower_product{
+			::fast_io::details::exact_precision_wide_window_multiply_mantissa(
+				power.lower, mantissa)};
+		auto const upper_product{
+			::fast_io::details::exact_precision_wide_window_multiply_mantissa(
+				power.upper, mantissa)};
+		::std::uint_least64_t lower[10u]{};
+		::std::uint_least64_t upper[10u]{};
+		auto const shift{static_cast<unsigned>(-scaled_exponent)};
+		::fast_io::details::exact_precision_wide_window_shift_mantissa_product(
+			lower, lower_product, shift);
+		::fast_io::details::exact_precision_wide_window_shift_mantissa_product(
+			upper, upper_product, shift);
+		bool equal{true};
+		::std::size_t size{10u};
+		for (::std::size_t index{}; index != 10u; ++index)
+		{
+			equal = equal && lower[index] == upper[index];
+		}
+		if (!equal)
+		{
+			return failure;
+		}
+		while (size && !lower[size - 1u])
+		{
+			--size;
+		}
+		if (!size)
+		{
+			--real_exponent;
+			continue;
+		}
+		auto generated{::fast_io::details::exact_precision_window_materialize(
+			lower, size, requested_digits, real_exponent, true, false)};
+		if (!generated.success)
+		{
+			return failure;
+		}
+		if (generated.real_exponent != real_exponent)
+		{
+			real_exponent = generated.real_exponent;
+			continue;
+		}
+		return generated;
+	}
+	return failure;
+}
+#endif
 
 // The DA arithmetic below is target-independent.  This boolean is a closed
 // code-generation and ABI policy, not a numerical capability test.
@@ -5591,7 +6246,8 @@ inline constexpr char_type *exact_precision_window_try_print_negative_scientific
 				if (produced && offset == 0u && count == 9u &&
 					!::std::is_constant_evaluated())
 				{
-					__builtin_memcpy(iter, block_digits, sizeof(block_digits));
+					::fast_io::freestanding::my_memcpy(
+						iter, block_digits, sizeof(block_digits));
 					iter += 9u;
 					produced += 9u;
 					// A complete copy makes requested_end < block_end impossible, so
@@ -6238,7 +6894,7 @@ exact_precision_compact_window_from_binary(
 	::std::int_least32_t binary_exponent{};
 	if (exponent)
 	{
-		binary_mantissa |= UINT64_C(1) << trait::mbits;
+		binary_mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 		constexpr ::std::int_least32_t bias{
 			(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
 		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
@@ -6377,7 +7033,7 @@ inline constexpr char_type *exact_precision_window_try_print_significant_fixed(
 		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
 	if (raw_exponent)
 	{
-		mantissa |= UINT64_C(1) << trait::mbits;
+		mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 		binary_exponent = static_cast<::std::int_least32_t>(raw_exponent) - bias -
 			static_cast<::std::int_least32_t>(trait::mbits);
 	}
@@ -6684,6 +7340,22 @@ inline constexpr char_type *exact_precision_copy(
 	char_type *iter, decimal_type const &decimal,
 	::std::size_t first, ::std::size_t last) noexcept
 {
+	if constexpr (sizeof(decimal.digits) == sizeof(decimal.digits[0]))
+	{
+		/*
+		The compact directed-rounding carrier has capacity and size one.  Every
+		caller supplies a slice satisfying 0 <= first <= last <= decimal.size;
+		therefore its only nonempty slice is [0, 1).  Spelling that invariant here
+		keeps the general block-copy loop out of this instantiation and prevents an
+		optimizer diagnostic from speculating about digits[1] or digits[2].
+		*/
+		if (first != last)
+		{
+			*iter = ::fast_io::char_literal_add<char_type>(decimal.digits[0]);
+			++iter;
+		}
+		return iter;
+	}
 	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
 	{
 		// Copy each complete eight-digit numeric block through an unaligned u64,
@@ -6699,7 +7371,7 @@ inline constexpr char_type *exact_precision_copy(
 				::std::uint_least64_t packed;
 				__builtin_memcpy(__builtin_addressof(packed), decimal.digits + first,
 					sizeof(packed));
-				packed += UINT64_C(0x3030303030303030);
+				packed += static_cast<::std::uint_least64_t>(0x3030303030303030ULL);
 				__builtin_memcpy(iter, __builtin_addressof(packed), sizeof(packed));
 			}
 		}
@@ -6711,6 +7383,42 @@ inline constexpr char_type *exact_precision_copy(
 		++iter;
 	}
 	return iter;
+}
+
+template <typename decimal_type>
+[[nodiscard]] inline constexpr ::std::size_t
+exact_precision_fractional_general_rounded_virtual_size(
+	decimal_type const &decimal, ::std::size_t precision) noexcept
+{
+	// Rounding at the 10^-P grid normally leaves the last stored coefficient
+	// digit at exponent -P.  A carry through all retained nines canonicalizes
+	// the coefficient to one digit and raises decimal.exponent; the omitted
+	// suffix zeroes remain part of the requested quantum and must participate in
+	// general's fixed/scientific decision.  Exact values that terminated before
+	// P never call this helper, so their intrinsic integer suffix zeroes are not
+	// mistaken for preserved fractional zeroes.
+	//
+	// This relation uses only the decimal exponent and saturating size
+	// arithmetic.  It deliberately remains outside the native-u128 gate below:
+	// the generic exact formatter and precise-size model require the same virtual
+	// coefficient on targets such as MSVC that use the limb-based fallback.
+	::std::size_t padding{};
+	if (0 <= decimal.exponent)
+	{
+		padding = ::fast_io::details::exact_precision_saturating_add(
+			precision, static_cast<::std::size_t>(decimal.exponent));
+	}
+	else
+	{
+		auto const magnitude{static_cast<::std::size_t>(
+			-static_cast<::std::int_least64_t>(decimal.exponent))};
+		if (magnitude < precision)
+		{
+			padding = precision - magnitude;
+		}
+	}
+	return ::fast_io::details::exact_precision_saturating_add(
+		decimal.size, padding);
 }
 
 // This table is generated by the native-u128 exact prefix materializer and is
@@ -6924,7 +7632,9 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 			iter, decimal, fractional_digits, preserve);
 	}
 	auto virtual_size{decimal.size};
-	if constexpr (preserve && !fractional)
+	if constexpr (preserve &&
+		(!fractional ||
+		 format == ::fast_io::manipulators::floating_format::general))
 	{
 		if (virtual_size < significant)
 		{
@@ -7056,10 +7766,10 @@ compute_binary64_common_significant_precision(
 {
 	[[assume(raw_exponent - 1u < 2046u)]];
 	[[assume(significant - 20u < 14u)]];
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
+	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const multiplier{
 		::fast_io::details::print_rsv_fp_pow10_0_to_19_table[significant - 16u]};
-	constexpr __uint128_t decimal_limb{UINT64_C(10000000000000000000)};
+	constexpr __uint128_t decimal_limb{static_cast<::std::uint_least64_t>(10000000000000000000ULL)};
 	auto const normalization_threshold{decimal_limb *
 		::fast_io::details::print_rsv_fp_pow10_0_to_19_table[significant - 19u]};
 	auto const normalized_significand{decimal_limb *
@@ -7549,6 +8259,318 @@ inline constexpr void exact_precision_window_round(
 	decimal.exponent = target_exponent + keep;
 }
 
+// Numeric window construction, precision interpretation and decimal rounding
+// are independent of the destination character and punctuation.  Keeping them
+// in one runtime-policy function prevents the full format x rounding x
+// precision-mode matrix from cloning the 512-bit arithmetic.  The caller still
+// instantiates the established presentation function, so this sharing changes
+// neither layout nor character semantics.
+#if defined(__SIZEOF_INT128__)
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr bool exact_precision_wide_subnormal_prepare(
+	unsigned char *output_digits, ::std::size_t &output_size,
+	::std::int_least32_t &output_exponent, ::std::size_t &significant,
+	__uint128_t mantissa, unsigned mantissa_bits,
+	::std::size_t precision,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	::fast_io::manipulators::floating_rounding rounding,
+	bool negative) noexcept
+{
+	using precision_enum = ::fast_io::manipulators::floating_precision;
+	using format_enum = ::fast_io::manipulators::floating_format;
+	auto const fractional{precision_mode == precision_enum::fractional ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	auto const preserve{
+		precision_mode == precision_enum::significant_preserve_trailing_zero ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	if (128u < precision)
+	{
+		return false;
+	}
+	exact_precision_window_result generated{};
+	::std::int_least32_t keep{};
+	if (fractional)
+	{
+		if (format == format_enum::scientific)
+		{
+			significant = precision + 1u;
+			keep = static_cast<::std::int_least32_t>(significant);
+			generated = ::fast_io::details::
+				exact_precision_wide_subnormal_window_from_binary(
+					mantissa, mantissa_bits, significant + 1u);
+		}
+		else
+		{
+			auto const exponent_probe{::fast_io::details::
+				exact_precision_wide_subnormal_window_from_binary(
+					mantissa, mantissa_bits, 2u)};
+			if (!exponent_probe.success)
+			{
+				return false;
+			}
+			auto const requested_keep{
+				static_cast<::std::int_least64_t>(exponent_probe.real_exponent) + 1 +
+				static_cast<::std::int_least64_t>(precision)};
+			if (requested_keep < 0 ||
+				exact_precision_wide_window_maximum_digits <=
+					static_cast<::std::uint_least64_t>(requested_keep))
+			{
+				return false;
+			}
+			keep = static_cast<::std::int_least32_t>(requested_keep);
+			significant = static_cast<::std::size_t>(keep);
+			generated = ::fast_io::details::
+				exact_precision_wide_subnormal_window_from_binary(
+					mantissa, mantissa_bits, significant + 1u);
+		}
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		keep = static_cast<::std::int_least32_t>(significant);
+		generated = ::fast_io::details::
+			exact_precision_wide_subnormal_window_from_binary(
+				mantissa, mantissa_bits, significant + 1u);
+	}
+	if (!generated.success ||
+		static_cast<::std::int_least32_t>(generated.decimal.size) <= keep)
+	{
+		return false;
+	}
+	auto const guard{generated.decimal.digits[static_cast<::std::size_t>(keep)]};
+	auto const rounded_down{keep
+		? generated.decimal.digits[static_cast<::std::size_t>(keep) - 1u]
+		: 0u};
+	auto const round_up{::fast_io::details::exact_precision_window_runtime_round_up(
+		rounding, negative, guard, generated.tail_nonzero, rounded_down)};
+	auto const target_exponent{
+		generated.decimal.exponent +
+		static_cast<::std::int_least32_t>(generated.decimal.size) - keep};
+	if (!keep)
+	{
+		generated.decimal.size = 1u;
+		generated.decimal.digits[0] = static_cast<unsigned char>(round_up);
+		generated.decimal.exponent = target_exponent;
+	}
+	else
+	{
+		generated.decimal.size = static_cast<::std::size_t>(keep);
+		generated.decimal.exponent = target_exponent;
+		if (round_up)
+		{
+			bool carry{true};
+			for (auto index{generated.decimal.size}; index; --index)
+			{
+				if (++generated.decimal.digits[index - 1u] != 10u)
+				{
+					carry = false;
+					break;
+				}
+				generated.decimal.digits[index - 1u] = 0u;
+			}
+			if (carry)
+			{
+				generated.decimal.digits[0] = 1u;
+				generated.decimal.size = 1u;
+				generated.decimal.exponent = target_exponent + keep;
+			}
+		}
+	}
+	if (!preserve)
+	{
+		::fast_io::details::exact_precision_trim(generated.decimal);
+	}
+	output_size = generated.decimal.size;
+	output_exponent = generated.decimal.exponent;
+	for (::std::size_t index{}; index != output_size; ++index)
+	{
+		output_digits[index] = generated.decimal.digits[index];
+	}
+	return true;
+}
+
+// Select the strongest available optimizer barrier by attribute capability.
+// `noipa` prevents policy-specific clones; `noinline` is the semantic-equivalent
+// placement fallback and no target architecture participates in this choice.
+template <::std::integral char_type, typename decimal_type>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *exact_precision_wide_call_fixed(
+	char_type *iter, decimal_type const &decimal, ::std::size_t virtual_size,
+	bool force_fractional, ::std::size_t fractional_precision,
+	char_type *(*function)(char_type *, decimal_type const &, ::std::size_t,
+		bool, ::std::size_t) noexcept) noexcept
+{
+	return function(iter, decimal, virtual_size, force_fractional,
+		fractional_precision);
+}
+
+// The scientific adapter needs the same capability-selected boundary as the
+// fixed adapter above so neither presentation is favored by code placement.
+template <::std::integral char_type, typename decimal_type>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *exact_precision_wide_call_scientific(
+	char_type *iter, decimal_type const &decimal,
+	::std::size_t fractional_precision, bool preserve,
+	char_type *(*function)(char_type *, decimal_type const &, ::std::size_t,
+		bool) noexcept) noexcept
+{
+	return function(iter, decimal, fractional_precision, preserve);
+}
+
+// Keep the presentation policy as data.  The two opaque tail-call adapters
+// prevent a compiler from inlining every fixed/scientific body into a sparse
+// 4 x 4 switch when a program instantiates only one policy; without that
+// boundary GCC grows a two-format binary by more than 100 KiB.  The arithmetic
+// below is the runtime spelling of print_rsvflt_rounded_precision_define_impl
+// and preserves its notation-choice inequalities exactly.  At the current
+// integration boundary every non-scientific fractional binary80/binary128
+// subnormal with P<=128 is discharged by the proved tiny-quantum branch before
+// this adapter; therefore the adapter cannot observe fractional-general's
+// carry-created virtual suffix.  If the window is extended to normal values or
+// to larger P, its caller must first mirror
+// exact_precision_fractional_general_rounded_virtual_size so that a carry
+// through retained nines participates in general's notation decision.
+// Keep numeric construction and runtime presentation outlined together.  GCC's
+// `noipa` prevents caller-policy cloning; compilers without that capability use
+// noinline and preserve the same prefix/guard/sticky and output contracts.
+template <typename flt, bool comma, bool uppercase_e, bool json_float,
+		  ::std::integral char_type, typename decimal_type>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *exact_precision_wide_runtime_present(
+	char_type *iter, decimal_type const &decimal, ::std::size_t precision,
+	::std::size_t significant,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode) noexcept
+{
+	using format_enum = ::fast_io::manipulators::floating_format;
+	using precision_enum = ::fast_io::manipulators::floating_precision;
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+	auto const fractional{precision_mode == precision_enum::fractional ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	auto const preserve{
+		precision_mode == precision_enum::significant_preserve_trailing_zero ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	if (format == format_enum::scientific)
+	{
+		auto const fractional_digits{fractional ? precision : significant - 1u};
+		return ::fast_io::details::exact_precision_wide_call_scientific(
+			iter, decimal, fractional_digits, preserve,
+			&::fast_io::details::exact_precision_scientific<
+				flt, comma, uppercase_e, char_type, decimal_type>);
+	}
+	auto virtual_size{decimal.size};
+	if (preserve && !fractional && virtual_size < significant)
+	{
+		virtual_size = significant;
+	}
+	if (format == format_enum::fixed ||
+		(fractional && format == format_enum::decimal))
+	{
+		return ::fast_io::details::exact_precision_wide_call_fixed(
+			iter, decimal, virtual_size, fractional && preserve, precision,
+			&::fast_io::details::exact_precision_fixed<
+				comma, json_float, char_type, decimal_type>);
+	}
+	auto const virtual_padding{virtual_size - decimal.size};
+	bool fixed{};
+	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	{
+		auto const virtual_exponent{
+			static_cast<::std::int_least64_t>(decimal.exponent) -
+			static_cast<::std::int_least64_t>(virtual_padding)};
+		fixed = -5 < virtual_exponent && virtual_exponent < 7;
+	}
+	if (format == format_enum::decimal)
+	{
+		auto const rounded_exponent{
+			decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+		::std::size_t fixed_length{};
+		if (0 <= rounded_exponent)
+		{
+			auto const integer_digits{
+				static_cast<::std::size_t>(rounded_exponent) + 1u};
+			if (virtual_size <= static_cast<::std::size_t>(rounded_exponent))
+			{
+				fixed_length = integer_digits;
+			}
+			else
+			{
+				fixed_length = ::fast_io::details::exact_precision_saturating_add(
+					virtual_size, virtual_size == integer_digits ? 1u : 2u);
+			}
+		}
+		else
+		{
+			fixed_length = ::fast_io::details::exact_precision_saturating_add(
+				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
+		}
+		auto const scientific_length{
+			::fast_io::details::exact_precision_saturating_add(
+				virtual_size, virtual_size == 1u ? 3u : 5u)};
+		fixed = scientific_length >= fixed_length;
+	}
+	if (fixed)
+	{
+		return ::fast_io::details::exact_precision_wide_call_fixed(
+			iter, decimal, virtual_size, fractional && preserve, precision,
+			&::fast_io::details::exact_precision_fixed<
+				comma, json_float, char_type, decimal_type>);
+	}
+	return ::fast_io::details::exact_precision_wide_call_scientific(
+		iter, decimal, virtual_size - 1u, preserve,
+		&::fast_io::details::exact_precision_scientific<
+			flt, comma, uppercase_e, char_type, decimal_type>);
+}
+
+// Keep numeric construction outlined as well: a format/rounding instantiation
+// contributes only one call site, while the 512-bit proof machinery remains a
+// single shared body.  The attribute capability changes placement, not results.
+template <typename flt, bool comma, bool uppercase_e, bool json_float,
+		  ::std::integral char_type>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *exact_precision_wide_subnormal_try_print(
+	char_type *iter,
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::size_t precision, bool negative,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	::fast_io::manipulators::floating_rounding rounding) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	exact_precision_compact_window_decimal decimal{};
+	::std::size_t significant{};
+	if (!::fast_io::details::exact_precision_wide_subnormal_prepare(
+			decimal.digits, decimal.size, decimal.exponent, significant,
+			static_cast<__uint128_t>(mantissa), trait::mbits, precision, format,
+			precision_mode, rounding, negative))
+	{
+		return nullptr;
+	}
+	return ::fast_io::details::exact_precision_wide_runtime_present<
+		flt, comma, uppercase_e, json_float>(
+			iter, decimal, precision, significant, format, precision_mode);
+}
+#endif
+
 template <typename flt, bool comma, bool uppercase_e,
 		  ::fast_io::manipulators::floating_format format,
 		  ::fast_io::manipulators::floating_precision precision_mode,
@@ -7693,7 +8715,7 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 							}
 						}
 					}
-					binary_mantissa |= UINT64_C(1) << trait::mbits;
+					binary_mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 					constexpr ::std::int_least32_t bias{
 						(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
 					binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
@@ -7874,7 +8896,7 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 								auto const fractional_binary_bits{
 									static_cast<::std::uint_least32_t>(-binary_exponent)};
 								auto const fractional_mask{
-									(UINT64_C(1) << fractional_binary_bits) - 1u};
+									(static_cast<::std::uint_least64_t>(1ULL) << fractional_binary_bits) - 1u};
 								if (18u <= precision &&
 									(::fast_io::details::exact_precision_window_direct_mixed_scientific ||
 										35u <= significant) &&
@@ -7951,7 +8973,9 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 					{
 						::fast_io::details::exact_precision_trim(generated.decimal);
 					}
-					if (static_cast<::std::int_least32_t>(generated.decimal.size) > keep)
+					auto const rounded{
+						static_cast<::std::int_least32_t>(generated.decimal.size) > keep};
+					if (rounded)
 					{
 						::fast_io::details::exact_precision_window_round<rounding>(
 							generated.decimal, keep, negative, generated.tail_nonzero);
@@ -7959,6 +8983,15 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 					if constexpr (!preserve)
 					{
 						::fast_io::details::exact_precision_trim(generated.decimal);
+					}
+					if constexpr (fractional && preserve &&
+						format == ::fast_io::manipulators::floating_format::general)
+					{
+						significant = rounded
+							? ::fast_io::details::
+								exact_precision_fractional_general_rounded_virtual_size(
+									generated.decimal, precision)
+							: generated.decimal.size;
 					}
 					return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 						flt, comma, uppercase_e, format, precision_mode, json_float>(
@@ -7985,7 +9018,9 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 		{
 			::fast_io::details::exact_precision_trim(generated.decimal);
 		}
-		if (static_cast<::std::int_least32_t>(generated.decimal.size) > keep)
+		auto const rounded{
+			static_cast<::std::int_least32_t>(generated.decimal.size) > keep};
+		if (rounded)
 		{
 			::fast_io::details::exact_precision_window_round<rounding>(
 				generated.decimal, keep, negative, generated.tail_nonzero);
@@ -7993,6 +9028,15 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 		if constexpr (!preserve)
 		{
 			::fast_io::details::exact_precision_trim(generated.decimal);
+		}
+		if constexpr (fractional && preserve &&
+			format == ::fast_io::manipulators::floating_format::general)
+		{
+			significant = rounded
+				? ::fast_io::details::
+					exact_precision_fractional_general_rounded_virtual_size(
+						generated.decimal, precision)
+				: generated.decimal.size;
 		}
 		return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 			flt, comma, uppercase_e, format, precision_mode, json_float>(
@@ -8067,7 +9111,8 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 	constexpr bool preserve{::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode>};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
 	auto decimal{::fast_io::details::exact_precision_from_binary<flt>(mantissa, exponent)};
-	auto const real_exponent{decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	auto const real_exponent{
+		decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
 	::std::size_t significant{};
 	::std::int_least32_t keep{};
 	if constexpr (fractional)
@@ -8095,10 +9140,20 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 		significant = precision ? precision : 1u;
 		keep = significant > static_cast<::std::size_t>(int32_max) ? int32_max : static_cast<::std::int_least32_t>(significant);
 	}
+	auto const rounded{static_cast<::std::int_least32_t>(decimal.size) > keep};
 	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
 	if constexpr (!preserve)
 	{
 		::fast_io::details::exact_precision_trim(decimal);
+	}
+	if constexpr (fractional && preserve &&
+		format == ::fast_io::manipulators::floating_format::general)
+	{
+		significant = rounded
+			? ::fast_io::details::
+				exact_precision_fractional_general_rounded_virtual_size(
+					decimal, precision)
+			: decimal.size;
 	}
 	return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 		flt, comma, uppercase_e, format, precision_mode, json_float>(
@@ -8183,9 +9238,9 @@ inline constexpr void print_rsv_fp_round_to_fractional(
 		The requested quantum 10^-P is no coarser than the carrier exactly when
 		-P<=e10.  For nonnegative e10 this is immediate; otherwise it is the
 		unsigned comparison P>=-int64(e10).  This single mathematical guard also
-		proves its fallthrough invariant P<-e10<=INT32_MAX, so the following
-		narrowing cannot wrap even when e10==INT32_MIN.  It replaces, rather than
-		adds to, the ordinary hot-path exponent comparison.
+		proves that the fallthrough magnitude is representable by int_least32_t,
+		so the following narrowing cannot wrap even at the minimum exponent.  It
+		replaces, rather than adds to, the ordinary hot-path exponent comparison.
 		*/
 		return;
 	}
@@ -8941,35 +9996,37 @@ template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io:
 		  ::fast_io::manipulators::floating_rounding rounding =
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
 		  bool nan_show_sign = true, bool nan_show_type = false, bool json_float = false,
-		  typename flt, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(char_type *iter, flt f) noexcept
+		  typename flt, bool exact_bounds = false, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define_impl(
+	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool sign) noexcept
 {
 	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
 	{
 		switch (::fast_io::details::current_floating_rounding())
 		{
 		case ::fast_io::manipulators::floating_rounding::toward_plus_infinity:
-			return print_rsvflt_define_impl<showpos, uppercase, uppercase_e, comma, mt,
+			return print_rsvflt_fields_define_impl<showpos, uppercase, uppercase_e, comma, mt,
 											::fast_io::manipulators::floating_rounding::toward_plus_infinity,
-											nan_show_sign, nan_show_type, json_float>(iter, f);
+											nan_show_sign, nan_show_type, json_float, flt, exact_bounds>(iter, mantissa, exponent, sign);
 		case ::fast_io::manipulators::floating_rounding::toward_minus_infinity:
-			return print_rsvflt_define_impl<showpos, uppercase, uppercase_e, comma, mt,
+			return print_rsvflt_fields_define_impl<showpos, uppercase, uppercase_e, comma, mt,
 											::fast_io::manipulators::floating_rounding::toward_minus_infinity,
-											nan_show_sign, nan_show_type, json_float>(iter, f);
+											nan_show_sign, nan_show_type, json_float, flt, exact_bounds>(iter, mantissa, exponent, sign);
 		case ::fast_io::manipulators::floating_rounding::toward_zero:
-			return print_rsvflt_define_impl<showpos, uppercase, uppercase_e, comma, mt,
+			return print_rsvflt_fields_define_impl<showpos, uppercase, uppercase_e, comma, mt,
 											::fast_io::manipulators::floating_rounding::toward_zero,
-											nan_show_sign, nan_show_type, json_float>(iter, f);
+											nan_show_sign, nan_show_type, json_float, flt, exact_bounds>(iter, mantissa, exponent, sign);
 		default:
-			return print_rsvflt_define_impl<showpos, uppercase, uppercase_e, comma, mt,
+			return print_rsvflt_fields_define_impl<showpos, uppercase, uppercase_e, comma, mt,
 											::fast_io::manipulators::floating_rounding::nearest_to_even,
-											nan_show_sign, nan_show_type, json_float>(iter, f);
+											nan_show_sign, nan_show_type, json_float, flt, exact_bounds>(iter, mantissa, exponent, sign);
 		}
 	}
 	if constexpr (::fast_io::manipulators::floating_format::fixed == mt && uppercase_e)
 	{
-		return print_rsvflt_define_impl<showpos, uppercase, false, comma, mt, rounding, nan_show_sign, nan_show_type,
-										json_float>(iter, f);
+		return print_rsvflt_fields_define_impl<showpos, uppercase, false, comma, mt, rounding, nan_show_sign,
+										nan_show_type, json_float, flt, exact_bounds>(iter, mantissa, exponent, sign);
 	}
 	else
 	{
@@ -8979,7 +10036,19 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 		constexpr ::std::size_t ebits{trait::ebits};
 		constexpr mantissa_type exponent_mask{(static_cast<mantissa_type>(1) << ebits) - 1};
 		constexpr ::std::uint_least32_t exponent_mask_u32{static_cast<::std::uint_least32_t>(exponent_mask)};
-		constexpr bool use_narrow_ascii{
+		/*
+		The ordinary reserve protocol owns the type's advertised maximum capacity,
+		so its narrow lookup may copy the complete fixed-size table entry and return
+		the shorter logical end.  A precise reservation owns exactly the measured
+		output interval: writing even a subsequently ignored byte past that interval
+		would violate the C++ object bound.  `exact_bounds` is therefore an emission-
+		storage policy, not a conversion policy.  It disables only writers whose
+		contract permits a wider store; the same decimal carrier then reaches the
+		generic renderer, whose fixed-width integer leaves and punctuation loops write
+		exactly the characters they return.  Because false is the default and every
+		predicate below is compile-time, ordinary printing retains its prior body.
+		*/
+		constexpr bool use_narrow_ascii{!exact_bounds &&
 			::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float) &&
 			rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
 			mt == ::fast_io::manipulators::floating_format::decimal && !uppercase_e && !comma && !json_float &&
@@ -8987,14 +10056,14 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 		[[maybe_unused]] auto const narrow_ascii_index{[&]() constexpr noexcept {
 			if constexpr (use_narrow_ascii)
 			{
-				return ::fast_io::details::dragonbox_narrow_runtime_index(f);
+				return (static_cast<::std::uint_least32_t>(exponent) << trait::mbits) |
+					static_cast<::std::uint_least32_t>(mantissa);
 			}
 			else
 			{
 				return ::std::uint_least32_t{};
 			}
 		}()};
-		auto [mantissa, exponent, sign] = get_punned_result(f);
 		if (exponent == exponent_mask_u32)
 		{
 			return prsv_fp_nan_impl<showpos, uppercase, nan_show_sign, nan_show_type, mbits>(iter, mantissa, sign);
@@ -9027,6 +10096,20 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
 						   ::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)
 		{
+			if constexpr (exact_bounds)
+			{
+				// DA conversion is part of the unique shortest-carrier proof and is
+				// retained.  Only its ASCII presentation leaf permits staged stores;
+				// finalizing the same carrier into the generic renderer preserves both
+				// the spelling selected by the size model and the exact object bound.
+				auto const converted{::fast_io::details::da::to_conversion_result<flt>(
+					mantissa, static_cast<::std::int_least32_t>(exponent))};
+				auto const finalized{::fast_io::details::da::trim_trailing_zeros(
+					::fast_io::details::da::finalize<flt>(converted))};
+				return ::fast_io::details::print_rsvflt_decimal_define_impl<
+					flt, comma, uppercase_e, mt, json_float>(
+						iter, finalized.m10, finalized.e10);
+			}
 			constexpr auto direct_flags{[]() constexpr noexcept {
 				auto value{::fast_io::manipulators::floating_point_default_scalar_flags};
 				value.uppercase = uppercase;
@@ -9112,10 +10195,11 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 			{
 				// Measured GCC 15 and 16 keep binary32 conversion in scalar fields,
 				// avoiding a conversion_result aggregate across the renderer boundary.
-				// GCC 16 benefits from the outlined split entry; GCC 15 keeps the fields
-				// inline.  The enclosing closed compiler/ABI predicate prevents future
-				// majors from inheriting either empirical schedule.  Both consume the same
-				// four fields and emit identical bytes.
+				// Both now use the separately audited outlined renderer: GCC 15 improved
+				// by 2.9--4.9% after the sign-carrier fix, and GCC 16 retains its prior
+				// schedule.  The enclosing compiler/ABI predicate prevents future majors
+				// from inheriting this empirical policy.  Both paths consume the same four
+				// fields and emit identical bytes.
 #if __GNUC__ == 15 || __GNUC__ == 16
 				if (exponent != 0u && mantissa != 0u)
 				{
@@ -9127,19 +10211,12 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 						(static_cast<::std::uint_least32_t>(1u) << trait::mbits)};
 					::fast_io::details::da::compute_binary32_fields(binary_significand, exponent,
 						significand, decimal_exponent, last_digit, has_last_digit);
-					// This compiler-major split preserves the audited frame and live range:
-					// GCC 16 outlines the renderer, while GCC 15 retains its more compact
-					// inline form.  Recheck spills, calls, pshufb placement and linked text
-					// before admitting another compiler major.
-#if __GNUC__ == 16
+					// The call boundary preserves the audited frame and live range on both
+					// admitted majors.  Recheck spills, calls, pshufb placement and linked
+					// text before admitting another compiler major.
 					auto const direct{::fast_io::details::da::print_ascii_shortest_split<
 						flt, direct_flags>(iter, significand, decimal_exponent, last_digit,
 							has_last_digit)};
-#else
-					auto const direct{::fast_io::details::da::print_ascii_shortest_fields<
-						flt, direct_flags>(iter, significand, decimal_exponent, last_digit,
-							has_last_digit)};
-#endif
 					if constexpr (mt != ::fast_io::manipulators::floating_format::fixed)
 					{
 						return direct;
@@ -9205,26 +10282,66 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(c
 		else
 		{
 			auto [m10, e10] =
-				[]([[maybe_unused]] flt value,
-				   [[maybe_unused]] mantissa_type binary_mantissa,
+				[]([[maybe_unused]] mantissa_type binary_mantissa,
 				   [[maybe_unused]] ::std::int_least32_t binary_exponent,
 				   [[maybe_unused]] bool negative) constexpr noexcept {
 					if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
 								  sizeof(flt) < sizeof(float))
 					{
 						return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
-							value, binary_mantissa, binary_exponent, negative);
+							binary_mantissa, binary_exponent, negative);
 					}
 					else
 					{
 						return ::fast_io::details::dragonbox_impl<flt, rounding>(
 							binary_mantissa, binary_exponent, negative);
 					}
-				}(f, mantissa, static_cast<::std::int_least32_t>(exponent), sign);
+				}(mantissa, static_cast<::std::int_least32_t>(exponent), sign);
 			return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
 				iter, m10, e10);
 		}
 	}
+}
+
+template <bool showpos, bool uppercase, bool uppercase_e, bool comma,
+	::fast_io::manipulators::floating_format mt,
+	::fast_io::manipulators::floating_rounding rounding =
+		::fast_io::manipulators::floating_rounding::nearest_to_even,
+	bool nan_show_sign = true, bool nan_show_type = false, bool json_float = false,
+	typename flt, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_define_impl(
+	char_type *iter, flt f) noexcept
+{
+	auto const [mantissa, exponent, sign]{
+		::fast_io::details::get_punned_result(f)};
+	return ::fast_io::details::print_rsvflt_fields_define_impl<
+		showpos, uppercase, uppercase_e, comma, mt, rounding, nan_show_sign,
+		nan_show_type, json_float, flt>(iter, mantissa, exponent, sign);
+}
+
+/*
+`print_rsvflt_exact_bounds_define_impl` is the private entry for the precise-
+reservation protocol.  It deliberately shares field extraction, conversion,
+rounding and presentation with `print_rsvflt_define_impl`; the sole difference
+is the compile-time storage contract passed to the final renderer.  Keeping the
+policy at this boundary prevents an exact allocation from entering an ASCII
+writer that is allowed to stage bytes beyond its logical cursor, while leaving
+the ordinary reserve entry and all of its measured specializations unchanged.
+*/
+template <bool showpos, bool uppercase, bool uppercase_e, bool comma,
+	::fast_io::manipulators::floating_format mt,
+	::fast_io::manipulators::floating_rounding rounding =
+		::fast_io::manipulators::floating_rounding::nearest_to_even,
+	bool nan_show_sign = true, bool nan_show_type = false,
+	bool json_float = false, typename flt, ::std::integral char_type>
+inline constexpr char_type *print_rsvflt_exact_bounds_define_impl(
+	char_type *iter, flt f) noexcept
+{
+	auto const [mantissa, exponent, sign]{
+		::fast_io::details::get_punned_result(f)};
+	return ::fast_io::details::print_rsvflt_fields_define_impl<
+		showpos, uppercase, uppercase_e, comma, mt, rounding, nan_show_sign,
+		nan_show_type, json_float, flt, true>(iter, mantissa, exponent, sign);
 }
 
 template <typename flt>
@@ -9327,6 +10444,36 @@ template <typename flt>
 		: 1 - static_cast<::std::int_least32_t>(exponent_bias)};
 	auto const decimal_upper_exponent{
 		::fast_io::details::mul_ln2_div_ln10_floor(binary_upper_exponent)};
+	return static_cast<::std::int_least64_t>(decimal_upper_exponent) +
+		static_cast<::std::int_least64_t>(precision) <= -2;
+}
+
+template <typename flt>
+[[nodiscard]] inline constexpr bool exact_precision_fractional_tiny_wide_binary_bound(
+	::std::uint_least32_t exponent, ::std::size_t precision) noexcept
+{
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+	if (static_cast<::std::size_t>(int32_max) < precision)
+	{
+		return false;
+	}
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	static_assert(::fast_io::details::exact_precision_is_wide_binary<flt>);
+	constexpr ::std::uint_least32_t exponent_bias{
+		(static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u};
+	::std::int_least32_t const binary_upper_exponent{
+		exponent ? static_cast<::std::int_least32_t>(exponent) -
+					   static_cast<::std::int_least32_t>(exponent_bias) + 1
+				 : 1 - static_cast<::std::int_least32_t>(exponent_bias)};
+	/*
+	 The shared binary32/binary64 logarithm helper intentionally uses a 32-bit
+	 product because those exponents are below 1100.  Binary80/binary128 reach
+	 16384, so that representation would overflow before the fixed-point shift.
+	 Widening only this proof calculation preserves the same lower logarithmic
+	 bound over the larger domain and does not change any formatting arithmetic.
+	 */
+	auto const decimal_upper_exponent{static_cast<::std::int_least32_t>(
+		(static_cast<::std::int_least64_t>(binary_upper_exponent) * 1262611) >> 22)};
 	return static_cast<::std::int_least64_t>(decimal_upper_exponent) +
 		static_cast<::std::int_least64_t>(precision) <= -2;
 }
@@ -9770,7 +10917,7 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 				::std::int_least32_t binary_exponent{};
 				if (exponent)
 				{
-					binary_mantissa |= UINT64_C(1) << trait::mbits;
+					binary_mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 					constexpr ::std::int_least32_t bias{
 						(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
 					binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
@@ -9986,6 +11133,14 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_select_impl(
 	::std::int_least32_t rounded_e10 = {}, ::std::size_t requested = {},
 	::std::size_t rounded_length = {}) noexcept
 {
+	// The direct significant-fixed writer is represented with native unsigned
+	// 128-bit intermediates, and both its policy constant and implementation are
+	// deliberately declared only inside the same capability gate.  Keep name
+	// lookup inside that gate as well: MSVC has no __int128 scalar type and must
+	// parse only the exact limb-based fallback below.  On native-u128 frontends
+	// preprocessing removes no tokens from the former hot path, so its dispatch,
+	// arithmetic and generated code remain unchanged.
+#if defined(__SIZEOF_INT128__)
 	if constexpr (::fast_io::details::binary64_significant_fixed_direct_block &&
 		::std::same_as<flt, double> &&
 		!::fast_io::details::floating_precision_is_fractional<precision_mode> &&
@@ -10014,10 +11169,223 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_select_impl(
 			}
 		}
 	}
+#endif
 	return ::fast_io::details::print_rsvflt_precision_slow_path_impl<
 		flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
 			iter, mantissa, exponent, precision, negative, rounded_m10,
 			rounded_e10, requested, rounded_length);
+}
+
+/*
+ Binary80 and binary128 do not use the binary32/binary64 shortest-carrier
+ precision dispatcher below.  Its Schubfach cache and fixed-width endpoint
+ arithmetic are deliberately specialized for the narrow exponent domains;
+ forcing a wide type through that route both wastes work and can exceed those
+ arithmetic preconditions.  A constrained overload keeps the ordinary public
+ entry byte-identical while giving wide types the complete exact algorithm and
+ the proved subnormal window.  The split is a type-domain distinction, not an
+ ISA or compiler selection.
+ */
+template <bool showpos, bool uppercase, bool uppercase_e, bool comma,
+	::fast_io::manipulators::floating_format mt,
+	::fast_io::manipulators::floating_precision precision_mode =
+		::fast_io::manipulators::floating_precision::significant,
+	::fast_io::manipulators::floating_rounding rounding =
+		::fast_io::manipulators::floating_rounding::nearest_to_even,
+	bool nan_show_sign = true, bool nan_show_type = false,
+	bool json_float = false, typename flt, ::std::integral char_type>
+	requires(::fast_io::details::exact_precision_is_wide_binary<flt>)
+inline constexpr char_type *print_rsvflt_precision_define_impl(
+	char_type *iter, flt f, ::std::size_t precision) noexcept
+{
+	if constexpr (rounding ==
+		::fast_io::manipulators::floating_rounding::current_environment)
+	{
+		switch (::fast_io::details::current_floating_rounding())
+		{
+		case ::fast_io::manipulators::floating_rounding::toward_plus_infinity:
+			return print_rsvflt_precision_define_impl<
+				showpos, uppercase, uppercase_e, comma, mt, precision_mode,
+				::fast_io::manipulators::floating_rounding::toward_plus_infinity,
+				nan_show_sign, nan_show_type, json_float>(iter, f, precision);
+		case ::fast_io::manipulators::floating_rounding::toward_minus_infinity:
+			return print_rsvflt_precision_define_impl<
+				showpos, uppercase, uppercase_e, comma, mt, precision_mode,
+				::fast_io::manipulators::floating_rounding::toward_minus_infinity,
+				nan_show_sign, nan_show_type, json_float>(iter, f, precision);
+		case ::fast_io::manipulators::floating_rounding::toward_zero:
+			return print_rsvflt_precision_define_impl<
+				showpos, uppercase, uppercase_e, comma, mt, precision_mode,
+				::fast_io::manipulators::floating_rounding::toward_zero,
+				nan_show_sign, nan_show_type, json_float>(iter, f, precision);
+		default:
+			return print_rsvflt_precision_define_impl<
+				showpos, uppercase, uppercase_e, comma, mt, precision_mode,
+				::fast_io::manipulators::floating_rounding::nearest_to_even,
+				nan_show_sign, nan_show_type, json_float>(iter, f, precision);
+		}
+	}
+	if constexpr (::fast_io::manipulators::floating_format::fixed == mt &&
+		uppercase_e)
+	{
+		return print_rsvflt_precision_define_impl<
+			showpos, uppercase, false, comma, mt, precision_mode, rounding,
+			nan_show_sign, nan_show_type, json_float>(iter, f, precision);
+	}
+	else
+	{
+		using trait = iec559_traits<flt>;
+		using mantissa_type = typename trait::mantissa_type;
+		constexpr ::std::size_t mbits{trait::mbits};
+		constexpr ::std::size_t ebits{trait::ebits};
+		constexpr mantissa_type exponent_mask{
+			(static_cast<mantissa_type>(1) << ebits) - 1};
+		constexpr ::std::uint_least32_t exponent_mask_u32{
+			static_cast<::std::uint_least32_t>(exponent_mask)};
+		auto [mantissa, exponent, sign] = get_punned_result(f);
+		if (exponent == exponent_mask_u32)
+		{
+			return prsv_fp_nan_impl<showpos, uppercase, nan_show_sign,
+				nan_show_type, mbits>(iter, mantissa, sign);
+		}
+		iter = print_rsv_fp_sign_impl<showpos>(iter, sign);
+		if (!mantissa && !exponent)
+		{
+			if constexpr (mt ==
+				::fast_io::manipulators::floating_format::scientific)
+			{
+				*iter = char_literal_v<u8'0', char_type>;
+				++iter;
+				if constexpr (::fast_io::details::
+					floating_precision_preserves_trailing_zero<precision_mode>)
+				{
+					if constexpr (::fast_io::details::
+						floating_precision_is_significant<precision_mode>)
+					{
+						precision = precision ? precision - 1u : 0u;
+					}
+					if (precision)
+					{
+						*iter = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+						++iter;
+						iter = ::fast_io::details::fill_zeros_impl(iter, precision);
+					}
+				}
+				return print_rsv_fp_e_impl<flt, uppercase_e>(iter, 0);
+			}
+			else if constexpr (::fast_io::details::
+				floating_precision_is_fractional<precision_mode>)
+			{
+				*iter = char_literal_v<u8'0', char_type>;
+				++iter;
+				if constexpr (json_float)
+				{
+					if (!precision || !::fast_io::details::
+						floating_precision_preserves_trailing_zero<precision_mode>)
+					{
+						return ::fast_io::details::
+							print_rsv_fp_append_json_float_zero<comma>(iter);
+					}
+				}
+				if constexpr (::fast_io::details::
+					floating_precision_preserves_trailing_zero<precision_mode>)
+				{
+					return ::fast_io::details::print_rsv_fp_append_point_zeros<comma>(
+						iter, precision);
+				}
+				return iter;
+			}
+			else if constexpr (precision_mode == ::fast_io::manipulators::
+				floating_precision::significant_preserve_trailing_zero)
+			{
+				*iter = char_literal_v<u8'0', char_type>;
+				++iter;
+				if constexpr (json_float)
+				{
+					if (precision <= 1u)
+					{
+						return ::fast_io::details::
+							print_rsv_fp_append_json_float_zero<comma>(iter);
+					}
+				}
+				return ::fast_io::details::print_rsv_fp_append_point_zeros<comma>(
+					iter, precision ? precision - 1u : 0u);
+			}
+			else
+			{
+				*iter = char_literal_v<u8'0', char_type>;
+				++iter;
+				if constexpr (json_float)
+				{
+					return ::fast_io::details::
+						print_rsv_fp_append_json_float_zero<comma>(iter);
+				}
+				return iter;
+			}
+		}
+		if constexpr (::fast_io::details::
+			floating_precision_is_fractional<precision_mode> &&
+			mt != ::fast_io::manipulators::floating_format::scientific)
+		{
+			/*
+			 The upper bound proves |x| < 0.1*10^-P.  Every nearest policy
+			 therefore produces zero on the requested fractional grid; a
+			 directed policy produces either zero or exactly one 10^-P quantum
+			 according to sign and direction.  The proof is independent of the
+			 significand width and avoids a full 11,000-digit expansion.
+			 */
+			if (::fast_io::details::
+				exact_precision_fractional_tiny_wide_binary_bound<flt>(
+					exponent, precision))
+			{
+				if constexpr (::fast_io::details::
+					floating_rounding_is_nearest<rounding>)
+				{
+					return ::fast_io::details::print_rsvflt_fractional_tiny_zero_impl<
+						flt, comma, uppercase_e, mt, precision_mode, json_float>(
+							iter, precision);
+				}
+				else if (!::fast_io::details::
+					floating_rounding_directed_round_up<rounding>(sign))
+				{
+					return ::fast_io::details::print_rsvflt_fractional_tiny_zero_impl<
+						flt, comma, uppercase_e, mt, precision_mode, json_float>(
+							iter, precision);
+				}
+				else
+				{
+					::fast_io::details::exact_precision_single_digit_decimal const quantum{
+						{1u}, 1u, -static_cast<::std::int_least32_t>(precision)};
+					return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
+						flt, comma, uppercase_e, mt, precision_mode, json_float>(
+							iter, quantum, precision, 0u);
+				}
+			}
+		}
+		// The interval implementation requires a native scalar capable of holding
+		// the complete binary128 significand.  Other targets retain the exact path.
+#if defined(__SIZEOF_INT128__)
+		if (!exponent && precision <= 128u)
+		{
+			if (auto window_end{
+					::fast_io::details::exact_precision_wide_subnormal_try_print<
+						flt, comma, uppercase_e, json_float>(
+							iter, mantissa, precision, sign, mt, precision_mode,
+							rounding)})
+			{
+				return window_end;
+			}
+		}
+#endif
+		/*
+		 Materializing the exact binary rational, rounding it on the requested
+		 decimal grid and invoking the shared presentation layer is complete for
+		 all four decimal formats, ten policies and four precision modes.
+		 */
+		return ::fast_io::details::print_rsvflt_exact_precision_define_impl<
+			flt, comma, uppercase_e, mt, precision_mode, rounding, json_float>(
+				iter, mantissa, exponent, precision, sign);
+	}
 }
 
 template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io::manipulators::floating_format mt,
@@ -10232,7 +11600,7 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 				::std::int_least32_t binary_exponent{};
 				if (exponent)
 				{
-					binary_mantissa |= UINT64_C(1) << trait::mbits;
+					binary_mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 					constexpr ::std::int_least32_t bias{
 						(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
 					binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
@@ -10454,6 +11822,48 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 					}
 				}
 			}
+			// MSVC x64 lacks a language-level u128 type, but P16--P17 require only
+			// the portable two-word products used by the ordinary DA conversion.
+			// Probe only after the shortest carrier and tiny-quantum exits, so P1--
+			// P15 retain their entry path.  The DA interval rejects every ambiguous
+			// half boundary before writing; the unchanged exact expansion handles
+			// those misses and all subnormals.  GCC, Clang, other ABIs and other
+			// MSVC architectures preprocess this code-generation policy away.
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
+	!defined(__SIZEOF_INT128__)
+			if constexpr (::std::same_as<flt, double> &&
+				::fast_io::details::floating_precision_is_significant<precision_mode>)
+			{
+				if (exponent && precision - 16u < 2u)
+				{
+					auto const converted{::fast_io::details::
+							binary64_scientific_precision_msvc_runtime(
+							static_cast<::std::uint_least64_t>(mantissa), exponent,
+							precision)};
+					if (converted.success)
+					{
+						auto decimal_exponent{converted.exponent + 1 -
+							static_cast<::std::int_least32_t>(precision)};
+						auto decimal_significand{converted.significand};
+						auto length{static_cast<::std::uint_least32_t>(precision)};
+						if constexpr (!::fast_io::details::
+							floating_precision_preserves_trailing_zero<precision_mode>)
+						{
+							while (decimal_significand % 10u == 0u)
+							{
+								decimal_significand /= 10u;
+								++decimal_exponent;
+								--length;
+							}
+						}
+						return ::fast_io::details::
+							print_rsvflt_decimal_with_length_define_impl<
+								flt, comma, uppercase_e, mt, json_float>(iter,
+									decimal_significand, decimal_exponent, length);
+					}
+				}
+			}
+#endif
 			// This compact binary32 scientific retry uses the same u128 exact-window
 			// infrastructure.  Targets without u128 proceed directly to the general
 			// slow path, preserving the requested rounding and character policy.

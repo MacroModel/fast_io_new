@@ -45,7 +45,7 @@ alignas(16) inline constexpr uint64_power10_table_type uint64_power10_table_stor
 inline constexpr auto const &uint64_power10_table{
 	uint64_power10_table_storage.values};
 
-static_assert(uint64_power10_table[19u] == UINT64_C(10000000000000000000));
+static_assert(uint64_power10_table[19u] == static_cast<::std::uint_least64_t>(10000000000000000000ULL));
 
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr uint64x2 umul64x64(::std::uint_least64_t x,
 																			::std::uint_least64_t y) noexcept

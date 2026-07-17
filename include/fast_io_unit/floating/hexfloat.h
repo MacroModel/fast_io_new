@@ -2113,6 +2113,29 @@ scan_hexfloat_context_eof(
 	return ::fast_io::details::scan_hexfloat_context_assign<T, flags>(state, value);
 }
 
+// Keep the structural non-type template argument behind a named variable
+// template.  MSVC 19.51 does not treat a designated initializer that directly
+// mentions function-template boolean parameters as a constant expression in a
+// return type, although the resulting scalar_flags object is structural.  The
+// existing cache form is accepted by all supported frontends and changes only
+// template spelling: it starts with the ordinary hexfloat policy and then sets
+// the two scan-only bits, so every flag has the same value as the former direct
+// initializer.
+inline constexpr ::fast_io::manipulators::scalar_flags set_hexfloat_scan_flags(
+	::fast_io::manipulators::scalar_flags flags, bool noskipws,
+	bool allow_leading_plus) noexcept
+{
+	flags.noskipws = noskipws;
+	flags.allow_leading_plus = allow_leading_plus;
+	return flags;
+}
+
+template <bool noskipws, bool prefix, bool allow_leading_plus>
+inline constexpr ::fast_io::manipulators::scalar_flags hexfloat_scan_mani_flags_cache{
+	::fast_io::details::set_hexfloat_scan_flags(
+		::fast_io::details::hexafloat_mani_flags_cache<false, false, prefix>,
+		noskipws, allow_leading_plus)};
+
 } // namespace details
 
 namespace manipulators
@@ -2120,12 +2143,10 @@ namespace manipulators
 
 template <bool noskipws = false, bool prefix = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_floating_point scalar_type>
-inline constexpr scalar_manip_t<::fast_io::manipulators::scalar_flags{.showbase = prefix,
-																	  .noskipws = noskipws,
-																	  .floating = ::fast_io::manipulators::floating_format::hexfloat,
-																	  .allow_leading_plus = allow_leading_plus},
+inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
+									noskipws, prefix, allow_leading_plus>,
 								scalar_type &>
-	hexfloat_get(scalar_type &t) noexcept
+hexfloat_get(scalar_type &t) noexcept
 {
 	return {t};
 }
@@ -2133,26 +2154,21 @@ inline constexpr scalar_manip_t<::fast_io::manipulators::scalar_flags{.showbase 
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false, bool prefix = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
-									::fast_io::manipulators::scalar_flags{
-										.showbase = prefix,
-										.noskipws = noskipws,
-										.floating = ::fast_io::manipulators::floating_format::hexfloat,
-										.allow_leading_plus = allow_leading_plus},
+									::fast_io::details::hexfloat_scan_mani_flags_cache<
+										noskipws, prefix, allow_leading_plus>,
 									::fast_io::manipulators::floating_precision::significant, rounding_policy>,
 								scalar_type &>
-	hexfloat_get(scalar_type &t) noexcept
+hexfloat_get(scalar_type &t) noexcept
 {
 	return {t};
 }
 
 template <bool noskipws = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_floating_point scalar_type>
-inline constexpr scalar_manip_t<::fast_io::manipulators::scalar_flags{.showbase = true,
-																	  .noskipws = noskipws,
-																	  .floating = ::fast_io::manipulators::floating_format::hexfloat,
-																	  .allow_leading_plus = allow_leading_plus},
+inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
+									noskipws, true, allow_leading_plus>,
 								scalar_type &>
-	hexfloat0x_get(scalar_type &t) noexcept
+hexfloat0x_get(scalar_type &t) noexcept
 {
 	return {t};
 }
@@ -2160,14 +2176,11 @@ inline constexpr scalar_manip_t<::fast_io::manipulators::scalar_flags{.showbase 
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
-									::fast_io::manipulators::scalar_flags{
-										.showbase = true,
-										.noskipws = noskipws,
-										.floating = ::fast_io::manipulators::floating_format::hexfloat,
-										.allow_leading_plus = allow_leading_plus},
+									::fast_io::details::hexfloat_scan_mani_flags_cache<
+										noskipws, true, allow_leading_plus>,
 									::fast_io::manipulators::floating_precision::significant, rounding_policy>,
 								scalar_type &>
-	hexfloat0x_get(scalar_type &t) noexcept
+hexfloat0x_get(scalar_type &t) noexcept
 {
 	return {t};
 }

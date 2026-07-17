@@ -292,7 +292,11 @@ inline constexpr int my_countr_zero_unchecked(T x) noexcept
 		{
 			return __builtin_ctzll(low);
 		}
-		unsigned long long high = x >> Nd_ull;
+		// Removing the low Nd_ull bits leaves at most Nd-Nd_ull bits.
+		// The enclosing static_assert proves that remainder fits exactly in the
+		// builtin's unsigned-long-long operand; state the narrowing explicitly so
+		// -Wconversion need not infer the same range through a dependent type.
+		unsigned long long high = static_cast<unsigned long long>(x >> Nd_ull);
 		return __builtin_ctzll(high) + Nd_ull;
 	}
 #else
@@ -983,12 +987,37 @@ inline constexpr char_type *prsv_fp_dece0(char_type *iter) noexcept
 	}
 }
 
+// The extracted sign is exactly zero or one; changing its storage carrier does
+// not change its logical domain.  For float and double, GCC 14--16 on Linux
+// System V x86-64 LP64 otherwise materialize and later reload the tail padding
+// of this returned aggregate in the scalar DA entry.  A 32-bit carrier occupies
+// that existing padding without changing sizeof or alignment and removes those
+// stores.  Every other floating type retains bool because no equivalent
+// code-generation evidence exists for its representation or conversion path.
+// Paired current/candidate runs on i9-14900HX improved GCC 14 binary64 by about
+// 4--5% and GCC 15/16 binary32/binary64 by 19--45%; GCC 13, Clang 23 and the
+// other ABIs did not show the same lowering defect and retain bool.  SSE4.1 and
+// SSSE3 close the policy to the audited DA backend rather than extending a
+// compiler-code-generation result to an unmeasured x86 baseline ISA.
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
+	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16
+template <typename flt>
+using punning_sign_type = ::std::conditional_t<
+	::std::same_as<::std::remove_cv_t<flt>, float> ||
+	::std::same_as<::std::remove_cv_t<flt>, double>,
+	::std::uint_least32_t, bool>;
+#else
+template <typename>
+using punning_sign_type = bool;
+#endif
+
 template <typename flt>
 struct punning_result
 {
 	typename iec559_traits<flt>::mantissa_type mantissa;
 	::std::uint_least32_t exponent;
-	bool sign;
+	::fast_io::details::punning_sign_type<flt> sign;
 };
 
 struct
@@ -1044,6 +1073,12 @@ inline constexpr punning_result<flt> get_punned_result(flt f) noexcept
 	constexpr mantissa_type mantissa_mask{(static_cast<mantissa_type>(1) << mbits) - 1};
 	constexpr mantissa_type exponent_mask{(static_cast<mantissa_type>(1) << ebits) - 1};
 
+	// Native MSVC in C++20 mode provides `__builtin_bit_cast` with the
+	// representation-preserving contract advertised by `__cpp_lib_bit_cast`, but
+	// does not consistently expose it through the `__has_builtin` probe used by
+	// FAST_IO_HAS_BUILTIN.  Clang-cl takes the ordinary capability branch when it
+	// advertises the builtin.  The fallback has identical bits; this split avoids
+	// inferring any ABI or arithmetic difference from compiler identity.
 	auto unwrap =
 #if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
 		__builtin_bit_cast(mantissa_type, f)
@@ -1074,6 +1109,10 @@ inline constexpr punning_result<flt> get_punned_result(flt f) noexcept
 {
 	static_assert(sizeof(flt) >= sizeof(::std::uint_least64_t) + sizeof(::std::uint_least16_t));
 	using storage_type = float80_storage<sizeof(flt) - sizeof(::std::uint_least64_t) - sizeof(::std::uint_least16_t)>;
+	// Native MSVC's C++20 feature macro is the audited capability fallback for
+	// `__builtin_bit_cast` when `__has_builtin` is unavailable.  Both selected
+	// operations copy the complete object representation into the same storage;
+	// the frontend branch changes neither the binary80 fields nor padding bytes.
 	auto unwrap =
 #if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
 		__builtin_bit_cast(storage_type, f)
@@ -1101,6 +1140,10 @@ inline constexpr punning_result<__float80> get_punned_result<__float80>(__float8
 {
 	static_assert(sizeof(__float80) >= sizeof(::std::uint_least64_t) + sizeof(::std::uint_least16_t));
 	using storage_type = float80_storage<sizeof(__float80) - sizeof(::std::uint_least64_t) - sizeof(::std::uint_least16_t)>;
+	// This repeats the long-double capability boundary deliberately: native MSVC
+	// may omit `__has_builtin` while providing the C++20 bit-cast intrinsic.
+	// Every branch preserves all bytes before the common binary80 field decode,
+	// so compiler selection cannot affect sign, exponent or significand semantics.
 	auto unwrap =
 #if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
 		__builtin_bit_cast(storage_type, f)

@@ -265,7 +265,7 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 						  sizeof(flt) < sizeof(float))
 			{
 				return ::fast_io::details::dragonbox_impl_narrow_hybrid<flt, rounding>(
-					value, mantissa, static_cast<::std::int_least32_t>(exponent), negative);
+					mantissa, static_cast<::std::int_least32_t>(exponent), negative);
 			}
 			else
 			{
@@ -305,6 +305,50 @@ template <bool showpos, bool nan_show_sign, bool nan_show_type,
 	return sign_size +
 		   floating_precise_shortest_finite_nonzero_size<flt, format, rounding, json_float>(
 			   value, mantissa, exponent, negative);
+}
+
+/*
+Some ABIs must transport a narrow floating value as integer IEC 60559 fields:
+forming a native by-value argument can itself narrow a subnormal before either
+the size model or renderer observes it.  This precise-only entry performs the
+same mutually exclusive special/sign/zero classification as
+`floating_precise_shortest_size`, but starts from the already preserved fields.
+The finite conversion routines below consume those fields directly; their
+`value` parameter exists only to keep the current-environment recursion typed,
+and precise support excludes that mutable policy for decimal output.
+*/
+template <bool showpos, bool nan_show_sign, bool nan_show_type,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_rounding rounding, bool json_float,
+	typename flt>
+[[nodiscard]] inline constexpr ::std::size_t
+floating_precise_shortest_fields_size(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr mantissa_type exponent_mask{
+		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u};
+	if (exponent == static_cast<::std::uint_least32_t>(exponent_mask))
+	{
+		return floating_precise_special_size<showpos, nan_show_sign,
+			nan_show_type, trait::mbits>(mantissa, negative);
+	}
+	auto const sign_size{floating_precise_sign_size<showpos>(negative)};
+	if (!mantissa && !exponent)
+	{
+		if constexpr (format ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			return sign_size + 4u;
+		}
+		return sign_size + 1u + (json_float ? 2u : 0u);
+	}
+	return sign_size +
+		floating_precise_shortest_finite_nonzero_size<
+			flt, format, rounding, json_float>(
+				flt{}, mantissa, exponent, negative);
 }
 
 /*
@@ -371,6 +415,83 @@ floating_precise_make_rounded_metadata(decimal_type const &decimal) noexcept
 	return {floating_precise_make_decimal_metadata<true>(decimal),
 			floating_precise_make_decimal_metadata<false>(decimal)};
 }
+
+template <typename decimal_type>
+[[nodiscard]] inline constexpr floating_precise_rounded_metadata
+floating_precise_make_fractional_rounded_metadata(
+	decimal_type const &decimal, ::std::size_t precision,
+	bool rounded) noexcept
+{
+	auto result{floating_precise_make_rounded_metadata(decimal)};
+	if (rounded)
+	{
+		// The emitter restores zeroes omitted when a carry canonicalizes a
+		// coefficient rounded on the 10^-P grid.  Metadata has no digit array, so
+		// represent that same virtual coefficient by its width and final exponent.
+		// A performed fractional rounding implies P fits int_least32_t; requests
+		// beyond that bound are finer than every finite expansion and never enter
+		// this branch.
+		result.raw.size = ::fast_io::details::
+			exact_precision_fractional_general_rounded_virtual_size(
+				decimal, precision);
+		result.raw.exponent = -static_cast<::std::int_least32_t>(precision);
+	}
+	return result;
+}
+
+/*
+The wide subnormal emitter has already proved that at most P+1 decimal digits
+plus one sticky bit determine every P<=128 result.  Precise reservation needs
+only the selected coefficient's nonzero state, width and exponent, so it must
+not reconstruct the complete binary80/binary128 expansion merely to discard
+all interior digits.  This adapter deliberately calls the same runtime-policy
+window as emission.  The callee performs the unique rounding and trailing-zero
+canonicalization; `floating_precise_make_decimal_metadata<true>` then projects
+that already-selected decimal without applying either operation a second time.
+
+Keeping format, precision mode and rounding as data preserves one arithmetic
+body per floating representation instead of cloning it across the 4 x 4 x 10
+presentation matrix.  The capability guard is arithmetic-only: targets without
+a native scalar uint128 continue through the complete exact fallback below.
+*/
+#if defined(__SIZEOF_INT128__)
+struct floating_precise_wide_window_metadata_result
+{
+	floating_precise_decimal_metadata decimal;
+	::std::size_t significant;
+	bool success;
+};
+
+// `noipa` prevents policy clones where available; `noinline` is the
+// placement-only fallback and leaves the numeric contract unchanged.
+template <typename flt>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+[[nodiscard]] inline constexpr floating_precise_wide_window_metadata_result
+floating_precise_prepare_wide_subnormal_metadata(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::size_t precision, bool negative,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	::fast_io::manipulators::floating_rounding rounding) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	static_assert(::fast_io::details::exact_precision_is_wide_binary<flt>);
+	::fast_io::details::exact_precision_compact_window_decimal decimal{};
+	::std::size_t significant{};
+	if (!::fast_io::details::exact_precision_wide_subnormal_prepare(
+			decimal.digits, decimal.size, decimal.exponent, significant,
+			static_cast<__uint128_t>(mantissa), trait::mbits, precision, format,
+			precision_mode, rounding, negative))
+	{
+		return {};
+	}
+	return {floating_precise_make_decimal_metadata<true>(decimal), significant, true};
+}
+#endif
 
 template <bool json_float, typename decimal_type>
 [[nodiscard]] inline constexpr ::std::size_t floating_precise_exact_fixed_size(
@@ -541,6 +662,186 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 	return floating_precise_exact_scientific_size<flt>(
 		decimal, virtual_size - 1u, preserve);
 }
+
+// Every helper in this block consumes the native-u128 wide window.  The gate is
+// an arithmetic representation boundary; no ISA performance policy is implied.
+#if defined(__SIZEOF_INT128__)
+struct floating_precise_wide_window_size_result
+{
+	::std::size_t size;
+	bool success;
+};
+
+[[nodiscard]] inline constexpr bool floating_precise_runtime_rounding_is_nearest(
+	::fast_io::manipulators::floating_rounding rounding) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	return rounding == nearest_to_even || rounding == nearest_to_odd ||
+		rounding == nearest_toward_plus_infinity ||
+		rounding == nearest_toward_minus_infinity ||
+		rounding == nearest_toward_zero || rounding == nearest_away_from_zero;
+}
+
+[[nodiscard]] inline constexpr bool floating_precise_runtime_directed_round_up(
+	::fast_io::manipulators::floating_rounding rounding, bool negative) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	switch (rounding)
+	{
+	case toward_plus_infinity:
+		return !negative;
+	case toward_minus_infinity:
+		return negative;
+	case away_from_zero:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+This is the size-only counterpart of `exact_precision_wide_runtime_present`.
+The same runtime policy representation that shares numeric window generation
+must also share layout selection; otherwise each of 320 compile-time policies
+would clone the fixed/scientific decision around a common arithmetic call.
+Only the three observable metadata fields participate, and every inequality is
+identical to `floating_precise_rounded_precision_size` above.
+*/
+template <typename flt, bool json_float>
+[[nodiscard]] inline constexpr ::std::size_t
+floating_precise_wide_runtime_rounded_size(
+	floating_precise_decimal_metadata const &decimal, ::std::size_t precision,
+	::std::size_t significant,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode) noexcept
+{
+	using format_enum = ::fast_io::manipulators::floating_format;
+	using precision_enum = ::fast_io::manipulators::floating_precision;
+	auto const fractional{precision_mode == precision_enum::fractional ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	auto const preserve{
+		precision_mode == precision_enum::significant_preserve_trailing_zero ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	if (format == format_enum::scientific)
+	{
+		auto const fractional_digits{fractional ? precision : significant - 1u};
+		return floating_precise_exact_scientific_size<flt>(
+			decimal, fractional_digits, preserve);
+	}
+	auto virtual_size{decimal.size};
+	if (preserve && !fractional && virtual_size < significant)
+	{
+		virtual_size = significant;
+	}
+	if (format == format_enum::fixed ||
+		(fractional && format == format_enum::decimal))
+	{
+		return floating_precise_exact_fixed_size<json_float>(
+			decimal, virtual_size, fractional && preserve, precision);
+	}
+	auto const virtual_padding{virtual_size - decimal.size};
+	bool fixed{};
+	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
+	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	{
+		auto const virtual_exponent{
+			static_cast<::std::int_least64_t>(decimal.exponent) -
+			static_cast<::std::int_least64_t>(virtual_padding)};
+		fixed = -5 < virtual_exponent && virtual_exponent < 7;
+	}
+	if (format == format_enum::decimal)
+	{
+		auto const rounded_exponent{
+			decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+		::std::size_t fixed_length{};
+		if (0 <= rounded_exponent)
+		{
+			auto const integer_digits{
+				static_cast<::std::size_t>(rounded_exponent) + 1u};
+			if (virtual_size <= static_cast<::std::size_t>(rounded_exponent))
+			{
+				fixed_length = integer_digits;
+			}
+			else
+			{
+				fixed_length = ::fast_io::details::exact_precision_saturating_add(
+					virtual_size, virtual_size == integer_digits ? 1u : 2u);
+			}
+		}
+		else
+		{
+			fixed_length = ::fast_io::details::exact_precision_saturating_add(
+				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
+		}
+		auto const scientific_length{
+			::fast_io::details::exact_precision_saturating_add(
+				virtual_size, virtual_size == 1u ? 3u : 5u)};
+		fixed = scientific_length >= fixed_length;
+	}
+	if (fixed)
+	{
+		return floating_precise_exact_fixed_size<json_float>(
+			decimal, virtual_size, fractional && preserve, precision);
+	}
+	return floating_precise_exact_scientific_size<flt>(
+		decimal, virtual_size - 1u, preserve);
+}
+
+/*
+Tiny fractional values and ordinary subnormal windows are combined behind one
+outlined size operation.  Consequently a caller policy contributes only a
+call with enum data.  A false result has one meaning: the bounded proof did not
+cover the value/grid, so the caller must execute the complete exact fallback.
+*/
+template <typename flt, bool json_float>
+#if __has_cpp_attribute(gnu::noipa)
+[[gnu::noipa]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+[[nodiscard]] inline constexpr floating_precise_wide_window_size_result
+floating_precise_wide_subnormal_size(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::size_t precision, bool negative,
+	::fast_io::manipulators::floating_format format,
+	::fast_io::manipulators::floating_precision precision_mode,
+	::fast_io::manipulators::floating_rounding rounding) noexcept
+{
+	using format_enum = ::fast_io::manipulators::floating_format;
+	using precision_enum = ::fast_io::manipulators::floating_precision;
+	static_assert(::fast_io::details::exact_precision_is_wide_binary<flt>);
+	auto const fractional{precision_mode == precision_enum::fractional ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	auto const preserve{
+		precision_mode == precision_enum::significant_preserve_trailing_zero ||
+		precision_mode == precision_enum::fractional_preserve_trailing_zero};
+	if (fractional && format != format_enum::scientific &&
+		::fast_io::details::exact_precision_fractional_tiny_wide_binary_bound<flt>(
+			0u, precision))
+	{
+		auto const digit{static_cast<unsigned char>(
+			!floating_precise_runtime_rounding_is_nearest(rounding) &&
+			floating_precise_runtime_directed_round_up(rounding, negative))};
+		floating_precise_decimal_metadata const decimal{
+			{digit}, 1u,
+			digit || preserve ? -static_cast<::std::int_least32_t>(precision) : 0};
+		return {floating_precise_wide_runtime_rounded_size<flt, json_float>(
+			decimal, precision, 0u, format, precision_mode), true};
+	}
+	if (128u < precision)
+	{
+		return {};
+	}
+	auto const window{floating_precise_prepare_wide_subnormal_metadata<flt>(
+		mantissa, precision, negative, format, precision_mode, rounding)};
+	if (!window.success)
+	{
+		return {};
+	}
+	return {floating_precise_wide_runtime_rounded_size<flt, json_float>(
+		window.decimal, precision, window.significant, format, precision_mode), true};
+}
+#endif
 
 template <typename flt, bool json_float>
 [[nodiscard]] inline constexpr ::std::size_t floating_precise_carrier_fixed_precision_size(
@@ -717,22 +1018,29 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 	}
 }
 
-// The compact exact window is available only when the implementation has the
-// native unsigned 128-bit representation used by its proved 64-by-128 products.
-// This is an arithmetic representation boundary, not an ISA-specific length
-// policy: targets without that type retain the complete exact-decimal fallback.
-#if defined(__SIZEOF_INT128__)
+// P16--P19 metadata needs only the already rounded DA coefficient, not its
+// character spelling.  Native-u128 targets can instantiate all four proved
+// widths.  MSVC x64 has the same audited two-word products but no language-level
+// u128 type; it reuses the single outlined P16--P17 selector shared with the
+// emitter.  No other no-u128 target is inferred to have that arithmetic ABI.
+#if defined(__SIZEOF_INT128__) || \
+	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__))
 [[nodiscard]] inline constexpr floating_precise_decimal_metadata_result
 floating_precise_try_binary64_narrow_da_metadata(
 	::std::uint_least64_t mantissa, ::std::uint_least32_t exponent,
 	::std::size_t significant) noexcept
 {
-	if (!exponent || 3u < significant - 16u)
+	if (!exponent || significant < 16u || 19u < significant)
 	{
 		return {};
 	}
-	constexpr ::std::uint_least64_t implicit_bit{UINT64_C(1) << 52u};
 	::fast_io::details::da::binary64_scientific_precision_result converted{};
+	// Native-u128 targets instantiate the complete P16--P19 switch.  The
+	// alternative branch below is exactly the closed MSVC-x64 P16--P17 policy
+	// documented by the enclosing capability gate.
+#if defined(__SIZEOF_INT128__)
+	constexpr ::std::uint_least64_t implicit_bit{
+		static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	switch (significant)
 	{
 	case 16u:
@@ -752,6 +1060,17 @@ floating_precise_try_binary64_narrow_da_metadata(
 			mantissa | implicit_bit, exponent);
 		break;
 	}
+#else
+	// MSVC P18--P19 failed the independent byte-stream differential proof.  The
+	// closed P16--P17 selector therefore rejects them before any metadata can be
+	// consumed, leaving the complete limb expansion authoritative.
+	if (17u < significant)
+	{
+		return {};
+	}
+	converted = ::fast_io::details::binary64_scientific_precision_msvc_runtime(
+		mantissa, exponent, significant);
+#endif
 	if (!converted.success)
 	{
 		return {};
@@ -773,7 +1092,12 @@ floating_precise_try_binary64_narrow_da_metadata(
 		{1u}, digits, converted.exponent + 1 - static_cast<::std::int_least32_t>(digits)};
 	return {decimal, true};
 }
+#endif
 
+// Every helper below this point consumes native-u128 exact-window state.  This
+// gate is a representation requirement; no compiler or ISA performance policy
+// is encoded in the precise-size presentation layer.
+#if defined(__SIZEOF_INT128__)
 [[nodiscard]] inline constexpr floating_precise_decimal_metadata_result
 floating_precise_try_binary64_wide_da_metadata(
 	::std::uint_least64_t mantissa, ::std::uint_least32_t exponent,
@@ -813,7 +1137,7 @@ floating_precise_try_exact_identity_metadata(
 	::std::int_least32_t binary_exponent{};
 	if (exponent)
 	{
-		binary_mantissa |= UINT64_C(1) << trait::mbits;
+		binary_mantissa |= static_cast<::std::uint_least64_t>(1ULL) << trait::mbits;
 		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
 						  static_cast<::std::int_least32_t>(trait::mbits);
 	}
@@ -1049,12 +1373,17 @@ floating_precise_prepare_exact_window_metadata(
 				{
 					::fast_io::details::exact_precision_trim(generated.decimal);
 				}
-				if (static_cast<::std::int_least32_t>(generated.decimal.size) > keep)
+				auto const rounded{
+					static_cast<::std::int_least32_t>(generated.decimal.size) > keep};
+				if (rounded)
 				{
 					::fast_io::details::exact_precision_window_round<rounding>(
 						generated.decimal, keep, negative, generated.tail_nonzero);
 				}
-				return {floating_precise_make_rounded_metadata(generated.decimal), true};
+				return {fractional_grid
+					? floating_precise_make_fractional_rounded_metadata(
+						generated.decimal, precision, rounded)
+					: floating_precise_make_rounded_metadata(generated.decimal), true};
 			}
 		}
 		auto generated{::fast_io::details::exact_precision_window_from_binary<flt>(
@@ -1072,12 +1401,17 @@ floating_precise_prepare_exact_window_metadata(
 		{
 			::fast_io::details::exact_precision_trim(generated.decimal);
 		}
-		if (static_cast<::std::int_least32_t>(generated.decimal.size) > keep)
+		auto const rounded{
+			static_cast<::std::int_least32_t>(generated.decimal.size) > keep};
+		if (rounded)
 		{
 			::fast_io::details::exact_precision_window_round<rounding>(
 				generated.decimal, keep, negative, generated.tail_nonzero);
 		}
-		return {floating_precise_make_rounded_metadata(generated.decimal), true};
+		return {fractional_grid
+			? floating_precise_make_fractional_rounded_metadata(
+				generated.decimal, precision, rounded)
+			: floating_precise_make_rounded_metadata(generated.decimal), true};
 	}
 	return {};
 }
@@ -1124,8 +1458,12 @@ floating_precise_prepare_full_exact_metadata(
 					   : static_cast<::std::int_least32_t>(requested_keep);
 		}
 	}
+	auto const rounded{static_cast<::std::int_least32_t>(decimal.size) > keep};
 	::fast_io::details::exact_precision_round<rounding>(decimal, keep, negative);
-	return floating_precise_make_rounded_metadata(decimal);
+	return fractional_grid
+		? floating_precise_make_fractional_rounded_metadata(
+			decimal, precision, rounded)
+		: floating_precise_make_rounded_metadata(decimal);
 }
 
 template <typename flt>
@@ -1272,9 +1610,11 @@ floating_precise_prepare_precision_metadata(
 			}
 		}
 
-		// Native u128 is the exact-window arithmetic capability gate.  Without
-		// it, the shared full expansion below remains authoritative.
-#if defined(__SIZEOF_INT128__)
+		// P16--P17 on MSVC x64 shares the proved outlined carrier used by emission;
+		// native-u128 targets additionally support P18--P33.  Every miss is merely
+		// an optimization rejection and falls through to exact materialization.
+#if defined(__SIZEOF_INT128__) || \
+	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__))
 		if constexpr (::std::same_as<flt, double>)
 		{
 			if (!fractional_grid)
@@ -1285,12 +1625,16 @@ floating_precise_prepare_precision_metadata(
 				{
 					return {narrow_da.decimal, narrow_da.decimal};
 				}
+				// The P20--P33 coefficient type is native u128; MSVC must not
+				// name or parse this helper after its independent P16--P17 probe.
+#if defined(__SIZEOF_INT128__)
 				auto const wide_da{floating_precise_try_binary64_wide_da_metadata(
 					static_cast<::std::uint_least64_t>(mantissa), exponent, significant)};
 				if (wide_da.success)
 				{
 					return {wide_da.decimal, wide_da.decimal};
 				}
+#endif
 			}
 		}
 #endif
@@ -1375,12 +1719,46 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 		auto const fixed_keep{significant > static_cast<::std::size_t>(int32_max)
 								  ? int32_max
 								  : static_cast<::std::int_least32_t>(significant)};
-		auto const prepared{floating_precise_prepare_precision_metadata<flt, rounding>(
-			mantissa, exponent, precision, significant, fixed_keep,
-			fractional_grid, negative)};
-		auto const decimal{preserve ? prepared.raw : prepared.trimmed};
-		return floating_precise_rounded_precision_size<flt, format, precision_mode, json_float>(
-			decimal, precision, significant);
+		if constexpr (::fast_io::details::exact_precision_is_wide_binary<flt>)
+		{
+			/*
+			Wide types intentionally bypass the binary32/binary64 Schubfach
+			carrier in `floating_precise_prepare_precision_metadata`: its cache
+			and endpoint arithmetic are proved only for the narrow exponent
+			domain.  A subnormal window success returns exactly the decimal used
+			by emission.  A capacity/grid rejection and every normal value retain
+			the complete exact expansion, so the optimization is a pure fast-path
+			refinement with an authoritative fallback.  Frontends without a native
+			scalar uint128 do not name the window helpers and enter that fallback
+			directly.
+			*/
+#if defined(__SIZEOF_INT128__)
+			if (!exponent)
+			{
+				auto const window{floating_precise_wide_subnormal_size<flt, json_float>(
+					mantissa, precision, negative, format, precision_mode,
+					rounding)};
+				if (window.success)
+				{
+					return window.size;
+				}
+			}
+#endif
+			auto const prepared{floating_precise_prepare_full_exact_metadata<flt, rounding>(
+				mantissa, exponent, precision, fixed_keep, fractional_grid, negative)};
+			auto const decimal{preserve ? prepared.raw : prepared.trimmed};
+			return floating_precise_rounded_precision_size<flt, format, precision_mode,
+				json_float>(decimal, precision, significant);
+		}
+		else
+		{
+			auto const prepared{floating_precise_prepare_precision_metadata<flt, rounding>(
+				mantissa, exponent, precision, significant, fixed_keep,
+				fractional_grid, negative)};
+			auto const decimal{preserve ? prepared.raw : prepared.trimmed};
+			return floating_precise_rounded_precision_size<flt, format, precision_mode,
+				json_float>(decimal, precision, significant);
+		}
 	}
 	else if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
 	{
@@ -1792,10 +2170,11 @@ namespace details
 // A precise CPO must be callable for every type admitted by its concept;
 // leaving an unsupported decimal type to a function-body static_assert would
 // make requires-expressions report a false capability.  Hexadecimal emission
-// works directly from every available IEC 60559 field decomposition.  Decimal
-// emission is precise only for the same domains as the existing formatter:
-// direct binary32/binary64, an exactly widened narrow type, or the ABI where
-// long double is representation-identical to double.
+// works directly from every available IEC 60559 field decomposition.  Scalar
+// decimal emission remains limited to the proved shortest domains.  Runtime-
+// precision decimal emission additionally admits the strict binary80/binary128
+// representation gate, where both size and output use the same exact decimal
+// expansion and never narrow the value to binary64.
 //
 // A precise reservation is a two-call protocol: size is observed before the
 // ordinary writer is invoked.  `current_environment` would independently read
@@ -1805,15 +2184,29 @@ namespace details
 // does not consult rounding and remains safe with that otherwise inert flag.
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 inline constexpr bool floating_precise_scalar_supported{
-	::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	::fast_io::details::print_floating_scalar_supported<flags, flt> &&
 	(flags.floating == ::fast_io::manipulators::floating_format::hexfloat ||
 	 flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)};
 
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 inline constexpr bool floating_precise_precision_supported{
-	::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	::fast_io::details::print_floating_precision_supported<flags, flt> &&
 	::fast_io::details::print_floating_precision_valid<flags.precision> &&
 	flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment};
+
+/*
+The x86 Clang bfloat16 workaround must cover the public CPO boundary itself.
+Copying a scalar manipulator by value can rematerialize its stored raw-bit-one
+subnormal with VCVTNEPS2BF16 before the callee can extract integer fields; once
+that instruction has produced zero, the later field transport cannot recover
+the original value.  Borrow only the type/compiler domain already selected by
+print_floating_decimal_requires_integer_transport.  Every other floating type
+retains the established by-value ABI and therefore its measured code shape.
+*/
+template <typename manipulator, typename flt>
+using floating_precise_parameter_t = ::std::conditional_t<
+	::fast_io::details::print_floating_decimal_requires_integer_transport<flt>,
+	manipulator const &, manipulator>;
 
 } // namespace details
 
@@ -1822,7 +2215,8 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 	requires ::fast_io::details::floating_precise_scalar_supported<flags, flt>
 [[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
 	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, flt>>,
-	::fast_io::manipulators::scalar_manip_t<flags, flt> value) noexcept
+	::fast_io::details::floating_precise_parameter_t<
+		::fast_io::manipulators::scalar_manip_t<flags, flt>, flt> value) noexcept
 {
 	static_assert(flags.floating == ::fast_io::manipulators::floating_format::general ||
 				  flags.floating == ::fast_io::manipulators::floating_format::scientific ||
@@ -1845,6 +2239,17 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 			flags.showpos, flags.nan_show_sign, flags.nan_show_type, flags.floating,
 			flags.rounding, flags.json_float>(static_cast<double>(value.reference));
 	}
+	else if constexpr (::fast_io::details::
+		print_floating_decimal_requires_integer_transport<flt>)
+	{
+		using floating_type = ::std::remove_cvref_t<flt>;
+		auto const [mantissa, exponent, sign]{
+			::fast_io::details::get_punned_result(value.reference)};
+		return ::fast_io::details::floating_precise_shortest_fields_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			flags.floating, flags.rounding, flags.json_float, floating_type>(
+				mantissa, exponent, sign);
+	}
 	else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
 	{
 		return ::fast_io::details::floating_precise_shortest_size<
@@ -1854,7 +2259,7 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 	else
 	{
 		static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
-					  "decimal precise sizing requires the same directly supported IEC 60559 type as decimal emission");
+					  "decimal shortest sizing requires the same directly supported IEC 60559 type as decimal emission");
 		return ::fast_io::details::floating_precise_shortest_size<
 			flags.showpos, flags.nan_show_sign, flags.nan_show_type, flags.floating,
 			flags.rounding, flags.json_float>(value.reference);
@@ -1867,21 +2272,69 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 inline constexpr char_type *print_reserve_precise_define(
 	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, flt>> tag,
 	char_type *iter, ::std::size_t precise_size,
-	::fast_io::manipulators::scalar_manip_t<flags, flt> value) noexcept
+	::fast_io::details::floating_precise_parameter_t<
+		::fast_io::manipulators::scalar_manip_t<flags, flt>, flt> value) noexcept
 {
 	/*
-	The precise counter and the ordinary emitter consume the same punned value,
-	rounding policy and presentation predicates.  For finite decimal values they
-	share the unique DA/exact rounded carrier; for hexadecimal values they share
-	the unique IEC 60559 field decomposition.  The layout lemmas above count each
-	mutually exclusive writer branch, so the ordinary cursor is exactly
-	iter + precise_size.  Returning that cursor (rather than discarding it as the
-	integer fixed-width protocol can) keeps the contract mechanically checkable by
-	every differential test and by output-core exact-fit validation.  `precise_size`
-	is therefore proof input, not a second capacity bound or a reason to reformat.
+	The measured length proves the logical cursor but does not grant storage after
+	that cursor.  Ordinary reserve writers may exploit their advertised maximum
+	capacity for a fixed-width ASCII staging store; a precise allocation may not.
+	Decimal binary16/bfloat16/binary32/binary64 values therefore use the private
+	exact-bounds renderer, which preserves the same punned fields, rounded carrier
+	and presentation grammar while selecting only exact-store leaves.  The ABI
+	normalization order below is intentionally identical to `print_reserve_define`:
+	MSVC long double is binary64, a narrow exact type widens to binary32, and the
+	x86 Clang bfloat16 workaround transports integer fields without a lossy native
+	argument.  Hexadecimal scalar rendering already emits each returned code unit
+	individually or through a fixed-width write wholly inside the final spelling,
+	so it retains its ordinary semantic entry.  Wide decimal scalar shortest is
+	not an advertised precise capability; wide runtime-precision formatting is a
+	separate protocol audited below.
 	*/
 	(void)precise_size;
-	return print_reserve_define(tag, iter, value);
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return print_reserve_define(tag, iter, value);
+	}
+	else if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> &&
+		sizeof(flt) == sizeof(double))
+	{
+		return ::fast_io::details::print_rsvflt_exact_bounds_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float>(
+				iter, static_cast<double>(value.reference));
+	}
+	else if constexpr (::fast_io::details::
+		print_floating_decimal_requires_integer_transport<flt>)
+	{
+		using floating_type = ::std::remove_cvref_t<flt>;
+		auto const [mantissa, exponent, sign]{
+			::fast_io::details::get_punned_result(value.reference)};
+		return ::fast_io::details::print_rsvflt_fields_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float, floating_type, true>(
+				iter, mantissa, exponent, sign);
+	}
+	else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
+	{
+		return ::fast_io::details::print_rsvflt_exact_bounds_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float>(
+				iter, static_cast<float>(value.reference));
+	}
+	else
+	{
+		static_assert(::fast_io::details::
+			print_floating_decimal_direct_supported<flt>);
+		return ::fast_io::details::print_rsvflt_exact_bounds_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float>(iter, value.reference);
+	}
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
@@ -1889,7 +2342,8 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 	requires ::fast_io::details::floating_precise_precision_supported<flags, flt>
 [[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
 	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_precision_t<flags, flt>>,
-	::fast_io::manipulators::scalar_manip_precision_t<flags, flt> value) noexcept
+	::fast_io::details::floating_precise_parameter_t<
+		::fast_io::manipulators::scalar_manip_precision_t<flags, flt>, flt> value) noexcept
 {
 	static_assert(flags.floating == ::fast_io::manipulators::floating_format::general ||
 				  flags.floating == ::fast_io::manipulators::floating_format::scientific ||
@@ -1913,6 +2367,29 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 			flags.precision, flags.rounding, flags.json_float>(
 			static_cast<double>(value.reference), value.precision);
 	}
+	else if constexpr (::fast_io::details::
+		print_floating_decimal_requires_integer_transport<flt>)
+	{
+		using floating_type = ::std::remove_cvref_t<flt>;
+		using trait = ::fast_io::details::iec559_traits<floating_type>;
+		auto const [mantissa, exponent, sign]{
+			::fast_io::details::get_punned_result(value.reference)};
+		constexpr auto exponent_mask{
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
+		if (exponent == static_cast<::std::uint_least32_t>(exponent_mask))
+		{
+			return ::fast_io::details::floating_precise_special_size<
+				flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+				trait::mbits>(mantissa, sign);
+		}
+		auto const widened{
+			::fast_io::details::dragonbox_narrow_float_from_fields<floating_type>(
+				mantissa, exponent, sign)};
+		return ::fast_io::details::floating_precise_precision_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			flags.floating, flags.precision, flags.rounding,
+			flags.json_float>(widened, value.precision);
+	}
 	else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
 	{
 		return ::fast_io::details::floating_precise_precision_size<
@@ -1922,8 +2399,10 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 	}
 	else
 	{
-		static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
-					  "decimal precise sizing requires the same directly supported IEC 60559 type as decimal emission");
+		static_assert(
+			::fast_io::details::print_floating_decimal_direct_supported<flt> ||
+				::fast_io::details::print_floating_decimal_exact_supported<flt>,
+			"decimal precision sizing requires a direct narrow domain or the strict exact wide domain");
 		return ::fast_io::details::floating_precise_precision_size<
 			flags.showpos, flags.nan_show_sign, flags.nan_show_type, flags.floating,
 			flags.precision, flags.rounding, flags.json_float>(value.reference, value.precision);
@@ -1936,7 +2415,8 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 inline constexpr char_type *print_reserve_precise_define(
 	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_precision_t<flags, flt>> tag,
 	char_type *iter, ::std::size_t precise_size,
-	::fast_io::manipulators::scalar_manip_precision_t<flags, flt> value) noexcept
+	::fast_io::details::floating_precise_parameter_t<
+		::fast_io::manipulators::scalar_manip_precision_t<flags, flt>, flt> value) noexcept
 {
 	// The proof is identical to the scalar overload above.  Runtime precision
 	// changes the rounded carrier and padding count, both of which are explicit

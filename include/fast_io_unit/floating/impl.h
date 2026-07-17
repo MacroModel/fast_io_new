@@ -66,6 +66,69 @@ template <typename T>
 inline constexpr bool print_floating_decimal_via_float{
 	::fast_io::details::print_floating_decimal_via_float_impl<T>::value};
 
+/*
+Binary80 and binary128 precision formatting is implemented by the exact
+decimal-expansion backend rather than the binary32/binary64 Dragonbox cache.
+Admit only representations for which get_punned_result and the exact backend
+have matching field models:
+
+* x87 binary80 has a 63-bit stored fraction and a 15-bit exponent.  Its object
+  representation is decoded by the explicitly proved little-endian x87
+  overload in punning.h.
+* IEEE binary128 has a 112-bit stored fraction and a 15-bit exponent in a
+  same-size unsigned carrier.  The same-size condition excludes IBM double-
+  double long double even when it has a wider std::numeric_limits precision.
+
+This is a representation capability, not an ISA selection.  In particular it
+does not make a wide type enter dragonbox_main, whose runtime power cache and
+endpoint arithmetic are intentionally limited to binary32 and binary64.
+*/
+template <typename T, bool = ::fast_io::details::print_floating_has_iec559_traits<T>>
+struct print_floating_decimal_exact_supported_impl
+{
+	inline static constexpr bool value{};
+};
+
+template <typename T>
+struct print_floating_decimal_exact_supported_impl<T, true>
+{
+	using no_cvref_t = ::std::remove_cvref_t<T>;
+	using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
+	using mantissa_type = typename trait::mantissa_type;
+	inline static constexpr bool binary80{
+		::fast_io::details::fp_floating_point_is_float80<no_cvref_t> &&
+		::std::endian::native == ::std::endian::little && trait::mbits == 63u &&
+		trait::ebits == 15u &&
+		sizeof(mantissa_type) == sizeof(::std::uint_least64_t)};
+	inline static constexpr bool binary128{
+		trait::mbits == 112u && trait::ebits == 15u &&
+		sizeof(no_cvref_t) == sizeof(mantissa_type) &&
+		::std::numeric_limits<mantissa_type>::digits >= 128u};
+	inline static constexpr bool value{binary80 || binary128};
+};
+
+template <typename T>
+inline constexpr bool print_floating_decimal_exact_supported{
+	::fast_io::details::print_floating_decimal_exact_supported_impl<T>::value};
+
+// Clang's x86 bfloat16 lowering can materialize an internal by-value argument
+// with VCVTNEPS2BF16.  For a bfloat16 subnormal, the widened binary32 operand is
+// itself subnormal and the narrowing instruction produces zero; Intel SDE DMR
+// and generated assembly reproduce the loss for every decimal presentation.
+// Keep this target/compiler workaround in the floating type customization: the
+// formatter receives integer IEC 60559 fields, while all other targets retain
+// their measured native-value path.  The capability macro prevents merely
+// naming __bf16 on targets where Clang rejects the type.
+#if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
+	(defined(__x86_64__) || defined(_M_X64))
+template <typename T>
+inline constexpr bool print_floating_decimal_requires_integer_transport{
+	::std::same_as<::std::remove_cvref_t<T>, __bf16>};
+#else
+template <typename T>
+inline constexpr bool print_floating_decimal_requires_integer_transport{};
+#endif
+
 template <::fast_io::manipulators::floating_format format>
 inline constexpr bool print_floating_format_valid{
 	format == ::fast_io::manipulators::floating_format::general ||
@@ -99,9 +162,9 @@ inline constexpr bool print_floating_rounding_valid{
 Reserve customization is a public capability query, so unsupported floating
 representations and forged enum values must be removed by constraints rather
 than diagnosed from a function-body static_assert.  Hexadecimal formatting
-requires a punned IEC 60559 field decomposition.  Decimal formatting further
-requires the exact binary64 ABI normalization, an exact binary32 widening, or
-one of the directly implemented binary32/binary64 domains.
+requires a punned IEC 60559 field decomposition.  Scalar decimal formatting
+further requires the exact binary64 ABI normalization, an exact binary32
+widening, or a directly implemented binary32/binary64 shortest domain.
 */
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 inline constexpr bool print_floating_ordinary_supported{
@@ -114,6 +177,30 @@ inline constexpr bool print_floating_ordinary_supported{
 	  sizeof(::std::remove_cvref_t<flt>) == sizeof(double)) ||
 	 ::fast_io::details::print_floating_decimal_via_float<flt> ||
 	 ::fast_io::details::print_floating_decimal_direct_supported<flt>)};
+
+/*
+Scalar decimal formatting promises the shortest round-tripping spelling, while
+runtime precision promises rounding on an explicitly requested decimal grid.
+Those are distinct capabilities for a wide representation: the exact grid
+formatter needs only binary-to-decimal expansion, whereas shortest selection
+also needs an independently proved decimal-to-binary interval algorithm.
+Keeping the gates separate prevents binary80/binary128 from entering the
+binary32/binary64 shortest cache while making their precision CPOs available.
+*/
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+inline constexpr bool print_floating_scalar_supported{
+	::fast_io::details::print_floating_ordinary_supported<flags, flt>};
+
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+inline constexpr bool print_floating_precision_supported{
+	flags.base == 10u &&
+	::fast_io::details::print_floating_format_valid<flags.floating> &&
+	::fast_io::details::print_floating_rounding_valid<flags.rounding> &&
+	::fast_io::details::print_floating_has_iec559_traits<flt> &&
+	(flags.floating == ::fast_io::manipulators::floating_format::hexfloat ||
+	 ::fast_io::details::print_floating_ordinary_supported<flags, flt> ||
+	 ::fast_io::details::print_floating_decimal_exact_supported<flt>)};
+
 
 template <::fast_io::manipulators::scalar_flags flags, typename flt>
 concept print_floating_staged_supported =
@@ -205,7 +292,7 @@ print_staged_prepare(
 	if constexpr (::fast_io::details::da::staged_prepares_sign<floating_type>)
 	{
 		return {converted.significand, converted.exponent, converted.last_digit,
-				converted.has_last_digit, sign};
+				converted.has_last_digit, static_cast<bool>(sign)};
 	}
 	else
 	{
@@ -274,7 +361,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires ::fast_io::details::print_floating_ordinary_supported<flags, flt>
+	requires ::fast_io::details::print_floating_scalar_supported<flags, flt>
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
@@ -354,9 +441,11 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires ::fast_io::details::print_floating_ordinary_supported<flags, flt>
+	requires(::fast_io::details::print_floating_scalar_supported<flags, flt> &&
+			 !(::fast_io::details::print_floating_decimal_requires_integer_transport<flt> &&
+			   flags.floating != manipulators::floating_format::hexfloat))
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
-												 char_type *iter, manipulators::scalar_manip_t<flags, flt> f) noexcept
+											 char_type *iter, manipulators::scalar_manip_t<flags, flt> f) noexcept
 {
 	static_assert(manipulators::floating_format::general == flags.floating ||
 				  manipulators::floating_format::scientific == flags.floating ||
@@ -415,8 +504,8 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 		else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
 		{
 			return details::print_rsvflt_define_impl<flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
-													 flags.floating, flags.rounding, flags.nan_show_sign,
-													 flags.nan_show_type, flags.json_float>(
+											 flags.floating, flags.rounding, flags.nan_show_sign,
+											 flags.nan_show_type, flags.json_float>(
 				iter, static_cast<float>(f.reference));
 		}
 		else
@@ -425,143 +514,36 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 			static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
 						  "currently only support iec559 float32 and float64 decimal output; narrower IEC559 "
 						  "formats are printed through float");
-			return details::print_rsvflt_define_impl<flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
-													 flags.floating, flags.rounding, flags.nan_show_sign,
-													 flags.nan_show_type, flags.json_float>(iter, f.reference);
+			return details::print_rsvflt_define_impl<
+				flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+				flags.floating, flags.rounding, flags.nan_show_sign,
+				flags.nan_show_type, flags.json_float>(iter, f.reference);
 		}
 	}
 }
 
-#if 0
-template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10)
-inline constexpr ::std::size_t
-print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>) noexcept
+template <::std::integral char_type, manipulators::scalar_flags flags,
+	details::my_floating_point flt>
+	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+			 flags.floating != manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
+inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
+	char_type *iter, manipulators::scalar_manip_t<flags, flt> const &f) noexcept
 {
-	static_assert(manipulators::floating_format::general == flags.floating ||
-				  manipulators::floating_format::scientific == flags.floating ||
-				  manipulators::floating_format::fixed == flags.floating ||
-				  manipulators::floating_format::decimal == flags.floating ||
-				  manipulators::floating_format::hexfloat == flags.floating);
-	using trait = ::fast_io::details::iec559_traits<flt>;
-	if constexpr (flags.floating == manipulators::floating_format::hexfloat)
-	{
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double>
-#if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
-					  || ::std::same_as<::std::remove_cvref_t<flt>, __float128>
-#endif
-		)
-		{
-#if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
-			if constexpr (sizeof(flt) > sizeof(double))
-			{
-				return details::print_rsvhexfloat_size_cache<flags.showbase, __uint128_t>;
-			}
-			else
-#endif
-				return details::print_rsvhexfloat_size_cache<flags.showbase,
-															 typename details::iec559_traits<double>::mantissa_type>;
-		}
-		else
-		{
-			return details::print_rsvhexfloat_size_cache<flags.showbase, typename trait::mantissa_type>;
-		}
-	}
-	else
-	{
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> &&
-					  sizeof(flt) == sizeof(double)) // this is the case on xxx-windows-msvc
-		{
-			return details::print_rsv_cache<double, flags.floating>;
-		}
-		static_assert((::std::same_as<::std::remove_cvref_t<flt>, double> ||
-					   ::std::same_as<::std::remove_cvref_t<flt>, float>
-#ifdef __STDCPP_FLOAT32_T__
-					   || ::std::same_as<::std::remove_cvref_t<flt>, _Float32>
-#endif
-#ifdef __STDCPP_FLOAT64_T__
-					   || ::std::same_as<::std::remove_cvref_t<flt>, _Float64>
-#endif
-					   ),
-					  "currently only support iec559 float32 and float64, sorry");
-		return details::print_rsv_cache<::std::remove_cvref_t<flt>, flags.floating>;
-	}
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const [mantissa, exponent, sign]{
+		::fast_io::details::get_punned_result(f.reference)};
+	return details::print_rsvflt_fields_define_impl<
+		flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+		flags.floating, flags.rounding, flags.nan_show_sign,
+		flags.nan_show_type, flags.json_float, floating_type>(
+			iter, mantissa, exponent, sign);
 }
-
-template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(flags.base == 10)
-inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
-												 char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
-{
-	static_assert(manipulators::floating_format::general == flags.floating ||
-				  manipulators::floating_format::scientific == flags.floating ||
-				  manipulators::floating_format::fixed == flags.floating ||
-				  manipulators::floating_format::decimal == flags.floating ||
-				  manipulators::floating_format::hexfloat == flags.floating);
-	if constexpr (flags.floating == manipulators::floating_format::hexfloat)
-	{
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double>
-#if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
-					  || ::std::same_as<::std::remove_cvref_t<flt>, __float128>
-#endif
-		)
-		{
-#if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
-			if constexpr (sizeof(flt) > sizeof(double))
-			{
-				return details::print_rsvhexfloat_define_impl<flags.showbase, flags.uppercase_showbase, flags.showpos,
-															  flags.uppercase, flags.uppercase_e, flags.comma,
-															  flags.nan_show_sign, flags.nan_show_type>(
-					iter, static_cast<__float128>(f.reference));
-			}
-			else
-#endif
-				return details::print_rsvhexfloat_define_impl<flags.showbase, flags.uppercase_showbase, flags.showpos,
-															  flags.uppercase, flags.uppercase_e, flags.comma,
-															  flags.nan_show_sign, flags.nan_show_type>(
-					iter, static_cast<double>(f.reference));
-		}
-		else
-		{
-			return details::print_rsvhexfloat_define_impl<flags.showbase, flags.uppercase_showbase, flags.showpos,
-														  flags.uppercase, flags.uppercase_e, flags.comma,
-														  flags.nan_show_sign, flags.nan_show_type>(iter,
-																										   f.reference);
-		}
-	}
-	else
-	{
-		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> &&
-					  sizeof(flt) == sizeof(double)) // this is the case on xxx-windows-msvc
-		{
-			return details::print_rsvflt_define_impl<flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
-													 flags.floating, flags.nan_show_sign, flags.nan_show_type>(
-				iter, static_cast<double>(f.reference));
-		}
-		else
-		{
-			// this is the case for every other platform, including xxx-windows-gnu
-			static_assert((::std::same_as<::std::remove_cvref_t<flt>, double> ||
-						   ::std::same_as<::std::remove_cvref_t<flt>, float>
-#ifdef __STDCPP_FLOAT32_T__
-						   || ::std::same_as<::std::remove_cvref_t<flt>, _Float32>
-#endif
-#ifdef __STDCPP_FLOAT64_T__
-						   || ::std::same_as<::std::remove_cvref_t<flt>, _Float64>
-#endif
-						   ),
-						  "currently only support iec559 float32 and float64, sorry");
-			return details::print_rsvflt_define_impl<flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
-													 flags.floating, flags.nan_show_sign, flags.nan_show_type>(iter,
-																											  f.reference);
-		}
-	}
-}
-#endif
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
 			 flags.floating == manipulators::floating_format::hexfloat &&
 			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
@@ -612,7 +594,7 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
 			 flags.floating == manipulators::floating_format::hexfloat &&
 			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr char_type *print_reserve_define(
@@ -661,7 +643,7 @@ inline constexpr char_type *print_reserve_define(
 
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
 			 flags.floating != manipulators::floating_format::hexfloat &&
 			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
@@ -673,9 +655,25 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 				  manipulators::floating_format::fixed == flags.floating ||
 				  manipulators::floating_format::decimal == flags.floating);
 	using no_cvref_t = ::std::remove_cvref_t<flt>;
+	/*
+	Fractional general formatting can retain the complete integral part before
+	rounding on the 10^-P grid.  At P=0 a max-finite binary80 value, for example,
+	is a 4933-digit integer even though ordinary general formatting would choose
+	scientific notation.  Therefore both general and decimal fractional modes
+	use the fixed reserve bound.  print_rsv_cache<fixed> is
+
+	  sign + "0." + e10max + m10digits,
+
+	which covers every integral prefix and every exact carrier digit.  Adding P
+	then covers a forced/requested fractional suffix; the checked additions below
+	preserve the established terminate-on-size_t-overflow contract.  Significant
+	general/decimal choose either a coefficient of at most P digits or the shorter
+	scientific spelling, so their native cache plus P remains sufficient.
+	*/
 	constexpr auto reserve_floating{
 		(::fast_io::details::floating_precision_is_fractional<flags.precision> &&
-		 flags.floating == manipulators::floating_format::decimal)
+		 (flags.floating == manipulators::floating_format::decimal ||
+		  flags.floating == manipulators::floating_format::general))
 			? manipulators::floating_format::fixed
 			: flags.floating};
 	::std::size_t base_size{};
@@ -690,6 +688,12 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 		base_size = details::print_rsv_fp_size_with_special_cache<details::print_rsv_cache<float, reserve_floating>,
 																  flags.nan_show_type>;
 	}
+	else if constexpr (::fast_io::details::print_floating_decimal_exact_supported<flt>)
+	{
+		base_size = details::print_rsv_fp_size_with_special_cache<
+			details::print_rsv_cache<no_cvref_t, reserve_floating>,
+			flags.nan_show_type>;
+	}
 	else
 	{
 		static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
@@ -703,9 +707,10 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_preci
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
-	requires(::fast_io::details::print_floating_ordinary_supported<flags, flt> &&
+	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
 			 flags.floating != manipulators::floating_format::hexfloat &&
-			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
+			 ::fast_io::details::print_floating_precision_valid<flags.precision> &&
+			 !::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
 inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 	char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
@@ -730,16 +735,56 @@ inline constexpr char_type *print_reserve_define(
 			flags.rounding, flags.nan_show_sign, flags.nan_show_type, flags.json_float>(
 			iter, static_cast<float>(f.reference), f.precision);
 	}
+	else if constexpr (::fast_io::details::print_floating_decimal_exact_supported<flt>)
+	{
+		return details::print_rsvflt_precision_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.precision, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float>(iter, f.reference, f.precision);
+	}
 	else
 	{
 		static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
 					  "currently only support iec559 float32 and float64 decimal output; narrower IEC559 "
 					  "formats are printed through float");
 		return details::print_rsvflt_precision_define_impl<
-			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma, flags.floating, flags.precision,
-			flags.rounding, flags.nan_show_sign, flags.nan_show_type, flags.json_float>(
-			iter, f.reference, f.precision);
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.precision, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float>(iter, f.reference, f.precision);
 	}
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+	details::my_floating_point flt>
+	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
+			 flags.floating != manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::print_floating_precision_valid<flags.precision> &&
+			 ::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
+inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type,
+		manipulators::scalar_manip_precision_t<flags, flt>>,
+	char_type *iter,
+	manipulators::scalar_manip_precision_t<flags, flt> const &f) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	auto const [mantissa, exponent, sign]{
+		::fast_io::details::get_punned_result(f.reference)};
+	constexpr auto exponent_mask{
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
+	if (exponent == static_cast<::std::uint_least32_t>(exponent_mask))
+	{
+		return ::fast_io::details::prsv_fp_nan_impl<
+			flags.showpos, flags.uppercase, flags.nan_show_sign,
+			flags.nan_show_type, trait::mbits>(iter, mantissa, sign);
+	}
+	auto const widened{
+		::fast_io::details::dragonbox_narrow_float_from_fields<floating_type>(
+			mantissa, exponent, sign)};
+	return details::print_rsvflt_precision_define_impl<
+		flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+		flags.floating, flags.precision, flags.rounding, flags.nan_show_sign,
+		flags.nan_show_type, flags.json_float>(iter, widened, f.precision);
 }
 } // namespace fast_io
 

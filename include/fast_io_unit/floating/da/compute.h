@@ -288,7 +288,7 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 	auto const integral{product.hi >> extra_shift};
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
-	auto const has_extra_digit{integral >= UINT64_C(1000000000000000)};
+	auto const has_extra_digit{integral >= static_cast<::std::uint_least64_t>(1000000000000000ULL)};
 	constexpr ::std::uint_least64_t extra_digit_multiplier{[]
 	{
 		::std::uint_least64_t value{1u};
@@ -328,7 +328,7 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 	// product.  All six nearest policies consequently agree here, since they
 	// differ only at an exact tie; directed policies never dispatch this carrier.
 	auto const ambiguity_bound{multiplier + ((multiplier - 1u) >> 11u)};
-	constexpr ::std::uint_least64_t half{UINT64_C(1) << 63u};
+	constexpr ::std::uint_least64_t half{static_cast<::std::uint_least64_t>(1ULL) << 63u};
 	if (fractional_product.lo - (half - ambiguity_bound) <= ambiguity_bound)
 	{
 		return {};
@@ -418,7 +418,7 @@ binary64_scientific_wide_precision_result compute_binary64_scientific_wide_preci
 	auto const integral{product.hi >> extra_shift};
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
-	auto const has_extra_digit{integral >= UINT64_C(1000000000000000)};
+	auto const has_extra_digit{integral >= static_cast<::std::uint_least64_t>(1000000000000000ULL)};
 	auto const multiplier{has_extra_digit ? extra_digit_multiplier :
 		extra_digit_multiplier * 10u};
 	auto const fractional_product{
@@ -429,7 +429,7 @@ binary64_scientific_wide_precision_result compute_binary64_scientific_wide_preci
 	// B = M + floor((M - 1) / 2048).  Reject [2^63 - B, 2^63] so every exact
 	// or possible tie remains on the exact-materialization fallback.
 	auto const ambiguity_bound{multiplier + ((multiplier - 1u) >> 11u)};
-	constexpr ::std::uint_least64_t half{UINT64_C(1) << 63u};
+	constexpr ::std::uint_least64_t half{static_cast<::std::uint_least64_t>(1ULL) << 63u};
 	if (fractional_product.lo - (half - ambiguity_bound) <= ambiguity_bound)
 	{
 		return {};
@@ -528,7 +528,7 @@ compute_binary64_scientific_p34_partial_precision(
 		binary_significand << shift, power)};
 	auto const integral{product.hi >> extra_shift};
 	constexpr ::std::uint_least64_t sixteen_digit_threshold{
-		UINT64_C(1000000000000000)};
+		static_cast<::std::uint_least64_t>(1000000000000000ULL)};
 	if (integral < sixteen_digit_threshold)
 	{
 		// A fifteen-digit provisional integer needs M=10^19.  Its ambiguity
@@ -537,10 +537,10 @@ compute_binary64_scientific_p34_partial_precision(
 	}
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
-	constexpr ::std::uint_least64_t multiplier{UINT64_C(1000000000000000000)};
+	constexpr ::std::uint_least64_t multiplier{static_cast<::std::uint_least64_t>(1000000000000000000ULL)};
 	constexpr ::std::uint_least64_t ambiguity_bound{
 		multiplier + ((multiplier - 1u) >> 11u)};
-	constexpr ::std::uint_least64_t half{UINT64_C(1) << 63u};
+	constexpr ::std::uint_least64_t half{static_cast<::std::uint_least64_t>(1ULL) << 63u};
 	static_assert(ambiguity_bound < half);
 	auto const fractional_product{
 		::fast_io::details::da::umul64x64(fractional, multiplier)};
@@ -555,11 +555,11 @@ compute_binary64_scientific_p34_partial_precision(
 		++significand;
 	}
 	auto real_exponent{decimal_exponent + 16};
-	constexpr __uint128_t decimal_limb{UINT64_C(10000000000000000000)};
+	constexpr __uint128_t decimal_limb{static_cast<::std::uint_least64_t>(10000000000000000000ULL)};
 	constexpr __uint128_t normalization_threshold{
-		decimal_limb * UINT64_C(1000000000000000)};
+		decimal_limb * static_cast<::std::uint_least64_t>(1000000000000000ULL)};
 	constexpr __uint128_t normalized_significand{
-		decimal_limb * UINT64_C(100000000000000)};
+		decimal_limb * static_cast<::std::uint_least64_t>(100000000000000ULL)};
 	static_assert(normalization_threshold < (static_cast<__uint128_t>(1u) << 113u));
 	if (significand == normalization_threshold)
 	{
@@ -647,7 +647,7 @@ binary64_fixed_fractional_precision_result compute_binary64_fixed_fractional_pre
 	auto const integral{product.hi >> extra_shift};
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
-	auto const has_extra_digit{integral >= UINT64_C(1000000000000000)};
+	auto const has_extra_digit{integral >= static_cast<::std::uint_least64_t>(1000000000000000ULL)};
 	auto real_exponent{decimal_exponent +
 		static_cast<::std::int_least32_t>(has_extra_digit ? 16u : 15u)};
 	auto const significant_signed{static_cast<::std::int_least64_t>(real_exponent) + 1 +
@@ -690,7 +690,7 @@ binary64_fixed_fractional_precision_result compute_binary64_fixed_fractional_pre
 	// is on the exact side of half, and all six nearest policies agree.  Directed
 	// rounding never dispatches this helper.
 	auto const ambiguity_bound{multiplier + ((multiplier - 1u) >> 11u)};
-	constexpr ::std::uint_least64_t half{UINT64_C(1) << 63u};
+	constexpr ::std::uint_least64_t half{static_cast<::std::uint_least64_t>(1ULL) << 63u};
 	if (fractional_product.lo - (half - ambiguity_bound) <= ambiguity_bound)
 	{
 		return {};
@@ -702,7 +702,7 @@ binary64_fixed_fractional_precision_result compute_binary64_fixed_fractional_pre
 
 	// Build 10^K and 10^(K-1) from the shared u64 table.  Splitting at 10^19
 	// avoids runtime u128 division while covering the complete K16..K33 domain.
-	constexpr __uint128_t decimal_limb{UINT64_C(10000000000000000000)};
+	constexpr __uint128_t decimal_limb{static_cast<::std::uint_least64_t>(10000000000000000000ULL)};
 	auto const normalization_threshold{significant <= 19u
 		? static_cast<__uint128_t>(uint64_power10_table[significant])
 		: decimal_limb * uint64_power10_table[significant - 19u]};
