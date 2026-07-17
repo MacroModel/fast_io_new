@@ -64,6 +64,19 @@ template <::fast_io::details::character char_type, unsigned base, unsigned digit
 inline constexpr auto to_chars_runtime_power_digits{
 	::fast_io::details::generate_to_chars_runtime_power_digits<char_type, base, digits>()};
 
+/*
+For a non-power-of-two divisor d, let k=floor(log2(d)) and
+
+    m = ceil(2^64 * (2^(k+1)-d) / d).
+
+The branch-free invariant used below is
+
+    floor(n/d) = ((((n-umulh(n,m)) >> 1) + umulh(n,m)) >> k)
+
+for every uint64_t n.  The three tables instantiate m for d=base, base^2, and
+base^4.  Their zero entries correspond exactly to power-of-two bases; the
+runtime power-of-two switch returns before any such entry can be read.
+*/
 inline constexpr ::fast_io::freestanding::array<::std::uint_least64_t, 35u>
 	to_chars_runtime_division_magic{
 		0x0000000000000000ULL, 0x5555555555555556ULL, 0x0000000000000000ULL,
@@ -122,6 +135,9 @@ template <::fast_io::details::my_unsigned_integral U>
 inline constexpr ::std::size_t to_chars_runtime_bit_width(U value) noexcept
 {
 	constexpr ::std::size_t bits{::std::numeric_limits<U>::digits};
+	// __SIZEOF_INT128__ is a type-availability test, not a performance gate.
+	// Splitting into uint64_t halves avoids requiring a library countl_zero
+	// overload for a non-standard integer type.
 #if defined(__SIZEOF_INT128__)
 	if constexpr (sizeof(U) == sizeof(__uint128_t))
 	{
@@ -141,6 +157,49 @@ inline constexpr ::std::size_t to_chars_runtime_bit_width(U value) noexcept
 						  ::std::countl_zero(static_cast<U>(value | static_cast<U>(1u))));
 	}
 }
+
+/*
+The public decimal result must end immediately after a one-digit value.  The
+JEAIII reserve primitive is also used by internal pointer-returning formatters
+and may stage a two-character table entry for such a value, so result-returning
+entry points need an exact one-character case.  This switch selects where that
+case is placed; it never removes the check.
+
+When this constant is true, the capacity-checked caller enters
+to_chars_integral_decimal_unchecked, which performs the one-digit test and then
+instantiates a JEAIII specialization whose single-digit precondition is known.
+Otherwise the full-result JEAIII specialization owns the test.  Encoding the
+state as a template argument keeps the invariant visible to the optimizer and
+gives the two layouts distinct specializations and mangled identities.
+In particular, single_digit_checked is part of the jeaiii_main specialization,
+so the proved and conservative callees have distinct mangled identities.
+
+The selection is deliberately code-generation-specific.  Paired hardware
+measurements favored the caller-side layout by roughly five percent for M4
+mixed/long decimal workloads.  Cross-target Cortex-A76 and Neoverse-N2
+assembly removes two instructions from the one-digit entry, and llvm-mca
+reports the corresponding modeled pipeline cost.  On x86-64, GCC 15 and Clang
+21 favored that layout, while GCC 13, 14, and 16 did not.  Unknown x86-64
+compiler layouts and other architectures therefore keep the conservative
+result-core placement.  Static assembly and llvm-mca evidence is not a claim
+about unmeasured hardware.  The AArch64 choice is ISA-wide rather than
+microarchitecture dispatch: M4 supplies the native measurement, whereas the
+Cortex-A76 and Neoverse-N2 results are cross-target static evidence.  Other
+AArch64 compiler lowerings inherit the semantically equivalent layout without
+a native performance claim.
+*/
+inline constexpr bool to_chars_use_decimal_unchecked_helper{
+#if defined(__aarch64__) || defined(_M_ARM64)
+	true
+#elif ((defined(__x86_64__) || defined(_M_X64)) && !defined(__arm64ec__) && \
+	   !defined(_M_ARM64EC)) &&                                                   \
+	((defined(__clang__) && __clang_major__ == 21) ||                            \
+	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15))
+	true
+#else
+	false
+#endif
+};
 
 template <::std::size_t base, ::fast_io::details::my_unsigned_integral U,
 		  ::fast_io::details::character char_type>
@@ -165,9 +224,90 @@ to_chars_integral_checked(char_type *first, char_type *last, U value, bool negat
 			return {first + 1u, {}};
 		}
 	}
+	/*
+	chars_len has already proved that value has exactly the number of radix-base
+	digits recorded in digits
+	(including one digit for zero), and the preceding capacity test proves that
+	[first, first + digits) is writable after an optional sign.  The precise
+	writer consumes that known end pointer and digit count and fills exactly that
+	range backwards.  Consequently it returns the same logical end without
+	repeating the length classification performed by the ordinary reserve entry.
+
+	Decimal and power-of-two bases retain their dedicated kernels; this reuse is
+	for the generic bases whose normal entry would otherwise recompute the same
+	length.  Paired M4 measurements motivated the routing, and independent linked
+	code-size probes showed smaller public literal-base roots.  A direct
+	`digits == 1` branch inside the shared precise writer was measured separately
+	and rejected: although it accelerated that microcase, uniformly distributed
+	multi-digit input slowed by 0.8--9.5% across GCC 13--16 and Clang 18--21, and
+	representative code grew by as much as 85%.  Keeping the branch out of the
+	shared writer is therefore an aggregate and code-size decision; it does not
+	imply that every individual value or target is faster.
+	*/
+	if constexpr (base != 10u && base != 2u && base != 4u && base != 8u && base != 16u &&
+				  base != 32u)
+	{
+		auto *const result{first + digits};
+		::fast_io::details::print_reserve_integral_withfull_precise_main_impl<base, false>(
+			result, value, digits);
+		return {result, {}};
+	}
 	return {::fast_io::details::print_reserve_integral_withfull_main_impl<false, base, false>(first, value), {}};
 }
 
+/*
+"Unchecked" refers only to buffer capacity: every caller has already proved
+space for the maximum decimal representation (and has emitted the sign, if
+any).  This helper still handles values below ten exactly.  After that branch,
+value >= 10 is the precondition represented by single_digit_checked=true in
+jeaiii_main.  Passing the state as a template argument removes a duplicate
+comparison without weakening the public output-range invariant.
+
+char_literal_add preserves the execution character set for char, all supported
+wide character types, and EBCDIC.  The AVX-512 implementation is restricted to
+one-byte non-EBCDIC output from an unsigned type whose storage width matches
+uint_least64_t.  The AVX-512 path is excluded from constant evaluation; all
+remaining multi-digit types and constexpr calls use the scalar JEAIII
+specialization.
+*/
+template <::fast_io::details::my_unsigned_integral U, ::fast_io::details::character char_type>
+inline constexpr ::fast_io::basic_to_chars_result<char_type>
+to_chars_integral_decimal_unchecked(char_type *first, U value) noexcept
+{
+	if (value < 10u)
+	{
+		*first = ::fast_io::char_literal_add<char_type>(value);
+		return {first + 1u, {}};
+	}
+	/*
+	Every AVX-512 guard in this file names the complete compile-time ISA contract
+	of the Champagne--Lemire decimal kernel: IFMA supplies its multiply-add, VBMI
+	its byte permutation, and BW+VL the used byte/word vector forms.  Nested type
+	and encoding constraints prove a one-byte ASCII-compatible representation of
+	an unsigned type whose storage width matches uint_least64_t; constant
+	evaluation and all other cases use JEAIII.  This is target dispatch, not
+	run-time CPUID.  SDE correctness and assembly inspection exist, but no native
+	throughput claim is made for the opaque virtualized host.
+	*/
+#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+				  sizeof(U) == sizeof(::std::uint_least64_t))
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
+						first, static_cast<::std::uint_least64_t>(value)),
+					{}};
+		}
+	}
+#endif
+	return ::fast_io::details::jeaiii::jeaiii_main<
+		false, false, char_type, ::fast_io::basic_to_chars_result<char_type>, true>(
+		first, value);
+}
+
+// Define this capacity-fast wrapper only when its AVX-512 consumer can be
+// formed.  Other builds call the fixed decimal/JEAIII path directly.
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 template <::fast_io::details::my_unsigned_integral U, ::fast_io::details::character char_type>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -186,18 +326,30 @@ to_chars_integral_decimal(char_type *first, char_type *last, U value, bool negat
 	{
 		*first++ = ::fast_io::char_literal_v<u8'-', char_type>;
 	}
-	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
-				  sizeof(U) == sizeof(::std::uint_least64_t))
+	if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
 	{
-		if (!::std::is_constant_evaluated())
-		{
-			return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
-						first, static_cast<::std::uint_least64_t>(value)),
-					{}};
-		}
+		return ::fast_io::details::to_chars_integral_decimal_unchecked(first, value);
 	}
-	return ::fast_io::details::jeaiii::jeaiii_main<
-		false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, value);
+	else
+	{
+		if (value < 10u)
+		{
+			*first = ::fast_io::char_literal_add<char_type>(value);
+			return {first + 1u, {}};
+		}
+		if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+					  sizeof(U) == sizeof(::std::uint_least64_t))
+		{
+			if (!::std::is_constant_evaluated())
+			{
+				return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
+							first, static_cast<::std::uint_least64_t>(value)),
+						{}};
+			}
+		}
+		return ::fast_io::details::jeaiii::jeaiii_main<
+			false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, value);
+	}
 }
 #endif
 
@@ -218,20 +370,34 @@ to_chars_integral_fixed_base(char_type *first, char_type *last, U value, bool ne
 	}
 	if constexpr (base == 10u && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 	{
-#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-		if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
-					  sizeof(U) == sizeof(::std::uint_least64_t))
+		if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
 		{
-			if (!::std::is_constant_evaluated())
-			{
-				return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
-							first, static_cast<::std::uint_least64_t>(value)),
-						{}};
-			}
+			return ::fast_io::details::to_chars_integral_decimal_unchecked(first, value);
 		}
+		else
+		{
+			// Same ISA, encoding, type, and constant-evaluation proof as the primary
+			// AVX-512 dispatch above.
+#if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
+			if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+						  sizeof(U) == sizeof(::std::uint_least64_t))
+			{
+				if (value < 10u)
+				{
+					*first = ::fast_io::char_literal_add<char_type>(value);
+					return {first + 1u, {}};
+				}
+				if (!::std::is_constant_evaluated())
+				{
+					return {::fast_io::details::jeaiii::champagne_lemire_main_for_char_type(
+								first, static_cast<::std::uint_least64_t>(value)),
+							{}};
+				}
+			}
 #endif
-		return ::fast_io::details::jeaiii::jeaiii_main<
-			false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, value);
+			return ::fast_io::details::jeaiii::jeaiii_main<
+				false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, value);
+		}
 	}
 	else if constexpr (base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
 	{
@@ -331,14 +497,57 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 		}
 		else if (base == 16u)
 		{
+			/*
+			The compact runtime dispatcher is unusually sensitive to added code and
+			register pressure.  Real paired full-result-ABI measurements showed that
+			inlining the 16-digit SSSE3 kernel materially improves GCC 16's base-16
+			case while preserving its mixed-base aggregate.  Enabling the same branch
+			for GCC 13-15 or Clang regressed at least one mixed/power-base group, so the
+			gate is intentionally narrower than the fixed-base SSSE3 facility.  GCC 16
+			is the measured boundary; the >= 16 spelling lets later GCC releases inherit
+			the path but is not evidence about versions that have not been benchmarked.
+
+			The remaining conditions are semantic as well as performance guards:
+			digits == 16 excludes leading-zero output; one-byte non-EBCDIC output is
+			required by the ASCII lookup; constant evaluation and SSE2 use the scalar
+			path; and ARM64EC is not treated as an x86-64 SSSE3 target.  GCC 16 inlines
+			the ordinary-inline helper here, avoiding a call-frame cost.  Static
+			llvm-mca results for the SIMD block were used only as pipeline support;
+			the compiler gate is based on whole-call hardware measurements.
+			*/
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(__arm64ec__) && \
+	!defined(_M_ARM64EC) && defined(__SSSE3__) &&                        \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_pshufb128) &&                     \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128) && defined(__GNUC__) && \
+	!defined(__clang__) && __GNUC__ >= 16
+			if constexpr (sizeof(U) == sizeof(::std::uint_least64_t) &&
+						  sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+			{
+				if (!::std::is_constant_evaluated() && digits == 16u)
+				{
+					auto *output_first{first};
+					if (negative)
+					{
+						*output_first++ = ::fast_io::char_literal_v<u8'-', char_type>;
+					}
+					::fast_io::details::print_reserve_hexadecimal_16_ssse3<false>(
+						output_first, value);
+					return {result, {}};
+				}
+			}
+#endif
 			constexpr auto const *table{
 				::fast_io::details::to_chars_runtime_power_digits<char_type, 16u, 2u>.data()};
-			while (value >= 256u)
+			if constexpr (::std::numeric_limits<U>::digits > 8u)
 			{
-				::std::size_t const index{static_cast<::std::size_t>(value & static_cast<U>(255u)) * 2u};
-				iter -= 2u;
-				::fast_io::details::non_overlapped_copy_n(table + index, 2u, iter);
-				value >>= 8u;
+				while (value >= 256u)
+				{
+					::std::size_t const index{
+						static_cast<::std::size_t>(value & static_cast<U>(255u)) * 2u};
+					iter -= 2u;
+					::fast_io::details::non_overlapped_copy_n(table + index, 2u, iter);
+					value >>= 8u;
+				}
 			}
 		}
 		do
@@ -382,6 +591,16 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 			digits += 4u;
 			break;
 		}
+		/*
+		For native x86-64, the per-base table and the branch-free reciprocal
+		invariant documented above compute exactly floor(n/base^4) over the complete
+		uint64_t domain; the surrounding comparisons have already excluded the
+		terminal cases.  The `/ divisor4` arm computes the same quotient for
+		other targets and wider types.  The architecture guard is conservative code
+		generation, and ARM64EC is not treated as native x86-64.  M4 native screening
+		rejected widening this reciprocal graph; traditional AArch64 evidence is
+		static only and therefore does not justify widening the gate.
+		*/
 #if (defined(__x86_64__) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		if constexpr (sizeof(working_type) <= sizeof(::std::uint_least64_t))
@@ -408,6 +627,12 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 	}
 	char_type *const result{first + length};
 	char_type *iter{result};
+	/*
+	The output loop applies the documented complete-domain reciprocal identity
+	first to base^2 and then to base, reconstructing each remainder as
+	n-quotient*divisor.  Each digit index is therefore in [0, base).  The fallback
+	direct-division loop has the same text and end-pointer semantics.
+	*/
 #if (defined(__x86_64__) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (sizeof(working_type) <= sizeof(::std::uint_least64_t))
@@ -473,12 +698,19 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 
 template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
+// The non-Clang GNU-compatible branch needs call-site inlining for
+// __builtin_constant_p(base) below to observe a literal.  GCC 13--16 linked
+// code-size probes verified that literal bases remove the runtime graph; other
+// GNU-compatible frontends inherit this layout and require revalidation.  Clang
+// performs the propagation without this attribute.
 #if defined(__GNUC__) && !defined(__clang__)
 [[gnu::always_inline]]
 #endif
 inline constexpr ::fast_io::basic_to_chars_result<char_type>
 to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 {
+	// Valid calls already satisfy the standard [2, 36] radix precondition.  The
+	// optional attribute is optimizer information, not algorithm dispatch.
 #if __has_cpp_attribute(assume)
 	[[assume(2 <= base && base <= 36)]];
 #endif
@@ -494,6 +726,14 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 		}
 	}
 
+	/*
+	GCC and Clang expose __builtin_constant_p, so a literal passed through this
+	runtime-base API can call the corresponding fixed-base template directly.
+	Substituting the known literal proves equivalence.  If base is not known, the
+	tests do not select an arm and execution reaches the single compact dynamic
+	implementation.  Linked assembly and code-size probes verified elimination
+	of the dynamic graph for literal bases 2--36; this is not an llvm-mca claim.
+	*/
 #if defined(__GNUC__) || defined(__clang__)
 	if (__builtin_constant_p(base) && base == 2)
 	{
@@ -529,6 +769,8 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 	}
 	if (__builtin_constant_p(base) && base == 10)
 	{
+		// A literal decimal radix may use the capacity-fast AVX-512 wrapper;
+		// all other compile targets use the ordinary fixed-base specialization.
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 		if constexpr (::std::numeric_limits<::std::uint_least32_t>::digits == 32u)
 		{
@@ -650,6 +892,8 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 
 	if (base == 10) [[likely]]
 	{
+		// Dynamic decimal input uses the same AVX-512 contract; its capacity
+		// check and scalar fallback preserve identical API behavior.
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 		if constexpr (::std::numeric_limits<::std::uint_least32_t>::digits == 32u)
 		{
@@ -671,8 +915,15 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 		{
 			*first++ = ::fast_io::char_literal_v<u8'-', char_type>;
 		}
-		return ::fast_io::details::jeaiii::jeaiii_main<
-			false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, magnitude);
+		if constexpr (::fast_io::details::to_chars_use_decimal_unchecked_helper)
+		{
+			return ::fast_io::details::to_chars_integral_decimal_unchecked(first, magnitude);
+		}
+		else
+		{
+			return ::fast_io::details::jeaiii::jeaiii_main<
+				false, false, char_type, ::fast_io::basic_to_chars_result<char_type>>(first, magnitude);
+		}
 #endif
 	}
 

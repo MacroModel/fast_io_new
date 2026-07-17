@@ -438,10 +438,49 @@ inline constexpr result_type jeaiii_result(char_type *iter) noexcept
 	}
 }
 
+/*
+single_digit_checked records a caller-to-callee proof, not an optional
+correctness check.  It may be true only when the top-level caller has already
+established n >= 10.  The public result-returning entry needs the complementary
+case below because jeaiii_first_two deliberately copies a two-code-unit table
+entry; for n < 10 that entry contains the digit followed by a zero code unit.
+Internal reserve formatters returning char_type * retain that staging behavior,
+whereas the bounded public result path writes exactly one code unit and returns
+iter + 1.
+
+The check is limited to a full, non-Ryu, non-recursive result entry.  Recursive
+JEAIII calls format decimal chunks with their own width/position invariants, so
+turning a chunk into the top-level short form would be incorrect.  Pointer-only
+and Ryu callers likewise preserve the established primitive contract.  For a
+128-bit top-level value, the proof is made before any narrowing; if its high
+half is zero, narrowing cannot turn an already-proved n >= 10 into one digit,
+and recursive calls retain their own conservative default.
+
+Encoding the proved state in the specialization lets a caller-side check
+remove the duplicate comparison and gives that code-generation choice a
+distinct specialization and mangled identity.  Current callers select the
+caller-side placement for AArch64 from native M4 measurements plus
+cross-target static evidence, and for x86-64 only on the measured GCC 15 and
+Clang 21 combinations.  Unmeasured AArch64 cores and compiler lowerings are not
+native performance evidence.  The default remains false for correctness and
+conservative code generation.  char_literal_add is used rather than an ASCII
+offset, so all supported character types and execution character sets,
+including EBCDIC char, produce the proper digit.
+*/
 template <bool ryu_mode = false, bool recursive = false, ::std::integral char_type,
-		  typename result_type = char_type *, ::fast_io::details::my_unsigned_integral U>
+		  typename result_type = char_type *, bool single_digit_checked = false,
+		  ::fast_io::details::my_unsigned_integral U>
 inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 {
+	if constexpr (!single_digit_checked && !::std::same_as<result_type, char_type *> &&
+				  !ryu_mode && !recursive)
+	{
+		if (n < 10u)
+		{
+			*iter = ::fast_io::char_literal_add<char_type>(n);
+			return jeaiii_result<result_type>(iter + 1u);
+		}
+	}
 	if constexpr (sizeof(U) > sizeof(::std::uint_least64_t) && sizeof(U) == 16) //__uint128_t
 	{
 		if (static_cast<::std::uint_least64_t>(n >> 64u) == 0)
@@ -488,6 +527,17 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			if (n < divisor8)
 			{
 				::std::uint_least32_t const u{static_cast<::std::uint_least32_t>(n)};
+				/*
+				Targets admitted by the __x86_64__/_M_X64 guard classify exact widths
+				with ordered magnitude tests; for example, u in [1000,9999] is exactly
+				the precondition of jeaiii_f<3>.
+				The non-x86 range helpers perform the same classification and emit the
+				same table entries.  An isolated M4 replacement by the exact-width tree was
+				mixed: the affected 3--8-digit aggregate was 1.0039x, while 64- and
+				128-bit carriers regressed to 0.9548x--0.9734x and AArch64 code grew by
+				about 36--39%.  The shared range layout is therefore retained; the
+				Cortex/Neoverse size figures are static code generation, not native timing.
+				*/
 #if defined(__x86_64__) || defined(_M_X64)
 				if (u < 10000u)
 				{
@@ -510,6 +560,14 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				return jeaiii_result<result_type>(jeaiii_range8(iter, u));
 #endif
 			}
+			/*
+			At this point n >= 10^8, so n < 10^9 proves an exact nine-digit width.
+			AArch64 may therefore call jeaiii_f<8> without another range search.  A
+			paired M4 substitution of range10 scored 0.9878x over the affected
+			nine-digit points and was worse for widened carriers, so the redundant
+			classifier is not retained.  The bound is the semantic proof; no native
+			Cortex/Neoverse performance claim is inferred from the M4 result.
+			*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{
@@ -519,8 +577,17 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 #else
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !defined(__tune_znver3__) && \
-	!defined(__tune_znver4__) && !defined(__tune_znver5__)
+				/*
+				AVX-VNNI uses one ISA-wide nine-digit policy.  The exact-width f<8>
+				kernel was 1.043x--1.402x faster than range10 in strict native tests
+				across GCC 13--16 and Clang 18--21, while range10 was 21--30% larger
+				in the static code-size probes.  llvm-mca disagreed for some GCC 15/16
+				Intel models, so the whole-call native result, rather than the isolated
+				static region, selects the path.  Removing Zen tune exclusions prevents
+				microarchitecture names from changing the algorithm under the same ISA
+				contract.
+				*/
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
 				return jeaiii_result<result_type>(jeaiii_f<8>(iter, static_cast<::std::uint_least32_t>(n)));
 #else
 				return jeaiii_result<result_type>(jeaiii_range10(iter, n));
@@ -637,6 +704,10 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			}
 			if (n < divisor8)
 			{
+				// Mirror the uint_least64_t-storage-width split above.  Exact bounds
+				// prove every fixed-width call; the branch admitted by the
+				// __x86_64__/_M_X64 guard and the range-helper branch are semantically
+				// equivalent.
 #if defined(__x86_64__) || defined(_M_X64)
 				if (n < 10000u)
 				{
@@ -659,8 +730,9 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				return jeaiii_result<result_type>(jeaiii_range8(iter, n));
 #endif
 			}
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !defined(__tune_znver3__) && \
-	!defined(__tune_znver4__) && !defined(__tune_znver5__)
+			// Mirror the ISA-wide AVX-VNNI nine-digit choice above for the
+			// narrower-integer branch; the exact same bound proves the fixed width.
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{
 				return jeaiii_result<result_type>(jeaiii_f<8>(iter, n));

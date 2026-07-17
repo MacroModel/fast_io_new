@@ -277,6 +277,18 @@ inline constexpr char unsigned simd16_shift_table[32]{0xFF, 0xFF, 0xFF, 0xFF, 0x
 													  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1, 2, 3, 4, 5,
 													  6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
 
+/*
+The decimal SIMD scanner is compiled only for native x86-64 with SSE4.1.
+Its movemask proves a valid digit prefix; multiply-add stages then compute
+10*d0+d1 and 100*p0+p1.  Because each proved digit is in [0,9], the packed
+stages cannot saturate.  ARM64EC is outside the native x86 builtin contract.
+GNU-family configurations other than those defining the legacy
+__INTEL_COMPILER macro use raw __builtin_ia32_* vector operations.  The
+fallback branch uses the equivalent x86-intrinsic spelling; both implement the
+same lane algebra.
+Native x86 timing and Haswell-through-Zen4 llvm-mca support the retained
+family, with llvm-mca understood only as static scheduling evidence.
+*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 
 template <bool char_execharset>
@@ -639,6 +651,9 @@ scan_int_contiguous_ascii_hex_space_part_define_impl(char_type const *first, cha
 		{
 			::std::uint_least64_t val;
 			::fast_io::freestanding::my_memcpy(__builtin_addressof(val), first, sizeof(::std::uint_least64_t));
+			// Canonical little-endian lane order places the first input byte in the
+			// low byte.  This is required both by countr_zero's first-invalid-byte
+			// result and by the subsequent hexadecimal polynomial reduction.
 			if constexpr (::std::endian::little != ::std::endian::native)
 			{
 				val = ::fast_io::little_endian(val);
@@ -677,9 +692,27 @@ scan_int_contiguous_ascii_hex_space_part_define_impl(char_type const *first, cha
 	return ret;
 }
 
-#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
+/*
+Parse exactly sixteen decimal bytes with AArch64 AdvSIMD.  Subtracting ASCII
+zero and taking a horizontal maximum proves every lane is in [0,9].  Widening
+pair, quad, and octet reductions compute base-10, base-100, and base-10000
+groups without lane overflow; octets[0]*10^8+octets[1] is therefore the input.
+Clang and supported non-Clang GNU-compatible frontends expose different raw
+builtin names, so the inner compiler guards select syntax only and avoid
+arm_neon.h.  The outer guard requires both a supported compiler and __ARM_NEON,
+the feature macro that Apple Clang removes under -mgeneral-regs-only (its
+compatibility macro __ARM_NEON__ remains set).
+The one-byte, non-EBCDIC constraint is an internal ASCII precondition, not
+merely a property of the current caller.
+Native M4 timings favor this kernel; Cortex/Neoverse llvm-mca results are
+static-only evidence.
+*/
+#if (defined(__aarch64__) || defined(__arm64__)) &&                     \
+	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
+	defined(__ARM_NEON)
 template <::std::integral char_type>
-	requires(sizeof(char_type) == sizeof(char8_t))
+	requires(sizeof(char_type) == sizeof(char8_t) &&
+			 !::fast_io::details::is_ebcdic<char_type>)
 [[gnu::always_inline]] inline bool
 aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 										::std::uint_least64_t &value) noexcept
@@ -697,6 +730,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 #endif
 
 	u8x16 raw;
+	// Both compiler arms perform the same unaligned sixteen-byte load.
 #if defined(__clang__)
 	raw = __builtin_bit_cast(
 		u8x16, __builtin_neon_vld1q_v(reinterpret_cast<unsigned char const *>(first), 48));
@@ -706,6 +740,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 #endif
 	auto const digits{raw - u8x16{48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u,
 								  48u, 48u, 48u, 48u, 48u, 48u, 48u, 48u}};
+	// Select only the compiler spelling of the same horizontal maximum.
 #if defined(__clang__)
 	auto const maximum_digit{static_cast<unsigned char>(__builtin_neon_vmaxvq_u8(digits))};
 #else
@@ -720,6 +755,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 	u8x8 const low_digits{__builtin_shufflevector(digits, digits, 0, 1, 2, 3, 4, 5, 6, 7)};
 	u8x8 const high_digits{__builtin_shufflevector(digits, digits, 8, 9, 10, 11, 12, 13, 14, 15)};
 	u8x8 const pair_weights{10u, 1u, 10u, 1u, 10u, 1u, 10u, 1u};
+	// Both arms compute the same adjacent 10*d0+d1 widening reduction.
 #if defined(__clang__)
 	auto const pair_products_low{__builtin_bit_cast(
 		u16x8, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_digits),
@@ -742,6 +778,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 	u16x4 const low_pairs{__builtin_shufflevector(pairs, pairs, 0, 1, 2, 3)};
 	u16x4 const high_pairs{__builtin_shufflevector(pairs, pairs, 4, 5, 6, 7)};
 	u16x4 const quad_weights{100u, 1u, 100u, 1u};
+	// Repeat the exact reduction in base 100.
 #if defined(__clang__)
 	auto const quad_products_low{__builtin_bit_cast(
 		u32x4, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_pairs),
@@ -764,6 +801,7 @@ aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 	u32x2 const low_quads{__builtin_shufflevector(quads, quads, 0, 1)};
 	u32x2 const high_quads{__builtin_shufflevector(quads, quads, 2, 3)};
 	u32x2 const octet_weights{10000u, 1u};
+	// The final compiler-spelling split forms two independent eight-digit values.
 #if defined(__clang__)
 	auto const octet_products_low{__builtin_bit_cast(
 		u64x2, __builtin_neon_vmull_v(__builtin_bit_cast(i8x8, low_quads),
@@ -808,6 +846,16 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	auto first_phase_last{first + mn_val};
 	T res{out};
 
+	/*
+	A 20-character decimal range for an unsigned type whose storage width matches
+	uint_least64_t is the maximum-width case on the measured AArch64 targets.  AArch64
+	validates 8+8+4 SWAR blocks, rejects a possible 21st digit, and compares the
+	last split against the corresponding quotient and remainder of the maximum
+	value of uint_least64_t before multiplying.
+	Those checks prove the final arithmetic cannot overflow.  Failed validation
+	falls through to the general scanner.  Native M4 retained this path; no native
+	traditional-AArch64 timing is inferred from cross-target assembly.
+	*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
 				  !::fast_io::details::is_ebcdic<char_type> &&
@@ -869,6 +917,14 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	}
 #endif
 
+	/*
+	All multi-byte scalar SWAR blocks below canonicalize the loaded word to
+	little-endian lane order.  Consequently the first code unit occupies the low
+	lane, countr_zero locates the earliest invalid input unit, and the documented
+	multiply constants reduce digits in source order on either host endianness.
+	EBCDIC and wide-code-unit predicates select separate constants or the scalar
+	fallback; byte-order conversion never assumes an execution character set.
+	*/
 	constexpr bool isebcdic{::fast_io::details::is_ebcdic<char_type>};
 	if constexpr (!isebcdic && (::std::numeric_limits<::std::uint_least64_t>::digits == 64u))
 	{
@@ -927,6 +983,10 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 
 									first += ctrz_cval;
 								}
+								// The non-Clang MSVC-compatible spelling returns directly through the
+								// same overflow checker instead of the shared forward join.  Other
+								// compilers share nextlabel to avoid cloning that checker.  Both routes
+								// preserve the same pointer and accumulator state.
 #if defined(_MSC_VER) && !defined(__clang__)
 								auto ret{scan_int_contiguous_none_simd_space_part_check_overflow_impl<base, char_type, T>(first, last, res)};
 								out = res;
@@ -936,10 +996,61 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 #endif
 							}
 
-							val -= zero_lower_bound;
-							val = (val * base_char_type) + (val >> 8);
-							val = (((val & mask) * mul1) + (((val >> 16) & mask) * mul2)) >> 32;
-							res = static_cast<T>(res * pow_base_sizeof_u64 + val);
+							/*
+							This point is reached only after the packed range test has proved that
+							all eight bytes are valid base-2 digits.  The earlier endian conversion
+							also makes the first input character byte zero of val.  Thus each byte
+							can be reduced to d_i in {0, 1}: subtracting the packed zero character
+							does so without a cross-byte borrow, while ASCII '0'/'1' masking has the
+							same result on the selected Apple path.
+
+							For D = sum(d_i * 2^(8*i)) and
+							P = 0x8040201008040201, byte seven of D*P is
+
+							    sum(d_i * 2^(7-i)),  0 <= i < 8,
+
+							which is exactly the value of the eight input bits in source order.
+							There is no carry into that byte: for every lower convolution byte k,
+							the maximum coefficient is 1 + 2 + ... + 2^k = 2^(k+1)-1,
+							which is at most 255.  Shifting the previous unsigned accumulator by
+							eight and ORing this byte therefore appends the block in base two;
+							unsigned wraparound, where relevant to the surrounding overflow logic,
+							is defined.
+
+							The Apple AArch64 mask is intentionally isolated.  Paired M4 hardware
+							measurements favored it by about one percent even though the M4
+							llvm-mca model did not predict that difference.  Cortex-A76 and
+							Neoverse-N2 static models favor the generic subtraction because it
+							avoids the extra AND.  In the inspected Apple-Clang-21 Cortex-A76 and
+							Neoverse-N2 cross-target lowerings, (val - zero) * P becomes MADD with
+							a precomputed -zero * P addend followed by EXTR; the Apple mask
+							form emits AND, MUL, and EXTR.  Traditional AArch64 keeps the former,
+							while x86-64 keeps the algebraically equivalent generic subtraction
+							with an ISA-specific lowering.  These are respectively measured and
+							modeled claims, not a claim for every core or compiler lowering.
+
+							The enclosing one-byte, non-EBCDIC condition keeps the ASCII reduction
+							out of wide and EBCDIC paths.  Invalid or partial blocks branch above
+							this code and retain the existing scalar reduction.
+							*/
+							if constexpr (base_char_type == 2u)
+							{
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
+								val &= baseval;
+#else
+								val -= zero_lower_bound;
+#endif
+								val *= UINT64_C(0x8040201008040201);
+								res = static_cast<T>((static_cast<unsigned_type>(res) << 8u) |
+													 static_cast<unsigned_type>(val >> 56u));
+							}
+							else
+							{
+								val -= zero_lower_bound;
+								val = (val * base_char_type) + (val >> 8);
+								val = (((val & mask) * mul1) + (((val >> 16) & mask) * mul2)) >> 32;
+								res = static_cast<T>(res * pow_base_sizeof_u64 + val);
+							}
 							first += sizeof(::std::uint_least64_t);
 						}
 					}
@@ -985,6 +1096,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 
 									first += ctrz_cval;
 								}
+								// Repeat the direct-return compatibility spelling for this 32-bit
+								// partial SWAR exit; its state matches the shared join.
 #if defined(_MSC_VER) && !defined(__clang__)
 								auto ret{scan_int_contiguous_none_simd_space_part_check_overflow_impl<base, char_type, T>(first, last, res)};
 								out = res;
@@ -1047,6 +1160,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 
 									first += ctrz_cval;
 								}
+								// Repeat the direct-return compatibility spelling for this partial
+								// char16_t block; its state matches the shared join.
 #if defined(_MSC_VER) && !defined(__clang__)
 								auto ret{scan_int_contiguous_none_simd_space_part_check_overflow_impl<base, char_type, T>(first, last, res)};
 								out = res;
@@ -1122,6 +1237,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 									first += ctrz_cval;
 								}
 
+								// Repeat the direct-return compatibility spelling for this partial
+								// alphanumeric block; its state matches the shared join.
 #if defined(_MSC_VER) && !defined(__clang__)
 								auto ret{scan_int_contiguous_none_simd_space_part_check_overflow_impl<base, char_type, T>(first, last, res)};
 								out = res;
@@ -1186,6 +1303,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 
 									first += ctrz_cval;
 								}
+								// Repeat the direct-return compatibility spelling for the small-word
+								// SWAR exit; its state matches the shared join.
 #if defined(_MSC_VER) && !defined(__clang__)
 								auto ret{scan_int_contiguous_none_simd_space_part_check_overflow_impl<base, char_type, T>(first, last, res)};
 								out = res;
@@ -1206,9 +1325,11 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 			}
 		}
 	}
-	// Clang's AVX2 cost model otherwise expands this serial accumulator to
+	// The observed Clang AVX2 lowering otherwise expands this serial accumulator to
 	// eight copies under -march=native.  The wider body adds front-end work
 	// without breaking the multiply/add dependency chain.
+	// The pragmas affect layout only.  An isolated current-version native A/B
+	// is required before assigning a numeric gain to either unroll factor.
 #if defined(__clang__) && defined(__AVX2__) && \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
 	if constexpr (11u <= base)
@@ -1244,6 +1365,7 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 		}
 	}
 
+	// Only the compiler arms that use the shared goto require this join label.
 #if !defined(_MSC_VER) || defined(__clang__)
 [[maybe_unused]] nextlabel:;
 #endif
@@ -1305,6 +1427,8 @@ template <char8_t base, ::std::integral char_type, my_unsigned_integral T>
 inline constexpr parse_result<char_type const *>
 scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, char_type const *last, T &res) noexcept
 {
+	// SIMD and target builtins are excluded from constant evaluation.  The
+	// constexpr arm is a scalar implementation with the same parse contract.
 #ifdef __cpp_if_consteval
 	if !consteval
 #else
@@ -1327,6 +1451,17 @@ scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, cha
 	}
 }
 
+/*
+The native x86-64 four-digit helper performs one bounded 32-bit load.  After
+subtracting ASCII zero, the two masks prove 0 <= d_i < B <= 10.  Hence each
+pair d_0*B+d_1 is at most 99 and fits one selected byte, while the four-digit
+value is at most 9999 and fits the selected low 16 bits.  The masks retain
+exactly those byte and halfword fields, so a carry from an adjacent packed
+field cannot affect the result.  Call sites use it only where the destination
+cannot overflow.  GNU/Clang builtins supply the unaligned load;
+ARM64EC and other targets keep the scalar scanner.  Native x86 matrices and
+assembly support the helper, independently of this arithmetic proof.
+*/
 #if (defined(__GNUC__) || defined(__clang__)) &&                     \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -1353,6 +1488,19 @@ scan_int_contiguous_x86_parse_four_digits(char_type const *first,
 }
 #endif
 
+/*
+The eight-byte SSE4.1 helper extends the same proof to bases 5--36.  Parallel
+digit/letter masks validate all eight bytes before pmaddubsw and pmaddwd form
+base-B pairs and quads; the final scalar combination yields the original
+eight-digit polynomial.  For B <= 36, a pair is at most 1295 (< 2^15), a
+four-digit group is at most 1,679,615 (< 2^31), and the final polynomial is
+below 36^8 < 2^64.  Therefore pmaddubsw cannot saturate and pmaddwd cannot
+overflow a signed 32-bit lane.  The helper performs no over-read.  Raw
+__builtin_ia32_* names avoid an intrinsic header, and the ISA/ARM64EC guard is
+compile-target policy.
+The call-site GCC exception below is based on whole-matrix front-end evidence,
+not on a claim that these isolated multiply-add instructions are slow.
+*/
 #if (defined(__GNUC__) || defined(__clang__)) && defined(__SSE4_1__) && \
 	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) &&   \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
@@ -1426,6 +1574,20 @@ scan_int_contiguous_x86_sse_parse_eight(char_type const *first,
 }
 #endif
 
+/*
+The specialized SSE hexadecimal and octal helpers share a caller-proved
+load-width contract, prefix-validity movemask, and exact lane reduction.
+Eight or sixteen hexadecimal digits fit the corresponding unsigned block;
+signed limits and a digit beyond a full sixteen-digit hexadecimal block are
+checked explicitly.  The octal helper separately enforces its 22-digit
+leading-digit bound and the signed limit.  Every result pointer is advanced
+to the first non-digit, including after overflow skipping.  GNU-family
+configurations other than those defining the legacy __INTEL_COMPILER macro use
+raw __builtin_ia32_* operations; the fallback branch uses the equivalent
+x86-intrinsic spelling.  ASCII-only constants and call-site EBCDIC guards
+keep execution-character encodings on the scalar path.  SSE4.1 is the minimum
+compile target and there is no run-time ISA probe.
+*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 template <::std::integral char_type, my_integral T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -1861,6 +2023,16 @@ inline constexpr char_type const *skip_hexdigits(char_type const *first, char_ty
 template <char8_t base, bool shbase = false, bool skipzero = false, bool oct_c2y = false,
 		  bool allow_leading_plus = false, bool zero_terminated_ok = false,
 		  ::std::integral char_type, my_integral T>
+/*
+GCC 15 with AVX enabled was the measured compiler boundary where automatic
+loop vectorization enlarged the complete instantiated scanner and its front-end
+footprint.  Paired native all-type x86 measurements selected disabling loop
+vectorization for GCC 15; applying the same setting to GCC 13 or GCC 16
+regressed their aggregate latency.  SLP and explicit SSE builtins remain
+enabled.  The attribute changes optimization policy only, not accepted digits
+or arithmetic, and it is a compiler-version exception rather than
+microarchitecture dispatch.
+*/
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && \
 	!defined(__CUDACC__) && __GNUC__ == 15 && defined(__AVX__) &&             \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
@@ -1969,6 +2141,16 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	/*
+	This preprocessor guard begins the complete GNU-family native-x86
+	specialization region, which ends at the matching directives below.  ARM64EC
+	and non-x86 targets skip that region and resume at the shared scanner.  Its
+	first branch performs the already-validated decimal digit's one-character
+	termination check: if the second code unit is absent or non-decimal, assigning
+	first_digit and returning next is exactly the general result.  Keeping it
+	below the public wrapper makes internal input and from_chars share the path;
+	other inputs continue through the remaining x86 specializations.
+	*/
 #if (defined(__GNUC__) || defined(__clang__)) &&                      \
 	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
@@ -2070,6 +2252,15 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	{
 		::std::uint_least32_t value{static_cast<::std::uint_least32_t>(first_digit)};
 		auto iter{first + 1u};
+		/*
+		Remembering an observed non-digit avoids a duplicate lookup before the
+		overflow decision.  Measured GCC 13--16 unsigned 16-bit exact-range
+		specializations regressed when carrying that state, while the signed layout
+		retained it.  Other non-Clang GNU-compatible frontends inherit this split and
+		require revalidation; other compilers retain the state unconditionally.  The
+		false arm is semantically equivalent: it repeats char_is_digit at the same
+		input position.
+		*/
 #if defined(__GNUC__) && !defined(__clang__)
 		constexpr bool remember_nondigit{my_signed_integral<T>};
 #else
@@ -2118,6 +2309,15 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 		return {iter, parse_code::ok};
 	}
+	/*
+	For GCC 15 and newer, unsigned uint32_t in bases 12--15 may contain at most
+	nine non-overflowing digits.  The bounded path validates the remaining eight
+	digits, then evaluates the same radix polynomial with a balanced pair/quad
+	tree and performs the existing terminal/overflow checks.  GCC 13/14, Clang,
+	signed, EBCDIC, and nonmatching types use the prior scanner.  Native GCC 15/16
+	timing selected this compiler boundary; later GCC releases inherit the policy
+	and require revalidation.  llvm-mca describes only the dependency chain.
+	*/
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__) && \
 	__GNUC__ >= 15
 	constexpr bool use_bounded_u32_midbase{my_unsigned_integral<T> && 12u <= base && base <= 15u};
@@ -2264,6 +2464,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			::std::size_t digits{};
 			// Keep the two short low-base cases compact.  Other bases in this
 			// block benefit from Clang's existing expansion and stay unchanged.
+			// The pragma changes unrolling only; current-version isolated native A/B
+			// evidence is required before assigning a numeric gain to this factor.
 #if defined(__clang__) && defined(__AVX2__) && \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
 			if constexpr (base == 3u || base == 4u)
@@ -2331,6 +2533,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				auto iter{first + 4u};
 				// This path accepts at most seven characters, so no more than three
 				// remain after the four-digit SWAR conversion.
+				// The two-way Clang AVX2 unroll is layout policy only; the loop bounds
+				// and digit/overflow semantics remain unchanged.
 #if defined(__clang__) && defined(__AVX2__) && \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
 #pragma clang loop unroll_count(2)
@@ -2391,8 +2595,14 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 		}
 	}
-// GCC duplicates this base-dependent SIMD graph aggressively; its smaller
-// scalar graph is faster once the complete base 2--36 scanner is instantiated.
+	// GCC duplicates this base-dependent SIMD graph aggressively; its smaller
+	// scalar graph is faster once the complete base 2--36 scanner is instantiated.
+	// Native full matrices for GCC 13--16 and 17.8--22.0% linked-text reductions
+	// select this compiler split.  Earlier GCC and other admitted non-Clang
+	// GNU-compatible frontends inherit it conservatively without native evidence;
+	// later versions also require revalidation.  llvm-mca showed the isolated SIMD
+	// arithmetic remained competitive, so it is not evidence for the whole-call
+	// decision.
 #if defined(__SSE4_1__) && \
 	!(defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__))
 	if constexpr ((base == 5u || base == 6u || base == 7u || base == 9u ||
@@ -2419,6 +2629,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 					first, accumulator)) [[likely]]
 			{
 				auto iter{first + 8u};
+				// This Clang AVX2 factor controls only the scalar tail after an
+				// already validated SIMD prefix.  No isolated native A/B measurement
+				// currently supports a speedup claim for this factor; it remains a
+				// code-layout policy pending revalidation.
 #if defined(__clang__) && defined(__AVX2__) && \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
 				if constexpr (16u <= base)
@@ -2468,12 +2682,29 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		constexpr ::std::size_t default_inline_limit{inline_nonoverflowing_alnum
 														 ? ::fast_io::details::max_int_size_result<unsigned_type, base> - 1u
 														 : 8u};
+	/*
+	Clang AArch64 extends selected bounded short scans to at most nine input
+	digits.  For the selected bases B <= 10, so the temporary is below 10^9 and
+	cannot overflow uint64_t; the destination range is still checked after the
+	loop.  The limit changes only where the same validation and radix recurrence
+	are performed.  Native M4 and cross-target assembly retained the policy;
+	traditional-core conclusions remain static rather than native.
+	*/
 #if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
 		constexpr ::std::size_t inline_limit{
 			base == 2u || (5u <= base && base <= 10u) ? 9u : default_inline_limit};
 #else
 		constexpr ::std::size_t inline_limit{default_inline_limit};
 #endif
+	/*
+	Targets admitted by this x86-64 macro guard have bounded base-8/base-16 short
+	forms after first_digit has already been validated.  Every unrolled step
+	validates its next digit before committing the accumulator; unsigned shifts
+	or multiplies therefore reproduce the scalar radix recurrence.  The one- to
+	four-digit early returns fit even signed 64-bit T because 16^4-1 < 2^63;
+	later bounded paths retain the shared signed range check.  Other architectures
+	use the equivalent generic short loop.
+	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 		if constexpr ((base == 8u || base == 16u) && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
@@ -2625,6 +2856,17 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 		}
 #endif
+	/*
+	On targets admitted by this x86-64 macro guard, inspecting the code unit at
+	inline_limit can prove that a longer range actually terminates there.
+	Truncating last is then exact, because that code unit is known not to be a
+	digit.  SSE4.1 may reduce an eight-hex-digit unsigned prefix.  The admitted
+	non-Clang GNU-compatible branch deliberately keeps signed hexadecimal on the
+	scalar graph: native GCC 15 affected points and assembly showed the former SSE
+	layout regressed, while the unsigned specialization remains eligible.  Other
+	GCC versions and compatible frontends inherit that policy without a native
+	performance claim and require revalidation.
+	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 		{
 			if (inline_limit < static_cast<::std::size_t>(last - first) &&
@@ -2651,6 +2893,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		{
 			::std::uint_least64_t short_value{static_cast<::std::uint_least64_t>(first_digit)};
 			auto short_iter{first + 1};
+			// x86 spells the bounded octal recurrence as explicit groups.  Each
+			// digit is range-checked before committing, so it is equivalent to the
+			// generic loop and cannot read past last.
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 			if constexpr (base == 8u)
 			{
@@ -2751,6 +2996,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 			else
 #endif
+			// Clang AArch64 fully expands a compile-time-bounded loop of at most nine
+			// code units.  The same validation and radix recurrence are preserved;
+			// the pragma supplies layout policy rather than an arithmetic assumption.
 #if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
 				if constexpr (base == 2u || (5u <= base && base <= 10u))
 			{
@@ -2792,6 +3040,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			else
 #endif
 			{
+				// The Clang AVX2 two-way factor changes only loop layout.  Do not
+				// infer a current-version speedup without the isolated A/B retest.
 #if defined(__clang__) && defined(__AVX2__) && \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
 #pragma clang loop unroll_count(2)
@@ -2852,6 +3102,13 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 			return {short_iter, parse_code::ok};
 		}
+	/*
+	For at least sixteen remaining octal or hexadecimal digits, SSE4.1 validates
+	and reduces one safe full block, then preserves the existing overflow and
+	end-pointer checks.  The threshold proves the vector load is in range.  The
+	scalar x86 hexadecimal arm below remains a semantically identical fallback
+	for shorter or non-SSE configurations.
+	*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 		if constexpr (base == 8u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
@@ -2870,6 +3127,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 		}
 #endif
+	// Targets admitted by this x86-64 macro guard retain an explicitly bounded
+	// scalar hexadecimal fallback.  Its shift-by-four recurrence is exact after
+	// char_digit_to_literal validates each nibble; other targets reach the common
+	// scanner with the same contract.
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 		if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
@@ -2922,6 +3183,16 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 #endif
 	}
+	/*
+	GCC 15+ on targets admitted by this x86-64 macro guard uses a nine-digit
+	unsigned-decimal SWAR kernel.  The first eight bytes are validated in parallel
+	and reduced as pairs, quads, and one eight-digit value; the independently
+	validated ninth digit completes high*10+last.  Nine decimal digits fit
+	uint32_t, while a tenth digit and all other lengths stay on the overflow-aware
+	path.  Native GCC 15/16 timing and assembly select this compiler boundary;
+	later GCC releases inherit the policy and require revalidation.  llvm-mca
+	covers only the arithmetic region, not whole-parser latency.
+	*/
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__) && \
 	__GNUC__ >= 15 &&                                                                                 \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
@@ -2959,7 +3230,16 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 #endif
-#if (defined(__aarch64__) || defined(__arm64__)) && (!defined(_MSC_VER) || defined(__clang__))
+	/*
+	AArch64 routes 16--19 decimal digits to the proved AdvSIMD helper above, then
+	validates any scalar suffix.  Exact 20-digit input stays on the dedicated
+	overflow-aware 8+8+4 path, and the terminated 15-digit shape avoids a failed
+	vector attempt.  Every other shape falls through unchanged.  Native M4 and
+	cross-model llvm-mca evidence are reported separately.
+	*/
+#if (defined(__aarch64__) || defined(__arm64__)) &&                     \
+	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
+	defined(__ARM_NEON)
 	if constexpr (base == 10u && my_unsigned_integral<T> &&
 				  sizeof(char_type) == sizeof(char8_t) &&
 				  !::fast_io::details::is_ebcdic<char_type> &&
@@ -2998,6 +3278,14 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #endif
 	unsigned_type res{};
 	auto parse_first{first};
+	/*
+	Either bound proves that at most max_digits - 1 radix digits can be consumed.
+	Such a value fits unsigned_type, so the scanner's unsigned accumulator cannot
+	wrap; a signed destination is still range-checked after parsing.  Because
+	first_digit is already validated and mapped, seeding the accumulator with it
+	removes one equivalent scanner iteration.  Other ranges retain the zero-seeded
+	overflow path.  This applies to targets admitted by the x86-64 macro guard.
+	*/
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
 	if constexpr (sizeof(char_type) == sizeof(char8_t) &&
 				  !::fast_io::details::is_ebcdic<char_type> &&
@@ -3019,6 +3307,15 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 #endif
+	/*
+	The selected AArch64 unsigned bases use the same proved first-digit seed when
+	the range is strictly shorter than the maximum.  That bound proves overflow is
+	impossible and the general loop computes the identical radix recurrence.  The
+	selection is shared AArch64 because Apple-Clang cross-target assembly for the
+	inspected traditional cores also retained the removed iteration.  Other
+	AArch64 compiler lowerings inherit the semantically equivalent seed; this is
+	not a native traditional-core or unmeasured-compiler timing claim.
+	*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 	if constexpr (((5u <= base && base <= 9u) || 16u < base) && my_unsigned_integral<T> &&
 				  sizeof(char_type) == sizeof(char8_t) &&
@@ -3037,6 +3334,14 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	}
 #endif
 	char_type const *it;
+	/*
+	For at least 32 one-byte decimal code units, native x86 SSE4.1 amortizes its
+	16-byte validation/reduction blocks.  Constant evaluation cannot execute the
+	target builtins and therefore uses the scalar scanner.  The SIMD result is
+	range-checked before narrowing, preserving overflow and returned-pointer
+	semantics for smaller destination types.  The threshold also proves every
+	vector load used by the entry block is in range.
+	*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	if constexpr (base == 10 && sizeof(char_type) == 1 && sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
 	{

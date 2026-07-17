@@ -2,6 +2,10 @@
 
 #include "itoa_precise_length.h"
 
+// This is diagnostic policy for a header-only implementation: a non-Clang
+// GNU-compatible frontend would otherwise repeat implementation-detail
+// warnings in every consumer.  The pragma changes no generated algorithm and
+// is confined to GNU pragma syntax.
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC system_header
 #endif
@@ -1828,11 +1832,82 @@ inline constexpr result_type print_reserve_power_of_two_result(char_type *iter) 
 	}
 }
 
+/*
+Convert one unsigned value whose storage width matches uint_least64_t to
+exactly sixteen hexadecimal digits with SSSE3.
+The source register is little-endian on every target admitted by this gate.
+duplicate_bytes therefore reverses the eight source bytes and places two copies
+of each byte in output order.  A four-bit logical right shift within each
+16-bit lane makes the original high nibble available in the first byte of every
+pair; the alternating masks select that nibble and the original low nibble.
+Both are in [0, 15], so the final pshufb is an exact lookup in digit_lookup.
+The single memcpy is valid for an unaligned destination and normally becomes
+one 16-byte store.
+
+The caller must prove that the representation has sixteen digits.  On the
+admitted x86-64 targets, both T and uint_least64_t have 64 value bits, so this
+is equivalent to value >= 2^60; without that precondition this fixed-width
+transform would emit leading zeroes.  The helper itself is intentionally
+ordinary inline: fixed-base and the selected runtime call sites can inline it
+without imposing an unconditional force-inline policy.
+
+This is compile-target dispatch, not run-time CPUID dispatch.  __SSSE3__ names
+the earliest permitted ISA, while AVX/AVX2 builds may encode the same 128-bit
+operations with VEX prefixes.  Raw builtins and compiler vector types avoid a
+SIMD-header dependency.  Builtin probes, the non-ARM64EC x86-64 gate, and the
+one-byte non-EBCDIC constraint make the byte order and ASCII table proof local
+to this implementation.  constexpr, wide-character, EBCDIC, ARM64EC, and
+non-x86 callers remain on the generic formatter.
+*/
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(__arm64ec__) && \
+	!defined(_M_ARM64EC) && defined(__SSSE3__) &&                        \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_pshufb128) &&                     \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128)
+template <bool uppercase, ::std::integral char_type, my_unsigned_integral T>
+	requires(sizeof(T) == sizeof(::std::uint_least64_t) &&
+			 sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) noexcept
+{
+	using v16qi [[__gnu__::__vector_size__(16)]] = char;
+	using v8hi [[__gnu__::__vector_size__(16)]] = short;
+	using v2du [[__gnu__::__vector_size__(16)]] = unsigned long long;
+	constexpr v16qi duplicate_bytes{7, 7, 6, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0};
+	constexpr v16qi high_nibble_mask{15, 0, 15, 0, 15, 0, 15, 0,
+									15, 0, 15, 0, 15, 0, 15, 0};
+	constexpr v16qi low_nibble_mask{0, 15, 0, 15, 0, 15, 0, 15,
+								   0, 15, 0, 15, 0, 15, 0, 15};
+	constexpr char alpha_a{uppercase ? 65 : 97};
+	constexpr v16qi digit_lookup{48, 49, 50, 51, 52, 53, 54, 55,
+								56, 57, alpha_a, static_cast<char>(alpha_a + 1),
+								static_cast<char>(alpha_a + 2), static_cast<char>(alpha_a + 3),
+								static_cast<char>(alpha_a + 4), static_cast<char>(alpha_a + 5)};
+	v2du const source{static_cast<unsigned long long>(value), 0u};
+	auto const duplicated{__builtin_ia32_pshufb128(
+		__builtin_bit_cast(v16qi, source), duplicate_bytes)};
+	auto const shifted{__builtin_bit_cast(
+		v16qi, __builtin_ia32_psrlwi128(__builtin_bit_cast(v8hi, duplicated), 4))};
+	auto const nibbles{(shifted & high_nibble_mask) | (duplicated & low_nibble_mask)};
+	auto const digits{__builtin_ia32_pshufb128(digit_lookup, nibbles)};
+	__builtin_memcpy(first, __builtin_addressof(digits), sizeof(digits));
+	return first + 16u;
+}
+
+#endif
+
 template <::std::size_t base, bool uppercase = false, ::std::integral char_type,
 		  typename result_type = char_type *, my_unsigned_integral T>
 	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
 inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T value) noexcept
 {
+	/*
+	AArch64 uses bounded table compositions for common short binary, octal, and
+	hexadecimal ranges.  Each range check proves the leading width; every table
+	copy emits a fixed-width suffix, so their concatenation is the unique radix
+	expansion without a leading zero.  The countl_zero/backward writer below is
+	the semantic fallback.  Native M4 measurements and the inspected Cortex-A76
+	and Neoverse-N2 llvm-mca models support the shared paths, but the latter are
+	static scheduling evidence only.
+	*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 	if constexpr (base == 2u)
 	{
@@ -1991,6 +2066,13 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 			non_overlapped_copy_n(table + low_index, 3u, first + 3u);
 			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
 		}
+		/*
+		Seven octal digits are the sole Apple-specific power-output case.  The
+		bound proves a one-digit prefix plus two padded three-digit table blocks.
+		The scoped paired M4 run favored this path by roughly 2x.  In contrast,
+		Cortex-A57/A76 and Neoverse-N1/V1 llvm-mca models favored the common
+		fallback; those are model results, not native Cortex/Neoverse timings.
+		*/
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(_M_ARM64))
 		if constexpr (::std::numeric_limits<T>::digits > 18u)
 		{
@@ -2133,6 +2215,29 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 		}
 	}
 #endif
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(__arm64ec__) && \
+	!defined(_M_ARM64EC) && defined(__SSSE3__) &&                        \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_pshufb128) &&                     \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128)
+	if constexpr (base == 16u && sizeof(T) == sizeof(::std::uint_least64_t) &&
+				  sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+	{
+		/*
+		The threshold is both the no-leading-zero proof and the natural
+		amortization boundary for this fixed-width kernel: all admitted values
+		have exactly sixteen digits,
+		so the fixed-width store returns first + 16 without a trimming pass.
+		Smaller values retain the scalar/table path.  is_constant_evaluated keeps
+		the target builtin out of constexpr execution.
+		*/
+		if (!::std::is_constant_evaluated() && value >= (static_cast<T>(1u) << 60u))
+		{
+			auto *const iter{
+				::fast_io::details::print_reserve_hexadecimal_16_ssse3<uppercase>(first, value)};
+			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(iter);
+		}
+	}
+#endif
 	constexpr ::std::size_t type_bits{::std::numeric_limits<T>::digits};
 	::std::size_t const bit_length{
 		type_bits - static_cast<::std::size_t>(::std::countl_zero(static_cast<T>(value | static_cast<T>(1u))))};
@@ -2149,6 +2254,13 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 		constexpr auto const *table{power_of_two_digits_table<char_type, base, digits_per_iteration>.data()};
 		if constexpr (type_bits > bits_per_iteration * 4u)
 		{
+			// The body already processes four independent table blocks.  These
+			// compiler-specific pragmas request the same no-further-unroll layout;
+			// they do not affect digits, stores, or the loop termination proof.  A
+			// paired Apple-Clang/M4 removal scored 0.9914x for binary inputs of at
+			// least 33 digits, so compiler-selected additional unrolling is not
+			// retained.  These directives preserve the pre-existing Clang/GCC layout
+			// policy; no GCC or non-M4 speedup is inferred from that M4 measurement.
 #if defined(__clang__)
 #pragma clang loop unroll(disable)
 #elif defined(__GNUC__)
@@ -2287,6 +2399,12 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 		constexpr auto const *table{power_of_two_digits_table<char_type, base, digits_per_iteration>.data()};
 		if constexpr (type_bits > bits_per_iteration * 4u)
 		{
+			// Preserve the same four-block software-unroll unit for octal.  Removing
+			// the directive was neutral/mixed for octal inputs of at least 17 digits
+			// (1.0024x) but the combined binary/octal Apple-Clang/M4 gate was
+			// 0.9957x, so one bounded layout policy is retained for both loops.  The
+			// directives preserve the pre-existing Clang/GCC layout; no GCC or
+			// non-M4 speedup is inferred from that M4 measurement.
 #if defined(__clang__)
 #pragma clang loop unroll(disable)
 #elif defined(__GNUC__)
@@ -2400,11 +2518,23 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 		}
 		if constexpr (type_bits > bits_per_iteration)
 		{
-#if defined(__aarch64__) || defined(_M_ARM64)
-			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration)) [[likely]]
-#else
+			/*
+			The comparison is a width proof: after the wider blocks have been removed,
+			it is true exactly when another fixed-width table pair is required.  Do not
+			attach a probability attribute here.  Apple Clang 21 propagated the former
+			AArch64 [[likely]] hint far enough backwards to outline the value >= 2^40
+			hexadecimal path into a cold helper.  Values with 11--16 hexadecimal digits
+			then paid for a non-leaf call, frame setup, and a spilled result pointer.
+			Removing the hint kept the same operations inline and improved every
+			round of the isolated M4 matrix.  The earlier isolated complete-core
+			symbol audit measured 900 to 852 bytes on Apple M4 and 912 to 864 bytes
+			for Cortex-A76 and Neoverse-N2.  The final dead-stripped linked-root audit
+			measured the Apple-Clang internal fixed-base root at 896 to 844 bytes and
+			the public literal-base root at 1836 to 1816 bytes.  These are distinct
+			measurement scopes; the Cortex and Neoverse figures are static
+			code-generation evidence, not native timing.
+			*/
 			if (value >= static_cast<T>(static_cast<T>(1u) << bits_per_iteration))
-#endif
 			{
 				::std::size_t const index{static_cast<::std::size_t>(value & mask) * digits_per_iteration};
 				value >>= bits_per_iteration;
@@ -2412,6 +2542,15 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 				non_overlapped_copy_n(table + index, digits_per_iteration, iter);
 			}
 		}
+		/*
+		After all fixed pairs are removed, hexadecimal leaves either one digit or
+		one two-digit table entry.  The value < 16 comparison proves the former
+		needs no leading zero.  AArch64 spells this tail explicitly; the generic
+		backward loop is algebraically equivalent.  Replacing it with that loop
+		scored 0.9912x over base 16 on paired M4 runs (0.9748x/0.9710x for
+		u64/i64), so the explicit tail is retained.  This is M4 evidence, not native
+		Cortex/Neoverse timing.
+		*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 		if constexpr (base == 16u)
 		{
@@ -2817,6 +2956,13 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 			}
 			else if constexpr (base == 10 && (::std::numeric_limits<::std::uint_least32_t>::digits == 32u))
 			{
+				/*
+				The decimal vector writer requires IFMA, VBMI, BW, and VL at compile
+				time.  Its nested constraint proves one-byte ASCII-compatible output
+				from an unsigned type whose storage width matches uint_least64_t, and
+				constant evaluation remains on JEAIII.  SDE correctness and assembly
+				were checked; no native AVX-512 throughput is claimed here.
+				*/
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 				if constexpr ((::std::same_as<char_type, char8_t> ||
 							   (::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)) &&

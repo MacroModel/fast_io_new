@@ -57,6 +57,20 @@ template <::std::size_t base, ::fast_io::details::my_integral T,
 [[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars_integral_fixed_base(char_type const *first, char_type const *last, T &value) noexcept
 {
+	/*
+	These bounded public-entry shortcuts and the shared scanner have identical
+	parse, overflow, and end-pointer contracts.  GNU-family native x86-64 omits
+	the duplicate wrapper graph because its shared scanner already owns the
+	accepted x86 short-input kernels.  The exclusion is a code-generation choice,
+	not an ISA correctness requirement.  ARM64EC is not classified as native
+	x86-64, and other compilers retain the conservative public shortcut.
+
+	The explicit digit tests prove that every accepted value fits: ten octal
+	digits use only 30 value bits, and at most eight digits in bases 3, 4, and
+	11--16 are below UINT64_MAX.  Every other case falls through to the same
+	general scanner.  Native GCC/Clang x86 and M4 assembly support the current
+	split; MSVC-native performance remains a separately identified retest item.
+	*/
 #if !((defined(__GNUC__) || defined(__clang__)) &&                     \
 	  (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	  !(defined(__arm64ec__) || defined(_M_ARM64EC)))
@@ -246,6 +260,9 @@ template <::fast_io::details::my_integral T, ::fast_io::details::character char_
 [[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars(char_type const *first, char_type const *last, T &value, int base = 10) noexcept
 {
+	// The standard interface requires base in [2, 36].  This optional attribute
+	// exposes that existing caller precondition to the optimizer and changes no
+	// valid-base result.
 #if __has_cpp_attribute(assume)
 	[[assume(2 <= base && base <= 36)]];
 #endif
