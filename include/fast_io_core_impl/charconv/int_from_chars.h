@@ -27,6 +27,63 @@ using from_chars_result = ::fast_io::basic_from_chars_result<char>;
 namespace details
 {
 
+template <::fast_io::details::my_integral T>
+struct from_chars_runtime_safe_digits_table
+{
+	::fast_io::freestanding::array<::std::uint_least8_t, 35u> positive;
+	::fast_io::freestanding::array<::std::uint_least8_t, 35u> negative;
+};
+
+template <::fast_io::details::my_integral T>
+inline consteval auto generate_from_chars_runtime_safe_digits() noexcept
+{
+	using unsigned_type = ::fast_io::details::my_make_unsigned_t<T>;
+	constexpr unsigned_type unsigned_max{static_cast<unsigned_type>(-1)};
+	constexpr unsigned_type positive_limit{
+		::fast_io::details::my_signed_integral<T>
+			? static_cast<unsigned_type>(unsigned_max >> 1u)
+			: unsigned_max};
+	constexpr unsigned_type negative_limit{
+		::fast_io::details::my_signed_integral<T>
+			? static_cast<unsigned_type>(positive_limit + 1u)
+			: unsigned_max};
+	::fast_io::details::from_chars_runtime_safe_digits_table<T> table{};
+	for (unsigned base{2u}; base != 37u; ++base)
+	{
+		auto count_safe_digits = [base](unsigned_type limit) constexpr {
+			::std::uint_least8_t digits{};
+			unsigned_type maximum_value{};
+			auto const maximum_digit{static_cast<unsigned_type>(base - 1u)};
+			while (maximum_value <=
+				   static_cast<unsigned_type>((limit - maximum_digit) / base))
+			{
+				maximum_value = static_cast<unsigned_type>(
+					maximum_value * static_cast<unsigned_type>(base) + maximum_digit);
+				++digits;
+			}
+			return digits;
+		};
+		table.positive.index_unchecked(base - 2u) =
+			count_safe_digits(positive_limit);
+		table.negative.index_unchecked(base - 2u) =
+			count_safe_digits(negative_limit);
+	}
+	return table;
+}
+
+/*
+For a selected radix, entry N is the largest digit count for which every
+N-digit magnitude fits the destination limit.  The generator evaluates the
+recurrence M[n+1]=M[n]*base+(base-1) only after proving it remains within the
+limit, so table construction itself cannot overflow.  The compact run-time
+parser uses this bound to keep its common prefix free of division and overflow
+comparisons; only the single boundary digit of a maximum-width value needs the
+quotient/remainder test.
+*/
+template <::fast_io::details::my_integral T>
+inline constexpr auto from_chars_runtime_safe_digits{
+	::fast_io::details::generate_from_chars_runtime_safe_digits<T>()};
+
 template <bool signed_integer, ::fast_io::details::character char_type>
 inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars_integral_map_result(::fast_io::parse_result<char_type const *> result,
@@ -170,11 +227,224 @@ from_chars_integral_fixed_base(char_type const *first, char_type const *last, T 
 		result, original_first);
 }
 
+/*
+The compact loop is deliberately not forced inline.  Folding it into the hybrid
+dispatcher makes its register pressure impose a large prologue on specialized
+leaves even though they never execute the loop.  Clang's measured
+size heuristic outlines it, confining that frame cost to the compact radix
+set; the one call/return is amortized by their digit loops.  Apple M4 assembly
+and the complete radix/length matrix both verify this layout decision.
+*/
+template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
+	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
+from_chars_integral_runtime_base_compact(char_type const *first,
+										 char_type const *last, T &value,
+										 unsigned base) noexcept
+{
+	using unsigned_char_type = ::std::make_unsigned_t<char_type>;
+	using unsigned_type = ::fast_io::details::my_make_unsigned_t<T>;
+	auto const original_first{first};
+	bool negative{};
+	if constexpr (::fast_io::details::my_signed_integral<T>)
+	{
+		if (first != last && *first == ::fast_io::char_literal_v<u8'-', char_type>)
+		{
+			negative = true;
+			++first;
+		}
+	}
+
+	/*
+	The radix is a run-time value, but the character alphabet is not.  Normalizing
+	through the base-36 digit decoder therefore accepts exactly the union of all
+	standard integer digits; the subsequent `digit < base` comparison selects the
+	requested alphabet prefix.  Reusing the established decoder also preserves
+	ASCII, wide-character, and EBCDIC execution encodings without a second table.
+
+	Let L be the largest permitted magnitude (`max(T)` or `-min(T)` for a signed
+	negative result), q=floor(L/base), and r=L mod base.  Before appending digit d,
+	`accumulator > q || (accumulator == q && d > r)` is equivalent to
+	`accumulator*base+d > L`; multiplication is performed only after that proof,
+	so the arithmetic itself cannot overflow.  Once overflow is known the loop
+	continues decoding digits solely to produce the standard end pointer.  The
+	destination is assigned only on success, preserving the required unchanged
+	value for both invalid input and out-of-range input.
+	*/
+	constexpr unsigned_type unsigned_max{static_cast<unsigned_type>(-1)};
+	unsigned_type limit{unsigned_max};
+	if constexpr (::fast_io::details::my_signed_integral<T>)
+	{
+		limit = static_cast<unsigned_type>((unsigned_max >> 1u) +
+										   static_cast<unsigned_type>(negative));
+	}
+	auto const &safe_digits_table{
+		::fast_io::details::from_chars_runtime_safe_digits<T>};
+	auto const safe_digits{static_cast<::std::size_t>(
+		(negative ? safe_digits_table.negative : safe_digits_table.positive)
+			.index_unchecked(base - 2u))};
+	unsigned_type accumulator{};
+	unsigned_type cutoff{};
+	unsigned_type cutlim{};
+	::std::size_t digits{};
+	bool any_digit{};
+	bool overflow{};
+	bool limit_ready{};
+	auto decode_digit = [base](char_type ch, unsigned_char_type &digit) constexpr {
+		digit = static_cast<unsigned_char_type>(ch);
+		return ::fast_io::details::char_digit_to_literal<36u, char_type>(digit) ||
+			   base <= digit;
+	};
+
+	/*
+	Eight- and four-digit trees shorten the dependency chain of the safe prefix.
+	For a successful eight-digit block, p_i=d[2i]*B+d[2i+1],
+	q_i=p[2i]*B^2+p[2i+1], and block=q[0]*B^4+q[1]; substitution gives exactly
+	the original radix polynomial.  Admission requires `digits + N <= safe_digits`,
+	which proves both the block and `accumulator*B^N+block` fit.  If any decoded
+	code unit is not a digit, no state is committed and the scalar loop resumes at
+	the same pointer, preserving first-invalid-character semantics.
+	*/
+	auto const radix{static_cast<unsigned_type>(base)};
+	auto const radix_squared{static_cast<unsigned_type>(radix * radix)};
+	auto const radix_fourth{
+		static_cast<unsigned_type>(radix_squared * radix_squared)};
+	auto const radix_eighth{
+		static_cast<unsigned_type>(radix_fourth * radix_fourth)};
+	while (8u <= safe_digits - digits &&
+		   8u <= static_cast<::std::size_t>(last - first))
+	{
+		unsigned_char_type digit0;
+		unsigned_char_type digit1;
+		unsigned_char_type digit2;
+		unsigned_char_type digit3;
+		unsigned_char_type digit4;
+		unsigned_char_type digit5;
+		unsigned_char_type digit6;
+		unsigned_char_type digit7;
+		bool invalid{decode_digit(first[0u], digit0)};
+		invalid |= decode_digit(first[1u], digit1);
+		invalid |= decode_digit(first[2u], digit2);
+		invalid |= decode_digit(first[3u], digit3);
+		invalid |= decode_digit(first[4u], digit4);
+		invalid |= decode_digit(first[5u], digit5);
+		invalid |= decode_digit(first[6u], digit6);
+		invalid |= decode_digit(first[7u], digit7);
+		if (invalid) [[unlikely]]
+		{
+			break;
+		}
+		auto const pair0{static_cast<unsigned_type>(digit0 * radix + digit1)};
+		auto const pair1{static_cast<unsigned_type>(digit2 * radix + digit3)};
+		auto const pair2{static_cast<unsigned_type>(digit4 * radix + digit5)};
+		auto const pair3{static_cast<unsigned_type>(digit6 * radix + digit7)};
+		auto const quad0{
+			static_cast<unsigned_type>(pair0 * radix_squared + pair1)};
+		auto const quad1{
+			static_cast<unsigned_type>(pair2 * radix_squared + pair3)};
+		auto const block{
+			static_cast<unsigned_type>(quad0 * radix_fourth + quad1)};
+		accumulator = static_cast<unsigned_type>(
+			accumulator * radix_eighth + block);
+		first += 8u;
+		digits += 8u;
+		any_digit = true;
+	}
+	while (4u <= safe_digits - digits &&
+		   4u <= static_cast<::std::size_t>(last - first))
+	{
+		unsigned_char_type digit0;
+		unsigned_char_type digit1;
+		unsigned_char_type digit2;
+		unsigned_char_type digit3;
+		bool invalid{decode_digit(first[0u], digit0)};
+		invalid |= decode_digit(first[1u], digit1);
+		invalid |= decode_digit(first[2u], digit2);
+		invalid |= decode_digit(first[3u], digit3);
+		if (invalid) [[unlikely]]
+		{
+			break;
+		}
+		auto const pair0{static_cast<unsigned_type>(digit0 * radix + digit1)};
+		auto const pair1{static_cast<unsigned_type>(digit2 * radix + digit3)};
+		auto const block{
+			static_cast<unsigned_type>(pair0 * radix_squared + pair1)};
+		accumulator = static_cast<unsigned_type>(
+			accumulator * radix_fourth + block);
+		first += 4u;
+		digits += 4u;
+		any_digit = true;
+	}
+	for (; first != last; ++first)
+	{
+		unsigned_char_type digit;
+		if (decode_digit(*first, digit))
+		{
+			break;
+		}
+		any_digit = true;
+		if (!overflow)
+		{
+			if (digits < safe_digits)
+			{
+				accumulator = static_cast<unsigned_type>(
+					accumulator * static_cast<unsigned_type>(base) +
+					static_cast<unsigned_type>(digit));
+			}
+			else
+			{
+				if (!limit_ready)
+				{
+					cutoff = static_cast<unsigned_type>(limit / base);
+					cutlim = static_cast<unsigned_type>(limit % base);
+					limit_ready = true;
+				}
+				overflow = cutoff < accumulator ||
+						   (accumulator == cutoff && cutlim < digit);
+				if (!overflow)
+				{
+					accumulator = static_cast<unsigned_type>(
+						accumulator * static_cast<unsigned_type>(base) +
+						static_cast<unsigned_type>(digit));
+				}
+			}
+		}
+		++digits;
+	}
+	if (!any_digit) [[unlikely]]
+	{
+		return {original_first, ::std::errc::invalid_argument};
+	}
+	if (overflow) [[unlikely]]
+	{
+		return {first, ::std::errc::result_out_of_range};
+	}
+	if constexpr (::fast_io::details::my_signed_integral<T>)
+	{
+		value = negative
+					? static_cast<T>(static_cast<unsigned_type>(unsigned_type{} - accumulator))
+					: static_cast<T>(accumulator);
+	}
+	else
+	{
+		value = static_cast<T>(accumulator);
+	}
+	return {first, {}};
+}
+
+/*
+This explicitly written switch is the conservative fallback for frontends on
+which the compact split is not profitable.  It also remains an internal
+semantic reference for tests.  Clang callers use direct constant
+branches in the public wrapper, which preserve the specialized decimal,
+hexadecimal, SIMD, and bounded integer kernels without macro-generated control
+flow.
+*/
 template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
 [[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
-from_chars_integral_runtime_base(char_type const *first, char_type const *last, T &value,
-								 int base) noexcept
+from_chars_integral_literal_base(char_type const *first, char_type const *last,
+								 T &value, int base) noexcept
 {
 	switch (base)
 	{
@@ -266,7 +536,199 @@ from_chars(char_type const *first, char_type const *last, T &value, int base = 1
 #if __has_cpp_attribute(assume)
 	[[assume(2 <= base && base <= 36)]];
 #endif
-	return ::fast_io::details::from_chars_integral_runtime_base(first, last, value, base);
+	/*
+	Clang's `__builtin_constant_p` is evaluated after this always-inline public
+	wrapper sees its caller.  Literal radices therefore retain the fixed-base
+	assembly, while a run-time radix has no edge to the large switch.  Native MSVC
+	has no equivalent source-level constant predicate.  GCC 13 and GCC 15 do
+	expose the predicate, but their frontends still emit dead scanner template
+	graphs and their compact-loop scheduling regressed the measured x86-64 matrix.
+	Those frontends therefore retain the full switch; this is a measured code-
+	generation split, not a semantic or ISA distinction.
+	*/
+#if defined(__clang__)
+	if (__builtin_constant_p(base) && base == 2)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<2u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 3)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<3u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 4)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<4u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 5)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<5u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 6)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<6u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 7)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<7u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 8)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<8u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 9)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<9u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 10)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<10u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 11)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<11u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 12)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<12u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 13)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<13u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 14)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<14u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 15)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<15u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 16)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<16u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 17)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<17u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 18)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<18u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 19)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<19u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 20)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<20u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 21)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<21u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 22)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<22u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 23)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<23u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 24)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<24u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 25)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<25u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 26)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<26u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 27)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<27u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 28)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<28u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 29)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<29u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 30)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<30u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 31)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<31u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 32)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<32u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 33)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<33u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 34)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<34u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 35)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<35u>(first, last, value);
+	}
+	if (__builtin_constant_p(base) && base == 36)
+	{
+		return ::fast_io::details::from_chars_integral_fixed_base<36u>(first, last, value);
+	}
+	/*
+	Radices 2--9 have the longest legal uint64_t inputs (64 through 21 digits),
+	so recurrence latency is amplified there and the established block/SIMD
+	kernels provide a material throughput advantage.  Apple M4 measurements show
+	that retaining these eight leaves recovers almost all of the full 35-leaf
+	switch's weighted throughput.  Decimal remains specialized because it is the
+	dominant public radix; hexadecimal remains specialized because its dedicated
+	kernel recovered about ten percent in the per-base M4 matrix for a small code-
+	size increment.  The remaining radices use the compact shared recurrence,
+	which removes the majority of the run-time-base call graph.
+	*/
+	switch (base)
+	{
+	case 2:
+		return ::fast_io::details::from_chars_integral_fixed_base<2u>(first, last, value);
+	case 3:
+		return ::fast_io::details::from_chars_integral_fixed_base<3u>(first, last, value);
+	case 4:
+		return ::fast_io::details::from_chars_integral_fixed_base<4u>(first, last, value);
+	case 5:
+		return ::fast_io::details::from_chars_integral_fixed_base<5u>(first, last, value);
+	case 6:
+		return ::fast_io::details::from_chars_integral_fixed_base<6u>(first, last, value);
+	case 7:
+		return ::fast_io::details::from_chars_integral_fixed_base<7u>(first, last, value);
+	case 8:
+		return ::fast_io::details::from_chars_integral_fixed_base<8u>(first, last, value);
+	case 9:
+		return ::fast_io::details::from_chars_integral_fixed_base<9u>(first, last, value);
+	[[likely]] case 10:
+		return ::fast_io::details::from_chars_integral_fixed_base<10u>(first, last, value);
+	case 16:
+		return ::fast_io::details::from_chars_integral_fixed_base<16u>(first, last, value);
+	default:
+		break;
+	}
+	return ::fast_io::details::from_chars_integral_runtime_base_compact(
+		first, last, value, static_cast<unsigned>(base));
+#else
+	return ::fast_io::details::from_chars_integral_literal_base(first, last, value,
+																base);
+#endif
 }
 
 template <::fast_io::details::character char_type>
