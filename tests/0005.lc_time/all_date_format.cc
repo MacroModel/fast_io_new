@@ -37,10 +37,12 @@ int main()
 			char8_t format_buffer[3]{u8'%', u8'%', u8'%'};
 			fast_io::basic_io_scatter_t<char8_t> test_format{format_buffer, 2};
 			fast_io::native_l10n loc(fast_io::mnp::os_c_str(fnm));
+			auto const *locale_object{::fast_io::get_lc<char8_t>(loc.loc)};
+			::fast_io::details::lc_time_view<char8_t> const locale{__builtin_addressof(locale_object->all)};
 			auto test = [&](char8_t i) {
-				std::size_t reserved{::fast_io::details::lc_print_reserve_size_time_format_common_impl(loc.loc.u8all->time, ts, test_format)};
+				std::size_t reserved{::fast_io::details::lc_print_reserve_size_time_format_common_impl(locale, ts, test_format)};
 				u8s.resize(reserved);
-				auto itr = ::fast_io::details::lc_print_reserve_define_time_fmt_common_impl(loc.loc.u8all->time, u8s.data(), ts, test_format);
+				auto itr = ::fast_io::details::lc_print_reserve_define_time_fmt_common_impl(locale, u8s.data(), ts, test_format);
 				std::size_t actual{static_cast<std::size_t>(itr - u8s.data())};
 				print(f, fast_io::mnp::chvw(i), u8" reserved:", reserved, u8"\tactually use:", actual);
 				if (reserved < actual)
@@ -48,7 +50,7 @@ int main()
 					print(f, u8"\twrong!");
 				}
 				print(f, u8"\tresult:");
-				write(f, u8s.data(), itr);
+				::fast_io::operations::write_all(f, u8s.data(), itr);
 				println(f);
 			};
 			for (char8_t i{u8'A'}; i <= u8'Z'; ++i)

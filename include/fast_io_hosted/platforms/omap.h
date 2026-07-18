@@ -24,15 +24,40 @@ public:
 };
 
 template <::std::integral ch_type>
-inline constexpr basic_omemory_map<ch_type> output_stream_ref_define(basic_omemory_map<ch_type> other) noexcept
+struct basic_omemory_map_ref
 {
-	return other;
+	using output_char_type = ch_type;
+	basic_omemory_map<ch_type> *ptr{};
+};
+
+template <::std::integral ch_type>
+inline constexpr basic_omemory_map_ref<ch_type>
+output_stream_ref_define(basic_omemory_map<ch_type> &other) noexcept
+{
+	// The cursor is mutable stream state. A value observer would advance only a disposable copy and make
+	// `written_bytes()` permanently report the original position.
+	return {__builtin_addressof(other)};
 }
 
 template <::std::integral ch_type>
-inline constexpr basic_omemory_map<ch_type> output_bytes_stream_ref_define(basic_omemory_map<ch_type> other) noexcept
+inline constexpr basic_omemory_map_ref<ch_type>
+output_stream_ref_define(basic_omemory_map<ch_type> &&other) noexcept
 {
-	return other;
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_omemory_map_ref<ch_type>
+output_bytes_stream_ref_define(basic_omemory_map<ch_type> &other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_omemory_map_ref<ch_type>
+output_bytes_stream_ref_define(basic_omemory_map<ch_type> &&other) noexcept
+{
+	return {__builtin_addressof(other)};
 }
 
 #if 0
@@ -86,8 +111,39 @@ inline constexpr void obuffer_set_curr(basic_omemory_map<char_type> &bomp, char_
 }
 
 template <::std::integral char_type>
-inline constexpr void obuffer_obuffer_overflow_never(basic_omemory_map<char_type> &) noexcept
+inline constexpr char_type *obuffer_begin(basic_omemory_map_ref<char_type> bomp) noexcept
 {
+	return bomp.ptr->begin_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *obuffer_curr(basic_omemory_map_ref<char_type> bomp) noexcept
+{
+	return bomp.ptr->curr_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *obuffer_end(basic_omemory_map_ref<char_type> bomp) noexcept
+{
+	return bomp.ptr->end_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr void obuffer_set_curr(basic_omemory_map_ref<char_type> bomp, char_type *ptr) noexcept
+{
+	bomp.ptr->curr_ptr = ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr void obuffer_overflow(basic_omemory_map_ref<char_type>, char_type) noexcept
+{
+	fast_terminate();
+}
+
+template <::std::integral char_type>
+inline constexpr bool obuffer_overflow_never(basic_omemory_map_ref<char_type>) noexcept
+{
+	return true;
 }
 
 using omemory_map = basic_omemory_map<char>;
@@ -108,15 +164,39 @@ public:
 };
 
 template <::std::integral ch_type>
-inline constexpr basic_imemory_map<ch_type> input_stream_ref_define(basic_imemory_map<ch_type> other) noexcept
+struct basic_imemory_map_ref
 {
-	return other;
+	using input_char_type = ch_type;
+	basic_imemory_map<ch_type> *ptr{};
+};
+
+template <::std::integral ch_type>
+inline constexpr basic_imemory_map_ref<ch_type>
+input_stream_ref_define(basic_imemory_map<ch_type> &other) noexcept
+{
+	// Retain cursor ownership in the public map object so multi-argument and subsequent scans observe one position.
+	return {__builtin_addressof(other)};
 }
 
 template <::std::integral ch_type>
-inline constexpr basic_imemory_map<ch_type> input_bytes_stream_ref_define(basic_imemory_map<ch_type> other) noexcept
+inline constexpr basic_imemory_map_ref<ch_type>
+input_stream_ref_define(basic_imemory_map<ch_type> &&other) noexcept
 {
-	return other;
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_imemory_map_ref<ch_type>
+input_bytes_stream_ref_define(basic_imemory_map<ch_type> &other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_imemory_map_ref<ch_type>
+input_bytes_stream_ref_define(basic_imemory_map<ch_type> &&other) noexcept
+{
+	return {__builtin_addressof(other)};
 }
 
 #if 0
@@ -162,8 +242,40 @@ inline constexpr void ibuffer_set_curr(basic_imemory_map<char_type> &bomp, char_
 }
 
 template <::std::integral char_type>
-inline constexpr void ibuffer_underflow_never(basic_imemory_map<char_type> &) noexcept
-{}
+inline constexpr char_type *ibuffer_begin(basic_imemory_map_ref<char_type> bomp) noexcept
+{
+	return bomp.ptr->begin_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *ibuffer_curr(basic_imemory_map_ref<char_type> bomp) noexcept
+{
+	return bomp.ptr->curr_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *ibuffer_end(basic_imemory_map_ref<char_type> bomp) noexcept
+{
+	return bomp.ptr->end_ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr bool ibuffer_underflow(basic_imemory_map_ref<char_type>) noexcept
+{
+	return false;
+}
+
+template <::std::integral char_type>
+inline constexpr void ibuffer_set_curr(basic_imemory_map_ref<char_type> bomp, char_type *ptr) noexcept
+{
+	bomp.ptr->curr_ptr = ptr;
+}
+
+template <::std::integral char_type>
+inline constexpr bool ibuffer_underflow_never(basic_imemory_map_ref<char_type>) noexcept
+{
+	return true;
+}
 
 using imemory_map = basic_imemory_map<char>;
 

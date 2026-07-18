@@ -3,6 +3,11 @@
 namespace fast_io
 {
 
+// Chrono facet descriptors are compact RVAs owned by `basic_lc_object`, not process pointers. Size-only paths read the
+// descriptor count directly because they observe no storage. Every materialization path resolves the selected RVA
+// through `lc_resolve_scatter`, which both re-establishes the pointer and validates the closed interval before copying.
+// Keeping that translation at the locale boundary leaves the ordinary chrono fallback and character kernels unchanged.
+
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type>
 inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const *__restrict all,
@@ -20,7 +25,7 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 		{
 			value = 0;
 		}
-		return all->time.day[value].len;
+		return all->time.day[value].length;
 	}
 }
 
@@ -39,7 +44,9 @@ inline constexpr char_type *print_reserve_define(basic_lc_all<char_type> const *
 		{
 			value = {};
 		}
-		return details::non_overlapped_copy_n(all->time.day[value].base, all->time.day[value].len, it);
+		auto const scatter{
+			::fast_io::details::lc_resolve_scatter(all, all->time.day[value])};
+		return details::non_overlapped_copy_n(scatter.base, scatter.len, it);
 	}
 }
 
@@ -51,7 +58,7 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 	--value;
 	if (value < 12u)
 	{
-		return all->time.mon[value].len;
+		return all->time.mon[value].length;
 	}
 	else
 	{
@@ -69,7 +76,9 @@ inline constexpr Iter print_reserve_define(basic_lc_all<char_type> const *__rest
 	--value;
 	if (value < 12u)
 	{
-		return details::non_overlapped_copy_n(all->time.mon[value].base, all->time.mon[value].len, iter);
+		auto const scatter{
+			::fast_io::details::lc_resolve_scatter(all, all->time.mon[value])};
+		return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 	}
 	else
 	{
@@ -146,7 +155,16 @@ template <::std::integral char_type>
 inline constexpr basic_io_scatter_t<char_type> print_scatter_define(basic_lc_all<char_type> const *__restrict all,
 																	am_pm_t<bool> ampm) noexcept
 {
-	return all->time.am_pm[ampm.reference];
+	return ::fast_io::details::lc_resolve_scatter(all, all->time.am_pm[ampm.reference]);
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_lc_borrowed_scatter_source(
+	io_reserve_type_t<char_type, am_pm_t<bool>>) noexcept
+{
+	// AM/PM names are stable descriptors in the enclosing locale object, and an unchanged boolean index is repeatable.
+	// The marker is intentionally limited to this exact manipulator rather than inferred for every locale scatter.
+	return {};
 }
 
 template <::std::integral char_type>
@@ -165,7 +183,7 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 		{
 			value = 0;
 		}
-		return all->time.abday[value].len;
+		return all->time.abday[value].length;
 	}
 }
 
@@ -184,7 +202,9 @@ inline constexpr char_type *print_reserve_define(basic_lc_all<char_type> const *
 		{
 			value = {};
 		}
-		return details::non_overlapped_copy_n(all->time.abday[value].base, all->time.abday[value].len, it);
+		auto const scatter{
+			::fast_io::details::lc_resolve_scatter(all, all->time.abday[value])};
+		return details::non_overlapped_copy_n(scatter.base, scatter.len, it);
 	}
 }
 
@@ -196,7 +216,7 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 	--value;
 	if (value < 12u)
 	{
-		return all->time.abmon[value].len;
+		return all->time.abmon[value].length;
 	}
 	else
 	{
@@ -214,7 +234,9 @@ inline constexpr Iter print_reserve_define(basic_lc_all<char_type> const *__rest
 	--value;
 	if (value < 12u)
 	{
-		return details::non_overlapped_copy_n(all->time.abmon[value].base, all->time.abmon[value].len, iter);
+		auto const scatter{
+			::fast_io::details::lc_resolve_scatter(all, all->time.abmon[value])};
+		return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 	}
 	else
 	{
@@ -230,13 +252,13 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 	--value;
 	if (value < 12u)
 	{
-		if (all->time.ab_alt_mon[value].len == 0)
+		if (all->time.ab_alt_mon[value].length == 0)
 		{
-			return all->time.abmon[value].len;
+			return all->time.abmon[value].length;
 		}
 		else
 		{
-			return all->time.ab_alt_mon[value].len;
+			return all->time.ab_alt_mon[value].length;
 		}
 	}
 	else
@@ -255,14 +277,17 @@ inline constexpr Iter print_reserve_define(basic_lc_all<char_type> const *__rest
 	--value;
 	if (value < 12u)
 	{
-		if (all->time.ab_alt_mon[value].len == 0)
+		if (all->time.ab_alt_mon[value].length == 0)
 		{
-			return details::non_overlapped_copy_n(all->time.abmon[value].base, all->time.abmon[value].len, iter);
+			auto const scatter{
+				::fast_io::details::lc_resolve_scatter(all, all->time.abmon[value])};
+			return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 		}
 		else
 		{
-			return details::non_overlapped_copy_n(all->time.ab_alt_mon[value].base, all->time.ab_alt_mon[value].len,
-												  iter);
+			auto const scatter{
+				::fast_io::details::lc_resolve_scatter(all, all->time.ab_alt_mon[value])};
+			return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 		}
 	}
 	else
@@ -275,15 +300,20 @@ template <::std::integral char_type, typename T>
 	requires(::std::same_as<T, ::std::chrono::month> || ::std::same_as<T, ::std::chrono::day> ||
 			 ::std::same_as<T, ::std::chrono::weekday>)
 inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const *__restrict all,
-												  alt_num_t<T> m) noexcept
+											  alt_num_t<T> m) noexcept
 {
 	using namespace ::std::chrono;
+	// `alt_digits` is a relative descriptor into the locale's descriptor table. Resolve that outer table once; the
+	// selected entry remains a compact character RVA, so a size query can read its count without touching character
+	// storage. Materialization below performs the second, character-table resolution only for the selected entry.
+	auto const alt_digits{
+		::fast_io::details::lc_resolve_scatter(all, all->time.alt_digits)};
 	if constexpr (::std::same_as<month, T> || ::std::same_as<day, T>)
 	{
 		unsigned value(m.reference);
-		if (value < all->time.alt_digits.len)
+		if (value < alt_digits.len)
 		{
-			return all->time.alt_digits.base[value].len;
+			return alt_digits.base[value].length;
 		}
 		else
 		{
@@ -294,9 +324,9 @@ inline constexpr ::std::size_t print_reserve_size(basic_lc_all<char_type> const 
 	else
 	{
 		unsigned value(m.reference.iso_encoding());
-		if (value < all->time.alt_digits.len)
+		if (value < alt_digits.len)
 		{
-			return all->time.alt_digits.base[value].len;
+			return alt_digits.base[value].length;
 		}
 		else
 		{
@@ -313,13 +343,16 @@ inline constexpr Iter print_reserve_define(basic_lc_all<char_type> const *__rest
 										   alt_num_t<T> m) noexcept
 {
 	using namespace ::std::chrono;
+	auto const alt_digits{
+		::fast_io::details::lc_resolve_scatter(all, all->time.alt_digits)};
 	if constexpr (::std::same_as<month, T> || ::std::same_as<day, T>)
 	{
 		unsigned value(m.reference);
-		if (value < all->time.alt_digits.len)
+		if (value < alt_digits.len)
 		{
-			return details::non_overlapped_copy_n(all->time.alt_digits.base[value].base,
-												  all->time.alt_digits.base[value].len, iter);
+			auto const scatter{
+				::fast_io::details::lc_resolve_scatter(all, alt_digits.base[value])};
+			return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 		}
 		else
 		{
@@ -329,10 +362,11 @@ inline constexpr Iter print_reserve_define(basic_lc_all<char_type> const *__rest
 	else
 	{
 		unsigned value(m.reference.iso_encoding());
-		if (value < all->time.alt_digits.len)
+		if (value < alt_digits.len)
 		{
-			return details::non_overlapped_copy_n(all->time.alt_digits.base[value].base,
-												  all->time.alt_digits.base[value].len, iter);
+			auto const scatter{
+				::fast_io::details::lc_resolve_scatter(all, alt_digits.base[value])};
+			return details::non_overlapped_copy_n(scatter.base, scatter.len, iter);
 		}
 		else
 		{

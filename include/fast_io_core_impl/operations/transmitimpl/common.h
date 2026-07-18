@@ -3,6 +3,39 @@
 namespace fast_io
 {
 
+namespace operations::decay::defines
+{
+
+// Observer transport invariant shared by every transmit strategy:
+// Public transmit functions retain each stream-ref result in a `decltype(auto)` local. A prvalue therefore has exactly
+// one owner, whereas ABI-aware normalization can preserve a stable lvalue for a large, non-trivial, or noncopyable
+// observer. Decay and main layers accept forwarding/reference parameters only as lifetime-preserving borrows: they
+// never forward those named parameters into another owner. At a mutex edge, the unlocked CPO result is likewise
+// retained before recursion. These rules are stronger than an ABI-size heuristic because no observer copy edge remains
+// in transmit at all; `abi_value_*` is consequently neither needed nor truthful as an admission condition here.
+
+/// @brief Requires every synchronization marker participating in a transmit to provide its complete directional
+///        protocol.
+/// @details Transmit recursively replaces a locked stream with its unlocked reference. A marker without the matching
+///          unlocked CPO, a storable exact-void mutex proxy, character preservation, or immediate type progress can
+///          never satisfy that recursion. Rejecting the pair in constraints keeps such partial protocols out of every
+///          transmit body instead of allowing a later, operation-dependent substitution failure.
+///
+///          This concept deliberately does not claim that two independent mutex proxies have a globally safe lock
+///          order. The current mutex vocabulary exposes only `lock()` and `unlock()`; it provides neither comparable
+///          identity nor `try_lock()`, so deadlock-free dual acquisition cannot be proved at the concept layer.
+template <typename output, typename input>
+concept has_complete_transmit_mutex_protocols =
+	(!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+		 ::std::remove_cvref_t<output>> ||
+	 ::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
+		 ::std::remove_cvref_t<output>>) &&
+	(!::fast_io::operations::decay::defines::has_input_or_io_stream_mutex_ref_define<
+		 ::std::remove_cvref_t<input>> ||
+	 ::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<::std::remove_cvref_t<input>>);
+
+} // namespace operations::decay::defines
+
 namespace details
 {
 

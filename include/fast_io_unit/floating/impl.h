@@ -231,6 +231,22 @@ inline constexpr ::std::size_t print_staged_width(
 	return ::fast_io::details::da::staged_width<::std::remove_cvref_t<flt>>();
 }
 
+/// @brief Caps floating conversion staging at the measured scheduler/register envelope.
+/// @details `staged_printable` proves that independent values can be prepared before emission; it does not prove that
+///          an arbitrarily long prepared-state array is profitable. Floating states carry substantially more live data
+///          than the two-lane integer state, so inheriting the generic `SIZE_MAX` policy allowed long packs to create a
+///          4-KiB optimization frame, extend every conversion's live range, and spill before serialization. Eight is
+///          the largest lane count covered by the current staged floating code-generation/throughput matrix. Larger
+///          runs retain the ordinary bounded formatter, preserving output and allocation semantics while avoiding an
+///          unaudited register-pressure strategy.
+template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires ::fast_io::details::print_floating_staged_supported<flags, flt>
+inline constexpr ::std::size_t print_staged_max_count(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
+{
+	return 8u;
+}
+
 /// @brief Selects the audited staged fallback placement for one floating formatter type.
 /// @details The in-caller path is limited to ASCII `char` shortest-decimal format because that is the complete caller
 ///          measured by the target policy. Wider characters, EBCDIC execution character sets, and other presentation

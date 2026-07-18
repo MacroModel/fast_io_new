@@ -190,9 +190,17 @@ concept my_floating_point = ::std::floating_point<T>
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE)
 							|| ::std::same_as<::std::remove_cv_t<T>, __bf16>
 #endif
-#if defined(__STDCPP_BFLOAT16_T__) || \
-	(defined(__GNUC__) && !defined(__clang__) && defined(__BFLT16_MANT_DIG__))
+// The standard bf16 literal suffix belongs to C++23.  GCC exposes the
+// underlying __bf16 type in C++20 as a vendor extension, but diagnosing the
+// suffix under -Wpedantic would make the type concept unusable in that mode.
+// Keep the standardized literal spelling only in its feature-macro domain;
+// the following GCC branch names the identical vendor type directly.
+#if defined(__STDCPP_BFLOAT16_T__)
 							|| ::std::same_as<::std::remove_cv_t<T>, decltype(0.0bf16)>
+#endif
+#if defined(__GNUC__) && !defined(__clang__) && defined(__BFLT16_MANT_DIG__) && \
+	!defined(__STDCPP_BFLOAT16_T__)
+							|| ::std::same_as<::std::remove_cv_t<T>, __bf16>
 #endif
 #if defined(__STDCPP_FLOAT16_T__) || defined(__FLT16_MANT_DIG__)
 							|| ::std::same_as<::std::remove_cv_t<T>, _Float16>

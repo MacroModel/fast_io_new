@@ -121,17 +121,25 @@ inline constexpr void debug_print_after_io_print_forward(Args... args)
 #endif
 }
 
+/// @brief Dispatches the already-normalized default-stdin scanner pack without materializing it again.
+/// @details `io_scan_alias` and `io_scan_forward` may deliberately produce a noncopyable lvalue proxy. Taking this
+///          boundary by value used to copy that proxy before the real scan dispatcher, even though explicit-input
+///          scanning retained the same proxy by reference. Forwarding references preserve both stable references and
+///          owned prvalues for the duration of this complete call; the downstream dispatcher names each target as an
+///          lvalue while scanning, so no scanner CPO observes an accidental rvalue category.
 template <bool report, typename... Args>
-inline constexpr ::std::conditional_t<report, bool, void> scan_after_io_scan_forward(Args... args)
+inline constexpr ::std::conditional_t<report, bool, void> scan_after_io_scan_forward(Args &&...args)
 {
 #if __has_include(<stdio.h>)
 	if constexpr (report)
 	{
-		return ::fast_io::operations::decay::scan_freestanding_decay(c_stdin(), args...);
+		return ::fast_io::operations::decay::scan_freestanding_decay(
+			c_stdin(), ::std::forward<Args>(args)...);
 	}
 	else
 	{
-		if (!::fast_io::operations::decay::scan_freestanding_decay(c_stdin(), args...))
+		if (!::fast_io::operations::decay::scan_freestanding_decay(
+				c_stdin(), ::std::forward<Args>(args)...))
 		{
 			::fast_io::throw_parse_code(fast_io::parse_code::end_of_file);
 		}

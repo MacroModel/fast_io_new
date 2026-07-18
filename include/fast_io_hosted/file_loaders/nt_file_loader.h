@@ -823,9 +823,20 @@ public:
 
 template <::fast_io::nt_family family>
 inline constexpr basic_io_scatter_t<char> print_alias_define(::fast_io::io_alias_t,
-															 nt_family_file_loader<family> const &load) noexcept
+														 nt_family_file_loader<family> const &load) noexcept
 {
 	return {load.data(), load.size()};
+}
+
+/// @brief Marks an NT-family file loader as the owner of its print-alias mapping.
+/// @details The family parameter changes the system-call spelling, not ownership: every specialization retains its
+///          mapped address until `close`, `release`, or destruction. Alias construction invokes none of those state
+///          transitions, so its descriptor remains valid while the source participates in the enclosing print.
+template <::fast_io::nt_family family>
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char, nt_family_file_loader<family>>) noexcept
+{
+	return {};
 }
 
 using nt_file_loader = nt_family_file_loader<::fast_io::nt_family::nt>;

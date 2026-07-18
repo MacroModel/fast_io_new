@@ -47,7 +47,7 @@ bytes_copy_punning_impl(FromItbg fromfirst, FromIted fromlast, ToIter tofirst, T
 }
 
 template <::std::size_t blocksize, typename outstmtype, typename T1, typename T>
-inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype outsm, T1 **controller_first,
+inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype &outsm, T1 **controller_first,
 															   T const *firstblock_curr, T const *firstblock_end,
 															   T1 **controller_last, T const *lastblock_first,
 															   T const *lastblock_curr)
@@ -129,14 +129,25 @@ inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype
 }
 
 template <typename outstmtype, typename Iter, typename Iterlast>
-inline constexpr void write_all_iterator_decay_impl(outstmtype outsm, Iter first, Iterlast last)
+inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter first, Iterlast last)
 {
 	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outstmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
-			::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
-		return ::fast_io::details::write_all_iterator_decay_impl(
-			::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm), first, last);
+		if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>)
+		{
+			// Iteration may lower to several scalar writes. Holding the guard outside recursive range dispatch proves
+			// those writes form one synchronized operation instead of one independently locked operation per block.
+			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
+			decltype(auto) unlocked = ::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm);
+			return ::fast_io::details::write_all_iterator_decay_impl(unlocked, first, last);
+		}
+		else
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>,
+				"an output mutex marker requires a complete, character-preserving, type-progressing unlocked protocol");
+		}
 	}
 	else
 	{
@@ -205,19 +216,24 @@ namespace operations::decay
 {
 
 template <typename outstmtype, ::std::ranges::input_range rg>
-	requires((::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<outstmtype> ||
-			  (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<outstmtype> &&
-			   (sizeof(::std::ranges::range_value_t<rg>) % sizeof(typename outstmtype::output_char_type) == 0))) &&
+	requires((::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<
+				 ::std::remove_cvref_t<outstmtype>> ||
+			  (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
+				   ::std::remove_cvref_t<outstmtype>> &&
+			   (sizeof(::std::ranges::range_value_t<rg>) %
+					sizeof(typename ::std::remove_cvref_t<outstmtype>::output_char_type) == 0))) &&
 			 ::fast_io::freestanding::is_trivially_copyable_or_relocatable_v<::std::ranges::range_value_t<rg>>)
-inline constexpr void write_all_range_decay(outstmtype outsm, rg &&r)
+inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 {
-	using output_char_type = typename outstmtype::output_char_type;
+	using normalized_outstmtype = ::std::remove_cvref_t<outstmtype>;
+	using output_char_type = typename normalized_outstmtype::output_char_type;
 	using rgvlt = ::std::ranges::range_value_t<rg>;
 	if constexpr (::std::ranges::contiguous_range<rg>)
 	{
 		auto firstptr{::std::ranges::cdata(r)};
 		auto lastptr{::std::to_address(::std::ranges::cend(r))};
-		if constexpr (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<outstmtype> &&
+		if constexpr (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
+					  normalized_outstmtype> &&
 					  (sizeof(rgvlt) % sizeof(output_char_type) == 0))
 		{
 			if constexpr (::std::same_as<rgvlt, output_char_type>)
@@ -262,8 +278,10 @@ template <typename outstmtype, ::std::ranges::input_range R>
 #endif
 inline constexpr void write_all_range(outstmtype &&outstm, R &&r)
 {
-	::fast_io::operations::decay::write_all_range_decay(::fast_io::operations::output_stream_ref(outstm),
-														::std::forward<R>(r));
+	// This is the only owning normalization point. A prvalue result lives in `outsm`; a reference result remains a
+	// reference. Every iterator block and scatter batch below borrows this same entity.
+	decltype(auto) outsm = ::fast_io::operations::output_stream_ref(outstm);
+	::fast_io::operations::decay::write_all_range_decay(outsm, ::std::forward<R>(r));
 }
 
 } // namespace operations

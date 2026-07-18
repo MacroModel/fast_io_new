@@ -3,6 +3,10 @@
 namespace fast_io
 {
 
+/// @brief Non-owning output-stream adapter for a string-like object.
+/// @details The adapter never changes ownership of `T`; it exposes either the underlying writable-buffer protocol or
+///          its append/growth operations. Copies of the adapter therefore refer to the same destination and are cheap
+///          stream handles, while the caller remains responsible for the lifetime of the pointed-to string-like object.
 template <::std::integral ch_type, typename T>
 struct io_strlike_reference_wrapper
 {
@@ -33,37 +37,70 @@ output_stream_ref_define(io_strlike_reference_wrapper<char_type, T> bref) noexce
 }
 
 template <::std::integral char_type, typename T>
+	requires buffered_print_preferred_strlike<char_type, T>
+inline constexpr ::std::true_type
+print_buffered_preferred_stream(io_reserve_type_t<char_type, io_strlike_reference_wrapper<char_type, T>>) noexcept
+{
+	// Forward only an underlying implementation's explicit cost promise. The wrapper contributes no allocation or
+	// growth behavior of its own, so structural string-like conformance cannot manufacture this policy.
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires deferred_obuffer_commit_safe_strlike<char_type, T>
+inline constexpr ::std::true_type print_deferred_obuffer_commit_safe(
+	io_reserve_type_t<char_type, io_strlike_reference_wrapper<char_type, T>>) noexcept
+{
+	// Forward only the underlying implementation's strong semantic promise. In particular, T's associated namespace
+	// may add status or locking hooks for this wrapper, so the fact that cursor expressions exist is not proof that raw
+	// copying and one final publication preserve the complete output protocol.
+	return {};
+}
+
+template <::std::integral char_type, typename T>
 	requires buffer_strlike<char_type, T>
-inline constexpr char_type *obuffer_begin(io_strlike_reference_wrapper<char_type, T> bref) noexcept
+inline constexpr char_type *obuffer_begin(io_strlike_reference_wrapper<char_type, T> bref)
+	noexcept(noexcept(strlike_begin(::fast_io::io_strlike_type<char_type, T>, *bref.ptr)))
 {
 	return strlike_begin(::fast_io::io_strlike_type<char_type, T>, *bref.ptr);
 }
 
 template <::std::integral char_type, typename T>
 	requires buffer_strlike<char_type, T>
-inline constexpr char_type *obuffer_curr(io_strlike_reference_wrapper<char_type, T> bref) noexcept
+inline constexpr char_type *obuffer_curr(io_strlike_reference_wrapper<char_type, T> bref)
+	noexcept(noexcept(strlike_curr(::fast_io::io_strlike_type<char_type, T>, *bref.ptr)))
 {
 	return strlike_curr(::fast_io::io_strlike_type<char_type, T>, *bref.ptr);
 }
 
 template <::std::integral char_type, typename T>
 	requires buffer_strlike<char_type, T>
-inline constexpr char_type *obuffer_end(io_strlike_reference_wrapper<char_type, T> bref) noexcept
+inline constexpr char_type *obuffer_end(io_strlike_reference_wrapper<char_type, T> bref)
+	noexcept(noexcept(strlike_end(::fast_io::io_strlike_type<char_type, T>, *bref.ptr)))
 {
 	return strlike_end(::fast_io::io_strlike_type<char_type, T>, *bref.ptr);
 }
 
 template <::std::integral char_type, typename T>
 	requires buffer_strlike<char_type, T>
-inline constexpr void obuffer_set_curr(io_strlike_reference_wrapper<char_type, T> bref, char_type *i) noexcept
+inline constexpr void obuffer_set_curr(io_strlike_reference_wrapper<char_type, T> bref, char_type *i)
+	noexcept(noexcept(strlike_set_curr(::fast_io::io_strlike_type<char_type, T>, *bref.ptr, i)))
 {
 	return strlike_set_curr(::fast_io::io_strlike_type<char_type, T>, *bref.ptr, i);
 }
 
 template <::std::integral char_type, typename T>
 	requires buffer_strlike<char_type, T>
-inline constexpr void obuffer_flush_reserve_define(io_strlike_reference_wrapper<char_type, T> bref, ::std::size_t to_reserve) noexcept
+inline constexpr void obuffer_flush_reserve_define(
+	io_strlike_reference_wrapper<char_type, T> bref, ::std::size_t to_reserve)
+	noexcept(
+		noexcept(strlike_begin(::fast_io::io_strlike_type<char_type, T>, *bref.ptr)) &&
+		noexcept(strlike_curr(::fast_io::io_strlike_type<char_type, T>, *bref.ptr)) &&
+		noexcept(strlike_reserve(
+			::fast_io::io_strlike_type<char_type, T>, *bref.ptr, to_reserve)))
 {
+	// String growth is an allocation boundary and may throw. Mirroring all queried CPOs keeps a throwing allocator or
+	// user adapter observable to the caller instead of converting an ordinary reserve failure into termination.
 	auto &strref{*bref.ptr};
 	to_reserve = ::fast_io::details::intrinsics::add_or_overflow_die(static_cast<::std::size_t>(strlike_curr(::fast_io::io_strlike_type<char_type, T>, strref) - strlike_begin(::fast_io::io_strlike_type<char_type, T>, strref)), to_reserve);
 	return strlike_reserve(::fast_io::io_strlike_type<char_type, T>, strref, to_reserve);
@@ -105,8 +142,15 @@ inline constexpr ::std::size_t cal_new_cap_io_strlike(::std::size_t cap) noexcep
 
 template <::std::integral ch_type, typename T>
 	requires buffer_strlike<ch_type, T>
-inline constexpr void output_stream_buffer_flush_define(io_strlike_reference_wrapper<ch_type, T> bref) noexcept
+inline constexpr void output_stream_buffer_flush_define(io_strlike_reference_wrapper<ch_type, T> bref)
+	noexcept(
+		noexcept(strlike_begin(::fast_io::io_strlike_type<ch_type, T>, *bref.ptr)) &&
+		noexcept(strlike_end(::fast_io::io_strlike_type<ch_type, T>, *bref.ptr)) &&
+		noexcept(strlike_reserve(
+			::fast_io::io_strlike_type<ch_type, T>, *bref.ptr, ::std::size_t{})))
 {
+	// The refill protocol has the same exception boundary as explicit reserve above; cursor inspection and growth are
+	// all represented in the conditional specification so concept dispatch never invents a stronger guarantee.
 	auto &strref{*bref.ptr};
 	auto bptr{strlike_begin(::fast_io::io_strlike_type<ch_type, T>, strref)};
 	auto eptr{strlike_end(::fast_io::io_strlike_type<ch_type, T>, strref)};

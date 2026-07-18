@@ -614,6 +614,10 @@ template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type, ::std::size_t N>
 inline constexpr auto code_cvt(small_scatter_t<char_type, N> t) noexcept
 {
+	// Preserve the source proxy's type-level capacity invariant before erasing N into a run-time scatter. Without this
+	// check, mutable legacy code could change `len` after construction and bypass the reserve-side defensive checks by
+	// entering codecvt directly.
+	t.validate();
 	return code_cvt_t<src_scheme, dst_scheme, char_type>{{t.base, t.len}};
 }
 

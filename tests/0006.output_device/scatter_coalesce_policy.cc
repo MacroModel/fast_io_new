@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstddef>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include <fast_io_core.h>
@@ -35,6 +36,15 @@ inline constexpr fast_io::basic_io_scatter_t<char>
 print_scatter_define(fast_io::io_reserve_type_t<char, fixed_scatter<size>>, fixed_scatter<size> scatter) noexcept
 {
 	return {scatter.base, size};
+}
+
+template <std::size_t size>
+inline constexpr std::true_type
+print_borrowed_scatter_source(fast_io::io_reserve_type_t<char, fixed_scatter<size>>) noexcept
+{
+	// The descriptor points into immutable storage owned by the caller, and this CPO performs no mutation. Repeated
+	// sizing/materialization observations are therefore identical and every descriptor remains valid through emission.
+	return {};
 }
 
 template <sink_policy policy>
@@ -147,6 +157,7 @@ int main()
 	using direct_sink = test_sink<sink_policy::direct>;
 	using repack_sink = test_sink<sink_policy::repack>;
 
+	static_assert(fast_io::borrowed_scatter_source<char, fixed_scatter<3u>>);
 	static_assert(fast_io::scatter_fallback_full_output_threshold_stream<char, fallback_sink>);
 	static_assert(fast_io::scatter_fallback_full_output_threshold_stream<char, fallback_heap_sink>);
 	static_assert(!fast_io::scatter_direct_full_output_coalesce_threshold_stream<char, fallback_sink>);

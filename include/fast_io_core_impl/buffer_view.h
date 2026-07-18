@@ -195,6 +195,17 @@ print_alias_define(io_alias_t, basic_obuffer_view<char_type> const &view) noexce
 	return {view.cbegin(), view.size()};
 }
 
+/// @brief Marks an output-buffer view as a stable non-owning scatter source.
+/// @details The alias is the view's existing `[cbegin(), cbegin()+size())` interval; producing it performs no
+///          allocation, formatting, or scratch-buffer reuse. Consequently retaining the descriptor introduces no new
+///          lifetime requirement beyond the external-buffer lifetime already required by `basic_obuffer_view`.
+template <::std::integral char_type>
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_obuffer_view<char_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type>
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, basic_obuffer_view<char_type>>,
@@ -303,7 +314,7 @@ inline constexpr void obuffer_overflow(basic_obuffer_view_ref<ch_type>, ch_type)
 }
 
 template <::std::integral ch_type>
-inline constexpr bool obuffer_overflow_never(basic_obuffer_view<ch_type>) noexcept
+inline constexpr bool obuffer_overflow_never(basic_obuffer_view_ref<ch_type>) noexcept
 {
 	return true;
 }

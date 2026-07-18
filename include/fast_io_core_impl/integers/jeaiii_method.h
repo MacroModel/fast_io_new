@@ -281,6 +281,100 @@ inline constexpr char_type *jeaiii_f(char_type *iter, ::std::uint_least32_t u) n
 	return iter + np1;
 }
 
+/// @brief Holds the division result and the first JEAIII multiplier state for a 17--20 digit unsigned value.
+/// @details Every uint64 value in [10^16, 2^64) has one variable-width leading block followed by two exact eight-digit
+///          blocks.  The three decimal blocks uniquely reconstruct the input as
+///          `top * 10^16 + middle * 10^8 + low`.  Preparing the first fixed-block multiplier is exact because each
+///          remainder is strictly below 10^8, which is precisely the precondition of `jeaiii_c<7>`.
+struct jeaiii_u64_long_state
+{
+	::std::uint_least64_t middle;
+	::std::uint_least64_t low;
+	::std::uint_least32_t top;
+};
+
+/// @brief Advances an exact eight-digit JEAIII block to the first table-lookup state.
+/// @param value an integer in [0, 10^8)
+/// @return the fixed-point accumulator consumed by four successive two-digit emissions
+[[nodiscard]] inline constexpr ::std::uint_least64_t
+jeaiii_prepare_fixed_eight_digits(::std::uint_least32_t value) noexcept
+{
+	constexpr ::std::uint_least64_t multiplier{
+		(static_cast<::std::uint_least64_t>(1u) << 48u) /
+			static_cast<::std::uint_least64_t>(1000000u) +
+		1u};
+	return ((multiplier * value) >> 16u) + 1u;
+}
+
+/// @brief Splits a proved 17--20 digit uint64 value and prepares both exact-width tails.
+/// @details Division by 10^8 yields `high` and `low`; division by 10^16 then separates `high` into `top` and
+///          `middle`.  Both subtractions are exact Euclidean remainders.  Compilers lower the constant divisions to
+///          independent multiply-high sequences, so preparing adjacent values before emission exposes those chains
+///          to out-of-order execution without changing a digit or performing temporary character stores.
+/// @param value an integer in [10^16, 2^64)
+/// @return the complete arithmetic state needed for character emission
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr jeaiii_u64_long_state
+jeaiii_prepare_u64_long(::std::uint_least64_t value) noexcept
+{
+	constexpr ::std::uint_least64_t divisor8{100000000u};
+	constexpr ::std::uint_least64_t divisor16{divisor8 * divisor8};
+	auto const high{value / divisor8};
+	auto const low{static_cast<::std::uint_least32_t>(value - high * divisor8)};
+	auto const top{static_cast<::std::uint_least32_t>(value / divisor16)};
+	auto const middle{static_cast<::std::uint_least32_t>(
+		high - static_cast<::std::uint_least64_t>(top) * divisor8)};
+	return {jeaiii_prepare_fixed_eight_digits(middle),
+			jeaiii_prepare_fixed_eight_digits(low), top};
+}
+
+/// @brief Emits one prepared exact eight-digit block.
+/// @details At each step the accumulator's high word is the next base-100 digit pair and multiplying its low word by
+///          100 advances the fixed-point fraction.  This is the same recurrence as `jeaiii_c<7>` with its first
+///          multiply moved into the independent preparation phase.
+template <::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+jeaiii_emit_fixed_eight_digits(char_type *iter, ::std::uint_least64_t prepared) noexcept
+{
+	for (::std::size_t offset{}; offset != 8u; offset += 2u)
+	{
+		jeaiii_w(iter + offset, prepared >> 32u);
+		prepared = static_cast<::std::uint_least32_t>(prepared) *
+				   static_cast<::std::uint_least64_t>(100u);
+	}
+	return iter + 8u;
+}
+
+/// @brief Emits a prepared 17--20 digit uint64 value without repeating division or tail setup.
+/// @details `top` lies in [1, 1844].  The two-way first/range4 classifier therefore covers its complete one-to-four
+///          digit domain, after which both tail blocks have exactly eight digits, including leading zeroes.
+template <::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+jeaiii_emit_u64_long(char_type *iter, jeaiii_u64_long_state const &state) noexcept
+{
+	if (state.top < 100u)
+	{
+		iter = jeaiii_first_two(iter, state.top);
+	}
+	else
+	{
+		iter = jeaiii_range4(iter, state.top);
+	}
+	iter = jeaiii_emit_fixed_eight_digits(iter, state.middle);
+	return jeaiii_emit_fixed_eight_digits(iter, state.low);
+}
+
+/// @brief Converts a proved 17--20 digit uint64 value through the shared prepared representation.
+/// @details The ordinary single-value classifier intentionally does not call this convenience wrapper. M4 per-width
+///          A/B probes showed that inserting the long arm before classification regressed 9--14 digits, while moving
+///          or outlining it later still perturbed 11--14-digit code placement. Two-value staged emission obtains its
+///          gain without changing that mature scalar function, so the prepared kernel remains isolated here.
+template <::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+jeaiii_u64_long(char_type *iter, ::std::uint_least64_t value) noexcept
+{
+	return jeaiii_emit_u64_long(iter, jeaiii_prepare_u64_long(value));
+}
+
 template <::std::size_t left, ::std::size_t right, ::std::integral char_type>
 /*
 Outlining this bounded classification tree changes code placement only; every

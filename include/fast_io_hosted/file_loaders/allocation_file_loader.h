@@ -553,4 +553,14 @@ inline constexpr basic_io_scatter_t<char> print_alias_define(io_alias_t, allocat
 	return {load.data(), load.size()};
 }
 
+/// @brief Marks an allocation-backed file loader as the owner of its aliased byte-character range.
+/// @details The mapping/allocation is released by `close`, `release`, or destruction, none of which alias construction
+///          performs. A retained descriptor is therefore stable while the loader source is alive for the enclosing
+///          print operation; this proof does not extend to independent scratch-producing loader-like types.
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char, allocation_file_loader>) noexcept
+{
+	return {};
+}
+
 } // namespace fast_io

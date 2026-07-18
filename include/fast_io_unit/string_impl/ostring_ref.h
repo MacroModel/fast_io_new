@@ -3,6 +3,99 @@
 namespace fast_io
 {
 
+/// @brief Opts standard strings into retained-scatter composition when they are range lvalue elements.
+/// @details fast_io's standard-string alias is a direct `{data(), size()}` view, so the characters have exactly the
+///          lifetime of the source string and advancing a stable range iterator cannot overwrite an earlier element's
+///          storage. The range strategy independently requires an lvalue iterator reference; this marker therefore
+///          does not admit temporary strings returned by transform views.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	io_reserve_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// A user-defined traits or allocator type contributes an associated namespace to ADL. That namespace may replace
+	// the ordinary alias/forwarding protocol with scratch-backed or stateful semantics, so structural contiguity alone
+	// cannot prove retained lifetime or repeatability. The standard specialization has no user-owned associated namespace.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	io_reserve_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// String aliasing reads only this object's data pointer and size; it never consults a destination put cursor.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	io_reserve_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// fast_io's standard-string print vocabulary is exactly its direct data/size alias; it has no hidden element hook.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type strlike_buffered_print_preferred(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// The standard default-allocator string owns reusable contiguous storage and supplies amortized append/growth.
+	// Custom traits or allocators remain unmarked because their associated namespaces and cost models are extensible.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// On implementations where fast_io exposes the standard string's real put area, raw writes cannot relocate that
+	// allocation until reserve/overflow is invoked and publishing an in-area end pointer has no independent I/O effect.
+	// Restricting the proof to the standard traits/allocator also excludes user-associated ADL output hooks.
+	return {};
+}
+
+#if defined(_GLIBCXX_STRING_VIEW) || defined(_LIBCPP_STRING_VIEW) || defined(_STRING_VIEW_)
+/// @brief Opts standard string views into retained-scatter composition when stored as range lvalue elements.
+/// @details Their alias points directly at the view's `[data(), data()+size())` range. The source-side marker is kept
+///          here, beside the standard string integration, instead of inferring lifetime merely from a scatter-shaped
+///          alias; that separation prevents unrelated scratch-producing aliases from receiving the same permission.
+template <::std::integral char_type, typename traits_type>
+	requires ::std::same_as<traits_type, ::std::char_traits<char_type>>
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
+{
+	// Custom traits add an ADL namespace and may replace the view's otherwise trivial print protocol.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type>
+	requires ::std::same_as<traits_type, ::std::char_traits<char_type>>
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
+{
+	// A string_view scatter is exactly its stored pointer/length pair and is independent of every output object.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type>
+	requires ::std::same_as<traits_type, ::std::char_traits<char_type>>
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
+{
+	// The view's complete print semantics are the characters in its stored pointer/length pair.
+	return {};
+}
+#endif
+
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 inline constexpr auto
 strlike_construct_define(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
@@ -16,6 +109,22 @@ inline constexpr auto strlike_construct_single_character_define(
 	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>, char_type ch)
 {
 	return ::std::basic_string<char_type, traits_type, allocator_type>(1, ch);
+}
+
+/// @brief Establishes an exact standard-string extent before exposing writable characters.
+/// @details `reserve(n); data()` is intentionally insufficient: capacity does not create live characters, and portable
+///          C++20 does not permit an adapter to write beyond `size()`. `resize(n)` first makes every character in the
+///          requested range part of the string's observable value; the returned mutable `data()` pointer may then be
+///          used by an independently proved exact-size formatter. Value initialization is the cost of this fully
+///          standard fallback. Implementations with a real `buffer_strlike` protocol retain that stronger strategy and
+///          are not forced through this CPO.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+inline constexpr char_type *strlike_precise_resize_and_get_begin(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str, ::std::size_t n)
+{
+	str.resize(n);
+	return str.data();
 }
 
 #if (defined(__GLIBCXX__) && !defined(_LIBCPP_VERSION) && !defined(_GLIBCXX_USE_CXX11_ABI)) || \

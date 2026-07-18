@@ -8,16 +8,22 @@ template <typename outstmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
-inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmtype outsm, io_scatter_t const *pscatters,
+inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmtype &outsm, io_scatter_t const *pscatters,
 																		::std::size_t n)
 {
 	using char_type = typename outstmtype::output_char_type;
 	if constexpr (::fast_io::operations::decay::defines::has_scatter_write_some_bytes_overflow_define<outstmtype>)
 	{
-		return scatter_write_some_bytes_overflow_define(outsm, pscatters, n);
+		// Keep "some" as one bounded backend attempt. The returned status is relative to this legal prefix; an
+		// all-operation, rather than the backend customization, owns any subsequent batching and retry policy.
+		::std::size_t const count{
+			::fast_io::details::scatter_write_maximum_count_clamp<char_type, outstmtype>(n)};
+		return scatter_write_some_bytes_overflow_define(outsm, pscatters, count);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_write_some_bytes_overflow_define<outstmtype>)
 	{
+		// Descriptors before i were completed, while sz is the byte progress in descriptor i. This is precisely the
+		// {complete-prefix, partial-next-descriptor} representation required by io_scatter_status_t.
 		for (::std::size_t i{}; i != n; ++i)
 		{
 			auto [baseb, len] = pscatters[i];
@@ -82,18 +88,38 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 															   ::fast_io::seekdir::cur);
 		return ret;
 	}
+	else
+	{
+		// With only a finite character put area and no overflow primitive, the cold byte suffix cannot advance.  A
+		// zero status lets the hot some-operation report precisely the descriptors it already buffered.
+		return {};
+	}
 }
 
 template <typename outstmtype>
-inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype outsm, io_scatter_t const *pscatters,
-																   ::std::size_t n)
+inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype &outsm, io_scatter_t const *pscatters,
+															   ::std::size_t n)
 {
+	if (n == 0u)
+	{
+		// An empty byte-descriptor prefix succeeds without crossing a synchronization or device boundary.
+		return {};
+	}
 	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outstmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
-			::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
-		return ::fast_io::details::scatter_write_some_bytes_impl(
-			::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm), pscatters, n);
+		if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>)
+		{
+			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
+			decltype(auto) unlocked = ::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm);
+			return ::fast_io::details::scatter_write_some_bytes_impl(unlocked, pscatters, n);
+		}
+		else
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>,
+				"an output mutex marker requires a complete, character-preserving, type-progressing unlocked protocol");
+		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outstmtype>)
 	{
@@ -119,7 +145,9 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype ou
 		for (; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			if (len < buffptrdiff) [[likely]]
+			// Exact fit is valid: copying `len == buffptrdiff` commits the cursor to the put-area end and completes
+			// this descriptor without invoking an overflow primitive.
+			if (len <= buffptrdiff) [[likely]]
 			{
 				using char_type_const_ptr
 #if __has_cpp_attribute(__gnu__::__may_alias__)
@@ -155,12 +183,23 @@ template <typename outstmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
-inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype outsm, io_scatter_t const *pscatters,
+inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_scatter_t const *pscatters,
 														::std::size_t n)
 {
 	using char_type = typename outstmtype::output_char_type;
 	if constexpr (::fast_io::operations::decay::defines::has_scatter_write_all_bytes_overflow_define<outstmtype>)
 	{
+		constexpr ::std::size_t maximum{
+			::fast_io::details::scatter_write_maximum_count_or_unlimited<char_type, outstmtype>()};
+		// An all-operation may issue several native writes, but every batch is a consecutive, fully consumed prefix.
+		// Removing that prefix therefore preserves the byte stream and eventually leaves one final legal batch.
+		// SIZE_MAX denotes no declared limit and skips the loop; any real limit is nonzero by concept, proving progress.
+		while (maximum < n)
+		{
+			scatter_write_all_bytes_overflow_define(outsm, pscatters, maximum);
+			pscatters += maximum;
+			n -= maximum;
+		}
 		scatter_write_all_bytes_overflow_define(outsm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_write_all_bytes_overflow_define<outstmtype>)
@@ -247,14 +286,28 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype outsm, io_sca
 }
 
 template <typename outstmtype>
-inline constexpr void scatter_write_all_bytes_impl(outstmtype outsm, io_scatter_t const *pscatters, ::std::size_t n)
+inline constexpr void scatter_write_all_bytes_impl(outstmtype &outsm, io_scatter_t const *pscatters, ::std::size_t n)
 {
+	if (n == 0u)
+	{
+		// Preserve the same nonempty-native-call invariant as the typed scatter operation.
+		return;
+	}
 	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outstmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
-			::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
-		return ::fast_io::details::scatter_write_all_bytes_impl(
-			::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm), pscatters, n);
+		if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>)
+		{
+			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
+			decltype(auto) unlocked = ::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm);
+			return ::fast_io::details::scatter_write_all_bytes_impl(unlocked, pscatters, n);
+		}
+		else
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outstmtype>,
+				"an output mutex marker requires a complete, character-preserving, type-progressing unlocked protocol");
+		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outstmtype>)
 	{
@@ -280,7 +333,7 @@ inline constexpr void scatter_write_all_bytes_impl(outstmtype outsm, io_scatter_
 		for (; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			if (len < buffptrdiff)
+			if (len <= buffptrdiff)
 #if __has_cpp_attribute(likely)
 				[[likely]]
 #endif

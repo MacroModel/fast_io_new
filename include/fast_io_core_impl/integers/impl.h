@@ -3575,6 +3575,47 @@ inline constexpr char_type *print_reserve_method_impl(char_type *iter,
 	}
 }
 
+/// @brief Prepared representation for the Apple-AArch64 two-value decimal integer schedule.
+/// @details The sign occupies padding after the 32-bit leading block, so signed and unsigned 64-bit formatters share
+///          one 24-byte state without increasing the two-value register footprint.  Keeping one common type is also
+///          required by the semantic staged-group proof when a signed and an unsigned value occur in the same run.
+struct print_integer_staged_u64_state
+{
+	::std::uint_least64_t middle{};
+	::std::uint_least64_t low{};
+	::std::uint_least32_t top{};
+	bool negative{};
+};
+
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+static_assert(sizeof(print_integer_staged_u64_state) == 24u);
+#endif
+
+/// @brief Selects the exactly measured integer staged domain.
+/// @details Only ordinary decimal, non-full 64-bit scalar output participates. Base prefixes, explicit signs,
+///          alphabetic forms, zero-filled full width, and scalar-placement metadata have different emission and
+///          fallback costs and retain their established formatter.  Apple AArch64 `char` is the sole enabled target:
+///          the complete two-value conversion and its 24-byte state were measured on M4, whereas traditional AArch64,
+///          x86-64, wide-character stores, and EBCDIC have no equivalent whole-call evidence. The arithmetic helper
+///          remains portable, but it is deliberately not inserted into the ordinary scalar classifier: per-width M4
+///          probes showed that the resulting large-function layout regressed shorter decimal widths even when the
+///          new long branch was not taken.
+template <::fast_io::manipulators::scalar_flags flags, typename T, typename char_type>
+inline constexpr bool print_integer_staged_u64_supported{
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
+	::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type> &&
+	::fast_io::details::my_integral<T> &&
+	!::std::same_as<::std::remove_cv_t<T>, bool> &&
+	sizeof(T) == sizeof(::std::uint_least64_t) && flags.base == 10u && !flags.alphabet &&
+	!flags.showbase && !flags.showpos && !flags.uppercase_showbase && !flags.modern_octal &&
+	!flags.uppercase && !flags.comma && !flags.full &&
+	flags.placement == ::fast_io::manipulators::scalar_placement::none &&
+	flags.percentage == ::fast_io::manipulators::percentage_flag::none
+#else
+	false
+#endif
+};
+
 } // namespace details
 
 /*
@@ -3752,6 +3793,95 @@ print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scala
 		return details::print_reserve_integral_define<flags.base, flags.showbase, flags.uppercase_showbase,
 													  flags.showpos, flags.uppercase, flags.full, flags.modern_octal>(iter, t.reference);
 	}
+}
+
+/// @brief Advertises the shared signed/unsigned 64-bit decimal prepared state on its audited target.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+inline constexpr auto print_staged_type(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return ::fast_io::io_type_t<::fast_io::details::print_integer_staged_u64_state>{};
+}
+
+/// @brief Requires two independent integer conversions before selecting staged scheduling.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+inline constexpr ::std::size_t print_staged_width(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return 2u;
+}
+
+/// @brief Caps integer staging at the measured two-value register envelope.
+/// @details M4 assembly keeps two 24-byte prepared states in registers. Four states enlarge the frame and eight states
+///          spill to an explicit prepared array with a stack protector; complete timings then erase or reverse the
+///          scheduling gain. Returning two makes larger integer runs retain the ordinary mature formatter rather than
+///          treating the minimum threshold as permission to prepare the complete run.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+inline constexpr ::std::size_t print_staged_max_count(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return 2u;
+}
+
+/// @brief Keeps the overwhelmingly common short-integer fallback adjacent to the eligibility branch.
+/// @details Staging accepts only the 17--20 digit domain. Sending counters and identifiers through the generic cold
+///          fallback would trade a predictable comparison for a call and a separate large formatter body. This policy
+///          affects placement only; the fallback remains `print_reserve_define` with identical capacity and bytes.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+inline constexpr bool print_staged_fallback_inline(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return true;
+}
+
+/// @brief Tests the proved 17--20 digit domain without signed overflow.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_staged_eligible(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
+	manipulators::scalar_manip_t<flags, T> const &value) noexcept
+{
+	auto const magnitude{::fast_io::details::itoa_unsigned_magnitude(value.reference)};
+	return magnitude >= static_cast<decltype(magnitude)>(10000000000000000ull);
+}
+
+/// @brief Prepares sign, decimal blocks, and both fixed-block multiplier chains before either value emits.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::details::print_integer_staged_u64_state
+print_staged_prepare(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
+	manipulators::scalar_manip_t<flags, T> const &value) noexcept
+{
+	auto const magnitude{::fast_io::details::itoa_unsigned_magnitude(value.reference)};
+	auto const arithmetic{::fast_io::details::jeaiii::jeaiii_prepare_u64_long(
+		static_cast<::std::uint_least64_t>(magnitude))};
+	bool negative{};
+	if constexpr (::fast_io::details::my_signed_integral<T>)
+	{
+		negative = value.reference < 0;
+	}
+	return {arithmetic.middle, arithmetic.low, arithmetic.top, negative};
+}
+
+/// @brief Emits one prepared integer directly into the caller's bounded contiguous range.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires ::fast_io::details::print_integer_staged_u64_supported<flags, T, char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_staged_define(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>, char_type *iter,
+	manipulators::scalar_manip_t<flags, T> const &,
+	::fast_io::details::print_integer_staged_u64_state const &state) noexcept
+{
+	if (state.negative)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'-', char_type>;
+	}
+	return ::fast_io::details::jeaiii::jeaiii_emit_u64_long(
+		iter, {state.middle, state.low, state.top});
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>

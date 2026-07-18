@@ -7,6 +7,10 @@ template <typename T>
 inline constexpr io_scatter_status_t scatter_size_to_status(::std::size_t sz, basic_io_scatter_t<T> const *base,
 															::std::size_t len) noexcept
 {
+	// Given the backend invariant sz <= sum(base[0..len).len), a scatter "some" result is a prefix decomposition:
+	// position counts descriptors consumed in full, and position_in_scatter counts elements consumed from the first
+	// incomplete descriptor. Subtracting complete lengths proves that the returned pair denotes exactly sz elements,
+	// without changing the descriptor-relative coordinate system expected by retrying all-operations.
 	::std::size_t total{sz};
 	for (::std::size_t i{}; i != len; ++i)
 	{
@@ -19,6 +23,33 @@ inline constexpr io_scatter_status_t scatter_size_to_status(::std::size_t sz, ba
 	}
 	return {len, 0};
 }
+
+namespace details
+{
+
+template <::std::integral char_type, typename stream_type>
+inline constexpr ::std::size_t scatter_read_maximum_count_clamp(::std::size_t count) noexcept
+{
+	// The optional limit is normalized to SIZE_MAX, so one min operation covers both bounded and unbounded streams.
+	// A recognized policy is nonzero by concept; therefore every nonempty request still admits a nonempty descriptor
+	// prefix, including a prefix whose descriptors all happen to have zero payload length.
+	constexpr ::std::size_t maximum{
+		::fast_io::details::scatter_read_maximum_count_or_unlimited<char_type, stream_type>()};
+	return count < maximum ? count : maximum;
+}
+
+template <::std::integral char_type, typename stream_type>
+inline constexpr ::std::size_t scatter_write_maximum_count_clamp(::std::size_t count) noexcept
+{
+	// Absence of a stream limit is represented by SIZE_MAX. Therefore min(count, maximum) is valid even for the
+	// sentinel itself and needs no separate unlimited branch. A declared limit is concept-checked as nonzero, which
+	// also supplies the progress invariant used by the batching loops in the scatter all-operations.
+	constexpr ::std::size_t maximum{
+		::fast_io::details::scatter_write_maximum_count_or_unlimited<char_type, stream_type>()};
+	return count < maximum ? count : maximum;
+}
+
+} // namespace details
 
 namespace details
 {
@@ -36,19 +67,33 @@ namespace details
 
 template <::std::unsigned_integral U, typename T>
 inline constexpr ::fast_io::details::basic_scatter_total_size_overflow_result<U>
-find_scatter_total_size_overflow_impl(basic_io_scatter_t<T> const *base, U len) noexcept
+find_scatter_total_size_overflow_impl(basic_io_scatter_t<T> const *base, ::std::size_t len) noexcept
 {
-	constexpr U mx{static_cast<::std::size_t>(::std::numeric_limits<U>::max())};
+	// Descriptor count is an address-space quantity and must remain size_t even when the accumulated payload/offset is
+	// intentionally narrower. Coupling len to U would truncate the iteration bound before any overflow check and could
+	// falsely certify an unvisited suffix as irrelevant to positional advancement.
+	constexpr U mx{::std::numeric_limits<U>::max()};
 	U total{};
 	auto i{base}, e{base + len};
 	for (; i != e; ++i)
 	{
-		/// @todo mx ~= max / 2, mx - i.len may underflow. I'm guessing the author meant to check for overflow.
-		if (static_cast<U>(static_cast<::std::size_t>(mx) - static_cast<::std::size_t>(i->len)) < total) [[unlikely]]
+		// Descriptor lengths are size_t, while positional accumulation may deliberately use a narrower unsigned type.
+		// Prove representability before conversion; otherwise truncating the descriptor would make an oversized element
+		// look small. Once converted, total <= mx is the loop invariant, so comparing length with mx - total cannot
+		// underflow and is equivalent to testing whether total + length is representable.
+		if constexpr (::std::numeric_limits<U>::digits < ::std::numeric_limits<::std::size_t>::digits)
+		{
+			if (i->len > static_cast<::std::size_t>(mx)) [[unlikely]]
+			{
+				break;
+			}
+		}
+		U const element_length{static_cast<U>(i->len)};
+		if (mx - total < element_length) [[unlikely]]
 		{
 			break;
 		}
-		total += i->len;
+		total += element_length;
 	}
 	return {total, static_cast<::std::size_t>(i - base)};
 }

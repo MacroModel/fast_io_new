@@ -35,6 +35,7 @@
 #include "fast_io_core_impl/terminate.h"
 #include "fast_io_dsal/impl/freestanding.h"
 #include "fast_io_core_impl/allocation/impl.h"
+#include "fast_io_core_impl/scan_context_state.h"
 
 #include "fast_io_core_impl/error.h"
 #include "fast_io_core_impl/asan_support.h"

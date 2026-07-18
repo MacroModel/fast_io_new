@@ -589,6 +589,74 @@ inline constexpr ::std::size_t full_output_coalesce_threshold(
 	return (::std::min)(default_value, stack_value);
 }
 
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t full_output_dynamic_coalesce_threshold(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// Heap materialization is deliberately a separate admission decision from full_output_coalesce_threshold: stack
+	// coalescing is bounded by frame size, while this path pays allocation/deallocation to replace descriptor setup and
+	// multiple writes with one contiguous write. The 1 MiB ceiling admits measured log/record-sized aggregates but
+	// prevents a formatting call from turning an arbitrarily large output into an equally large temporary allocation.
+	// Express the ceiling in bytes so a wide-character observer receives the same memory budget, not sizeof(char_type)
+	// times that budget. This overload is a POSIX-observer default; unrelated sinks must provide their own evidence.
+	constexpr ::std::size_t default_bytes{1024u * 1024u};
+	return default_bytes / sizeof(char_type);
+}
+
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::fast_io::repeated_fill_output_policy repeated_fill_output_policy_define(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// This policy is intentionally scoped to unbuffered POSIX-family observers. It must not become a generic formatting
+	// rule: memory-backed and syscall-shell sinks have materially different copy-versus-dispatch costs. Linux P-core
+	// measurements put the crossover from materialize-and-write to repeated-block writev between 8 KiB and 16 KiB.
+	// Selecting the lower endpoint deliberately biases toward bounded repeated-block output instead of full temporary
+	// materialization. A 4 KiB reusable block limits fill work and matches the measured page-scale copy unit. The
+	// preferred 256 descriptors can describe 1 MiB per native batch; it is only a preference, because the generic
+	// dispatcher clamps it again to the stream's hard descriptor limit.
+	constexpr ::std::size_t dynamic_bytes{8192u};
+	constexpr ::std::size_t block_bytes{4096u};
+	return {dynamic_bytes / sizeof(char_type), block_bytes / sizeof(char_type), 256u};
+}
+
+namespace details
+{
+
+// The descriptor cap must be a compile-time value because it participates in concept-based strategy selection and is
+// also used at the final syscall boundary. POSIX defines IOV_MAX for readv/writev, and supported kernels apply the
+// same vector limit to preadv/pwritev. Linux fixes the kernel-side UIO_MAXIOV at 1024, while Darwin publishes
+// IOV_MAX == 1024. Other POSIX targets are conservatively limited to the portable _XOPEN_IOV_MAX minimum of 16. A
+// runtime sysconf(_SC_IOV_MAX) result cannot satisfy the compile-time policy contract, and using the guaranteed floor
+// remains correct on systems with a larger runtime limit.
+inline constexpr ::std::size_t posix_scatter_maximum_count{
+#if defined(__linux__) || (defined(__APPLE__) && defined(__MACH__))
+	1024u
+#else
+	16u
+#endif
+};
+
+} // namespace details
+
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t scatter_read_maximum_count(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// readv and preadv use the same iovec-count ABI as their write counterparts. Publishing the limit lets generic
+	// typed/byte and positioned/non-positioned dispatch admit the legal prefix before the platform adapter; the adapter
+	// keeps its own clamp as a trust-boundary invariant for lower-level callers.
+	return ::fast_io::details::posix_scatter_maximum_count;
+}
+
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::size_t scatter_write_maximum_count(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// The kernel limit is a count of iovec entries, independent of element width and of whether an explicit offset is
+	// supplied. One policy therefore governs typed/byte write and pwrite paths and keeps their batching proofs aligned.
+	return ::fast_io::details::posix_scatter_maximum_count;
+}
+
 #if 0
 template <::fast_io::posix_family family, ::std::integral char_type>
 inline constexpr ::std::size_t small_scatter_coalesce_threshold(

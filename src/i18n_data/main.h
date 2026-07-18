@@ -1,30 +1,27 @@
 ﻿#pragma once
-#include <type_traits>
+
 namespace fast_io_i18n
 {
 
-template <typename char_type1, std::size_t n1, typename char_type2, std::size_t n2>
-inline constexpr bool compile_time_compare(char_type1 const (&a)[n1], char_type2 const (&b)[n2]) noexcept
-{
-	if constexpr ((sizeof(char_type1) != sizeof(char_type2)) || (n1 != n2))
-	{
-		return false;
-	}
-	for (std::size_t i{}; i != n1; ++i)
-	{
-		if (static_cast<std::make_unsigned_t<char_type1>>(a[i]) != static_cast<std::make_unsigned_t<char_type2>>(b[i]))
-		{
-			return false;
-		}
-	}
-	return true;
-}
+inline constexpr ::fast_io::i18n_module_v1::export_descriptor module_export_descriptor{
+	.magic = ::fast_io::i18n_module_v1::export_magic,
+	.version = ::fast_io::i18n_module_v1::export_version,
+	.descriptor_size = static_cast<::std::uint_least32_t>(
+		sizeof(::fast_io::i18n_module_v1::export_descriptor)),
+	.abi_layout_tag = ::fast_io::i18n_module_v1::layout_tag(),
+	.locale = {&lc_all_global, &wlc_all_global, &u8lc_all_global, &u16lc_all_global, &u32lc_all_global}};
 
+static_assert(sizeof(::fast_io::i18n_module_v1::export_descriptor) <= UINT_LEAST32_MAX);
+
+// v1 exports a pointer to immutable POD data described by the shared ABI
+// header.  Returning the descriptor through an output parameter preserves the
+// historical fastcall convention on 32-bit Windows while still making the
+// pointee type part of the compile-time contract.
 extern "C"
 #if (defined(_WIN32) || defined(__CYGWIN__)) && !defined(__WINE__)
 #if __has_cpp_attribute(__gnu__::__dllexport__)
 	[[__gnu__::__dllexport__]]
-#elif !__has_cpp_attribute(__gnu__::__dllexport__)
+#else
 	__declspec(dllexport)
 #endif
 #if __has_cpp_attribute(__gnu__::__fastcall__)
@@ -37,47 +34,35 @@ extern "C"
 	__fastcall
 #endif
 #endif
-	export_v0(lc_locale *lc_ptr) noexcept
+	fast_io_i18n_export_v1(::fast_io::i18n_module_v1::export_descriptor const **result) noexcept
 {
-	using lc_all_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
-#endif
-		= lc_all const *;
-	lc_all_ptr ptr;
-#if defined(FAST_IO_LOCALE_u8ENCODING)
-	if constexpr (compile_time_compare(FAST_IO_LOCALE_u8ENCODING, u8"UTF-8"))
+	*result = __builtin_addressof(module_export_descriptor);
+}
+
+// Keep the old symbol for binaries built against the original direct-pointer
+// module contract.  New loaders never call it: v0 has no version/layout proof
+// and its output type was historically confused with the unrelated public
+// owning representation.
+extern "C"
+#if (defined(_WIN32) || defined(__CYGWIN__)) && !defined(__WINE__)
+#if __has_cpp_attribute(__gnu__::__dllexport__)
+	[[__gnu__::__dllexport__]]
 #else
-	if constexpr (compile_time_compare("我", u8"我"))
+	__declspec(dllexport)
 #endif
-		ptr = reinterpret_cast<lc_all_ptr>(&u8lc_all_global);
-	else
-	{
-		ptr = &lc_all_global;
-	}
-	using wlc_all_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
+#if __has_cpp_attribute(__gnu__::__fastcall__)
+	[[__gnu__::__fastcall__]]
 #endif
-		= wlc_all const *;
-	wlc_all_ptr wptr;
-	if constexpr (compile_time_compare(u8"我", L"我"))
-	{
-		wptr = reinterpret_cast<wlc_all_ptr>(&u8lc_all_global);
-	}
-	else if constexpr (compile_time_compare(u"我", L"我"))
-	{
-		wptr = reinterpret_cast<wlc_all_ptr>(&u16lc_all_global);
-	}
-	else if constexpr (compile_time_compare(U"我", L"我"))
-	{
-		wptr = reinterpret_cast<wlc_all_ptr>(&u32lc_all_global);
-	}
-	else
-	{
-		wptr = &wlc_all_global;
-	}
-	*lc_ptr = {ptr, wptr, &u8lc_all_global, &u16lc_all_global, &u32lc_all_global};
+#endif
+	void
+#if (defined(_WIN32) || defined(__CYGWIN__)) && !defined(__WINE__)
+#if !__has_cpp_attribute(__gnu__::__fastcall__)
+	__fastcall
+#endif
+#endif
+	export_v0(lc_locale *result) noexcept
+{
+	*result = module_export_descriptor.locale;
 }
 
 } // namespace fast_io_i18n

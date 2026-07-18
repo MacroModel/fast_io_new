@@ -5,256 +5,185 @@
 namespace fast_io
 {
 
+namespace details
+{
+
+template <typename T>
+using width_alias_result = decltype(::fast_io::io_print_alias(::std::declval<T>()));
+
+/// @brief Selects the representation retained by a width semantic node.
+/// @details The original source category is deliberately kept as part of this decision. Applying
+///          `io_print_forward_transport` only to the alias result would lose that evidence: an alias invoked on an
+///          rvalue is permitted to return an lvalue reference to one of the source's subobjects, and wrapping that
+///          reference would let it escape the source temporary. Therefore every rvalue-derived result is materialized.
+///          An alias reference obtained from an lvalue retains its exact cv/ref identity so noncopyable mutable proxies
+///          remain usable. An ordinary ABI-small trivial lvalue is copied as the established calling-convention
+///          optimization; every other ordinary lvalue is a borrowed exact reference. Consequently a width node that
+///          stores an lvalue reference is a view and must not outlive that source object.
+template <typename T>
+using width_storage_type = ::std::conditional_t<
+	::std::is_function_v<::std::remove_cvref_t<T>>,
+	::std::remove_cvref_t<::fast_io::details::width_alias_result<T>>,
+	::std::conditional_t<
+		::std::is_lvalue_reference_v<T &&> && ::fast_io::alias_printable<T> &&
+			::std::is_lvalue_reference_v<::fast_io::details::width_alias_result<T>>,
+		::fast_io::details::width_alias_result<T>,
+		::std::conditional_t<
+			::std::is_lvalue_reference_v<T &&> && !::fast_io::alias_printable<T>,
+			::std::conditional_t<::fast_io::details::io_print_forward_transport_by_value<T>,
+								 ::std::remove_cvref_t<T>, T>,
+			::std::remove_cvref_t<::fast_io::details::width_alias_result<T>>>>>;
+
+/// @brief Tests the exact conversion used to initialize a width node's stored child.
+/// @details Expressing the conversion as a requirement, rather than only using `is_constructible`, models the actual
+///          explicit alias-to-storage conversion and cleanly rejects an rvalue alias that exposes a noncopyable borrowed
+///          subobject. Guaranteed copy elision can nevertheless make an immovable owned prvalue pass that first test.
+///          Such a child cannot cross the normalized semantic node's later by-value boundary, so owned storage also has
+///          to be constructible from its rvalue category. Reference storage already preserves an existing identity and
+///          intentionally needs no move proof. This is the same compositional contract used by condition and pack nodes.
+template <typename T>
+concept width_storable =
+	requires {
+		static_cast<::fast_io::details::width_storage_type<T>>(
+			::fast_io::io_print_alias(::std::declval<T>()));
+	} &&
+	(::std::is_lvalue_reference_v<::fast_io::details::width_storage_type<T>> ||
+	 ::std::constructible_from<
+		 ::std::remove_cvref_t<::fast_io::details::width_storage_type<T>>,
+		 ::std::remove_cvref_t<::fast_io::details::width_storage_type<T>> &&>);
+
+/// @brief Computes whether width child normalization can propagate an exception.
+/// @details The expression includes both the selected alias CPO and the materialization/copy required by the storage
+///          policy. It is kept conditional so an unstorable adversarial alias remains a clean constraint failure rather
+///          than producing a second diagnostic from a factory's exception specification.
+template <typename T>
+inline constexpr bool width_storage_nothrow_constructible = []() constexpr {
+	if constexpr (::fast_io::details::width_storable<T>)
+	{
+		return noexcept(static_cast<::fast_io::details::width_storage_type<T>>(
+			::fast_io::io_print_alias(::std::declval<T>())));
+	}
+	else
+	{
+		return false;
+	}
+}();
+
+/// @brief Normalizes one width child according to `width_storage_type`.
+/// @details The explicit cast is the single construction point shared by all placement and fill-character factories;
+///          this prevents those overloads from drifting into different alias, lifetime, or exception rules.
+template <typename T>
+	requires ::fast_io::details::width_storable<T>
+inline constexpr ::fast_io::details::width_storage_type<T> width_store(T &&t)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+{
+	return static_cast<::fast_io::details::width_storage_type<T>>(
+		::fast_io::io_print_alias(::std::forward<T>(t)));
+}
+
+} // namespace details
+
 namespace manipulators
 {
 
 template <typename T>
-inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_runtime_t<decltype(print_alias_define(io_alias, ::std::forward<T>(t)))>{
-			placement, print_alias_define(io_alias, ::std::forward<T>(t)), n};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::ptrdiff_t) * 2)
-#endif
-	)
-	{
-		return width_runtime_t<noref>{placement, t, n};
-	}
-	else
-	{
-		return width_runtime_t<noref const &>{placement, t, n};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_runtime_t<storage_type>{
+		placement, ::fast_io::details::width_store(::std::forward<T>(t)), n};
 }
 
 template <typename T, ::std::integral char_type>
-inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n, char_type ch) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n, char_type ch)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_runtime_ch_t<decltype(print_alias_define(io_alias, ::std::forward<T>(t))), char_type>{
-			placement, print_alias_define(io_alias, ::std::forward<T>(t)), n, ch};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::ptrdiff_t) * 2)
-#endif
-	)
-
-		return width_runtime_ch_t<noref, char_type>{placement, t, n, ch};
-	else
-	{
-		return width_runtime_ch_t<noref const &, char_type>{placement, t, n, ch};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_runtime_ch_t<storage_type, char_type>{
+		placement, ::fast_io::details::width_store(::std::forward<T>(t)), n, ch};
 }
 
 template <typename T>
-inline constexpr auto left(T &&t, ::std::size_t n) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto left(T &&t, ::std::size_t n)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_t<scalar_placement::left, decltype(print_alias_define(io_alias, ::std::forward<T>(t)))>{
-			print_alias_define(io_alias, ::std::forward<T>(t)), n};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_t<scalar_placement::left, noref>{t, n};
-	}
-	else
-	{
-		return width_t<scalar_placement::left, noref const &>{t, n};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_t<scalar_placement::left, storage_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n};
 }
 
 template <typename T>
-inline constexpr auto middle(T &&t, ::std::size_t n) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto middle(T &&t, ::std::size_t n)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_t<scalar_placement::middle, decltype(print_alias_define(io_alias, ::std::forward<T>(t)))>{
-			print_alias_define(io_alias, ::std::forward<T>(t)), n};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_t<scalar_placement::middle, noref>{t, n};
-	}
-	else
-	{
-		return width_t<scalar_placement::middle, noref const &>{t, n};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_t<scalar_placement::middle, storage_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n};
 }
 
 template <typename T>
-inline constexpr auto right(T &&t, ::std::size_t n) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto right(T &&t, ::std::size_t n)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_t<scalar_placement::right, decltype(print_alias_define(io_alias, ::std::forward<T>(t)))>{
-			print_alias_define(io_alias, ::std::forward<T>(t)), n};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_t<scalar_placement::right, noref>{t, n};
-	}
-	else
-	{
-		return width_t<scalar_placement::right, noref const &>{t, n};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_t<scalar_placement::right, storage_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n};
 }
 
 template <typename T>
-inline constexpr auto internal(T &&t, ::std::size_t n) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto internal(T &&t, ::std::size_t n)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_t<scalar_placement::internal, decltype(print_alias_define(io_alias, ::std::forward<T>(t)))>{
-			print_alias_define(io_alias, ::std::forward<T>(t)), n};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_t<scalar_placement::internal, noref>{t, n};
-	}
-	else
-	{
-		return width_t<scalar_placement::internal, noref const &>{t, n};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_t<scalar_placement::internal, storage_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n};
 }
 
 template <typename T, ::std::integral char_type>
-inline constexpr auto left(T &&t, ::std::size_t n, char_type ch) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto left(T &&t, ::std::size_t n, char_type ch)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_ch_t<scalar_placement::left, decltype(print_alias_define(io_alias, ::std::forward<T>(t))),
-						  char_type>{print_alias_define(io_alias, ::std::forward<T>(t)), n, ch};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_ch_t<scalar_placement::left, noref, char_type>{t, n, ch};
-	}
-	else
-	{
-		return width_ch_t<scalar_placement::left, noref const &, char_type>{t, n, ch};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_ch_t<scalar_placement::left, storage_type, char_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n, ch};
 }
 
 template <typename T, ::std::integral char_type>
-inline constexpr auto middle(T &&t, ::std::size_t n, char_type ch) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto middle(T &&t, ::std::size_t n, char_type ch)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_ch_t<scalar_placement::middle, decltype(print_alias_define(io_alias, ::std::forward<T>(t))),
-						  char_type>{print_alias_define(io_alias, ::std::forward<T>(t)), n, ch};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_ch_t<scalar_placement::middle, noref, char_type>{t, n, ch};
-	}
-	else
-	{
-		return width_ch_t<scalar_placement::middle, noref const &, char_type>{t, n, ch};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_ch_t<scalar_placement::middle, storage_type, char_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n, ch};
 }
 
 template <typename T, ::std::integral char_type>
-inline constexpr auto right(T &&t, ::std::size_t n, char_type ch) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto right(T &&t, ::std::size_t n, char_type ch)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_ch_t<scalar_placement::right, decltype(print_alias_define(io_alias, ::std::forward<T>(t))),
-						  char_type>{print_alias_define(io_alias, ::std::forward<T>(t)), n, ch};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_ch_t<scalar_placement::right, noref, char_type>{t, n, ch};
-	}
-	else
-	{
-		return width_ch_t<scalar_placement::right, noref const &, char_type>{t, n, ch};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_ch_t<scalar_placement::right, storage_type, char_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n, ch};
 }
 
 template <typename T, ::std::integral char_type>
-inline constexpr auto internal(T &&t, ::std::size_t n, char_type ch) noexcept
+requires ::fast_io::details::width_storable<T>
+inline constexpr auto internal(T &&t, ::std::size_t n, char_type ch)
+	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
-	using noref = ::std::remove_cvref_t<T>;
-	if constexpr (alias_printable<::std::remove_cvref_t<T>>)
-	{
-		return width_ch_t<scalar_placement::internal, decltype(print_alias_define(io_alias, ::std::forward<T>(t))),
-						  char_type>{print_alias_define(io_alias, ::std::forward<T>(t)), n, ch};
-	}
-	else if constexpr ((manipulator<noref> || ::std::is_trivially_copyable_v<noref>) &&
-#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
-					   sizeof(noref) <= 8u
-#else
-					   sizeof(noref) <= (sizeof(::std::size_t) * 2)
-#endif
-	)
-	{
-		return width_ch_t<scalar_placement::internal, noref, char_type>{t, n, ch};
-	}
-	else
-	{
-		return width_ch_t<scalar_placement::internal, noref const &, char_type>{t, n, ch};
-	}
+	using storage_type = ::fast_io::details::width_storage_type<T>;
+	return width_ch_t<scalar_placement::internal, storage_type, char_type>{
+		::fast_io::details::width_store(::std::forward<T>(t)), n, ch};
 }
 
 } // namespace manipulators

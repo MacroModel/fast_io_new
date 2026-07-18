@@ -80,6 +80,17 @@ struct basic_reserve_scatters_define_result
 	char_type *reserve_pos_ptr;
 };
 
+/// @brief Result cursor pair for a producer that writes native byte-scatter descriptors.
+/// @details This is intentionally a distinct type from `basic_reserve_scatters_define_result`: descriptor layout
+///          compatibility does not permit a producer to write one class-template specialization through a pointer to
+///          another. Byte lengths are expressed in bytes, while `reserve_pos_ptr` still advances in `char_type` units.
+template <::std::integral char_type>
+struct basic_reserve_scatters_bytes_define_result
+{
+	io_scatter_t *scatters_pos_ptr;
+	char_type *reserve_pos_ptr;
+};
+
 struct io_alias_t
 {
 	inline explicit constexpr io_alias_t() noexcept = default;

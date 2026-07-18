@@ -570,6 +570,16 @@ inline constexpr basic_io_scatter_t<char> print_alias_define(io_alias_t, posix_f
 	return {load.data(), load.size()};
 }
 
+/// @brief Marks a POSIX file loader as the owner of the mapping exposed by its print alias.
+/// @details `print_alias_define` is a const projection of the loader's current mapping. Only explicit ownership
+///          operations or destruction unmap it, and the source object remains alive throughout the enclosing print.
+///          Retaining the pointer/length pair for that operation is therefore valid and does not rely on shared scratch.
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char, posix_file_loader>) noexcept
+{
+	return {};
+}
+
 namespace freestanding
 {
 template <>

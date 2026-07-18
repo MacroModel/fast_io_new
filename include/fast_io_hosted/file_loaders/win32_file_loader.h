@@ -835,9 +835,20 @@ public:
 
 template <win32_family family>
 inline constexpr basic_io_scatter_t<char> print_alias_define(io_alias_t,
-															 win32_family_file_loader<family> const &load) noexcept
+														 win32_family_file_loader<family> const &load) noexcept
 {
 	return {load.data(), load.size()};
+}
+
+/// @brief Marks a Win32-family file loader as the owner of its print-alias mapping.
+/// @details All family variants expose the loader's persistent mapped range; the alias does not allocate a conversion
+///          buffer or call an operation that can unmap it. Since source lifetime encloses print dispatch, retaining the
+///          scatter until the final write is valid for every family specialization.
+template <win32_family family>
+inline constexpr ::std::true_type
+print_borrowed_scatter_source(io_reserve_type_t<char, win32_family_file_loader<family>>) noexcept
+{
+	return {};
 }
 
 using win32_file_loader_9xa = win32_family_file_loader<win32_family::ansi_9x>;

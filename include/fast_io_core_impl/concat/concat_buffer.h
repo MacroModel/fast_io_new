@@ -111,6 +111,23 @@ inline constexpr ::std::size_t strlike_sso_size(
 }
 
 template <::std::integral char_type>
+inline constexpr ::std::true_type strlike_buffered_print_preferred(
+	::fast_io::io_strlike_type_t<char_type, ::fast_io::details::basic_concat_buffer<char_type>>) noexcept
+{
+	// This internal staging type owns a fixed inline area and grows into one retained allocation only on exhaustion.
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
+	::fast_io::io_strlike_type_t<char_type, ::fast_io::details::basic_concat_buffer<char_type>>) noexcept
+{
+	// Cursor access is a direct read/write of the three internal pointers. No output/status customization is associated
+	// with this private staging type, and no allocation can move until the ordinary overflow path is entered.
+	return {};
+}
+
+template <::std::integral char_type>
 inline constexpr io_strlike_reference_wrapper<char_type, ::fast_io::details::basic_concat_buffer<char_type>>
 io_strlike_ref(io_alias_t, ::fast_io::details::basic_concat_buffer<char_type> &str) noexcept
 {

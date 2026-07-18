@@ -1698,6 +1698,42 @@ print_alias_define(io_alias_t, basic_string<chtype, alloctype> const &str) noexc
 	return {str.imp.begin_ptr, static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr)};
 }
 
+/// @brief Proves that a stored fast_io string may lend its direct print scatter through a range operation.
+/// @details `print_alias_define` above refers to the source object's character allocation. The range admission rule
+///          additionally requires an lvalue element, so this source-side opt-in never extends the lifetime of a
+///          temporary owning string.
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	::fast_io::io_reserve_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	// A custom allocator contributes an associated namespace to ADL and can therefore replace alias/forwarding
+	// semantics even though the container remains contiguous. Only the two library-owned allocator models have been
+	// audited to make the allocation bounds above a stable, repeatable description of the complete print operation.
+	return {};
+}
+
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	::fast_io::io_reserve_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	// The print alias reads this string's allocation bounds only; it has no destination-stream dependency.
+	return {};
+}
+
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	::fast_io::io_reserve_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	// The direct allocation bounds are this type's complete character-print protocol for an unchanged string.
+	return {};
+}
+
 template <::std::integral char_type, typename alloctype>
 inline constexpr ::std::size_t
 print_reserve_size(::fast_io::io_reserve_type_t<char_type, basic_string<char_type, alloctype>>,
@@ -1779,6 +1815,44 @@ template <::std::integral chtype, typename alloctype>
 inline constexpr void strlike_reserve(::fast_io::io_strlike_type_t<chtype, basic_string<chtype, alloctype>>, basic_string<chtype, alloctype> &str, ::std::size_t n) noexcept
 {
 	str.reserve(n);
+}
+
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type strlike_buffered_print_preferred(
+	::fast_io::io_strlike_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	// The two native allocator families back the string's retained geometric-growth storage. A custom allocator remains
+	// unmarked because allocation frequency and growth cost are part of this policy rather than structural conformance.
+	return {};
+}
+
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
+	::fast_io::io_strlike_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	// The native string exposes its three owned pointers directly; in-area copies cannot relocate storage and setting
+	// `curr_ptr` only publishes the logical end (plus its terminating zero). Restricting the proof to library allocators
+	// keeps user-associated output/status customizations outside this semantic opt-in.
+	return {};
+}
+
+/// @brief Opts the two native fast_io string families into concat's single-pass context staging policy.
+/// @details `basic_string` starts with zero writable capacity, so feeding a multi-window context producer directly to
+///          its output adapter performs geometric growth from an empty allocation. `basic_concat_buffer` instead owns
+///          a two-KiB inline area and range construction allocates the completed result once. The marker is deliberately
+///          restricted to the native global and thread-local allocators: a custom allocator may have different growth,
+///          copying, or publication costs, and structural string conformance alone is not a profitability proof.
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type concat_context_staging_preferred(
+	::fast_io::io_strlike_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	return {};
 }
 
 template <::std::integral chtype, typename alloctype>

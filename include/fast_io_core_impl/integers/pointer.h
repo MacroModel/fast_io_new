@@ -30,6 +30,27 @@ struct small_scatter_t
 	using manip_tag = manip_tag_t;
 	ch_type const *base{};
 	::std::size_t len{};
+
+	inline constexpr small_scatter_t() noexcept = default;
+
+	/// @brief Constructs a run-time extent whose capacity remains bounded by the type-level reserve proof.
+	/// @details `print_reserve_size` advertises exactly `N`, so permitting `len > N` would make the public aggregate
+	///          reserve-printable while its define CPO writes past the selected destination. A user-provided constructor
+	///          removes aggregate initialization as an invariant bypass. The fields remain readable for source
+	///          compatibility, and every consuming CPO revalidates the bound in case mutable legacy code changes `len`.
+	inline constexpr small_scatter_t(ch_type const *scatter_base, ::std::size_t scatter_len) noexcept
+		: base(scatter_base), len(scatter_len)
+	{
+		validate();
+	}
+
+	inline constexpr void validate() const noexcept
+	{
+		if (N < len) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	}
 };
 
 template <::std::integral ch_type, ::std::size_t N>
@@ -336,7 +357,10 @@ inline constexpr char_type *
 print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::static_scatter_t<char_type, N>>,
 					 char_type *iter, ::fast_io::manipulators::static_scatter_t<char_type, N> scatter) noexcept
 {
-	return ::fast_io::details::non_overlapped_copy_n(scatter.base, N, iter);
+	// A static scatter proves an exact extent, so the type-level small-copy policy may expose its individual code units
+	// before GCC's loop-to-memcpy recognition. The helper reads and writes exactly N elements; an N-element source with
+	// no trailing null is therefore sufficient and no over-copy is permitted.
+	return ::fast_io::details::decay::static_scatter_copy_n<N>(scatter.base, iter);
 }
 
 template <::std::integral char_type, ::std::size_t N>
@@ -353,7 +377,9 @@ print_reserve_precise_define(io_reserve_type_t<char_type, ::fast_io::manipulator
 							 char_type *iter, ::std::size_t,
 							 ::fast_io::manipulators::static_scatter_t<char_type, N> scatter) noexcept
 {
-	return ::fast_io::details::non_overlapped_copy_n(scatter.base, N, iter);
+	// Precise concat and ordinary reserve output share one lowering policy; otherwise the same semantic leaf would regain
+	// fragmented memcpy stores merely by crossing the destination concept boundary.
+	return ::fast_io::details::decay::static_scatter_copy_n<N>(scatter.base, iter);
 }
 
 template <::std::integral char_type, ::std::size_t N>
@@ -380,7 +406,7 @@ inline constexpr char_type *
 print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::small_scatter_t<char_type, N>>,
 					 char_type *iter, ::fast_io::manipulators::small_scatter_t<char_type, N> scatter) noexcept
 {
-
+	scatter.validate();
 	return ::fast_io::details::small_scatter_print_reserve_define_impl(iter, scatter.base, scatter.len);
 }
 
@@ -389,15 +415,17 @@ inline constexpr ::std::size_t
 print_reserve_precise_size(io_reserve_type_t<char_type, ::fast_io::manipulators::small_scatter_t<char_type, N>>,
 						   ::fast_io::manipulators::small_scatter_t<char_type, N> scatter) noexcept
 {
+	scatter.validate();
 	return scatter.len;
 }
 
 template <::std::integral char_type, ::std::size_t N>
 inline constexpr char_type *
 print_reserve_precise_define(io_reserve_type_t<char_type, ::fast_io::manipulators::small_scatter_t<char_type, N>>,
-							 char_type *iter, ::std::size_t,
-							 ::fast_io::manipulators::small_scatter_t<char_type, N> scatter) noexcept
+								 char_type *iter, ::std::size_t,
+								 ::fast_io::manipulators::small_scatter_t<char_type, N> scatter) noexcept
 {
+	scatter.validate();
 	return ::fast_io::details::small_scatter_print_reserve_define_impl(iter, scatter.base, scatter.len);
 }
 

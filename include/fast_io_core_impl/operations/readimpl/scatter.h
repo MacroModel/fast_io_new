@@ -7,35 +7,39 @@ namespace fast_io
 namespace operations::decay
 {
 template <typename instmtype>
-inline constexpr ::std::byte *read_some_bytes_decay(instmtype insm, ::std::byte *first, ::std::byte *last);
+inline constexpr ::std::byte *read_some_bytes_decay(instmtype &&insm, ::std::byte *first, ::std::byte *last);
 
 template <typename instmtype>
-inline constexpr ::std::byte *pread_some_bytes_decay(instmtype insm, ::std::byte *first, ::std::byte *last,
+inline constexpr ::std::byte *pread_some_bytes_decay(instmtype &&insm, ::std::byte *first, ::std::byte *last,
 														  ::fast_io::intfpos_t);
 
 } // namespace operations::decay
 
 namespace details
 {
+
+// Scatter decomposition is an internal control-flow choice. All descriptor segments must therefore use one borrowed
+// observer: N descriptors may require N scalar calls, but they must not create N proxy owners or change observer
+// identity between calls. Native scatter CPOs still receive the ordinary named lvalue required by their protocol.
 template <typename instmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
-inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype insm, io_scatter_t const *pscatters,
+inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype &insm, io_scatter_t const *pscatters,
 																	   ::std::size_t n);
 
 template <typename instmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
-inline constexpr void scatter_read_all_bytes_cold_impl(instmtype insm, io_scatter_t const *pscatters, ::std::size_t n);
+inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatter_t const *pscatters, ::std::size_t n);
 
 template <typename instmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
 inline constexpr void
-scatter_read_all_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
+scatter_read_all_cold_impl(instmtype &insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
 						   ::std::size_t n);
 
 template <typename instmtype>
@@ -43,13 +47,18 @@ template <typename instmtype>
 [[__gnu__::__cold__]]
 #endif
 inline constexpr io_scatter_status_t
-scatter_read_some_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
+scatter_read_some_cold_impl(instmtype &insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
 							::std::size_t n)
 {
 	using char_type = typename instmtype::input_char_type;
 	if constexpr (::fast_io::operations::decay::defines::has_scatter_read_some_underflow_define<instmtype>)
 	{
-		return scatter_read_some_underflow_define(insm, pscatters, n);
+		// "Some" performs one native attempt. Admit only the stream's legal descriptor prefix and leave the returned
+		// status in the caller's descriptor coordinate system; a completed bounded prefix is therefore continuation,
+		// not an implicit request to consume the suffix in this operation.
+		::std::size_t const count{
+			::fast_io::details::scatter_read_maximum_count_clamp<char_type, instmtype>(n)};
+		return scatter_read_some_underflow_define(insm, pscatters, count);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_read_some_underflow_define<instmtype>)
 	{
@@ -101,12 +110,8 @@ scatter_read_some_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtyp
 				if (md)
 				{
 					::std::size_t dfd{sizeof(char_type) - md};
-					auto readedend{readed + dfd};
-					auto it{::fast_io::operations::decay::read_some_bytes_decay(insm, readed, readedend)};
-					if (it == readedend)
-					{
-						++sz;
-					}
+					::fast_io::details::read_all_bytes_impl(insm, readed, readed + dfd);
+					++sz;
 				}
 				if (sz != len)
 				{
@@ -137,33 +142,49 @@ scatter_read_some_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtyp
 
 template <typename instmtype>
 inline constexpr io_scatter_status_t
-scatter_read_some_impl(instmtype insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
+scatter_read_some_impl(instmtype &insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
 					   ::std::size_t n)
 {
+	if (n == 0u)
+	{
+		return {};
+	}
 	if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_mutex_ref_define<instmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
-			::fast_io::operations::decay::input_stream_mutex_ref_decay(insm)};
-		return ::fast_io::details::scatter_read_some_impl(
-			::fast_io::operations::decay::input_stream_unlocked_ref_decay(insm), pscatters, n);
+		if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<instmtype>)
+		{
+			// Character preservation proves that descriptors formed for the locked stream retain their element type
+			// after unwrapping. The guard surrounds recursive dispatch, so descriptor fallback cannot relock per segment.
+			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
+				::fast_io::operations::decay::input_stream_mutex_ref_decay(insm)};
+			decltype(auto) unlocked = ::fast_io::operations::decay::input_stream_unlocked_ref_decay(insm);
+			return ::fast_io::details::scatter_read_some_impl(unlocked, pscatters, n);
+		}
+		else
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<instmtype>,
+				"an input mutex marker requires a complete, character-preserving, type-progressing unlocked protocol");
+		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
 	{
 		using char_type = typename instmtype::input_char_type;
-		char_type *curr{ibuffer_curr(insm)};
-		char_type *ed{ibuffer_end(insm)};
+		auto curr{ibuffer_curr(insm)};
+		auto ed{ibuffer_end(insm)};
 
 		::std::size_t buffptrdiff{static_cast<::std::size_t>(ed - curr)};
 
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
 		{
-			auto [base, len] = *i;
-			if (len < buffptrdiff)
+			auto [basec, len] = *i;
+			if (len <= buffptrdiff)
 #if __has_cpp_attribute(likely)
 				[[likely]]
 #endif
 			{
+				char_type *base{const_cast<char_type *>(basec)};
 				::fast_io::details::non_overlapped_copy_n(curr, len, base);
 				curr += len;
 				buffptrdiff -= len;
@@ -196,19 +217,31 @@ template <typename instmtype>
 [[__gnu__::__cold__]]
 #endif
 inline constexpr void
-scatter_read_all_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
+scatter_read_all_cold_impl(instmtype &insm, basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
 						   ::std::size_t n)
 {
 	using char_type = typename instmtype::input_char_type;
 	if constexpr (::fast_io::operations::decay::defines::has_scatter_read_all_underflow_define<instmtype>)
 	{
+		constexpr ::std::size_t maximum{
+			::fast_io::details::scatter_read_maximum_count_or_unlimited<char_type, instmtype>()};
+		// Every all-CPO either completes its admitted prefix or reports EOF by its normal failure mechanism. Splitting
+		// only after a completed descriptor batch preserves order and observable destination contents. SIZE_MAX makes
+		// the loop inactive for an unbounded stream; a finite policy is nonzero, so n decreases monotonically.
+		while (maximum < n)
+		{
+			scatter_read_all_underflow_define(insm, pscatters, maximum);
+			pscatters += maximum;
+			n -= maximum;
+		}
 		scatter_read_all_underflow_define(insm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_read_all_underflow_define<instmtype>)
 	{
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
-			auto [base, len] = *i;
+			auto [basec, len] = *i;
+			char_type *base{const_cast<char_type *>(basec)};
 			::fast_io::details::read_all_impl(insm, base, base + len);
 		}
 	}
@@ -222,15 +255,16 @@ scatter_read_all_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype
 			{
 				return;
 			}
-			if (!retpos)
+			::std::size_t pisc{ret.position_in_scatter};
+			if (retpos == 0u && pisc == 0u)
 			{
 				::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
 			}
-			::std::size_t pisc{ret.position_in_scatter};
 			if (pisc)
 			{
 				auto pi = pscatters[ret.position];
-				::fast_io::details::read_all_impl(insm, pi.base + pisc, pi.len);
+				char_type *base{const_cast<char_type *>(pi.base)};
+				::fast_io::details::read_all_impl(insm, base + pisc, base + pi.len);
 				++retpos;
 			}
 			pscatters += retpos;
@@ -241,7 +275,8 @@ scatter_read_all_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype
 	{
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
-			auto [base, len] = *i;
+			auto [basec, len] = *i;
+			char_type *base{const_cast<char_type *>(basec)};
 			::fast_io::details::read_all_impl(insm, base, base + len);
 		}
 	}
@@ -287,34 +322,48 @@ scatter_read_all_cold_impl(instmtype insm, basic_io_scatter_t<typename instmtype
 }
 
 template <typename instmtype>
-inline constexpr void scatter_read_all_impl(instmtype insm,
+inline constexpr void scatter_read_all_impl(instmtype &insm,
 											basic_io_scatter_t<typename instmtype::input_char_type> const *pscatters,
 											::std::size_t n)
 {
+	if (n == 0u)
+	{
+		return;
+	}
 	if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_mutex_ref_define<instmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
-			::fast_io::operations::decay::input_stream_mutex_ref_decay(insm)};
-		return ::fast_io::details::scatter_read_all_impl(
-			::fast_io::operations::decay::input_stream_unlocked_ref_decay(insm), pscatters, n);
+		if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<instmtype>)
+		{
+			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
+				::fast_io::operations::decay::input_stream_mutex_ref_decay(insm)};
+			decltype(auto) unlocked = ::fast_io::operations::decay::input_stream_unlocked_ref_decay(insm);
+			return ::fast_io::details::scatter_read_all_impl(unlocked, pscatters, n);
+		}
+		else
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<instmtype>,
+				"an input mutex marker requires a complete, character-preserving, type-progressing unlocked protocol");
+		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
 	{
 		using char_type = typename instmtype::input_char_type;
-		char_type *curr{ibuffer_curr(insm)};
-		char_type *ed{ibuffer_end(insm)};
+		auto curr{ibuffer_curr(insm)};
+		auto ed{ibuffer_end(insm)};
 
 		::std::size_t buffptrdiff{static_cast<::std::size_t>(ed - curr)};
 
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
 		{
-			auto [base, len] = *i;
-			if (len < buffptrdiff)
+			auto [basec, len] = *i;
+			if (len <= buffptrdiff)
 #if __has_cpp_attribute(likely)
 				[[likely]]
 #endif
 			{
+				char_type *base{const_cast<char_type *>(basec)};
 				::fast_io::details::non_overlapped_copy_n(curr, len, base);
 				curr += len;
 				buffptrdiff -= len;
