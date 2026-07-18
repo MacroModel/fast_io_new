@@ -369,11 +369,13 @@ void test_profitable_nothrow_direct_scatter()
 		elements[i] = {character, __builtin_addressof(observations)};
 		if (i != 0u)
 		{
-			expected.push_back(':');
+			expected.append("::");
 		}
 		expected.push_back(character);
 	}
-	auto range{::fast_io::mnp::rgvw(elements, ":")};
+	// A two-code-unit separator keeps the profitable direct loop covered without pretending that a run-time descriptor
+	// has a static extent. The existing short-put-area cases below retain one-code-unit and fallback coverage.
+	auto range{::fast_io::mnp::rgvw(elements, "::")};
 	static_assert(::fast_io::sized_range_view_nothrow_direct_scatter_v<
 		char, typename decltype(range)::iterator>);
 

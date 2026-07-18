@@ -4,14 +4,14 @@ namespace fast_io::details::decay
 {
 
 /// @brief Copies a type-level fixed scatter without losing its extent to a run-time function parameter.
-/// @details This helper is intentionally separate from `small_scatter_copy_n`. GCC recognizes a short loop whose count
-///          arrives as a function argument as an independent `memcpy`, even after constant propagation. Adjacent
-///          literal fragments then remain separate stores and cannot be combined with neighboring one-character
-///          manipulators. Keeping `count` in the template exposes every small assignment before loop-distribution and
-///          lets the back end merge, for example, `"a", "bbb", chvw('c')` into the same payload stores as `"abbbc"`.
-///          Only a `static_scatter_t<count>` may select this route, so the exact source extent is a type-level proof;
-///          general run-time scatters continue through the bounded policy below. Larger fixed extents deliberately use
-///          the memcpy-shaped primitive to avoid multiplying instructions at delimiter-heavy call sites.
+/// @details GCC recognizes a short loop whose count arrives as a function argument as an independent `memcpy`, even
+///          after constant propagation. Adjacent literal fragments then remain separate stores and cannot be combined
+///          with neighboring one-character manipulators. Keeping `count` in the template exposes every small assignment
+///          before loop-distribution and lets the back end merge, for example, `"a", "bbb", chvw('c')` into the same
+///          payload stores as `"abbbc"`. Only `static_scatter_t<count>` reserve CPOs call this helper, so their type
+///          supplies the exact readable extent; a run-time descriptor does not acquire that proof from its pointer.
+///          Extents above sixteen retain the memcpy-shaped non-overlapping path to avoid multiplying instructions at
+///          large literal call sites.
 /// @tparam count      exact number of source and destination elements
 /// @tparam value_type the trivially addressable element type carried by the scatter
 /// @param first       first source element of an extent containing at least `count` elements
@@ -21,10 +21,16 @@ template <::std::size_t count, typename value_type>
 inline constexpr value_type *static_scatter_copy_n(
 	value_type const *first, value_type *result) noexcept
 {
-	if constexpr (count <= 16u)
+	if constexpr (count == 0u)
+	{
+		// An empty scatter need not carry an array pointer. Return the representation unchanged: even adding zero to a
+		// null pointer is not a defined pointer-arithmetic operation and is rejected during constant evaluation.
+		return result;
+	}
+	else if constexpr (count <= 16u)
 	{
 		// An index expansion, rather than a counted loop, prevents GCC from recreating a separate memcpy before the
-		// static-scatter pointer itself has propagated to the literal object.
+		// static-scatter source pointer itself has propagated to the literal object.
 		[]<::std::size_t... index>(value_type const *source, value_type *destination,
 			::std::index_sequence<index...>) constexpr noexcept {
 			((destination[index] = source[index]), ...);

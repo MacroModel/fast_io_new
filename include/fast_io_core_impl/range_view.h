@@ -513,7 +513,15 @@ template <::std::integral char_type, ::std::input_iterator It, typename output>
 		::fast_io::sized_range_view_nothrow_direct_scatter_v<char_type, It> &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
-#if __has_cpp_attribute(__gnu__::__noinline__)
+#if __has_cpp_attribute(__gnu__::__noinline__) && __has_cpp_attribute(__gnu__::__aligned__)
+// This specialization is deliberately out of line and its fitting loop is several KiB after optimization. On x86-64,
+// GCC 15 otherwise lets COMDAT order move the loop between cache-line phases: two instruction-identical instantiations
+// differed by 20--25% when the loop entry landed at byte 61 instead of byte 29 of a 64-byte line. Aligning the function,
+// rather than a benchmark caller, makes that internal phase deterministic. It adds at most 63 bytes of padding per
+// admitted specialization, changes no call or loop operation, and measured 112 bytes (+0.0025%) for the complete
+// benchmark.
+[[__gnu__::__noinline__, __gnu__::__aligned__(64)]]
+#elif __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #elif __has_cpp_attribute(msvc::noinline)
 [[msvc::noinline]]

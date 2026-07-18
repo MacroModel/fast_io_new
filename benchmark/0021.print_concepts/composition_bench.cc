@@ -27,10 +27,13 @@ inline constexpr ::std::size_t iterations{FAST_IO_PRINT_CONCEPT_BENCH_ITERATIONS
 
 #if defined(__GNUC__) || defined(__clang__)
 #define FAST_IO_BENCH_NOINLINE [[gnu::noinline]]
+#define FAST_IO_BENCH_TIMED_BOUNDARY [[gnu::noinline, gnu::aligned(64)]]
 #elif defined(_MSC_VER)
 #define FAST_IO_BENCH_NOINLINE __declspec(noinline)
+#define FAST_IO_BENCH_TIMED_BOUNDARY __declspec(noinline)
 #else
 #define FAST_IO_BENCH_NOINLINE
+#define FAST_IO_BENCH_TIMED_BOUNDARY
 #endif
 
 // These sinks deliberately expose only the operation being measured.  The noinline compiler barrier makes the
@@ -652,9 +655,13 @@ inline void report_observer_transport(char const *backend, char const *operation
 		static_cast<unsigned long long>(checksum(verified)), copies_per_operation, iterations);
 }
 
+// Each benchmark specialization owns its complete timed loop behind a stable, aligned out-of-line boundary. The
+// attribute adds no call inside an iteration. It prevents unrelated template instantiations in the common command-line
+// dispatcher from changing GCC's inlining budget or shifting a hot loop across an instruction-cache line; both effects
+// were large enough to masquerade as 3--5 percent library regressions in the mixed range fixtures.
 template <bool line, typename printable>
-inline void benchmark_fake_only(char const *operation, char const *workload, printable const &value,
-								 ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_fake_only(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	auto const elapsed{measure([&] {
@@ -667,8 +674,8 @@ inline void benchmark_fake_only(char const *operation, char const *workload, pri
 }
 
 template <bool line, typename printable>
-inline void benchmark_fake_write(char const *operation, char const *workload, printable const &value,
-									 ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_fake_write(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	fake_write_sink sink;
@@ -683,8 +690,8 @@ inline void benchmark_fake_write(char const *operation, char const *workload, pr
 
 #if !defined(FAST_IO_PRINT_CONCEPT_BASELINE)
 template <bool line, typename printable>
-inline void benchmark_large_fake_observer(char const *operation, char const *workload,
-									  printable const &value, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_large_fake_observer(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	large_fake_state state{};
@@ -701,8 +708,8 @@ inline void benchmark_large_fake_observer(char const *operation, char const *wor
 #endif
 
 template <bool line, typename printable>
-inline void benchmark_fake_scatter(char const *operation, char const *workload, printable const &value,
-								   ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_fake_scatter(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	fake_scatter_sink sink;
@@ -716,8 +723,8 @@ inline void benchmark_fake_scatter(char const *operation, char const *workload, 
 }
 
 template <bool line, typename printable>
-inline void benchmark_obuffer(char const *operation, char const *workload, printable const &value,
-							  ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_obuffer(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	::std::vector<char> storage(verified.size() + 64u);
@@ -740,8 +747,8 @@ inline void benchmark_obuffer(char const *operation, char const *workload, print
 
 #if !defined(FAST_IO_PRINT_CONCEPT_BASELINE)
 template <bool line, typename printable>
-inline void benchmark_large_obuffer_observer(char const *operation, char const *workload,
-										 printable const &value, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_large_obuffer_observer(
+	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	::std::vector<char> storage(verified.size() + 64u);
@@ -765,8 +772,9 @@ inline void benchmark_large_obuffer_observer(char const *operation, char const *
 #endif
 
 template <bool line, typename string_type, typename string_sink_type, typename printable>
-inline void benchmark_reusable_string(char const *backend, char const *operation, char const *workload,
-									 printable const &value, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_reusable_string(
+	char const *backend, char const *operation, char const *workload, printable const &value,
+	::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	string_type output;
@@ -788,8 +796,9 @@ inline void benchmark_reusable_string(char const *backend, char const *operation
 }
 
 template <bool line, typename output, typename printable>
-inline void benchmark_native_output(char const *backend, char const *operation, char const *workload,
-								   output &out, printable const &value, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_native_output(
+	char const *backend, char const *operation, char const *workload, output &out,
+	printable const &value, ::std::string_view expected)
 {
 	::std::string const verified{verify_print<line>(value, expected)};
 	auto const elapsed{measure([&] {
@@ -943,12 +952,10 @@ inline void dispatch_print_backend(char const *backend, char const *operation, c
 	fail("unknown or incompatible print backend");
 }
 
-// Keep each concat specialization outside the workload dispatcher's global inlining budget. The complete timed loop
-// remains inside this function, so the attribute adds no call to an individual iteration. This isolation is important
-// for high-arity formatting graphs: with GCC 15, merely adding an unrelated template specialization otherwise changed
-// the generated sixteen-leaf loop by several KiB and could masquerade as a library strategy effect.
+// Concat uses the same timed-loop boundary as print. High-arity formatting graphs are especially sensitive: without
+// the boundary, merely adding an unrelated specialization changed GCC 15's generated sixteen-leaf loop by several KiB.
 template <bool line, typename printable>
-FAST_IO_BENCH_NOINLINE inline void benchmark_concat_std(
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_concat_std(
 	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string complete_expected{expected};
@@ -976,7 +983,7 @@ FAST_IO_BENCH_NOINLINE inline void benchmark_concat_std(
 }
 
 template <bool line, typename printable>
-FAST_IO_BENCH_NOINLINE inline void benchmark_concat_fast(
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_concat_fast(
 	char const *operation, char const *workload, printable const &value, ::std::string_view expected)
 {
 	::std::string complete_expected{expected};
@@ -1170,8 +1177,8 @@ inline void invoke_range_record(output &&out, range_type const &range)
 ///          exercises the explicit deferred-commit marker. Short put areas, append-only adapters, and direct-write
 ///          sinks have different whole-record trade-offs and remain outside these two fixtures.
 template <bool line, bool framed, typename range_type>
-inline void benchmark_obuffer_range_record(char const *operation, char const *workload,
-										   range_type const &range, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_obuffer_range_record(
+	char const *operation, char const *workload, range_type const &range, ::std::string_view expected)
 {
 	::std::string verified;
 	capture_sink capture{__builtin_addressof(verified)};
@@ -1201,8 +1208,8 @@ inline void benchmark_obuffer_range_record(char const *operation, char const *wo
 }
 
 template <bool line, bool framed, typename range_type>
-inline void benchmark_fast_string_range_record(char const *operation, char const *workload,
-										   range_type const &range, ::std::string_view expected)
+FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_fast_string_range_record(
+	char const *operation, char const *workload, range_type const &range, ::std::string_view expected)
 {
 	::std::string verified;
 	capture_sink capture{__builtin_addressof(verified)};

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <fast_io.h>
 
@@ -746,6 +747,13 @@ inline void test_memory_map_reference_semantics()
 
 	char output[8u]{};
 	::fast_io::basic_omemory_map<char> output_map;
+	using output_map_ref = ::std::remove_cvref_t<decltype(
+		::fast_io::operations::output_stream_ref(output_map))>;
+	// A fixed mapped put area also supplies an all-or-terminate bulk completion CPO. The two proofs are independent:
+	// cursor operations select the fitting fast path, while `writable` guarantees that every buffer-miss strategy has
+	// a real terminal operation instead of accepting a put area that could silently drop the remainder.
+	static_assert(::fast_io::operations::decay::defines::has_obuffer_basic_operations<output_map_ref>);
+	static_assert(::fast_io::operations::decay::defines::writable<output_map_ref>);
 	output_map.begin_ptr = output_map.curr_ptr = output;
 	output_map.end_ptr = output + 8u;
 	::fast_io::print(output_map, "ab");

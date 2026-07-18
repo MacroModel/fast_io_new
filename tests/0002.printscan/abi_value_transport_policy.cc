@@ -68,6 +68,54 @@ inline constexpr ::std::true_type abi_value_transport_force_direct(
 	return {};
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+struct __attribute__((packed)) packed_misaligned
+{
+	unsigned char tag;
+	::std::uint64_t value;
+};
+
+// Outer alignment does not repair the unaligned member at offset one. This second shape prevents a future policy from
+// mistaking `alignof(T)` for proof that every SysV eightbyte can be classified independently of member layout.
+struct __attribute__((packed, aligned(8))) packed_misaligned_outer_aligned
+{
+	unsigned char tag;
+	::std::uint64_t value;
+};
+
+struct __attribute__((packed)) packed_misaligned_forced_reference
+{
+	unsigned char tag;
+	::std::uint64_t value;
+};
+
+inline constexpr ::std::true_type abi_value_transport_force_reference(
+	::fast_io::io_type_t<packed_misaligned_forced_reference>) noexcept
+{
+	return {};
+}
+
+static_assert(sizeof(packed_misaligned) == 9u && alignof(packed_misaligned) == 1u);
+static_assert(sizeof(packed_misaligned_outer_aligned) == 16u &&
+			  alignof(packed_misaligned_outer_aligned) == 8u);
+
+// SysV AMD64 assigns both exact types above the MEMORY class because `value` is unaligned. The reflection-free
+// envelope intentionally still admits their gross size/alignment: true means that a bounded source copy is eligible,
+// not that this exact type is register-lowered. C++20 has no portable field-offset query with which to refine the
+// generic rule. A known indirect type can and should use the explicit reference override demonstrated below.
+static_assert(::fast_io::details::abi_small_trivial_argument_layout_envelope(
+	::fast_io::details::abi_small_aggregate_model::sysv_amd64,
+	sizeof(packed_misaligned), alignof(packed_misaligned), false, 16u, 8u));
+static_assert(::fast_io::details::abi_small_trivial_argument_layout_envelope(
+	::fast_io::details::abi_small_aggregate_model::sysv_amd64,
+	sizeof(packed_misaligned_outer_aligned), alignof(packed_misaligned_outer_aligned),
+	false, 16u, 8u));
+static_assert(!::fast_io::details::abi_small_trivial_argument_object<
+	packed_misaligned_forced_reference>());
+static_assert(!::fast_io::details::abi_small_trivial_result_object<
+	packed_misaligned_forced_reference>());
+#endif
+
 static_assert(::std::is_trivially_copy_constructible_v<assignment_only_nontrivial>);
 static_assert(::std::is_trivially_move_constructible_v<assignment_only_nontrivial>);
 static_assert(::std::is_trivially_destructible_v<assignment_only_nontrivial>);
@@ -131,7 +179,7 @@ static_assert(::fast_io::details::abi_small_trivial_result_object_for_model<::st
 static_assert(::fast_io::details::abi_small_trivial_result_object_for_model<forced_direct>(
 	::fast_io::details::abi_small_aggregate_model::windows_arm64, 16u, 8u));
 
-inline consteval bool every_abi_argument_layout_envelope_is_conservative()
+inline consteval bool every_abi_argument_layout_envelope_matches_bounded_copy_policy()
 {
 	using enum ::fast_io::details::abi_small_aggregate_model;
 	using ::fast_io::details::abi_small_trivial_argument_layout_envelope;
@@ -173,6 +221,14 @@ inline consteval bool every_abi_argument_layout_envelope_is_conservative()
 		}
 	}
 
+	// AAPCS64 HFA/HVA classes may remain direct beyond 16 bytes, but neither byte layout nor C++20 traits can prove
+	// homogeneity. The generic policy deliberately rejects that false-negative shape; an exact target-specific type may
+	// opt in through the strong direct-transport contract instead of broadening every ordinary aggregate.
+	if (abi_small_trivial_argument_layout_envelope(aapcs64, 32u, 8u, false, 16u, 8u))
+	{
+		return false;
+	}
+
 	// CHERI, caller-storage aggregate ABIs (PowerPC32/SPARC V8/Wasm), and unknown targets never infer an aggregate
 	// register class from byte size. Scalar admission remains bounded so a type-specific direct marker is required for
 	// any aggregate exception the compiler can see but portable C++20 reflection cannot describe.
@@ -191,7 +247,7 @@ inline consteval bool every_abi_argument_layout_envelope_is_conservative()
 	return true;
 }
 
-static_assert(every_abi_argument_layout_envelope_is_conservative());
+static_assert(every_abi_argument_layout_envelope_matches_bounded_copy_policy());
 
 inline consteval bool asymmetric_abi_result_envelopes_are_conservative()
 {

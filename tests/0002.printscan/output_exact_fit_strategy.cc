@@ -2,11 +2,68 @@
 #include <cassert>
 #include <cstddef>
 #include <string_view>
+#include <type_traits>
 
 #include <fast_io.h>
 
 namespace
 {
+
+template <typename output>
+inline constexpr bool writable_output_v =
+	::fast_io::operations::decay::defines::writable<output>;
+
+static_assert(!writable_output_v<::fast_io::basic_obuffer_view_ref<char const>>);
+static_assert(!writable_output_v<::fast_io::basic_obuffer_view_ref<char volatile>>);
+static_assert(!writable_output_v<::fast_io::basic_omemory_map_ref<char const>>);
+static_assert(!writable_output_v<::fast_io::basic_omemory_map_ref<char volatile>>);
+
+consteval bool fixed_output_completion_consteval_contract()
+{
+	// Empty fixed-capacity outputs use typed null sentinels. A zero-length completion must not form pointer arithmetic
+	// or dereference the owner merely to establish that there is no work.
+	{
+		::fast_io::basic_obuffer_view<char> empty{};
+		::fast_io::write_all_overflow_define(
+			::fast_io::basic_obuffer_view_ref<char>{__builtin_addressof(empty)},
+			static_cast<char const *>(nullptr), static_cast<char const *>(nullptr));
+	}
+	{
+		::fast_io::basic_omemory_map<char> empty{};
+		::fast_io::write_all_overflow_define(
+			::fast_io::basic_omemory_map_ref<char>{__builtin_addressof(empty)},
+			static_cast<char const *>(nullptr), static_cast<char const *>(nullptr));
+	}
+
+	char const source[]{'x', 'y', 'z'};
+	{
+		::std::array<char, 3u> storage{};
+		::fast_io::basic_obuffer_view<char> output(storage);
+		::fast_io::write_all_overflow_define(
+			::fast_io::basic_obuffer_view_ref<char>{__builtin_addressof(output)},
+			source, source + 3u);
+		if (output.curr_ptr != output.end_ptr || storage != ::std::array<char, 3u>{'x', 'y', 'z'})
+		{
+			return false;
+		}
+	}
+	{
+		::std::array<char, 3u> storage{};
+		::fast_io::basic_omemory_map<char> output{};
+		output.begin_ptr = output.curr_ptr = storage.data();
+		output.end_ptr = storage.data() + storage.size();
+		::fast_io::write_all_overflow_define(
+			::fast_io::basic_omemory_map_ref<char>{__builtin_addressof(output)},
+			source, source + 3u);
+		if (output.curr_ptr != output.end_ptr || storage != ::std::array<char, 3u>{'x', 'y', 'z'})
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static_assert(fixed_output_completion_consteval_contract());
 
 struct static_pair
 {
@@ -67,8 +124,20 @@ inline void test_print_exact_fit()
 	{
 		::std::array<char, 2u> storage{};
 		::fast_io::basic_obuffer_view<char> output(storage);
+		using output_ref = ::std::remove_cvref_t<decltype(
+			::fast_io::operations::output_stream_ref(output))>;
+		static_assert(::fast_io::operations::decay::defines::has_obuffer_basic_operations<output_ref>);
+		static_assert(::fast_io::operations::decay::defines::writable<output_ref>);
 		::fast_io::print(output, static_pair{'A', 'B'});
 		require_contents(output, "AB");
+	}
+	{
+		// Cursor state must survive normalization across calls; the second reserve run exactly fills the remaining area.
+		::std::array<char, 4u> storage{};
+		::fast_io::basic_obuffer_view<char> output(storage);
+		::fast_io::print(output, static_pair{'A', 'B'});
+		::fast_io::print(output, static_pair{'C', 'D'});
+		require_contents(output, "ABCD");
 	}
 	{
 		::std::array<char, 3u> storage{};

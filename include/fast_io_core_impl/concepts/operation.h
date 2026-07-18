@@ -1358,9 +1358,12 @@ inline constexpr abi_small_aggregate_model native_abi_small_aggregate_model{
 #endif
 };
 
-/// @brief Conservative direct-argument size envelope for the selected ABI family.
+/// @brief Conservative source-level value-copy envelope for the selected ABI family.
 /// @details RISC-V and LoongArch specify direct aggregates up to twice XLEN/GRLEN. AAPCS32 can split larger fixed
 ///          composites across r0-r3 and the stack, but this performance policy intentionally stops at two words.
+///          AAPCS64 can carry an HFA/HVA of up to four members in SIMD/FP registers even when it exceeds 16 bytes;
+///          C++20 cannot recognize that recursive homogeneous shape, so the generic budget remains two words and an
+///          exact target-specific type may recover the exceptional path with `abi_value_transport_force_direct`.
 ///          PowerPC64 ELFv1/ELFv2, all three standard MIPS ABIs, and SPARC V9 likewise have broader allocation rules;
 ///          two register words are the common bounded hot-call shape selected here. MIPS is keyed by o32/n32/n64,
 ///          not ISA width: n32 uses 64-bit argument registers despite its 32-bit pointer model, while an unrecognized
@@ -1421,10 +1424,14 @@ inline constexpr ::std::size_t abi_small_trivial_argument_max_size{
 /// @brief Applies the model-specific, reflection-free argument-layout envelope.
 /// @details This is deliberately a necessary filter rather than an ABI classifier. Exact field classes, homogeneous
 ///          aggregates, packed-member alignment, capability-bearing fields, and available argument registers remain
-///          compiler decisions. Returning true means only that the layout is inside a family-wide class in which a
-///          direct argument is possible; it never overrides the compiler's final lowering. The separate function keeps
-///          every family testable on one host and prevents a future architecture macro from silently broadening an
-///          unrelated ABI model.
+///          compiler decisions. In particular, a SysV AMD64 aggregate with an unaligned packed member can satisfy both
+///          the size and `alignof(T)` bounds while the psABI assigns it the MEMORY class; adding an outer alignment does
+///          not prove that every member is naturally aligned. Returning true therefore authorizes only a bounded
+///          source-level copy in a family where direct transport is possible for some such layouts. It does not promise
+///          registers, suppress stack arguments or hidden result storage, or override the compiler's final lowering.
+///          A type author who knows that a particular layout is indirect should provide
+///          `abi_value_transport_force_reference`. The separate function keeps every family testable on one host and
+///          prevents a future architecture macro from silently broadening an unrelated ABI model.
 inline consteval bool abi_small_trivial_argument_layout_envelope(
 	abi_small_aggregate_model model, ::std::size_t object_size, ::std::size_t object_alignment,
 	bool is_scalar, ::std::size_t maximum_size, ::std::size_t scalar_alignment) noexcept
@@ -1498,13 +1505,15 @@ concept abi_value_transport_forced_reference = requires {
 	} -> ::std::same_as<::std::true_type>;
 };
 
-/// @brief Detects a type-author proof that the native ABI carries this exact value directly.
-/// @details This marker overrides only the architecture layout envelope. The library still requires trivial
-///          copy/move construction and destruction, because an ABI attribute cannot make repeated observable C++
-///          constructor side effects semantically free. Because the marker is shared by the argument and result
-///          policies, supplying it is a deliberately strong contract: the type author attests direct transport in both
-///          directions. A direction-specific ABI exception should remain on the conservative path until it has its own
-///          model rather than weakening this bidirectional promise.
+/// @brief Detects a type-author contract selecting value transport for this exact type.
+/// @details The marker does not alter a compiler calling convention; its author must already know that the native ABI
+///          and the exact completed type make the value path appropriate. It overrides only the library's conservative
+///          architecture layout envelope. The library still requires trivial copy/move construction and destruction,
+///          because an ABI attribute cannot make repeated observable C++ constructor side effects semantically free.
+///          Because the marker is shared by the argument and result policies, supplying it is a deliberately strong
+///          contract: the type author attests direct transport in both directions. A direction-specific ABI exception
+///          should remain on the conservative path until it has its own model rather than weakening this bidirectional
+///          promise.
 template <typename value_type>
 concept abi_value_transport_forced_direct = requires {
 	{
@@ -1547,11 +1556,12 @@ inline constexpr ::std::size_t abi_small_trivial_scalar_alignment{
 		? ::fast_io::details::abi_small_trivial_argument_max_size
 		: alignof(::std::size_t)};
 
-/// @brief Admits the conservative argument policy after the common language proof.
-/// @details This predicate is for helpers whose copied object is a by-value parameter. It must not be reused for a
-///          copied return value: several supported psABIs deliberately classify the same aggregate differently in the
-///          two directions. Size and alignment are only reflection-free necessary conditions; semantic permission to
-///          duplicate a proxy remains an independent concept at each call site.
+/// @brief Admits the conservative argument-copy policy after the common language proof.
+/// @details This predicate is for helpers whose copied object is a by-value parameter. A true result selects a bounded
+///          C++ copy but is not proof that the target ABI will allocate that parameter in registers. It must not be
+///          reused for a copied return value: several supported psABIs deliberately classify the same aggregate
+///          differently in the two directions. Size and alignment are only reflection-free necessary conditions;
+///          semantic permission to duplicate a proxy remains an independent concept at each call site.
 template <typename value_type>
 inline consteval bool abi_small_trivial_argument_object() noexcept
 {

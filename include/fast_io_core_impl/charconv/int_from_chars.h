@@ -316,8 +316,20 @@ from_chars_integral_runtime_base_compact(char_type const *first,
 	auto const radix_squared{static_cast<unsigned_type>(radix * radix)};
 	auto const radix_fourth{
 		static_cast<unsigned_type>(radix_squared * radix_squared)};
+	/*
+	`unsigned_type` may be `uint16_t`, which is promoted to signed `int` when
+	`int` represents its complete range.  At base 15, `radix_fourth` is 50625
+	and squaring it then overflows that promoted `int` before the cast below.
+	The calculation is eager even when an eight-digit block is inadmissible.
+
+	Widening an operand before multiplication makes the operation unsigned and
+	exact: the largest supported value is 36^8 = 2,821,109,907,456, well within
+	`uint_least64_t`.  Conversion back to `unsigned_type` has the intended
+	well-defined modulo semantics for narrow accumulators.
+	*/
 	auto const radix_eighth{
-		static_cast<unsigned_type>(radix_fourth * radix_fourth)};
+		static_cast<unsigned_type>(
+			static_cast<::std::uint_least64_t>(radix_fourth) * radix_fourth)};
 	while (8u <= safe_digits - digits &&
 		   8u <= static_cast<::std::size_t>(last - first))
 	{

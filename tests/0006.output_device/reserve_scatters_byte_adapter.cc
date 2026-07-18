@@ -394,6 +394,15 @@ inline void write_all_bytes_overflow_define(
 	sink.bytes->append(byte_first, byte_last);
 }
 
+// `writable` deliberately does not reinterpret a wide stream's byte CPO as a character-count CPO. The primitive print
+// dispatcher has the opposite, well-defined bridge: it converts the complete char16_t pointer range to bytes before
+// calling this sink. Destination admission must therefore compose the two unit-specific concepts at the strategy
+// boundary rather than changing either public concept's meaning.
+static_assert(!::fast_io::operations::decay::defines::writable<wide_byte_capture>);
+static_assert(::fast_io::operations::decay::defines::bytes_writable<wide_byte_capture>);
+static_assert(::fast_io::details::decay::print_freestanding_primitive_output_okay<
+	wide_byte_capture>);
+
 struct byte_scatter_only_capture
 {
 	using output_char_type = char;

@@ -357,9 +357,9 @@ inline constexpr char_type *
 print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::static_scatter_t<char_type, N>>,
 					 char_type *iter, ::fast_io::manipulators::static_scatter_t<char_type, N> scatter) noexcept
 {
-	// A static scatter proves an exact extent, so the type-level small-copy policy may expose its individual code units
-	// before GCC's loop-to-memcpy recognition. The helper reads and writes exactly N elements; an N-element source with
-	// no trailing null is therefore sufficient and no over-copy is permitted.
+	// A static scatter declares an exact extent contract, so the type-level small-copy policy may expose its individual
+	// code units before GCC's loop-to-memcpy recognition. The helper reads and writes exactly N elements; an N-element
+	// source with no trailing null is therefore sufficient and no over-copy is permitted.
 	return ::fast_io::details::decay::static_scatter_copy_n<N>(scatter.base, iter);
 }
 

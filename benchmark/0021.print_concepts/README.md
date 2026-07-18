@@ -37,9 +37,11 @@ with an ill-formed baseline rather than two equivalent operations.
 `static_literal_asm.cc` isolates compile-time-known text materialization. The split probe spells
 `"a", "bbb", chvw('c')`; the control spells `"abbbc"`. Both reach one noinline compiler-barrier-protected scalar write,
 so the exported wrappers contain no syscall, checksum, allocation, or numeric conversion. Before the static-scatter
-copy policy was shared with the measured small-copy helper, GCC 15 emitted four payload stores for the split spelling
-and two for the control. With the 16-element policy both lower to one dword store plus one byte store on x86-64; Apple
-Clang on M4 likewise gives the two wrappers the same payload instruction shape. Build and compare the complete symbols:
+extent remained a run-time helper parameter, GCC 15 reconstructed an independent three-byte `memcpy`: the split
+spelling used four payload stores while the control used two. The fixed-extent helper now expands `N <= 16` as indexed
+assignments before loop-to-memcpy recognition. Both forms consequently lower to one dword store plus one byte store on
+x86-64; GCC 15 on M4 and Apple Clang likewise give the two wrappers the same payload instruction shape. Build and
+compare the complete symbols:
 
 ```sh
 g++ -O3 -march=native -std=c++20 -Iinclude \
@@ -51,10 +53,27 @@ objdump -drC /tmp/static-literal-asm | \
 
 This is deliberately an ordinary constexpr copy policy, not consteval string concatenation. The public function's
 literal values cannot be promoted to C++20 non-type template arguments, and a general reserve CPO may have effects or
-return less than its advertised upper bound. `static_scatter_t<N>` supplies the missing exact-extent proof: `N <= 16`
-exposes element stores for cross-fragment merging, while `N > 16` retains the memcpy-shaped path. The correctness suite
-uses sources containing exactly N live elements (no readable terminator padding), covers 1/3/16/17 and multiple
-character widths, and exercises both ordinary and precise reserve CPOs.
+return less than its advertised upper bound. `static_scatter_t<N>` carries the required type-level extent contract:
+`N <= 16` uses an index expansion for cross-fragment merging, while `N > 16` retains the memcpy-shaped path. Constructing
+the scatter still requires its base to denote at least N readable elements. General run-time scatters keep the separately
+measured bounded-copy policy. The correctness suite uses sources containing exactly N live elements (no readable
+terminator padding), covers 1/3/16/17 and multiple character widths, and exercises both ordinary and precise reserve CPOs.
+
+On Linux x86-64, GCC 15 produced 37-byte clean and 75-byte default-hardened exported symbols for both spellings; the
+complete instruction sequences, including the byte store for `c` and dword store for `abbb`, were identical. In the
+final frozen-source gate, eleven alternating 100-million-call samples on an opportunistically idle physical P-core
+measured 1.780192 ns/op for the split form and 1.779746 ns/op for the control (median difference +0.025%, paired-ratio
+median -0.269%). This is indistinguishable from layout/timing noise and confirms that the concept-level composition no
+longer adds a measurable run-time penalty. The matching timed probe
+accepts `s` for the split spelling and `w` for the whole-literal control; alternate their order across samples rather
+than running every copy of one variant first:
+
+```sh
+g++ -O3 -march=native -std=c++20 -Iinclude \
+  benchmark/0021.print_concepts/static_literal_bench.cc -o /tmp/static-literal-bench
+taskset -c 5 /tmp/static-literal-bench s
+taskset -c 5 /tmp/static-literal-bench w
+```
 
 Compiled scatter plans retain a different proof boundary. Direct calls normalize each used public argument once;
 bound calls first retain an ABI-decayed pre-alias source and recreate its alias only during synchronous emission. The
@@ -334,10 +353,11 @@ expansion and stack cost grow linearly and have no profitability evidence yet. T
 descriptors, so exact sizing does not imply a borrowed-source lifetime. The `print-precise-concat` benchmark suite pairs
 portable `std::string` with fast_io's native put-area string at the 2/4/8/12/16 boundary for both concat and concatln.
 The intermediate shapes are intentional: they separate gradual per-leaf work from nonlinear compiler code-generation
-changes which would be invisible in a matrix containing only powers-of-two endpoints. Each concat specialization owns
-its complete timed loop and is marked noinline. The attribute is outside the loop, so it adds no per-operation call;
-it prevents unrelated cases in this large translation unit from changing GCC's global inlining budget and being
-mistaken for a strategy effect.
+changes which would be invisible in a matrix containing only powers-of-two endpoints. Every backend specialization,
+including concat, owns its complete timed loop behind a noinline boundary; GNU-compatible compilers additionally align
+that boundary to 64 bytes. The attributes are outside the loop, so they add no per-operation call. They prevent
+unrelated cases in this large translation unit from changing GCC's global inlining budget or moving the hot loop
+across an instruction-cache line and being mistaken for a strategy effect.
 
 ## Shared small-scatter copy lowering
 
@@ -458,6 +478,43 @@ reduced text further but regressed those cases by 31%/54%/56%: address-taking ch
 loop's register allocation. Assembly confirmed extra moves or stack state on every fitting iteration. Both splits were
 therefore rejected. Calling two raw writes was not considered an equivalent substitute because it can change pair
 status dispatch, lock scope, exact-fit behavior, alias lifetime, and the prefix visible when allocation fails.
+
+The fitting loop deliberately retains one run-time `small_scatter_copy_n` policy for every separator and element.
+Several apparently obvious fixed-length refinements were measured and rejected because `t.sep.len` is invariant across
+the range but the copied element length is not. A two-unit-only branch improved `::` records, yet moved the general path
+such that comma records became 41--49% slower. Adding a one-unit branch recovered part of that loss but still left
+comma 10.51--15.68% slower than the original helper; relative-to-intermediate gains must not be reported as a net win.
+A common `len <= 2` hot branch likewise left comma 15.27--21.67% slower.
+
+Dispatching once before the loop and instantiating fixed one-, fixed two-, and dynamic-length loop versions removed the
+per-item decision, but expanded the GCC helper from 4,934 to 14,111 bytes (+186%) and the focused executable text by
+20.2%. Moving explicit one/two cases into the shared primitive shrank this particular helper to 2,075 bytes, but also
+put the new decision on every element copy and regressed the established two-unit records by 6.75--26.11%. Finally,
+replacing separator and element copies with the smaller memcpy-shaped primitive reduced helper text by about 15% but
+made the fitting cases 68--90% slower. The retained generic loop is therefore a measured multi-separator compromise;
+the type-level fixed copy remains reserved for genuine `static_scatter_t<N>` extents, where it has no run-time branch.
+
+With that generic policy restored, a focused GCC 15 baseline/current comparison put the complete timed specialization
+behind the same noinline 64-byte-aligned boundary. Seven alternating physical-P-core samples measured current
+`rgvw16`/`rgvw128` 19.44%/19.39% faster than the frozen tree and adjacent/framed 128-element records 7.05%/9.15%
+faster. A full-harness disassembly then found one remaining internal layout dependency: the instruction-identical
+4,934-byte direct helper began at cache-line offset 32 instead of zero, placing its fitting-loop entry at byte 61 of a
+64-byte line rather than byte 29. Aligning that already-noinline helper to 64 bytes added 112 bytes (0.0025%) to the
+complete executable and changed no helper instruction. Seven alternating samples improved full-harness
+`rgvw16`/`rgvw128` by 24.93%/20.48% and adjacent/framed records by 20.14%/19.72%, exactly restoring the focused code-
+shape tier. A final same-batch frozen-versus-aligned comparison measured net improvements of 18.45%/18.98% for
+`rgvw16`/`rgvw128` and 16.14%/17.56% for adjacent/framed records. The apparent regressions were therefore internal
+COMDAT phase artifacts, not a missing separator branch or an ABI-copy difference. Clang 21 accepted the guarded GNU
+attribute and emitted `.p2align 6`; compilers without that GNU alignment attribute retain a recognized noinline-only
+branch when one is available.
+
+The final fake-call conditional-pack control retains one small, real tradeoff. Current and frozen paths both make five
+opaque calls. The unified semantic plan stores and reloads five descriptors in one loop, while the frozen shape calls
+the prefix and suffix directly and loops over only the three selected inner descriptors. This costs 0.107--0.151 ns/op
+(4.66--6.24%) at an empty-call boundary. Reintroducing condition-specific splitting was rejected because the same
+unified flattening reduces the nine-leaf fake-call pack from 8.687 to 3.950 ns/op (-54.53%). A future direct-write-only
+leafwise refinement needs independent 2/5/9/16-leaf evidence; the current sub-nanosecond conditional result is reported
+as an explicit scalability tradeoff, not hidden as noise.
 
 ### fmt 12.2.0 controls
 

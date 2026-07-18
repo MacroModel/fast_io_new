@@ -319,6 +319,52 @@ inline constexpr bool obuffer_overflow_never(basic_obuffer_view_ref<ch_type>) no
 	return true;
 }
 
+/// @brief Completes a bulk write for a fixed-capacity output view.
+/// @details A put area is only a fast-path cursor protocol; it is not by itself proof that a buffer miss can consume
+///          the remaining range. This completion CPO makes the fixed-capacity contract explicit. Exact fits are valid,
+///          while an oversized write follows the view's existing non-growing overflow policy and terminates before any
+///          partial copy. Consequently destination-aware print admission may rely on `writable` without treating every
+///          arbitrary put-area provider as a complete output device. A cv-qualified code-unit type is deliberately not
+///          admitted: its cursor CPOs remain structurally formable, but primitive output requires an assignable,
+///          ordinary code-unit destination.
+template <::std::integral ch_type>
+	requires ::std::same_as<ch_type, ::std::remove_cv_t<ch_type>>
+inline constexpr void write_all_overflow_define(
+	basic_obuffer_view_ref<ch_type> view, ch_type const *first, ch_type const *last) noexcept
+{
+	// The default-constructed empty view is represented by null pointers. Handle an empty source before inspecting the
+	// observer so that even a null reference wrapper remains a valid no-op. For a nonempty source, test the zero-capacity
+	// representation before subtracting cursors: C++ does not define nullptr - nullptr, despite both pointers comparing
+	// equal. The remaining subtraction is between cursors from the view's one contiguous allocation. A negative distance
+	// denotes a corrupted/reversed cursor and must not become a huge size_t after conversion.
+	if (first == last)
+	{
+		return;
+	}
+	if (view.ptr == nullptr) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	auto const curr_ptr{view.ptr->curr_ptr};
+	auto const end_ptr{view.ptr->end_ptr};
+	if (curr_ptr == end_ptr || curr_ptr == nullptr || end_ptr == nullptr) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	auto const available_difference{end_ptr - curr_ptr};
+	if (available_difference < 0) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	auto const count{static_cast<::std::size_t>(last - first)};
+	auto const available{static_cast<::std::size_t>(available_difference)};
+	if (available < count) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	view.ptr->curr_ptr = ::fast_io::details::non_overlapped_copy_n(first, count, curr_ptr);
+}
+
 using ibuffer_view = basic_ibuffer_view<char>;
 using wibuffer_view = basic_ibuffer_view<wchar_t>;
 using u8ibuffer_view = basic_ibuffer_view<char8_t>;

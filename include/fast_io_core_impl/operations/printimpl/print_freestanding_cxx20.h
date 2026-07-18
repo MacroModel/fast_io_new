@@ -6162,15 +6162,19 @@ struct print_freestanding_output_param_okay_single;
 /// @details Formatter protocols such as reserve, scatter, context, staged, and semantic padding produce characters in
 ///          library-owned storage before handing them to primitive output. Merely exposing `output_char_type` cannot
 ///          complete that transfer: the primitive write dispatcher otherwise reaches an empty terminal branch and a
-///          syntactically accepted operation silently loses output. `writable` is the maintained disjunction of typed
-///          and byte writes, including the seek/pwrite bridges used by the actual primitive implementation.
+///          syntactically accepted operation silently loses output. Typed completion is modeled by `writable`. A direct
+///          byte completion is independently sufficient for a wider character type because `write_all_impl` converts
+///          the complete `[char_type*, char_type*)` range to its exact byte extent before dispatch. This is not the
+///          inverse one-byte adaptation encoded inside either public concept, so the print strategy must compose
+///          `writable || bytes_writable` explicitly rather than weakening their unit-specific definitions.
 template <typename output>
 inline constexpr bool print_freestanding_primitive_output_okay = []() constexpr {
 	using normalized_output = ::std::remove_cvref_t<output>;
 	if constexpr (requires { typename normalized_output::output_char_type; })
 	{
 		return ::std::integral<typename normalized_output::output_char_type> &&
-			   ::fast_io::operations::decay::defines::writable<normalized_output>;
+			   (::fast_io::operations::decay::defines::writable<normalized_output> ||
+				::fast_io::operations::decay::defines::bytes_writable<normalized_output>);
 	}
 	else
 	{
@@ -7561,9 +7565,12 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_semantic_staged_emit
 	using value_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::staged_printable<char_type, value_type>)
 	{
-		// The staged customization completes formatting from the state prepared during the first fold.
+		// Admission probes the staged protocol through `value_type const&`. Preserve that exact expression here: a
+		// mutable lvalue overload is a distinct CPO and may be deleted, throwing, or semantically unrelated even though
+		// the const overload proved the staged contract.
 		return print_staged_define(
-			::fast_io::io_reserve_type<char_type, value_type>, iter, t, prepared[position]);
+			::fast_io::io_reserve_type<char_type, value_type>, iter,
+			static_cast<value_type const &>(t), prepared[position]);
 	}
 	else
 	{
@@ -10137,7 +10144,7 @@ inline constexpr bool compiled_scatter_plan_runtime_value_available_v = []() con
 template <::std::size_t index, typename dynamic_tuple>
 using compiled_scatter_plan_runtime_value_expression_t = decltype(
 	::fast_io::details::decay::compiled_scatter_plan_runtime_value_exact<index>(
-		::std::declval<::std::remove_cvref_t<dynamic_tuple> const &>()));
+		::std::declval<::std::remove_reference_t<dynamic_tuple> const &>()));
 
 /// @brief Proves the retained descriptor property for one runtime component in its final container expression.
 template <::std::integral char_type, typename dynamic_tuple, typename component_type>
@@ -10148,9 +10155,8 @@ inline constexpr bool compiled_scatter_plan_runtime_component_v = []() constexpr
 	}
 	else
 	{
-		using values_type = ::std::remove_cvref_t<dynamic_tuple>;
 		if constexpr (!::fast_io::details::decay::compiled_scatter_plan_runtime_value_available_v<
-						  component_type::index, values_type>)
+						  component_type::index, dynamic_tuple>)
 		{
 			return false;
 		}
@@ -10159,7 +10165,7 @@ inline constexpr bool compiled_scatter_plan_runtime_component_v = []() constexpr
 			return ::fast_io::details::decay::retained_scatter_printable_v<
 				char_type,
 				::fast_io::details::decay::compiled_scatter_plan_runtime_value_expression_t<
-					component_type::index, values_type>>;
+					component_type::index, dynamic_tuple>>;
 		}
 	}
 }();
@@ -10210,7 +10216,7 @@ inline constexpr bool compiled_scatter_plan_bound_runtime_component_v = []() con
 			return false;
 		}
 		else if constexpr (!::fast_io::details::decay::compiled_scatter_plan_runtime_value_available_v<
-						  component_type::index, values_type>)
+						  component_type::index, dynamic_tuple>)
 		{
 			return false;
 		}
@@ -10218,7 +10224,7 @@ inline constexpr bool compiled_scatter_plan_bound_runtime_component_v = []() con
 		{
 			using storage_expression =
 				::fast_io::details::decay::compiled_scatter_plan_runtime_value_expression_t<
-					component_type::index, values_type>;
+					component_type::index, dynamic_tuple>;
 			return ::fast_io::details::decay::compiled_scatter_plan_bound_storage_v<
 				char_type, storage_expression>;
 		}
@@ -10251,8 +10257,8 @@ inline constexpr bool compiled_scatter_plan_bound_runtime_values_v = []() conste
 /// @brief Proves the final primitive output route used after compiled-plan descriptor materialization.
 template <::std::integral char_type, typename output>
 inline constexpr bool compiled_scatter_plan_final_output_v = []() constexpr {
-	// Primitive output decay has no volatile observer protocol. Preserve that fact in admission rather than erasing the
-	// qualifier and allowing `emit_borrowed` to fail after overload selection.
+	// The compiled-plan borrowed-output boundary deliberately does not model volatile observers. Preserve that fact in
+	// admission rather than erasing the qualifier and allowing `emit_borrowed` to fail after overload selection.
 	if constexpr (::std::is_volatile_v<::std::remove_reference_t<output>>)
 	{
 		return false;

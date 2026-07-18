@@ -1,2 +1,2 @@
-["constant_buffer_output_stream.cc"] # TODO: crash. API changes?
-ignore = true
+["constant_buffer_output_stream.cc"] # Current split cursor/minimum-size concepts replace the removed legacy name.
+ignore = false

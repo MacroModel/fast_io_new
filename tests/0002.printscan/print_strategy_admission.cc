@@ -193,6 +193,70 @@ inline char *print_staged_define(
 	return iter;
 }
 
+// The staged protocol is specified on a const source expression. This hostile overload set proves that emission does
+// not accidentally rediscover a mutable-lvalue CPO after the concept has admitted the const, non-throwing operation.
+struct const_only_staged_value
+{
+	char value{};
+};
+
+struct const_only_staged_state
+{
+	char value{};
+};
+
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>) noexcept
+{
+	return 1u;
+}
+
+inline constexpr char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>, char *iter,
+	const_only_staged_value value) noexcept
+{
+	*iter++ = value.value;
+	return iter;
+}
+
+inline constexpr ::fast_io::io_type_t<const_only_staged_state> print_staged_type(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>) noexcept
+{
+	return {};
+}
+
+inline constexpr ::std::size_t print_staged_width(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>) noexcept
+{
+	return 2u;
+}
+
+inline constexpr bool print_staged_eligible(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>,
+	const_only_staged_value const &) noexcept
+{
+	return true;
+}
+
+inline constexpr const_only_staged_state print_staged_prepare(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>,
+	const_only_staged_value const &value) noexcept
+{
+	return {value.value};
+}
+
+inline constexpr char *print_staged_define(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>, char *iter,
+	const_only_staged_value const &, const_only_staged_state const &state) noexcept
+{
+	*iter++ = state.value;
+	return iter;
+}
+
+inline char *print_staged_define(
+	::fast_io::io_reserve_type_t<char, const_only_staged_value>, char *,
+	const_only_staged_value &, const_only_staged_state const &) = delete;
+
 struct oversized_staged_state
 {
 	char storage[4096]{};
@@ -269,6 +333,9 @@ static_assert(::fast_io::operations::decay::defines::print_freestanding_okay<
 	native_scatter_sink, actual_pack>);
 static_assert(::fast_io::operations::decay::print_semantic_staged_group<
 	char, staged_value, staged_value>::available);
+static_assert(::fast_io::staged_printable<char, const_only_staged_value>);
+static_assert(::fast_io::operations::decay::print_semantic_staged_group<
+	char, const_only_staged_value, const_only_staged_value>::available);
 static_assert(!::fast_io::operations::decay::print_semantic_staged_group<
 	char, oversized_staged_value, oversized_staged_value>::available);
 
@@ -300,4 +367,7 @@ int main()
 	assert(counters.reserve_defines == 0u);
 	assert(counters.prepares == 2u && counters.staged_defines == 2u);
 	assert(state.buffer[3] == 'x' && state.buffer[4] == 'y');
+
+	::fast_io::print(sink, const_only_staged_value{'C'}, const_only_staged_value{'V'});
+	assert(state.buffer[5] == 'C' && state.buffer[6] == 'V');
 }

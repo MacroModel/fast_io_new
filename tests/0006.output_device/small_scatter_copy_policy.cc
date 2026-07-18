@@ -39,6 +39,13 @@ consteval bool constant_evaluation_copy_matches()
 	return true;
 }
 
+template <typename char_type>
+consteval bool zero_static_copy_preserves_null_representation()
+{
+	return ::fast_io::details::decay::static_scatter_copy_n<0u>(
+		static_cast<char_type const *>(nullptr), static_cast<char_type *>(nullptr)) == nullptr;
+}
+
 template <typename char_type, ::std::size_t count>
 consteval bool constant_static_scatter_cpos_match()
 {
@@ -136,6 +143,7 @@ void test_runtime_static_scatter_cpos_and_guards()
 template <typename char_type>
 void test_runtime_static_scatter_boundaries()
 {
+	test_runtime_static_scatter_cpos_and_guards<char_type, 0u>();
 	test_runtime_static_scatter_cpos_and_guards<char_type, 1u>();
 	test_runtime_static_scatter_cpos_and_guards<char_type, 3u>();
 	test_runtime_static_scatter_cpos_and_guards<char_type, 16u>();
@@ -148,6 +156,10 @@ static_assert(constant_evaluation_copy_matches<wchar_t>());
 static_assert(constant_evaluation_copy_matches<char16_t>());
 static_assert(constant_evaluation_copy_matches<char32_t>());
 
+static_assert(zero_static_copy_preserves_null_representation<char>());
+static_assert(zero_static_copy_preserves_null_representation<char16_t>());
+
+static_assert(constant_static_scatter_cpos_match<char, 0u>());
 static_assert(constant_static_scatter_cpos_match<char, 1u>());
 static_assert(constant_static_scatter_cpos_match<char, 3u>());
 static_assert(constant_static_scatter_cpos_match<char, 16u>());
