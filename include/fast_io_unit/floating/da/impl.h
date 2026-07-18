@@ -26,7 +26,9 @@ struct decimal_result
 ///          the floating customization rather than to the platform-independent staged_printable protocol.
 template <typename flt>
 inline constexpr bool staged_supported{
-#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)
+#if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64) || defined(__arm64ec__) || \
+	defined(_M_ARM64EC) || \
+	((defined(__x86_64__) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else
@@ -64,17 +66,21 @@ inline constexpr bool staged_inline_fallback_supported{
 // Linux System V x86-64 LP64 uses the per-front-end and per-type decisions established by isolated same-process
 // AB/BA measurements. x32 and non-System-V targets have different argument and stack-placement costs.
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 // Every unmeasured ISA, ABI, operating system, compiler, and compiler major keeps the size-bounded cold fallback.
 #else
@@ -95,7 +101,8 @@ template <typename flt>
 inline constexpr bool staged_prepares_sign{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	((defined(__clang__) && __clang_major__ == 23) || \
-	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15))
+	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else
 	false

@@ -2,7 +2,7 @@
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
-#if defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+#if defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 #include <xmmintrin.h>
 #endif
 #endif

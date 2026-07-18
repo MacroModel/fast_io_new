@@ -124,7 +124,8 @@ inline constexpr ::std::size_t decimal_power_limb_capacity{40u};
 // COMDAT/linkonce coalescing, relocations and addends, table-load instructions,
 // neighboring constant placement, and linked data size on that ABI.
 #if defined(__GNUC__) && !defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr ::std::size_t public_table_alignment{32u};
 #else
 inline constexpr ::std::size_t public_table_alignment{16u};

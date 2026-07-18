@@ -101,10 +101,10 @@ struct pow10_float32_table_type
 // Before changing them, compare symbol/section alignment, COMDAT/linkonce
 // coalescing, relocations and addends, constant-load instructions, neighboring
 // hot-data placement, and linked text/data size for the affected ABI.
-#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename value_type>
 inline constexpr ::std::size_t dragonbox_generated_table_alignment{32u};
-#elif defined(__x86_64__) || defined(_M_X64)
+#elif (defined(__x86_64__) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename value_type>
 inline constexpr ::std::size_t dragonbox_generated_table_alignment{16u};
 #else
@@ -2260,7 +2260,8 @@ inline constexpr void print_rsv_fp_digits_len(
 		// use the fixed hash writer.  The two writers are semantically identical;
 		// widening this predicate requires whole-caller assembly and size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		::fast_io::details::jeaiii::jeaiii_main_len<true>(iter, value, length);
 #else
 		::fast_io::details::jeaiii::jeaiii_hash<9u>(iter, static_cast<::std::uint_least32_t>(value), length);
@@ -2294,7 +2295,8 @@ inline constexpr char_type *print_rsv_fp_digits(
 		// x86-64 LP64 GCC 13--16; every other ABI or GNU major uses the fixed hash
 		// writer until its calls, stores, live ranges and linked text are re-audited.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		return ::fast_io::details::jeaiii::jeaiii_main<false>(iter, value);
 #else
 		auto const length{static_cast<::std::uint_least32_t>(chars_len<10, true>(value))};
@@ -2741,7 +2743,8 @@ inline constexpr auto const &print_rsv_fp_pow10_0_to_19_table{
 // rejected; those precisions therefore retain the exact fallback until their
 // complete carrier-to-character boundary has an independent proof.
 #if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
-	!defined(__SIZEOF_INT128__)
+	!defined(__SIZEOF_INT128__) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 [[msvc::noinline]]
 [[nodiscard]] inline constexpr ::fast_io::details::da::binary64_scientific_precision_result
 binary64_scientific_precision_msvc_runtime(
@@ -2865,7 +2868,8 @@ inline constexpr char_type *print_rsvflt_binary64_scientific_precision_runtime_i
 inline constexpr bool binary64_scientific_precision_outer_dispatch{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	((defined(__clang__) && __clang_major__ == 23) || \
-	 (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16))
+	 (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -2897,7 +2901,8 @@ inline constexpr bool binary64_scientific_wide_precision_direct_block{
 // dependency chains, spills and calls before widening this closed partition.
 inline constexpr bool binary64_scientific_wide_precision_runtime_is_extended{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -2918,7 +2923,8 @@ inline constexpr bool binary64_scientific_wide_precision_runtime_is_extended{
 // compiler/ABI pair.
 inline constexpr bool binary64_significant_fixed_direct_block{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -3645,7 +3651,8 @@ inline constexpr void exact_precision_copy_character_digits_numeric(
 	// artifact; every other ABI uses the exact portable carry expression.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__BMI2__) && defined(__GNUC__) && !defined(__clang__) && \
-	14 <= __GNUC__ && __GNUC__ <= 15
+	14 <= __GNUC__ && __GNUC__ <= 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if (!__builtin_is_constant_evaluated())
 	{
 		auto const left_low{static_cast<::std::uint_least64_t>(value)};
@@ -4008,7 +4015,8 @@ print_rsvflt_binary64_scientific_wide_precision_runtime_impl(
 	// the closed set requires text-size, front-end, spill, call and dependency-chain
 	// evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const extra_digit_multiplier{
 		print_rsv_fp_pow10_0_to_19_table[significant - 16u]};
@@ -4096,7 +4104,8 @@ print_rsvflt_binary64_scientific_extended_precision_runtime_impl(
 	// evidence is closed to Linux System V x86-64 LP64; other ABIs use the shared
 	// runtime tail and do not instantiate these specializations.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	switch (significant)
 	{
 	case 25u:
@@ -4287,7 +4296,8 @@ exact_precision_window_divide_128_by_decimal_limb(
 	// remainder pair.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	!defined(_MSC_VER) && \
-	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__)))
+	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if (!__builtin_is_constant_evaluated())
 	{
 		// high is the preceding base-1e19 remainder, so high < divisor and
@@ -4912,7 +4922,8 @@ exact_precision_wide_subnormal_window_from_binary(
 // before extending this closed set.
 inline constexpr bool binary64_p18_p19_materializer_enabled{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -5303,11 +5314,13 @@ inline constexpr bool exact_precision_window_materialize_mixed_binary(
 inline constexpr bool exact_precision_window_direct_negative_scientific{true};
 inline constexpr bool exact_precision_window_direct_nonnegative_scientific{true};
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_negative_scientific{true};
 inline constexpr bool exact_precision_window_direct_nonnegative_scientific{false};
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_negative_scientific{false};
 inline constexpr bool exact_precision_window_direct_nonnegative_scientific{true};
 #else
@@ -5346,7 +5359,8 @@ inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{true
 	__GNUC__ == 15
 inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{true};
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{true};
 #else
 inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{false};
@@ -5357,7 +5371,8 @@ inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{fals
 // reuse their nonnegative-stream decision and compact exact fallback.  This
 // closed policy changes dispatch placement only, not arithmetic or rounding.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_boundary_carrier{true};
 inline constexpr bool exact_precision_window_direct_mixed_scientific{true};
 #else
@@ -5377,7 +5392,8 @@ inline constexpr bool exact_precision_window_direct_mixed_scientific{
 // Both paths derive the same prefix, guard and sticky bits and share the same
 // rounding writer.  The gate therefore changes code generation, not semantics.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_long_nonnegative_scientific{true};
 inline constexpr bool exact_precision_window_long_mixed_scientific{true};
 #else
@@ -5413,7 +5429,7 @@ inline constexpr bool exact_precision_window_direct_binary32_positive_scientific
 // fallback until the same hit, miss, frame and text-size audit is available.
 // Every choice emits the identical integer and zero suffix; this is compiler
 // scheduling policy, not a rounding rule.
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__)
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_positive_fixed{false};
 #else
 inline constexpr bool exact_precision_window_direct_positive_fixed{true};
@@ -5421,7 +5437,8 @@ inline constexpr bool exact_precision_window_direct_positive_fixed{true};
 
 inline constexpr bool exact_precision_window_outlined_positive_fixed{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15)
+	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -7910,14 +7927,17 @@ inline constexpr bool binary64_common_significant_precision_direct{
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	format == ::fast_io::manipulators::floating_format::fixed ||
 		format == ::fast_io::manipulators::floating_format::decimal
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	format == ::fast_io::manipulators::floating_format::fixed ||
 		format == ::fast_io::manipulators::floating_format::general
 #else
@@ -8017,10 +8037,12 @@ inline constexpr bool binary64_scientific_p20_p22_direct{
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15)
+	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -9721,7 +9743,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_with_
 // and fallback rules, but may merge their live ranges into the caller.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 // The subnormal entry owns normalization and a possible fixed-format retry.
 // Its separate boundary is measured for the selected GCC/x86 set, not inferred
 // from subnormal arithmetic.
@@ -10224,7 +10247,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			// benchmark and linked-text-size validation before extension.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if constexpr (trait::mbits == 52u && trait::ebits == 11u)
 			{
 				if (exponent != 0u && mantissa != 0u)
@@ -11983,7 +12007,8 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 			// those misses and all subnormals.  GCC, Clang, other ABIs and other
 			// MSVC architectures preprocess this code-generation policy away.
 #if defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
-	!defined(__SIZEOF_INT128__)
+	!defined(__SIZEOF_INT128__) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if constexpr (::std::same_as<flt, double> &&
 				::fast_io::details::floating_precision_is_significant<precision_mode>)
 			{

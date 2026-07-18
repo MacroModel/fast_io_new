@@ -48,7 +48,9 @@ namespace details
 {
 
 inline constexpr prfch_isa native_prfch_isa =
-#if defined(__x86_64__) || defined(__i386__) || defined(__x86__) || defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86)
+#if (defined(__x86_64__) || defined(__i386__) || defined(__x86__) || defined(_M_X64) || \
+	  defined(_M_AMD64) || defined(_M_IX86)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC))
 	prfch_isa::x86;
 #elif defined(__aarch64__) || defined(__arm64__) || defined(__arm64) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
 	prfch_isa::aarch64;
@@ -113,7 +115,8 @@ inline constexpr bool native_data_prfch_available =
 #if FAST_IO_HAS_BUILTIN(__builtin_prefetch) || FAST_IO_HAS_BUILTIN(__builtin_arm_prefetch)
 	true;
 #elif defined(_MSC_VER) && !defined(__clang__) && \
-	(defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(_M_X64) || defined(_M_AMD64) || \
+	(defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) || \
+	 ((defined(_M_X64) || defined(_M_AMD64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC))) || \
 	 (defined(_M_IX86_FP) && _M_IX86_FP >= 1))
 	true;
 #else
@@ -125,7 +128,8 @@ inline constexpr bool native_instruction_prfch_available =
 	FAST_IO_HAS_BUILTIN(__builtin_arm_prefetch)
 	true;
 #elif (defined(__x86_64__) || defined(__i386__)) && defined(__PREFETCHI__) && \
-	FAST_IO_HAS_BUILTIN(__builtin_ia32_prefetchi)
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_prefetchi) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true;
 #else
 	false;

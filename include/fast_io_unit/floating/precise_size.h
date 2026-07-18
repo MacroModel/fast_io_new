@@ -1024,7 +1024,8 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 // u128 type; it reuses the single outlined P16--P17 selector shared with the
 // emitter.  No other no-u128 target is inferred to have that arithmetic ABI.
 #if defined(__SIZEOF_INT128__) || \
-	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__))
+	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 [[nodiscard]] inline constexpr floating_precise_decimal_metadata_result
 floating_precise_try_binary64_narrow_da_metadata(
 	::std::uint_least64_t mantissa, ::std::uint_least32_t exponent,
@@ -1614,7 +1615,8 @@ floating_precise_prepare_precision_metadata(
 		// native-u128 targets additionally support P18--P33.  Every miss is merely
 		// an optimization rejection and falls through to exact materialization.
 #if defined(__SIZEOF_INT128__) || \
-	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__))
+	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 		if constexpr (::std::same_as<flt, double>)
 		{
 			if (!fractional_grid)

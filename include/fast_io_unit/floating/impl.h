@@ -120,7 +120,8 @@ inline constexpr bool print_floating_decimal_exact_supported{
 // their measured native-value path.  The capability macro prevents merely
 // naming __bf16 on targets where Clang rejects the type.
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename T>
 inline constexpr bool print_floating_decimal_requires_integer_transport{
 	::std::same_as<::std::remove_cvref_t<T>, __bf16>};

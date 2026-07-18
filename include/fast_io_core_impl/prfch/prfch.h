@@ -59,7 +59,8 @@ FAST_IO_GNU_ALWAYS_INLINE_ARTIFICIAL inline constexpr void prfch(void const *add
 							   static_cast<int>(retention), 0);
 		}
 #elif (defined(__x86_64__) || defined(__i386__)) && defined(__PREFETCHI__) && \
-	FAST_IO_HAS_BUILTIN(__builtin_ia32_prefetchi)
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_prefetchi) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		constexpr int actual_level{static_cast<int>(level) < 2 ? 2 : static_cast<int>(level)};
 		__builtin_ia32_prefetchi(address, actual_level);
 #else
@@ -85,7 +86,8 @@ FAST_IO_GNU_ALWAYS_INLINE_ARTIFICIAL inline constexpr void prfch(void const *add
 	(defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC))
 		__prefetch(address);
 #elif defined(_MSC_VER) && !defined(__clang__) && \
-	(defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1))
+	(defined(_M_X64) || defined(_M_AMD64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		_mm_prefetch(reinterpret_cast<char const *>(address), static_cast<int>(level));
 #else
 		(void)address;

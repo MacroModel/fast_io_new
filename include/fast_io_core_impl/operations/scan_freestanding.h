@@ -14,7 +14,7 @@ namespace operations::decay
 ///          argument registers. The same object and rounded-byte limits bound each independently outlined cold
 ///          fallback chunk below. Keeping one set of constants makes the size proof compositional: neither entry
 ///          ownership nor chunk transport exceeds the selected call-shape budget.
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr ::std::size_t scan_owned_proxy_max_count{32u};
 #else
 inline constexpr ::std::size_t scan_owned_proxy_max_count{16u};

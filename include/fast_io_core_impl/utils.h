@@ -12,7 +12,8 @@
 #if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__) &&                                    \
 	(defined(__aarch64__) || defined(__arm64ec__) || defined(__riscv) || defined(__AMDGCN__) || \
 	 defined(__NVPTX__) ||                                                                      \
-	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__)) ||                       \
+	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__) &&                         \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC))) ||                                         \
 	 (defined(__arm__) && defined(__ARM_FP)) ||                                                 \
 	 (defined(__loongarch__) && __clang_major__ >= 21))
 #define FAST_IO_CLANG_HAS_BFLOAT16_TYPE 1

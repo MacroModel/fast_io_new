@@ -1376,7 +1376,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	// The pragmas affect layout only.  An isolated current-version native A/B
 	// is required before assigning a numeric gain to either unroll factor.
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (11u <= base)
 	{
 #pragma clang loop unroll_count(4)
@@ -1395,7 +1396,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 #endif
 	{
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 #pragma clang loop unroll_count(2)
 #endif
 		for (; first != first_phase_last; ++first) [[likely]]
@@ -2097,7 +2099,8 @@ microarchitecture dispatch.
 */
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && \
 	!defined(__CUDACC__) && __GNUC__ == 15 && defined(__AVX__) &&             \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 [[gnu::optimize("no-tree-loop-vectorize")]]
 #endif
 inline constexpr parse_result<char_type const *>
@@ -2542,7 +2545,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			// The pragma changes unrolling only; current-version isolated native A/B
 			// evidence is required before assigning a numeric gain to this factor.
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if constexpr (base == 3u || base == 4u)
 			{
 #pragma clang loop unroll_count(2)
@@ -2611,7 +2615,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				// The two-way Clang AVX2 unroll is layout policy only; the loop bounds
 				// and digit/overflow semantics remain unchanged.
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 #pragma clang loop unroll_count(2)
 #endif
 				for (; iter != last; ++iter)
@@ -2709,7 +2714,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				// currently supports a speedup claim for this factor; it remains a
 				// code-layout policy pending revalidation.
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 				if constexpr (16u <= base)
 				{
 #pragma clang loop unroll_count(4)
@@ -2783,12 +2789,12 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	No retained artifact isolates a positive native A/B for this expanded base-8/
 	base-16 layout.  It is a conservative legacy code-generation policy pending
 	native revalidation, and admitted but unmeasured targets inherit no numeric
-	performance claim.  These scalar operations require no x86 ISA instruction;
-	if an ARM64EC environment defines one of the admitted x86-64 macros, it
-	inherits only the semantic proof.  The generic bounded short loop below is the
-	exact fallback.
+	performance claim.  The native-x86 guard excludes ARM64EC even though these
+	scalar operations require no x86 ISA instruction; the generic bounded short
+	loop below is the exact fallback.
 	*/
-#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		if constexpr ((base == 8u || base == 16u) && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
 			auto const x86_remaining{static_cast<::std::size_t>(last - first)};
@@ -2950,7 +2956,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	GCC versions and compatible frontends inherit that policy without a native
 	performance claim and require revalidation.
 	*/
-#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		{
 			if (inline_limit < static_cast<::std::size_t>(last - first) &&
 				!char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[inline_limit])))
@@ -2983,10 +2990,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			A/B for this second expansion; it is a conservative legacy layout policy
 			pending revalidation, and no unmeasured compiler/core receives a speed
 			claim.  The ordinary loop in the non-x86 arm is the exact fallback.  The
-			body uses no x86 instruction, so any ARM64EC configuration admitted by an
-			x86-64 macro inherits only this semantic proof.
+			native-x86 guard excludes ARM64EC, which therefore uses that fallback.
 			*/
-#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if constexpr (base == 8u)
 			{
 				do
@@ -3133,7 +3140,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				// The Clang AVX2 two-way factor changes only loop layout.  Do not
 				// infer a current-version speedup without the isolated A/B retest.
 #if defined(__clang__) && defined(__AVX2__) && \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 #pragma clang loop unroll_count(2)
 #endif
 				for (; short_iter != last; ++short_iter)
@@ -3229,10 +3237,12 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	base core from 2916 to 2372 bytes and improved affected points by about
 	2.9x--3.3x; the unsigned specialization remained unchanged.  This is one
 	compiler/host/range result, not an ISA-wide guarantee.  Other admitted
-	frontends, cores, and any ARM64EC environment inherit only the semantic
-	fallback policy and no numeric performance claim.
+	frontends and cores inherit only the semantic fallback policy and no numeric
+	performance claim. ARM64EC is excluded by the native-x86 guard and uses the
+	shared fallback.
 	*/
-#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		if constexpr (base == 16u && sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 		{
 			auto const diff{static_cast<::std::size_t>(last - first)};
@@ -3296,7 +3306,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	*/
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__) && \
 	__GNUC__ >= 15 &&                                                                                 \
-	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64))
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	// GCC's generic overflow graph is expensive for nine-digit uint32_t
 	// decimal input.  Keep this after the existing short-input returns so the
 	// extra SWAR graph does not sit on their control-flow path.
@@ -3391,11 +3402,12 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 
 	The retained reports do not isolate this seed from the surrounding x86 parser,
 	so the selection is a conservative legacy code-generation policy pending
-	native revalidation.  Unmeasured x86 frontends/cores and any ARM64EC
-	configuration admitted by these macros inherit only the no-wrap proof, not a
-	numeric speed claim.  The zero-seeded shared scanner is the exact fallback.
+	native revalidation.  Unmeasured x86 frontends/cores inherit only the no-wrap
+	proof, not a numeric speed claim. ARM64EC is excluded by the native-x86 guard;
+	the zero-seeded shared scanner is its exact fallback.
 	*/
-#if defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (sizeof(char_type) == sizeof(char8_t) &&
 				  !::fast_io::details::is_ebcdic<char_type> &&
 				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t) &&

@@ -1328,9 +1328,11 @@ inline constexpr abi_small_aggregate_model native_abi_small_aggregate_model{
 #elif defined(__arm64ec__) || defined(_M_ARM64EC)
 	abi_small_aggregate_model::windows_arm64
 #elif (defined(_WIN32) || defined(__CYGWIN__)) && \
-	(defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__))
+	(defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	abi_small_aggregate_model::microsoft_x64
-#elif defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
+#elif (defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	abi_small_aggregate_model::sysv_amd64
 #elif defined(_WIN32) && (defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	abi_small_aggregate_model::windows_arm64
@@ -1403,10 +1405,12 @@ inline constexpr ::std::size_t abi_small_trivial_argument_max_size{
 #elif defined(__arm64ec__) || defined(_M_ARM64EC)
 	16u
 #elif (defined(_WIN32) || defined(__CYGWIN__)) && \
-	(defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__))
+	(defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	8u
-#elif defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64) || defined(__aarch64__) || \
-	defined(__arm64__) || defined(_M_ARM64)
+#elif ((defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)) && \
+	   !(defined(__arm64ec__) || defined(_M_ARM64EC))) || \
+	defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
 	16u
 #elif defined(__riscv_xlen)
 	2u * (static_cast<::std::size_t>(__riscv_xlen) / 8u)

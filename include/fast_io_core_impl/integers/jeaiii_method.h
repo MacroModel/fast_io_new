@@ -656,11 +656,10 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				exact-width arm.  It remains a conservative legacy x86 code-generation
 				policy pending native revalidation; admitted but unmeasured x86 compilers
 				and cores inherit only the range proof, not a numeric speed claim.  This
-				branch contains no x86 intrinsic, so an environment that defines _M_X64
-				for ARM64EC is semantically safe but receives no native-x86 claim.  The
-				range4/range6/range8 arm is the equivalent fallback.
+				native-x86 guard excludes ARM64EC, which uses the semantically equivalent
+				range4/range6/range8 fallback.
 				*/
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 				if (u < 10000u)
 				{
 					return jeaiii_result<result_type>(u < 1000u ? jeaiii_f<2>(iter, u) : jeaiii_f<3>(iter, u));
@@ -712,7 +711,7 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				native performance claim; targets without the feature macro retain
 				range10.
 				*/
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 				return jeaiii_result<result_type>(jeaiii_f<8>(iter, static_cast<::std::uint_least32_t>(n)));
 #else
 				return jeaiii_result<result_type>(jeaiii_range10(iter, n));
@@ -832,10 +831,10 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				// Mirror the uint_least64_t-storage-width split above.  Exact bounds
 				// prove every fixed-width call; the branch admitted by the
 				// __x86_64__/_M_X64 guard and the range-helper branch are semantically
-				// equivalent.  It inherits the legacy-policy status, ARM64EC
-				// classification, pending x86 revalidation, and no-performance-claim
+				// equivalent.  ARM64EC uses the range-helper fallback; native x86 retains
+				// the legacy-policy status, pending revalidation, and no-performance-claim
 				// boundary recorded at the primary split.
-#if defined(__x86_64__) || defined(_M_X64)
+#if (defined(__x86_64__) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 				if (n < 10000u)
 				{
 					return jeaiii_result<result_type>(n < 1000u ? jeaiii_f<2>(iter, n) : jeaiii_f<3>(iter, n));
@@ -864,7 +863,7 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			disagreement, and unmeasured-frontend caveat recorded above.  Without
 			AVX-VNNI, range10 remains the semantically equivalent fallback below.
 			*/
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__)
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__AVXVNNI__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
 			{
 				return jeaiii_result<result_type>(jeaiii_f<8>(iter, n));

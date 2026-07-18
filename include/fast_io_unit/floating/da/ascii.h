@@ -49,7 +49,8 @@ inline constexpr bool ascii_x86_cached_bcd_constants_default{
 	// The unselected configuration does not instantiate the opaque cached-address
 	// dependency.  It computes the same quotients and emits the same bytes.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
 	false
@@ -267,7 +268,8 @@ make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
 // footprint, frames and spills before changing this predicate.  Other x86
 // targets use the byte-identical scalar backend.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 using ascii_x86_i8x16 [[gnu::vector_size(16)]] = signed char;
 using ascii_x86_c8x16 [[gnu::vector_size(16)]] = char;
 using ascii_x86_u8x16 [[gnu::vector_size(16)]] = unsigned char;
@@ -522,7 +524,8 @@ struct ascii_fixed_layout_cache
 	// changes require checking address generation and cache footprint in assembly.
 	inline static constexpr ::std::size_t entry_alignment{
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		64u
 #else
 		32u
@@ -535,7 +538,8 @@ struct ascii_fixed_layout_cache
 		// Their absence on other targets halves each metadata entry and avoids an
 		// unused architecture-specific table payload.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		::std::uint_least8_t binary64_shuffle[2][16]{};
 		::std::uint_least8_t binary64_last_digit_position[2]{};
 #endif
@@ -557,7 +561,8 @@ struct ascii_fixed_layout_cache
 			// writer.  Compiling this loop elsewhere would create dead table data;
 			// the scalar metadata below is generated for every target.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			for (::std::uint_least32_t extra{}; extra != 2u; ++extra)
 			{
 				auto source{static_cast<::std::uint_least8_t>(!extra)};
@@ -635,7 +640,8 @@ inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 // owning this duplicate data.  Re-audit text/data size, loads and spills before
 // widening the predicate.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 struct ascii_decimal_fixed_mask_cache
 {
 	::std::uint_least32_t data[static_cast<::std::size_t>(
@@ -666,7 +672,8 @@ inline constexpr ascii_decimal_fixed_mask_cache ascii_decimal_fixed_masks{};
 // and is outside every logical output.  This table exists only with its x86
 // pshufb consumer, preventing unused ISA-specific data on other targets.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 struct ascii_binary32_scientific_cache
 {
 	struct alignas(16) entry
@@ -800,7 +807,8 @@ template <typename flt, bool comma, bool json_float>
 // one-shuffle binary64 assembly shape; binary32 continues through the scalar
 // layout because its shorter block does not use this shuffle metadata.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (sizeof(flt) > sizeof(float))
 	{
 		auto const extra{static_cast<::std::uint_least32_t>(has_extra_digit)};
@@ -947,7 +955,8 @@ template <typename flt, bool comma, bool json_float>
 // every result.  The destination must nevertheless permit all sixteen bytes.
 // The ISA guard matches the producer and the generated shuffle table exactly.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <bool comma, bool uppercase_e>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific_x86_binary32(
 	char *destination, ascii_x86_u8x16 unshuffled, ::std::uint_least32_t digit_span,
@@ -1028,7 +1037,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	// through exponent 6 and delegate larger fixed fields to the extended writer.
 	constexpr ::std::int_least32_t fast_fixed_maximum{
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		binary32 ? ascii_fixed_layout_cache::compact_maximum : ascii_fixed_layout_cache::binary64_shuffle_maximum
 #else
 		ascii_fixed_layout_cache::compact_maximum
@@ -1088,7 +1098,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	(defined(__clang__) || defined(__GNUC__))
 	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(significand)};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(
 		significand)};
 	auto const digits{digit_data.digits};
@@ -1123,7 +1134,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			// notation decision.  Every other configuration reads the authoritative
 			// mask from the full layout entry and emits the identical characters.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			auto const fixed_mask{ascii_decimal_fixed_masks.data[static_cast<::std::size_t>(
 				exponent - ascii_fixed_layout_cache::minimum)]};
 #else
@@ -1177,7 +1189,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	// pshufb count, frame, spills and calls when staged preparation or compiler
 	// support changes; this polarity is not part of formatting semantics.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__))
+	(defined(__GNUC__) || defined(__clang__)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (binary32)
 	{
 		// Both placements feed the same carrier fields to the same pshufb writer,
@@ -1224,7 +1237,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 // and linked-text-size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fixed_direct(
 	char *destination, conversion_result converted) noexcept
@@ -1264,7 +1278,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 // and linked-text-size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 15 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 15 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]]
 // noinline is the live-range boundary described above, not an ISA semantic.

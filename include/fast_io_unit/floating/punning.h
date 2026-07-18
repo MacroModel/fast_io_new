@@ -1001,7 +1001,8 @@ inline constexpr char_type *prsv_fp_dece0(char_type *iter) noexcept
 // compiler-code-generation result to an unmeasured x86 baseline ISA.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt>
 using punning_sign_type = ::std::conditional_t<
 	::std::same_as<::std::remove_cv_t<flt>, float> ||
