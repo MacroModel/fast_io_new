@@ -1147,8 +1147,23 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 						}
 					}
 				}
-				else if constexpr (sizeof(char_type) == sizeof(char16_t))
+				else if constexpr (sizeof(char_type) == sizeof(char16_t) &&
+							   ::std::endian::native == ::std::endian::little)
 				{
+					/*
+					The packed char16_t reduction is deliberately little-endian-only.
+					Its constants place the first source code unit in bits 0..15 and
+					use countr_zero in units of sixteen bits.  A whole-word byte swap,
+					unlike the one-byte path above, would also reverse the two bytes
+					inside every UTF-16 code unit: big-endian u'1' (0x0031) would become
+					0x3100 and fail the 0x0030 lane predicate.  Reversing just four
+					halfword lanes is possible, but adds target-specific code to an
+					unmeasured path.  The scalar recurrence below reads char16_t objects
+					as code units and is endian-agnostic, so selecting it on big or
+					mixed/PDP byte order preserves the identical digit, pointer, and
+					overflow contract.  Native little-endian x86-64 and AArch64 retain
+					the existing packed implementation unchanged.
+					*/
 					constexpr ::std::size_t u64_size_of_c16{sizeof(::std::uint_least64_t) / sizeof(char16_t)};
 					constexpr ::std::uint_least64_t pow_base_sizeof_u64{::fast_io::details::compile_pow_n<::std::uint_least64_t, base_char_type, u64_size_of_c16>};
 					constexpr ::std::uint_least64_t pow_base_sizeof_base_2{::fast_io::details::compile_pow_n<::std::uint_least64_t, base_char_type, 2>};
