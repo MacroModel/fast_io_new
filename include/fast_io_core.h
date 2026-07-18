@@ -43,6 +43,7 @@
 #include "fast_io_core_impl/utils.h"
 #include "fast_io_core_impl/intrinsics/impl.h"
 #include "fast_io_core_impl/intrinsics.h"
+#include "fast_io_core_impl/prfch/impl.h"
 #include "fast_io_core_impl/parse_code.h"
 
 #include "fast_io_core_impl/ebcdic.h"

@@ -773,6 +773,24 @@ concept precise_reserve_printable =
 						   char_type *>);
 	};
 
+/// @brief Refines exact reserve formatting with a non-throwing, pointer-reporting emission expression.
+/// @details Exact size alone is not sufficient inside a C++23 overwrite callback: an exception escaping the callback
+///          does not have the ordinary concat strategy's simple partially-constructed-result contract. This concept
+///          therefore tests the concrete named-lvalue expression used after phase-1 decay and requires the language
+///          `noexcept` operator to prove it. Requiring the exact `char_type*` result also lets the caller validate that
+///          the producer ended at its promised extent before the destination publishes that extent. Void-returning
+///          precise producers remain valid `precise_reserve_printable`s, but deliberately stay on the established
+///          strategy until a separate non-throwing endpoint proof exists for them.
+template <typename char_type, typename T>
+concept nothrow_precise_reserve_printable =
+	::std::integral<char_type> && precise_reserve_printable<char_type, T> &&
+	requires(T &value, char_type *ptr, ::std::size_t n) {
+		{
+			print_reserve_precise_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, n, value)
+		} noexcept -> ::std::same_as<char_type *>;
+	};
+
 /// @brief Marks an exact-size producer for which preinitializing the destination is a material cost.
 /// @details This is a profitability refinement, not another formatting capability. The precise reserve protocol still
 ///          proves the exact extent and complete overwrite. The marker says that an ordinary concat strategy should
@@ -2246,10 +2264,18 @@ template <::std::integral char_type, typename value_type, typename Iter>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
 							 parameter<value_type> &para)
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+	noexcept(noexcept(print_reserve_precise_define(
+		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
+#endif
 {
 	// Preserve the wrapped customization's return type and value category. Some precise writers return the actual
 	// end pointer; discarding it in this transparent manipulator would break higher-level composition even though the
-	// characters themselves were emitted correctly.
+	// characters themselves were emitted correctly. When the resize-and-overwrite feature macro is present, the
+	// conditional exception specification mirrors the full delegated call expression, including any conversion into an
+	// underlying by-value parameter. That last point is the parameter-transport proof required by an overwrite callback;
+	// inspecting only the callee's declared specification would miss a throwing copy performed before the callee is
+	// entered. Macro-absent library modes keep the historical function type.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }
@@ -2260,10 +2286,16 @@ template <::std::integral char_type, typename value_type, typename Iter>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
 							 parameter<value_type> const &para)
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+	noexcept(noexcept(print_reserve_precise_define(
+		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
+#endif
 {
 	// Preserve both the formatter's identity and its precise writer's return type. A pointer result is an actual cursor,
 	// not metadata that the transparent wrapper may replace with `begin + n`; a void result retains its distinct exact-
-	// extent contract in the caller.
+	// extent contract in the caller. When the feature macro is present, this specification repeats the mutable adapter's
+	// complete-expression proof so const transport cannot silently discard a throwing conversion which its underlying
+	// formatter requires.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }

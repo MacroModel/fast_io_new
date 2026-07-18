@@ -777,6 +777,125 @@ inline constexpr bool basic_general_concat_precise_resize_destination_run_v = []
 	}
 }();
 
+/// @brief Admits one initialization-sensitive exact source to C++23 callback-owned string construction.
+/// @details The ordinary exact-resize strategy permits a throwing formatter because its local result is destroyed if
+///          emission fails. `std::basic_string::resize_and_overwrite` has a different callback boundary, so this
+///          narrower strategy requires the exact named-lvalue define expression itself to be `noexcept` and to report
+///          its actual endpoint. The initialization-sensitive marker is a cost proof: without it, the established
+///          scatter/static-reserve priorities already avoid the extra destination-initialization pass this strategy is
+///          designed to remove. Restricting the shape to one normalized leaf preserves the measured range-view case
+///          without introducing a component-size table or an unbounded callback expansion.
+template <typename char_type, typename Arg>
+concept basic_general_concat_exact_overwrite_source =
+	::std::integral<char_type> &&
+	::fast_io::precise_resize_initialization_sensitive_printable<char_type, Arg> &&
+	::fast_io::nothrow_precise_reserve_printable<char_type, Arg>;
+
+/// @brief Writes one proved exact source into storage owned by a resize-and-overwrite destination.
+/// @details `concat_precise_size_with_line` has already proved `total_size <= PTRDIFF_MAX`, and `payload_size` is no
+///          greater than that total. Consequently the guarded endpoint addition stays inside the callback's writable
+///          array. The source cursor is compared with that exact endpoint before either the newline or logical size is
+///          published. The precise-reserve contract, rather than this post-call cursor comparison, proves that the
+///          producer confines its writes to `[buffer, expected_end)`; the comparison validates only the endpoint it
+///          reports and cannot retroactively detect an already out-of-bounds write by a broken customization. A short
+///          callback extent is a broken destination contract and terminates before any write. The source concept proves
+///          that the only user-extensible expression executed here cannot throw; pointer arithmetic, comparison, the
+///          optional character store, and `fast_terminate` are non-throwing operations.
+template <bool line, ::std::integral char_type, typename Arg>
+	requires ::fast_io::details::decay::basic_general_concat_exact_overwrite_source<char_type, Arg>
+struct basic_general_concat_exact_overwrite_operation
+{
+	Arg *argument;
+	::std::size_t payload_size;
+	::std::size_t total_size;
+
+	inline constexpr ::std::size_t operator()(char_type *buffer, ::std::size_t writable_size) const noexcept
+	{
+		// Keeping both extents is intentional even though it makes this state three words on LP64. A two-word variant was
+		// motivated by the SysV AMD64/AAPCS64 small-aggregate register classes, not by a cross-ABI theorem: MS x64,
+		// RISC-V, PPC64, and ILP32 targets classify aggregates differently. In the measured GCC 15/libstdc++ build the
+		// complete callback was inlined, so no by-value ABI transfer remained; reconstruction instead enlarged the hot line
+		// specialization and regressed the 128-element E-core case by about 6.7 percent. Passing the already checked values
+		// avoids that optimizer cliff. Aggregate-size decay heuristics were therefore not predictive for this measured
+		// inlined specialization; other ABI/library/compiler combinations remain governed by their own code generation.
+		if (writable_size < total_size) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		char_type *expected_end{buffer};
+		if (payload_size != 0u)
+		{
+			expected_end += payload_size;
+		}
+		using arg_type = ::std::remove_cvref_t<Arg>;
+		char_type *const actual_end{print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, buffer, payload_size, *argument)};
+		if (actual_end != expected_end) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		if constexpr (line)
+		{
+			*expected_end = ::fast_io::char_literal_v<u8'\n', char_type>;
+		}
+		return total_size;
+	}
+};
+
+/// @brief Pairs the exact source operation with the concrete destination callback CPO.
+/// @details Testing the final operation type, rather than only the destination marker, closes the strategy/body gap:
+///          a destination cannot opt in with a marker while rejecting the callback concat actually passes.
+template <bool line, ::std::integral char_type, typename T, typename Arg>
+inline constexpr bool basic_general_concat_exact_overwrite_run_v = []() constexpr {
+	if constexpr (!line)
+	{
+		// Without a newline, the retained-scatter fallback traverses this range once into concat's 2-KiB inline staging
+		// area and lets basic_string bulk-copy the completed bytes. Exact overwrite replaces that bulk copy with a full
+		// sizing traversal. Formal paired P-core measurements found a 1.33-percent regression at 128 elements,
+		// while E-core results moved in the opposite direction; there is therefore no portable cost proof for selecting
+		// the callback path. The line case has independent evidence because it also fuses newline publication and avoids
+		// the substantially larger legacy line helper. Keep this policy in the concept-level predicate so every caller
+		// observes the same admission decision rather than duplicating a platform heuristic in the dispatch body.
+		return false;
+	}
+	else if constexpr (!::fast_io::details::decay::basic_general_concat_exact_overwrite_source<
+					  char_type, Arg>)
+	{
+		return false;
+	}
+	else
+	{
+		using operation = ::fast_io::details::decay::basic_general_concat_exact_overwrite_operation<
+			line, char_type, Arg>;
+		return ::fast_io::exact_resize_and_overwrite_strlike_for<char_type, T, operation>;
+	}
+}();
+
+/// @brief Constructs the final string with one sizing pass and one direct overwrite pass.
+/// @details Sizing remains outside the callback and may throw normally. Only after a representable final extent is
+///          known is the local destination constructed and asked to allocate. The callback then writes directly into
+///          that allocation, avoiding both value-initialization of the final range and concat's descriptor/staging
+///          string. If allocation throws, the local result owns no published partial value; after callback entry, the
+///          source and endpoint proofs above make the operation non-throwing.
+template <bool line, ::std::integral char_type, typename T, typename Arg>
+	requires ::fast_io::details::decay::basic_general_concat_exact_overwrite_run_v<
+		line, char_type, T, Arg>
+inline constexpr T basic_general_concat_exact_overwrite_run(Arg &arg)
+{
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	::std::size_t const payload_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, arg_type>, arg)};
+	::std::size_t const total_size{
+		::fast_io::details::decay::concat_precise_size_with_line<line>(payload_size)};
+	using operation = ::fast_io::details::decay::basic_general_concat_exact_overwrite_operation<
+		line, char_type, Arg>;
+	operation overwrite{__builtin_addressof(arg), payload_size, total_size};
+	T result;
+	strlike_exact_resize_and_overwrite(
+		::fast_io::io_strlike_type<char_type, T>, result, total_size, overwrite);
+	return result;
+}
+
 /// @brief Constructs a non-buffer string-like result directly in one exactly resized logical range.
 /// @details Exact source sizing and destination storage are orthogonal proofs: every
 ///          `precise_reserve_printable` supplies one component extent, while `precise_resize_writable_strlike` creates
@@ -1500,6 +1619,19 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 			T str;
 			basic_general_concat_decay_ref_impl<line, ch_type>(str, args...);
 			return str;
+		}
+		else if constexpr (
+			sizeof...(Args) == 1u &&
+			(::fast_io::details::decay::basic_general_concat_exact_overwrite_run_v<
+				 line, ch_type, T, Args> &&
+			 ...))
+		{
+			// A newline-bearing run-time scatter range would otherwise be measured, copied into concat staging, and copied
+			// again into the final standard string. The exact callback path owns the same two-pass source traversal but
+			// writes the second pass and newline directly into the destination's uninitialized live extent. It precedes
+			// retained-scatter and reserve fallbacks only for the independently proved one-leaf/noexcept line shape above.
+			return ::fast_io::details::decay::basic_general_concat_exact_overwrite_run<
+				line, ch_type, T>(args...);
 		}
 		else if constexpr ((!line) && sizeof...(args) == 1 &&
 						   (::fast_io::scatter_printable_for<ch_type, Args &> && ...))

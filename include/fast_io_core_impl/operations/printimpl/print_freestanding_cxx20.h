@@ -9084,9 +9084,38 @@ inline consteval bool print_semantic_top_level_width_has_semantic_child() noexce
 	}
 }
 
+/// @brief Admits direct scalar emission for exactly two passive typed-scatter leaves.
+/// @details A `basic_io_scatter_t` leaf is already the final descriptor: acquiring it is a non-throwing field read and
+///          cannot invoke a producer whose effects would otherwise need to precede every write.  The destination gates
+///          prove that the established descriptor fallback also performs ordered typed scalar writes. Native typed or
+///          byte scatter, byte representation, put areas, mutex ownership, status dispatch, and every whole-output
+///          coalescing policy are excluded because each can change either the primitive boundary or its lifetime.
+///          `direct_streaming_preferred_stream` is the independent cost opt-in; scalar syntax alone does not establish
+///          that bypassing the general plan is profitable. The exact-two limit is measured and intentionally does not
+///          generalize to larger packs, whose code growth and instruction-cache cost require separate evidence.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+inline constexpr bool print_semantic_exact_two_passive_scatter_direct_write_v =
+	sizeof...(Args) == 2u &&
+	(::std::same_as<::std::remove_cvref_t<Args>, ::fast_io::basic_io_scatter_t<char_type>> && ...) &&
+	::fast_io::direct_streaming_preferred_stream<char_type, outputstmtype> &&
+	::fast_io::operations::decay::defines::has_write_all_overflow_define<outputstmtype> &&
+	!::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype> &&
+	!::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype> &&
+	!::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype> &&
+	!::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+	!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype> &&
+	!::fast_io::operations::decay::defines::has_status_print_define<
+		line, outputstmtype, ::std::remove_cvref_t<Args>...> &&
+	!::fast_io::semantic_plain_leaf_coalesce_preferred_stream<char_type, outputstmtype> &&
+	::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, outputstmtype>() == 0u &&
+	::fast_io::details::decay::print_full_output_dynamic_coalesce_threshold_for_run<
+		char_type, outputstmtype, ::std::remove_cvref_t<Args>...>() == 0u &&
+	::fast_io::details::decay::print_scatter_fallback_full_output_threshold<char_type, outputstmtype>() == 0u;
+
 /// @brief    Entry continuation for flattened semantic emission.
-/// @details  It first tries one-pass static-bound coalescing, then exact-size coalescing, and finally general run-time
-///           bounded coalescing before falling back to semantic flattening.
+/// @details  It first applies the exact-two direct-write policy when its destination proof is complete, then tries
+///           one-pass static-bound coalescing, exact-size coalescing, and general run-time bounded coalescing before
+///           falling back to semantic flattening.
 /// @tparam   line          true when a trailing newline is appended
 /// @tparam   char_type     the character type of the output stream
 /// @tparam   outputstmtype the decayed output stream reference type
@@ -9102,6 +9131,28 @@ struct print_semantic_emit_flat_continuation
 	template <typename... FilteredArgs>
 	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
 	{
+		if constexpr (
+			::fast_io::operations::decay::print_semantic_exact_two_passive_scatter_direct_write_v<
+				line, char_type, outputstmtype, FilteredArgs...>)
+		{
+			// A descriptor type alone does not prove a pointer domain for `{nullptr,0}`.  Retain the general dispatcher
+			// whenever either payload is empty: besides avoiding null arithmetic, that preserves whether an empty scalar
+			// customization is observed.  For two nonempty leaves the gate above proves exact ordered-call equivalence.
+			if ((true && ... && (filtered_args.len != 0u)))
+			{
+				(::fast_io::operations::decay::write_all_decay(
+					 optstm, filtered_args.base, filtered_args.base + filtered_args.len),
+				 ...);
+				if constexpr (line)
+				{
+					// The ordinary descriptor fallback appends this same static range.  Reusing its base preserves both the
+					// scalar write boundary and pointer identity; `char_put` would be a different output customization.
+					auto const [base, len]{::fast_io::details::decay::line_scatter_common<char_type>};
+					::fast_io::operations::decay::write_all_decay(optstm, base, base + len);
+				}
+				return;
+			}
+		}
 		constexpr bool has_semantic_node{
 			(false || ... || ::fast_io::details::decay::print_semantic_node<FilteredArgs>)};
 		constexpr bool has_runtime_scatter_component{

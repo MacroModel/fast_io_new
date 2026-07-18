@@ -127,6 +127,37 @@ inline constexpr char_type *strlike_precise_resize_and_get_begin(
 	return str.data();
 }
 
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+/// @brief Opts the exact default standard string into callback-owned logical-size publication.
+/// @details The specialization intentionally names `std::basic_string<char_type>` with no traits or allocator template
+///          parameters: that is exactly standard traits plus the default allocator. Custom traits and allocators carry
+///          user-associated namespaces and independent allocation/cost behavior, neither of which was part of the
+///          evidence for concat's direct-write policy. The marker supplies only destination lifetime semantics; concat
+///          separately proves that its concrete source writer cannot throw after this CPO has allocated storage.
+template <::std::integral char_type>
+inline constexpr ::std::true_type strlike_exact_resize_and_overwrite_available(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Executes one exact overwrite operation on a default standard string.
+/// @details `resize_and_overwrite` may allocate and therefore remains potentially throwing. Its callback receives a
+///          contiguous writable extent, returns the logical size to publish, and must not retain the pointer. Forwarding
+///          the exact operation category lets the standard implementation own its callback in the normal way; concat's
+///          operation object is copyable, but this adapter does not impose that stronger restriction on the protocol.
+template <::std::integral char_type, typename operation>
+	requires requires(::std::basic_string<char_type> &str, ::std::size_t n, operation &&op) {
+		str.resize_and_overwrite(n, static_cast<operation &&>(op));
+	}
+inline constexpr void strlike_exact_resize_and_overwrite(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type>>,
+	::std::basic_string<char_type> &str, ::std::size_t n, operation &&op) noexcept(noexcept(str.resize_and_overwrite(n, static_cast<operation &&>(op))))
+{
+	str.resize_and_overwrite(n, static_cast<operation &&>(op));
+}
+#endif
+
 #if (defined(__GLIBCXX__) && !defined(_LIBCPP_VERSION) && !defined(_GLIBCXX_USE_CXX11_ABI)) || \
 	(defined(_LIBCPP_VERSION) &&                                                               \
 	 !((_LIBCPP_VERSION < 20 && !defined(_LIBCPP_HAS_NO_ASAN) || _LIBCPP_HAS_ASAN) && defined(_LIBCPP_INSTRUMENTED_WITH_ASAN)))

@@ -15,6 +15,7 @@ int main()
 	constexpr float tiny_value{1.0e-30f};
 	constexpr auto nearest{floating_rounding::nearest_to_even};
 	constexpr auto fractional_mode{floating_precision::fractional};
+	constexpr auto significant_mode{floating_precision::significant};
 	constexpr auto preserving_mode{
 		floating_precision::fractional_preserve_trailing_zero};
 	auto const tiny_general{::fast_io::concat_std(
@@ -149,6 +150,36 @@ int main()
 		exact_integer_comma_json != "4503599627370496,0" ||
 		exact_integer_negative_json != "-4503599627370496.0" ||
 		exact_integer_wide_json != L"4503599627370496.0")
+	{
+		return 1;
+	}
+
+	// A shortest decimal carrier with P digits is not necessarily the correctly
+	// rounded P-digit coefficient.  This normal binary64 value lies below the
+	// midpoint following ...3044, while its independently valid shortest carrier
+	// ends in ...3045.  Every significant/scientific entry must therefore reach
+	// the DA interval proof or exact guard/sticky path instead of accepting the
+	// shortest carrier merely because its length equals the requested precision.
+	constexpr auto equal_length_boundary{::std::bit_cast<double>(
+		::std::uint64_t{0x0060000000000000ULL})};
+	auto const equal_length_general{::fast_io::concat_std(
+		general<significant_mode, nearest>(equal_length_boundary, 16u))};
+	auto const equal_length_scientific{::fast_io::concat_std(
+		scientific<significant_mode, nearest>(equal_length_boundary, 16u))};
+	auto const equal_length_preserved{::fast_io::concat_std(
+		scientific<significant_preserving_mode, nearest>(equal_length_boundary, 16u))};
+	auto const equal_length_fractional{::fast_io::concat_std(
+		scientific<preserving_mode, nearest>(equal_length_boundary, 15u))};
+	auto const equal_length_comma{::fast_io::concat_std(
+		comma_scientific<significant_mode, nearest>(equal_length_boundary, 16u))};
+	auto const equal_length_wide{::fast_io::wconcat_std(
+		scientific<significant_mode, nearest>(equal_length_boundary, 16u))};
+	if (equal_length_general != "7.120236347223044e-307" ||
+		equal_length_scientific != "7.120236347223044e-307" ||
+		equal_length_preserved != "7.120236347223044e-307" ||
+		equal_length_fractional != "7.120236347223044e-307" ||
+		equal_length_comma != "7,120236347223044e-307" ||
+		equal_length_wide != L"7.120236347223044e-307")
 	{
 		return 1;
 	}

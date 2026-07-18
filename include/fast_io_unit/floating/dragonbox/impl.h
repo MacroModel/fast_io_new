@@ -10702,17 +10702,16 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
 	::fast_io::details::dragonbox_decimal_mantissa_type<flt> rounded_m10 = {},
 	::std::int_least32_t rounded_e10 = {}, ::std::size_t requested = {},
-	::std::size_t rounded_length = {}) noexcept
+	::std::size_t = {}) noexcept
 {
-	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
-	{
-		if (requested == rounded_length)
-		{
-			return ::fast_io::details::print_rsv_fp_precision_decision_impl<
-				flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
-					iter, rounded_m10, rounded_e10, precision, negative);
-		}
-	}
+	// Equal decimal lengths do not prove that the shortest carrier is the
+	// correctly rounded P-digit coefficient.  The shortest interval may select a
+	// carrier on the opposite side of the exact value from the P-digit rounding
+	// result; for example, a 16-digit binary64 shortest carrier can end in 5 while
+	// the exact P16 coefficient ends in 4.  The public entry has already accepted
+	// every carrier justified by a strict distance bound.  All remaining equal-
+	// length cases must therefore reach the DA interval proof or the exact
+	// prefix/guard/sticky fallback below.
 	// x86-64 and unmeasured targets defer the P23-P33 range branch until this
 	// already-outlined slow dispatcher.  Apple AArch64 performs the identical
 	// probe in the public entry and compile-time removal prevents a duplicate.

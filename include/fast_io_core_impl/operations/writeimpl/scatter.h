@@ -132,9 +132,9 @@ inline constexpr io_scatter_status_t scatter_write_some_cold_impl(
 		for (::std::size_t i{}; i != n; ++i)
 		{
 			auto [base, len] = pscatters[i];
-			auto ed{base + len};
-			auto written{::fast_io::details::write_some_impl(outsm, base, ed)};
-			::std::size_t sz{static_cast<::std::size_t>(written - base)};
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			auto written{::fast_io::details::write_some_impl(outsm, range.first, range.last)};
+			::std::size_t sz{static_cast<::std::size_t>(written - range.first)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -172,9 +172,9 @@ inline constexpr io_scatter_status_t scatter_write_some_cold_impl(
 			for (::std::size_t i{}; i != n; ++i)
 			{
 				auto [basef, len] = pscatters[i];
-				auto edf{basef + len};
-				::std::byte const *base{reinterpret_cast<::std::byte const *>(basef)};
-				::std::byte const *ed{reinterpret_cast<::std::byte const *>(edf)};
+				auto const range{::fast_io::details::scatter_to_scalar_range(basef, len)};
+				::std::byte const *base{reinterpret_cast<::std::byte const *>(range.first)};
+				::std::byte const *ed{reinterpret_cast<::std::byte const *>(range.last)};
 				auto written{::fast_io::details::write_some_bytes_impl(outsm, base, ed)};
 				::std::size_t diff{static_cast<::std::size_t>(written - base)};
 				::std::size_t md{diff % sizeof(char_type)};
@@ -344,7 +344,8 @@ scatter_write_all_cold_impl(outstmtype &outsm,
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			::fast_io::details::write_all_impl(outsm, base, base + len);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::write_all_impl(outsm, range.first, range.last);
 		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_scatter_write_some_overflow_define<outstmtype>)
@@ -373,7 +374,8 @@ scatter_write_all_cold_impl(outstmtype &outsm,
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			::fast_io::details::write_all_impl(outsm, base, base + len);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::write_all_impl(outsm, range.first, range.last);
 		}
 	}
 	else if constexpr ((::fast_io::operations::decay::defines::has_write_all_bytes_overflow_define<outstmtype> ||

@@ -28,9 +28,9 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 		{
 			auto [baseb, len] = pscatters[i];
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(baseb)};
-			auto ed{base + len};
-			auto written{::fast_io::details::write_some_bytes_impl(outsm, base, ed)};
-			::std::size_t sz{static_cast<::std::size_t>(written - base)};
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			auto written{::fast_io::details::write_some_bytes_impl(outsm, range.first, range.last)};
+			::std::size_t sz{static_cast<::std::size_t>(written - range.first)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -208,7 +208,8 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 		{
 			auto [basep, len] = *i;
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(basep)};
-			::fast_io::details::write_all_bytes_impl(outsm, base, base + len);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::write_all_bytes_impl(outsm, range.first, range.last);
 		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_scatter_write_some_bytes_overflow_define<outstmtype>)
@@ -239,7 +240,8 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 		{
 			auto [basep, len] = *i;
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(basep)};
-			::fast_io::details::write_all_bytes_impl(outsm, base, base + len);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::write_all_bytes_impl(outsm, range.first, range.last);
 		}
 	}
 	else if constexpr (sizeof(char_type) == 1 &&

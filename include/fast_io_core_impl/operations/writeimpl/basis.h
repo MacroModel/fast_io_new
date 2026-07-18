@@ -5,6 +5,50 @@ namespace fast_io
 namespace details
 {
 
+template <typename element_type>
+inline constexpr element_type scatter_scalar_empty_anchor{};
+
+template <typename element_type>
+struct basic_scatter_scalar_range
+{
+	element_type const *first;
+	element_type const *last;
+};
+
+/**
+ * @brief Converts one scatter descriptor to the pointer pair required by a scalar output primitive.
+ *
+ * @details A zero-length scatter is allowed to carry a null base because it denotes no readable object.  C++ pointer
+ *          arithmetic and subtraction, however, are defined only within an array object; consequently `base + 0` and
+ *          a later `last - first` are not valid when both pointers are null.  A null empty descriptor is therefore
+ *          represented by two pointers to a stable inline anchor.  A non-null empty base is deliberately preserved so
+ *          observers that distinguish descriptor provenance keep seeing the original address.  Positive extents retain
+ *          the normal scatter precondition that `base` begins a valid array range.
+ *
+ *          This normalization changes neither the byte sequence nor the strategy's exception boundary: callers retain
+ *          their existing one scalar-range dispatch per descriptor, including an empty descriptor, and only the
+ *          otherwise-invalid null pointer representation is replaced.
+ *
+ *          The empty arm is marked unlikely for optimizer cost modelling, not as a semantic precondition.  Apple Clang
+ *          otherwise stops inlining a cold scatter loop even when every descriptor length is compile-time nonzero;
+ *          the annotation restores instruction-for-instruction baseline code after constant propagation.  GCC keeps
+ *          the same generic cold-loop layout with the annotation, while run-time empty descriptors remain supported.
+ */
+template <typename element_type>
+inline constexpr basic_scatter_scalar_range<element_type>
+scatter_to_scalar_range(element_type const *base, ::std::size_t len) noexcept
+{
+	if (len == 0u) [[unlikely]]
+	{
+		if (base == nullptr)
+		{
+			base = __builtin_addressof(scatter_scalar_empty_anchor<element_type>);
+		}
+		return {base, base};
+	}
+	return {base, base + len};
+}
+
 template <typename outstmtype>
 inline constexpr typename outstmtype::output_char_type const *
 pwrite_some_cold_impl(outstmtype &outsm, typename outstmtype::output_char_type const *first,

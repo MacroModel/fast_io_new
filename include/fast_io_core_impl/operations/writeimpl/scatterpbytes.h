@@ -35,10 +35,10 @@ scatter_pwrite_some_bytes_cold_impl(outstmtype &outsm, io_scatter_t const *pscat
 		{
 			auto [baseb, len] = pscatters[i];
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(baseb)};
-			auto ed{base + len};
-			auto written{::fast_io::details::pwrite_some_bytes_impl(outsm, base, ed, off)};
-			::std::ptrdiff_t dfsz{written - base};
-			::std::size_t sz{static_cast<::std::size_t>(written - base)};
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			auto written{::fast_io::details::pwrite_some_bytes_impl(outsm, range.first, range.last, off)};
+			::std::ptrdiff_t dfsz{written - range.first};
+			::std::size_t sz{static_cast<::std::size_t>(dfsz)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -162,7 +162,8 @@ inline constexpr void scatter_pwrite_all_bytes_cold_impl(outstmtype &outsm, io_s
 		{
 			auto [basep, len] = *i;
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(basep)};
-			::fast_io::details::pwrite_all_bytes_impl(outsm, base, base + len, off);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::pwrite_all_bytes_impl(outsm, range.first, range.last, off);
 			off = ::fast_io::fposoffadd_nonegative(off, len);
 		}
 	}
@@ -196,7 +197,8 @@ inline constexpr void scatter_pwrite_all_bytes_cold_impl(outstmtype &outsm, io_s
 		{
 			auto [basep, len] = *i;
 			::std::byte const *base{reinterpret_cast<::std::byte const *>(basep)};
-			::fast_io::details::pwrite_all_bytes_impl(outsm, base, base + len, off);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::pwrite_all_bytes_impl(outsm, range.first, range.last, off);
 			off = ::fast_io::fposoffadd_nonegative(off, len);
 		}
 	}

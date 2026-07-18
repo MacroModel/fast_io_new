@@ -85,6 +85,52 @@ concept auxiliary_strlike = strlike<char_type, T> && requires(T &t, char_type ch
 	{ strlike_append(io_strlike_type<char_type, T>, t, ptr, ptr) } -> ::std::same_as<void>;
 };
 
+/// @brief Marks an exact string-like destination which can publish storage through one overwrite callback.
+/// @details This capability is intentionally separate from `precise_resize_writable_strlike`. The latter first makes
+///          every character observable and may therefore initialize the whole range before a formatter overwrites it.
+///          An exact-overwrite destination instead grants one callback a contiguous writable extent of at least the
+///          requested size and publishes exactly the count returned by that callback. The marker alone does not prove
+///          that a particular callback is accepted; `exact_resize_and_overwrite_strlike_for` checks the concrete
+///          operation expression used by a strategy. Keeping both proofs destination-specific prevents an arbitrary
+///          type with a similarly named member from inheriting the allocation and lifetime contract of a standard
+///          string specialization.
+/// @fn      strlike_exact_resize_and_overwrite_available
+/// @return  std::true_type
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+template <typename char_type, typename T>
+concept exact_resize_and_overwrite_strlike = strlike<char_type, T> && requires {
+	{
+		strlike_exact_resize_and_overwrite_available(io_strlike_type<char_type, T>)
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/// @brief Proves the exact destination CPO for the callback object a strategy will actually pass.
+/// @details The operation is tested as a named lvalue because concat constructs one operation object, then passes that
+///          same object to the destination CPO. Exact `void` matching keeps count-returning or proxy adapters from
+///          becoming concept-true and failing only in the strategy body. Allocation is deliberately allowed to throw;
+///          the independent source concept proves that formatting after allocation cannot escape the callback.
+template <typename char_type, typename T, typename operation>
+concept exact_resize_and_overwrite_strlike_for =
+	exact_resize_and_overwrite_strlike<char_type, T> && requires(T &str, ::std::size_t n, operation op) {
+		{
+			strlike_exact_resize_and_overwrite(io_strlike_type<char_type, T>, str, n, op)
+		} -> ::std::same_as<void>;
+	};
+#else
+/// @brief Keeps the callback-storage protocol unavailable until the standard library advertises its contract.
+/// @details The gate belongs to the generic capability rather than only the standard-string adapter. Otherwise a
+///          third-party destination defining equally named ADL hooks in a C++20 translation unit could make concat
+///          instantiate an unavailable strategy and silently change both code generation and exception boundaries. The
+///          always-false definitions preserve well-formed concept queries while making every admission point consume
+///          the same feature-test proof. This also admits MSVC modes which expose the standardized API and macro while
+///          `_MSVC_LANG` still reports its historical C++20 value.
+template <typename char_type, typename T>
+concept exact_resize_and_overwrite_strlike = false;
+
+template <typename char_type, typename T, typename operation>
+concept exact_resize_and_overwrite_strlike_for = false;
+#endif
+
 template <typename char_type, typename T>
 concept sso_buffer_strlike = buffer_strlike<char_type, T> &&
 							 requires {

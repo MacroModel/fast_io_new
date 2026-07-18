@@ -48,7 +48,9 @@ g++ -O3 -march=native -std=c++20 -Iinclude \
   benchmark/0021.print_concepts/static_literal_asm.cc -o /tmp/static-literal-asm
 objdump -drC /tmp/static-literal-asm | \
   sed -n '/<fast_io_static_literal_split_probe>/,/^$/p; \
-          /<fast_io_static_literal_whole_probe>/,/^$/p'
+          /<fast_io_static_literal_whole_probe>/,/^$/p; \
+          /<fast_io_static_literal_line_probe>/,/^$/p; \
+          /<fast_io_static_literal_embedded_line_probe>/,/^$/p'
 ```
 
 This is deliberately an ordinary constexpr copy policy, not consteval string concatenation. The public function's
@@ -58,6 +60,18 @@ return less than its advertised upper bound. `static_scatter_t<N>` carries the r
 the scatter still requires its base to denote at least N readable elements. General run-time scatters keep the separately
 measured bounded-copy policy. The correctness suite uses sources containing exactly N live elements (no readable
 terminator padding), covers 1/3/16/17 and multiple character widths, and exercises both ordinary and precise reserve CPOs.
+
+Line ownership preserves the same type-level materialization opportunity. The line probe calls the public
+`println(sink, "abc")` entry; its control calls public `print(sink, "abc\\n")`. Both own one four-character reserve
+window and make one scalar boundary call. GCC 15 emits the complete little-endian payload as one
+`movl $0x0a636261,(destination)` in each wrapper. Apple Clang on M4 emits the same literal-pool load and one 32-bit
+store in each wrapper, with otherwise identical instruction sequences. With stack and control-flow hardening disabled,
+the two GCC 15 exported symbols are both 32 bytes. No special-case literal construction is needed:
+the line policy contributes one checked slot to the fixed reserve capacity, `static_scatter_t<3>` exposes the first
+three assignments, and the adjacent newline assignment remains visible to ordinary store merging. This proof does not
+extend to a run-time scatter or an arbitrary formatter, whose length, effects, or destination call boundaries are not
+type-level facts. Runtime regressions compare line-owned and embedded-newline output at 1/3/15/16/17 payload boundaries
+for all supported character widths and require one completed scalar range in both forms.
 
 On Linux x86-64, GCC 15 produced 37-byte clean and 75-byte default-hardened exported symbols for both spellings; the
 complete instruction sequences, including the byte store for `c` and dword store for `abbb`, were identical. In the
@@ -445,6 +459,66 @@ The fixed-range and true-put-area policies are profitable at their intended boun
 run-time-scatter regressions are not hidden by that conclusion: exact-resize concat remains a separate open strategy
 gap. The reusable fast_io string is governed by the narrower deferred-commit composition described above.
 
+Two portable attempts to close that gap were rejected after same-source measurement. The C++20 candidate materialized
+one initialization-sensitive borrowed dynamic-scatter source, summed its retained descriptors, reserved the exact
+default-allocator `std::string` result, and appended every descriptor. Its gate admitted no custom traits, allocator,
+or ADL result, and instrumentation proved one plan-size/define traversal instead of the baseline's two source
+traversals. ASan and UBSan passed, but CPU-6 medians regressed from 44.816 to 100.356 ns for rgvw16 concat (+123.9%)
+and from 218.025 to 734.977 ns for rgvw128 (+237.1%); concatln regressed from 45.282 to 108.461 ns (+139.5%) and from
+219.143 to 741.039 ns (+238.2%). The helper was smaller (1,734/1,987 bytes versus 1,968/3,629 for concat/concatln),
+but 31 or 255 tiny `std::string::append` operations retained a size, capacity, alias, length, and copy decision each.
+One fewer source traversal could not repay that destination work, so amortized append capability was not promoted into
+a descriptor-wise concat cost proof.
+
+The distinct C++23 candidate retained the same validated descriptor plan but supplied it to one exact
+`std::string::resize_and_overwrite` CPO. All producer calls, cursor checks, checked summation, and allocation-capacity
+proofs completed before its mutable `noexcept` callback. The callback skipped empty descriptors before pointer
+arithmetic, copied only into the supplied span, and returned the prevalidated extent while the borrowed plan remained
+alive. GCC inlined the callback and reduced helper size to 1,475/1,870 bytes, yet its loop still made 31 or 255 tiny
+conditional copies. CPU-6 medians regressed from 46.328 to 89.137 ns for rgvw16 concat (+92.4%) and from 221.084 to
+692.292 ns for rgvw128 (+213.1%); concatln regressed from 46.070 to 93.091 ns (+102.1%) and from 220.522 to 680.654 ns
+(+208.7%). The current staging result stays inside its 2-KiB inline buffer for these payloads and finishes with one
+allocation plus one whole-payload copy. That contiguous second pass is cheaper than replacing it with fragmented final
+writes, so neither portable descriptor strategy is present in the implementation.
+
+### C++23 exact-overwrite range `concatln`
+
+A profitable C++23 route uses a different proof and does not retain or replay scatter descriptors. A normalized source
+must provide an exact size and a pointer-returning precise writer whose complete named-lvalue call is `noexcept`. Concat
+computes the checked payload extent before constructing the destination, then lets `resize_and_overwrite` allocate its
+final live array and invokes that source writer directly into the callback span. The callback verifies the returned end
+pointer before publishing the already-checked size and writes the canonical newline in the same final array. A sizing
+or allocation failure therefore occurs outside the callback; an admitted source cannot unwind through the standard
+library's nonthrowing callback boundary.
+
+For `sized_range_view_t`, admission is intentionally stronger than a nonthrowing leaf CPO. Its proof mirrors every
+operation performed by the selected writer: iterator copy/destruction, dereference and preincrement;
+alias/forward normalization; destruction of an owned normalized result; and the exact reserve or scatter CPO chosen
+for each element. A precise writer returning `void` is excluded because the final endpoint cannot be validated. The
+destination side is available only when `__cpp_lib_string_resize_and_overwrite >= 202110L`; the built-in adapter is
+limited to default-traits/default-allocator `std::basic_string`, while a third-party destination must satisfy the same
+callback-specific concept. The generic admission concept is false below that feature boundary, even if unrelated ADL
+hooks use the same names. The tested feature-macro-absent C++20 object is consequently byte-identical to the prior
+dispatcher; a library mode which exposes the standardized feature and macro as an extension is intentionally admitted.
+
+The profitability gate is deliberately line-only. In eleven alternating 2.5-million-operation samples on an idle
+physical P-core, the final line-only binary reduced `rgvw16 concatln` from 42.723 to 32.703 ns/op (-23.45%) and
+`rgvw128 concatln` from 206.202 to 185.287 ns/op (-10.14%). Enabling the same route for ordinary concat improved
+`rgvw16` by 2.87% but regressed
+`rgvw128` from 206.982 to 209.735 ns/op (+1.33%), so non-line output retains its byte-for-byte baseline specialization.
+E-core measurements favored both modes, but they do not override the P-core benchmark policy. Thus the gate records a
+measured destination/source/mode combination rather than treating a semantic noexcept proof as a cost proof.
+
+The callback state remains the explicit 24-byte `{source pointer, payload size, total size}` aggregate. Reconstructing
+one extent from the other reduced the source object to two machine words, but GCC had already inlined the callback, so
+no ABI transfer was removed. The reconstruction enlarged the line specialization and made E-core `rgvw128 concatln`
+about 6.7% slower. Retaining all three values is therefore supported by code-generation evidence rather than an
+assumption that the smallest source aggregate is necessarily the cheapest one.
+
+Directed regressions cover named and temporary nonempty ranges, an empty range, every supported character width,
+custom traits and allocators, a throwing iterator copy, a void precise writer, destination CPOs which reject the named
+operation or return non-void, and a throwing size pass which must occur before the destination callback is entered.
+
 The latest refinement was measured in a separate fifteen-sample alternating A/B batch on logical CPU 14, with its P-
 core sibling CPU 15 idle. Both binaries used GCC 15 with identical function/loop/jump alignment. “Before” is the same
 tree without the original cursor-independence/stream markers and direct loop; these rows therefore isolate this
@@ -515,6 +589,29 @@ the prefix and suffix directly and loops over only the three selected inner desc
 unified flattening reduces the nine-leaf fake-call pack from 8.687 to 3.950 ns/op (-54.53%). A future direct-write-only
 leafwise refinement needs independent 2/5/9/16-leaf evidence; the current sub-nanosecond conditional result is reported
 as an explicit scalability tradeoff, not hidden as noise.
+
+### Exact-two passive-scatter refinement
+
+That independent evidence admits one deliberately narrow refinement. After semantic filtering, exactly two nonempty
+`basic_io_scatter_t<Char>` leaves may be emitted as two ordered typed scalar writes when the destination explicitly
+prefers direct streaming. The compile-time gate excludes byte representation, native typed or byte scatter, put areas,
+mutex ownership, exact status dispatch, and every established whole-output coalescing policy. Empty descriptors retain
+the generic path so its observable empty-call boundary is preserved; `println` appends the canonical static newline
+through the same typed write CPO rather than substituting `char_put`.
+
+The two-leaf ceiling is an empirical code-size boundary, not an inference from printable syntax. Across 48 isolated
+GCC 15 case pairs, only the eight intended plain/adjacent-condition, print/line, fake/memory cases changed; all 40
+five-, nine-, sixteen-, framed-, and non-admitted controls were byte-identical. The focused executable text shrank from
+109,727 to 106,791 bytes. Representative exported symbols shrank from 243 to 138 bytes for fake print, 260 to 180 for
+fake line, 376 to 269 for memory print, and 409 to 279 for memory line; the adjacent-condition variants showed the same
+direction. Ninety-six functional cases and the same 96 cases under ASan/UBSan passed, including status, byte
+representation, native scatter, null-empty fallback, canonical-newline pointer identity, and exception-prefix checks.
+
+Eleven alternating five-million-operation samples on an idle physical P-core measured 74.64--74.93% lower fake-boundary
+cost for print and 59.82--59.99% for line. Real memory-writing cases improved by 30.71--35.38% for print and
+45.82--49.74% for line. Framed non-admitted controls remained within -0.46% to +0.57%, consistent with timing noise and
+their byte-identical objects. Generalizing the route without a new leaf-count/code-growth experiment would discard the
+very evidence that makes this concept combination safe and profitable.
 
 ### fmt 12.2.0 controls
 

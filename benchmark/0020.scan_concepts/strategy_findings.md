@@ -123,7 +123,27 @@ Removing recursive suffix specializations fixes the catastrophic 256-target code
 global strategy sacrifices the old 64-target hot code shape. This is evidence for a bounded medium-pack strategy, not
 for restoring recursive dispatch generally. Any refinement must retain one normalization boundary and linear template
 growth, recover the 64-target assembly only below an explicit code-size threshold, and leave the 256-target path on the
-current controller. Until that experiment exists, the 64-target regression is an acknowledged open cost-policy issue.
+current controller. The 64-target regression was therefore an acknowledged open cost-policy issue for the bounded
+experiment recorded below, rather than permission to restore the recursive controller.
+
+That bounded experiment has now been performed and rejected. A private 33--64-target prototype created one tuple of
+references to the already-normalized proxies and visited the same tuple in fixed sixteen-element offset blocks. It
+never formed a progressively shorter suffix pack: template depth was `ceil(N/16)`, element expansion was exactly N,
+and 256 targets remained on the current path. Existing aggregate-commit, zero-width, `noexcept`, transport, refill,
+and status gates were unchanged. GCC 15.1 on AArch64 flattened every tested block width back into the current fold;
+the complete current and candidate instruction streams were byte-identical at both 64 and 256 targets. Forcing the
+controller out of line instead raised the 64-target frame from 1,696 to 2,752 bytes, increased reachable text, added a
+hot call, and measured roughly 249--264 ns versus 78--103 ns for current in the E-core-QoS diagnostic.
+
+The x86-64 Linux GCC 15.2 E-core-pinned build supplies the code-growth boundary which timing alone cannot show.
+Executable `.text` was 5,923 bytes current versus 43,203 bytes frozen at 64 targets (7.294x), and 15,375 versus
+833,483 bytes at 256 targets (54.210x). Current emits no recursive controller or suffix nodes; its cold path reuses one
+bounded sixteen-value fallback four times at 64 and sixteen times at 256. Frozen emits 4 controller/14 suffix nodes at
+64 and 65/59 at 256. Thus the old 64-target P-core win is a GCC/x86 inlining and scheduling threshold artifact whose
+representation grows directly into the 256-target failure. The bounded same-tuple form is free only when it becomes
+the current instructions and harmful when forced to remain distinct. The implementation therefore keeps the current
+linear controller; revisiting this point requires a candidate with genuinely different x86 hot instructions, a
+pack256 non-regression, and an explicit reachable-text/graph cap.
 
 The final common matrix also measured `pack9` at 2.268 ns/op in the frozen controller and 2.687 ns/op in the current
 controller. That delta is not evidence that a recursive producer is intrinsically faster: replacing the current fold

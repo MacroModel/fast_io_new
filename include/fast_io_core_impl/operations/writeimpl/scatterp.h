@@ -59,9 +59,9 @@ scatter_pwrite_some_cold_impl(outstmtype &outsm,
 		for (::std::size_t i{}; i != n; ++i)
 		{
 			auto [base, len] = pscatters[i];
-			auto ed{base + len};
-			auto written{::fast_io::details::pwrite_some_impl(outsm, base, ed, off)};
-			::std::size_t sz{static_cast<::std::size_t>(written - base)};
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			auto written{::fast_io::details::pwrite_some_impl(outsm, range.first, range.last, off)};
+			::std::size_t sz{static_cast<::std::size_t>(written - range.first)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -104,9 +104,9 @@ scatter_pwrite_some_cold_impl(outstmtype &outsm,
 			for (::std::size_t i{}; i != n; ++i)
 			{
 				auto [basef, len] = pscatters[i];
-				auto edf{basef + len};
-				::std::byte const *base{reinterpret_cast<::std::byte const *>(basef)};
-				::std::byte const *ed{reinterpret_cast<::std::byte const *>(edf)};
+				auto const range{::fast_io::details::scatter_to_scalar_range(basef, len)};
+				::std::byte const *base{reinterpret_cast<::std::byte const *>(range.first)};
+				::std::byte const *ed{reinterpret_cast<::std::byte const *>(range.last)};
 				auto written{::fast_io::details::pwrite_some_bytes_impl(outsm, base, ed, off)};
 				::std::size_t diff{static_cast<::std::size_t>(written - base)};
 				off = ::fast_io::fposoffadd_nonegative(off, diff);
@@ -198,7 +198,8 @@ scatter_pwrite_all_cold_impl(outstmtype &outsm,
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			::fast_io::details::pwrite_all_impl(outsm, base, base + len, off);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::pwrite_all_impl(outsm, range.first, range.last, off);
 			off = ::fast_io::fposoffadd_nonegative(off, len);
 		}
 	}
@@ -230,7 +231,8 @@ scatter_pwrite_all_cold_impl(outstmtype &outsm,
 		for (auto i{pscatters}, e{pscatters + n}; i != e; ++i)
 		{
 			auto [base, len] = *i;
-			::fast_io::details::pwrite_all_impl(outsm, base, base + len, off);
+			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
+			::fast_io::details::pwrite_all_impl(outsm, range.first, range.last, off);
 			off = ::fast_io::fposoffadd_nonegative(off, len);
 		}
 	}
@@ -265,9 +267,9 @@ if constexpr ((::fast_io::operations::decay::defines::has_pwrite_all_bytes_overf
 			for (::std::size_t i{}; i != n; ++i)
 			{
 				auto [basef, len] = pscatters[i];
-				auto edf{basef + len};
-				::std::byte const *base{reinterpret_cast<::std::byte const *>(basef)};
-				::std::byte const *ed{reinterpret_cast<::std::byte const *>(edf)};
+				auto const range{::fast_io::details::scatter_to_scalar_range(basef, len)};
+				::std::byte const *base{reinterpret_cast<::std::byte const *>(range.first)};
+				::std::byte const *ed{reinterpret_cast<::std::byte const *>(range.last)};
 				::fast_io::details::pwrite_all_bytes_impl(outsm, base, ed, off);
 				// The selected fallback is a byte protocol: both its extent and its file position are measured in bytes.
 				// `len` belongs to the typed descriptor and counts characters, so advancing by `len` would overlap every

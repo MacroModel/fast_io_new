@@ -207,6 +207,79 @@ print_reserve_static_stack_size(io_reserve_type_t<char_type, sized_range_view_t<
 	return (preferred_bytes / sizeof(char_type)) == 0u ? 1u : (preferred_bytes / sizeof(char_type));
 }
 
+/// @brief Proves every potentially throwing expression in sized-range contiguous emission.
+/// @details The public reserve concepts prove capacity and cursor shape, but deliberately say nothing about exception
+///          behavior. An overwrite callback needs a stronger fact. The proof below mirrors the ordinary writer body:
+///          its local current-iterator copy, dereference and preincrement; the combined alias/character-forward
+///          expression; and either the selected reserve writer or the named-and-reforwarded scatter writer. Runtime
+///          scatter copies and separator copies use `small_scatter_copy_n`, whose contract is unconditionally
+///          `noexcept`.
+///
+///          This body also sits behind the precise adapter and its delegated ordinary-writer call, both of which pass
+///          the view by value. Those copies are intentionally not hidden in this predicate: the nested conditional
+///          `noexcept` specifications test each complete call expression, so construction of every parameter is checked
+///          at the boundary where it occurs. A value-producing forwarding expression additionally creates a local
+///          object in the emitter lambda; its destructor must therefore be non-throwing. Reference results create no
+///          such owned object.
+template <::std::integral char_type, ::std::input_iterator It>
+inline constexpr bool sized_range_view_nothrow_reserve_define_v = []() constexpr {
+	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
+	using forwarded_expression_type = typename view_type::forwarded_expression_type;
+	using forwarded_value_type = typename view_type::forwarded_value_type;
+	if constexpr (!::fast_io::sized_range_view_reserve_element_v<char_type, It> ||
+				  !::std::is_nothrow_copy_constructible_v<It> ||
+				  !::std::is_nothrow_destructible_v<It>)
+	{
+		return false;
+	}
+	else if constexpr (
+		!::std::is_reference_v<forwarded_expression_type> &&
+		(!::std::is_object_v<forwarded_expression_type> ||
+		 !requires { sizeof(forwarded_expression_type); }))
+	{
+		return false;
+	}
+	else if constexpr (
+		!::std::is_reference_v<forwarded_expression_type> &&
+		!::std::is_nothrow_destructible_v<forwarded_expression_type>)
+	{
+		return false;
+	}
+	else if constexpr (!requires(It &current) {
+						   { *current } noexcept;
+						   { ++current } noexcept -> ::std::same_as<It &>;
+						   {
+							   ::fast_io::io_print_forward<char_type>(
+								   ::fast_io::io_print_alias(*current))
+						   } noexcept;
+					   })
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::reserve_printable<char_type, forwarded_value_type> ||
+		::fast_io::dynamic_reserve_printable<char_type, forwarded_value_type>)
+	{
+		return requires(char_type *ptr, forwarded_expression_type &value) {
+			{
+				print_reserve_define(
+					::fast_io::io_reserve_type<char_type, forwarded_value_type>, ptr,
+					::std::forward<forwarded_expression_type>(value))
+			} noexcept -> ::std::same_as<char_type *>;
+		};
+	}
+	else
+	{
+		return requires(forwarded_expression_type &value) {
+			{
+				print_scatter_define(
+					::fast_io::io_reserve_type<char_type, forwarded_value_type>,
+					::std::forward<forwarded_expression_type>(value))
+			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
+		};
+	}
+}();
+
 /// @brief Materializes a sized range into contiguous storage and returns the actual end.
 /// @details This is the define half of the ordinary reserve protocol. Each element is forwarded through the same
 ///          alias pipeline used during sizing. Scatter elements are copied because a contiguous destination cannot
@@ -216,6 +289,9 @@ template <::std::integral char_type, ::std::input_iterator It>
 	requires(::fast_io::sized_range_view_reserve_element_v<char_type, It>)
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>>,
 											 char_type *__restrict ptr, sized_range_view_t<char_type, It> t)
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+	noexcept(::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It>)
+#endif
 {
 	if (t.size == 0)
 	{
@@ -317,6 +393,9 @@ inline constexpr char_type *
 print_reserve_precise_define(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>> tag,
 							 char_type *__restrict ptr, [[maybe_unused]] ::std::size_t precise_size,
 							 sized_range_view_t<char_type, It> t)
+#if __cpp_lib_string_resize_and_overwrite >= 202110L
+	noexcept(noexcept(print_reserve_define(tag, ptr, t)))
+#endif
 {
 	return print_reserve_define(tag, ptr, t);
 }
