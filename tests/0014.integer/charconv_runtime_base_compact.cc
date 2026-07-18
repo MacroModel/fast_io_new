@@ -33,6 +33,34 @@ static_assert(check_literal_constant_evaluation<15u>());
 static_assert(check_literal_constant_evaluation<17u>());
 static_assert(check_literal_constant_evaluation<36u>());
 
+template <typename integer_type>
+constexpr bool check_narrow_runtime_power_constant_evaluation() noexcept
+{
+	constexpr ::std::array<char, 1u> input{
+		::fast_io::char_literal_v<u8'#', char>};
+	constexpr integer_type initial{static_cast<integer_type>(0x5au)};
+	integer_type value{initial};
+	auto const result{
+		::fast_io::details::from_chars_integral_runtime_base_compact(
+			input.data(), input.data(), value, 15u)};
+	return result.ptr == input.data() &&
+		   result.ec == ::std::errc::invalid_argument &&
+		   value == initial;
+}
+
+/*
+The compact scanner precomputes B^8 before inspecting the input.  An empty
+range therefore provides the smallest compile-time regression for narrow
+integer promotion: on ordinary 32-bit-int ABIs, the `uint_least16_t` case
+rejects a signed B^4 * B^4.  On a 16-bit-int target where `uint_least8_t` has
+lower rank than `int` (as on AVR), the second assertion also exposes an earlier
+signed B^2 * B^2.  Base 15 reaches both boundaries even though no digit is
+consumed.  Checking the unchanged destination also preserves the public
+invalid-input contract while keeping this test independent of the digit loop.
+*/
+static_assert(check_narrow_runtime_power_constant_evaluation<::std::uint_least8_t>());
+static_assert(check_narrow_runtime_power_constant_evaluation<::std::uint_least16_t>());
+
 [[noreturn]] inline void fail() noexcept
 {
 	::std::abort();

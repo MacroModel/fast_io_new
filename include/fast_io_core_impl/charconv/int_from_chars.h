@@ -322,11 +322,14 @@ from_chars_integral_runtime_base_compact(char_type const *first,
 	and squaring it then overflows that promoted `int` before the cast below.
 	The calculation is eager even when an eight-digit block is inadmissible.
 
-	Promoting an operand to `uint_least32_t` makes the operation unsigned. For a
-	narrow accumulator `radix_fourth` is already at most 65535, so its square is
-	strictly below 2^32 and the product is exact. For wider accumulators the usual
-	arithmetic conversions retain the wider unsigned type. Conversion back to
-	`unsigned_type` therefore has the intended well-defined modulo semantics.
+	Converting one operand to `uint_least32_t` makes the common arithmetic type
+	wide enough to represent every value below 2^32.  On an ABI with a still wider
+	signed `int`, integer promotion may select that signed type; the product remains
+	representable rather than relying on it being unsigned.  For a narrow
+	accumulator `radix_fourth` is at most 65535, so its square is strictly below
+	2^32 and exact.  For wider accumulators the usual arithmetic conversions retain
+	the wider unsigned type.  Conversion back to `unsigned_type` therefore has the
+	intended well-defined modulo semantics.
 	*/
 	auto const radix_eighth{
 		static_cast<unsigned_type>(
