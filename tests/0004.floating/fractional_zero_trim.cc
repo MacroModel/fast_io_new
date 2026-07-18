@@ -79,12 +79,54 @@ int main()
 		general<preserving_mode, nearest>(1.25f, 3u))};
 	auto const wide_padded{::fast_io::concat_std(
 		general<preserving_mode, nearest>(1.25, 20u))};
+	// The compact binary64 carrier may end before the requested fractional
+	// quantum.  If general selects scientific notation, preserving P decimal
+	// places still requires P+R coefficient places, where R is the displayed
+	// exponent.  The terminal zero below represents 10^-27 and is not optional.
+	constexpr auto scientific_quantum_value{::std::bit_cast<double>(
+		::std::uint64_t{0x3d44e27112e2ae54ULL})};
+	constexpr auto nearest_upward{
+		floating_rounding::nearest_toward_plus_infinity};
+	auto const scientific_quantum{::fast_io::concat_std(
+		general<preserving_mode, nearest_upward>(scientific_quantum_value, 27u))};
+	auto const scientific_quantum_comma{::fast_io::concat_std(
+		comma_general<preserving_mode, nearest_upward>(scientific_quantum_value, 27u))};
+	auto const scientific_quantum_wide{::fast_io::wconcat_std(
+		general<preserving_mode, nearest_upward>(scientific_quantum_value, 27u))};
+	// Conversely, a dyadic value already exact on the requested grid does not
+	// acquire a synthetic quantum merely because the shortest carrier is shorter
+	// than P+R.  The exact-window tail bit distinguishes this case from the
+	// rounded value above.
+	constexpr auto exact_scientific_value{::std::bit_cast<double>(
+		::std::uint64_t{0x4110000001000000ULL})};
+	constexpr auto nearest_odd{floating_rounding::nearest_to_odd};
+	auto const exact_scientific{::fast_io::concat_std(
+		general<preserving_mode, nearest_odd>(exact_scientific_value, 42u))};
+	// Exact reservation is an independent length computation, not a formatted
+	// scratch-buffer measurement.  It must observe the same distinction between
+	// a rounded synthetic quantum and an already-grid-exact dyadic value.
+	auto scientific_quantum_manip{
+		general<preserving_mode, nearest_upward>(scientific_quantum_value, 27u)};
+	auto exact_scientific_manip{
+		general<preserving_mode, nearest_odd>(exact_scientific_value, 42u)};
+	auto const scientific_quantum_size{::fast_io::print_reserve_precise_size(
+		::fast_io::io_reserve_type<char, decltype(scientific_quantum_manip)>,
+		scientific_quantum_manip)};
+	auto const exact_scientific_size{::fast_io::print_reserve_precise_size(
+		::fast_io::io_reserve_type<char, decltype(exact_scientific_manip)>,
+		exact_scientific_manip)};
 	if (ordinary_preserved != "-0.0" || ordinary_nonpreserved != "-0" ||
 		ordinary_preserved_comma != "-0,0" || ordinary_preserved_json != "-0.0" ||
 		ordinary_preserved_scientific != "-0e-05" ||
 		exact_window_nonpreserved != "-0" || exact_window_nonpreserved_comma != "-0" ||
 		exact_window_nonpreserved_json != "-0.0" || ordinary_padded != "1.250" ||
-		wide_padded != "1.25000000000000000000")
+		wide_padded != "1.25000000000000000000" ||
+		scientific_quantum != "1.48393566724010e-13" ||
+		scientific_quantum_comma != "1,48393566724010e-13" ||
+		scientific_quantum_wide != L"1.48393566724010e-13" ||
+		exact_scientific != "2.621440009765625e+05" ||
+		scientific_quantum_size != scientific_quantum.size() ||
+		exact_scientific_size != exact_scientific.size())
 	{
 		return 1;
 	}

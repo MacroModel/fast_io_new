@@ -1510,7 +1510,8 @@ floating_precise_prepare_precision_metadata(
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
 	::std::uint_least32_t exponent, ::std::size_t precision,
 	::std::size_t significant, ::std::int_least32_t fixed_keep,
-	bool fractional_grid, bool negative) noexcept
+	bool fractional_grid, bool require_fractional_rounding_state,
+	bool negative) noexcept
 {
 	auto carrier{[&]() constexpr noexcept {
 		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
@@ -1570,7 +1571,20 @@ floating_precise_prepare_precision_metadata(
 		else if (exponent && length <= requested &&
 				 requested <= static_cast<::std::size_t>((::std::numeric_limits<flt>::digits10)))
 		{
-			carrier_is_exact_enough = true;
+			/*
+			The shortest carrier contains no sticky bit.  Ordinarily that is enough:
+			for a normal value and at most digits10 requested digits, padding cannot
+			cross a nearest boundary.  General fractional-preserve has one additional
+			observable, however: it synthesizes the 10^-P suffix only when rounding
+			actually discarded a nonzero exact tail.  When the requested width exceeds
+			the carrier width, only the exact window can distinguish that event from a
+			dyadic value already on the grid.  Equality needs no suffix and remains a
+			safe carrier result.  This is the size-only counterpart of the emitter's
+			general/fractional-preserve carrier gate; other formats must retain their
+			established padding path.
+			*/
+			carrier_is_exact_enough =
+				!require_fractional_rounding_state || length == requested;
 		}
 		if (carrier_is_exact_enough)
 		{
@@ -1754,9 +1768,13 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 		}
 		else
 		{
+			constexpr bool require_fractional_rounding_state{
+				format == ::fast_io::manipulators::floating_format::general &&
+				precision_mode == ::fast_io::manipulators::floating_precision::
+					fractional_preserve_trailing_zero};
 			auto const prepared{floating_precise_prepare_precision_metadata<flt, rounding>(
 				mantissa, exponent, precision, significant, fixed_keep,
-				fractional_grid, negative)};
+				fractional_grid, require_fractional_rounding_state, negative)};
 			auto const decimal{preserve ? prepared.raw : prepared.trimmed};
 			return floating_precise_rounded_precision_size<flt, format, precision_mode,
 				json_float>(decimal, precision, significant);

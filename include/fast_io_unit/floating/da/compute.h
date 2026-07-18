@@ -360,8 +360,8 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 }
 
 // This block owns every precision carrier whose production representation uses
-// a native unsigned 128-bit type.  Complete scientific P20-P33 and the accepted
-// branch of partial P34 necessarily exceed u64.
+// a native unsigned 128-bit type.  Scientific P20-P34 coefficients can exceed
+// u64, so representing their complete domains requires u128.
 // The fixed-fractional implementation below also keeps K16-K19 in the same u128
 // result so K16-K28 has one compute/fallback contract and no second partial
 // backend.  This is a representation choice, not an ISA rounding choice:
@@ -370,8 +370,7 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 #if defined(__SIZEOF_INT128__)
 struct binary64_scientific_wide_precision_result
 {
-	// 10^34 < 2^113, so both complete P20-P33 and accepted partial-P34
-	// rounded coefficients fit in u128.
+	// 10^34 < 2^113, so every rounded P20-P34 coefficient fits in u128.
 	__uint128_t significand;
 	::std::int_least32_t exponent;
 	bool success;
@@ -456,11 +455,10 @@ binary64_scientific_wide_precision_result compute_binary64_scientific_wide_preci
 	::std::uint_least64_t binary_significand,
 	::std::uint_least32_t raw_exponent) noexcept
 {
-	// The complete-domain proof stops at P33.  M <= 10^18 fits in u64 and
+	// This one-fractional-word proof stops at P33.  M <= 10^18 fits in u64 and
 	// 10^33 fits in u128.  P34's fifteen-digit provisional branch needs M=10^19,
-	// whose ambiguity radius exceeds one half; accepting that branch requires an
-	// additional fractional word and a new error analysis.  The independent
-	// partial helper below safely accepts only the sixteen-digit branch.
+	// whose ambiguity radius exceeds one half in this representation; the
+	// independent two-word helper below covers both provisional widths.
 	static_assert(20u <= digits && digits <= 33u);
 	// Generate specialization constants at compile time without a P20-P33 table.
 	// Runtime renderers obtain decimal scales from uint64_power10_table in
@@ -488,24 +486,34 @@ binary64_scientific_wide_precision_result compute_binary64_scientific_wide_preci
 		normalization_threshold / 10u);
 }
 
-// P34 admits a useful but deliberately partial extension of the P20-P33 proof.
-// The cached-power integer before decimal extension has either fifteen or
-// sixteen digits.  In the sixteen-digit case, a 34-digit coefficient needs
-// M = 10^(34-16) = 10^18 and the existing one-sided cache error gives
+// The caller supplies a positive normalized 53-bit significand,
+// 2^52 <= binary_significand < 2^53, and a finite-normal raw exponent in
+// [1,2046].  P34 needs M=10^19 when the provisional integer has fifteen digits.
+// Scaling the P20-P33 carrier's single 64-bit fraction by that M makes its
+// discarded product tail exceed one half of an output quantum.  Retain another
+// 64 product bits instead.  For X=binary_significand<<shift, cached endpoint C
+// and exact endpoint C*, the cache contract gives C <= C* < C+1 and X < 2^59. Let
 //
-//   B = M + floor((M - 1) / 2048) < 2^63.
+//   Q = floor(X*C / 2^6).
 //
-// Rejecting [2^63-B, 2^63] therefore proves the same strict comparison with one
-// half as the established wide carrier.  Moreover 10^34 < 2^113, so both the
-// rounded coefficient and its all-nine normalization edge fit in u128.  The
-// fifteen-digit case would require M = 10^19, for which B exceeds 2^63 and the
-// one-word closed-interval test is no longer valid; it must fall back before M
-// is formed.  Keeping this as a separate helper preserves the P20-P33 runtime
-// body's assembly and proof domain while exact materialization remains
-// authoritative for every rejected P34 value.
+// Q contains the provisional integer followed by 128 fractional bits.  The
+// discarded six product bits and cache error satisfy
+//
+//   0 <= X*C*/2^6 - Q < (X+2^6)/2^6 < 2^53+1.
+//
+// After multiplication by M, the exact value is therefore fewer than
+// M*(2^53+1) units above the 128-bit fractional lower endpoint.  This is below
+// 2^127 even for M=10^19.  Rejecting the closed interval
+// [2^127-B,2^127], B=M*(2^53+1)-1, proves the strict comparison with one half;
+// outside it nearest rounding is unique for all six nearest policies.  Both
+// 10^34 and the rounded coefficient fit in 113 bits.  This numeric result is
+// presentation-independent: significant P34 and scientific fractional P33
+// both request the same 34-digit coefficient; trimming and radix placement
+// occur only after this proof succeeds.  Keeping this helper separate preserves
+// the established P20-P33 assembly and proof domain.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
 binary64_scientific_wide_precision_result
-compute_binary64_scientific_p34_partial_precision(
+compute_binary64_scientific_p34_precision(
 	::std::uint_least64_t binary_significand,
 	::std::uint_least32_t raw_exponent) noexcept
 {
@@ -514,7 +522,7 @@ compute_binary64_scientific_p34_partial_precision(
 	// This is the same exhaustively equivalent exponent computation used by the
 	// P20-P33 carrier.  Apple AArch64 retains its measured single-umulh spelling;
 	// all other targets use the reduced reciprocal.  The conditional selects code
-	// generation only and does not alter the partial P34 acceptance proof.
+	// generation only and does not alter the P34 acceptance proof.
 #if defined(__APPLE__) && \
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	decimal_exponent = compute_decimal_exponent_high_product(binary_exponent);
@@ -524,37 +532,60 @@ compute_binary64_scientific_p34_partial_precision(
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
 	auto const shift{cached_data.exponent_shifts.data[raw_exponent]};
 	auto const power{cached_data.powers[-decimal_exponent - 1]};
-	auto const product{::fast_io::details::da::umul64x128_high(
-		binary_significand << shift, power)};
-	auto const integral{product.hi >> extra_shift};
+	auto const shifted_significand{binary_significand << shift};
+	auto const upper_product{::fast_io::details::da::umul64x64(
+		shifted_significand, power.hi)};
+	auto const lower_product{::fast_io::details::da::umul64x64(
+		shifted_significand, power.lo)};
+	auto const product_middle{static_cast<::std::uint_least64_t>(
+		upper_product.lo + lower_product.hi)};
+	auto const product_high{static_cast<::std::uint_least64_t>(
+		upper_product.hi + (product_middle < upper_product.lo))};
+	auto const integral{product_high >> extra_shift};
 	constexpr ::std::uint_least64_t sixteen_digit_threshold{
 		static_cast<::std::uint_least64_t>(1000000000000000ULL)};
-	if (integral < sixteen_digit_threshold)
-	{
-		// A fifteen-digit provisional integer needs M=10^19.  Its ambiguity
-		// radius crosses one half, so this one-word proof cannot decide it.
-		return {};
-	}
-	auto const fractional{static_cast<::std::uint_least64_t>(
-		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
-	constexpr ::std::uint_least64_t multiplier{static_cast<::std::uint_least64_t>(1000000000000000000ULL)};
-	constexpr ::std::uint_least64_t ambiguity_bound{
-		multiplier + ((multiplier - 1u) >> 11u)};
-	constexpr ::std::uint_least64_t half{static_cast<::std::uint_least64_t>(1ULL) << 63u};
-	static_assert(ambiguity_bound < half);
-	auto const fractional_product{
-		::fast_io::details::da::umul64x64(fractional, multiplier)};
-	if (fractional_product.lo - (half - ambiguity_bound) <= ambiguity_bound)
+	auto const has_extra_digit{sixteen_digit_threshold <= integral};
+	auto const fractional_high{static_cast<::std::uint_least64_t>(
+		(product_high << (64u - extra_shift)) |
+		(product_middle >> extra_shift))};
+	auto const fractional_low{static_cast<::std::uint_least64_t>(
+		(product_middle << (64u - extra_shift)) |
+		(lower_product.lo >> extra_shift))};
+	constexpr ::std::uint_least64_t extra_digit_multiplier{
+		static_cast<::std::uint_least64_t>(1000000000000000000ULL)};
+	auto const multiplier{has_extra_digit ? extra_digit_multiplier :
+		extra_digit_multiplier * 10u};
+	auto const fractional_low_product{::fast_io::details::da::umul64x64(
+		fractional_low, multiplier)};
+	auto const fractional_high_product{::fast_io::details::da::umul64x64(
+		fractional_high, multiplier)};
+	auto const fractional_product_middle{static_cast<::std::uint_least64_t>(
+		fractional_high_product.lo + fractional_low_product.hi)};
+	auto const fractional_product_high{static_cast<::std::uint_least64_t>(
+		fractional_high_product.hi +
+		(fractional_product_middle < fractional_high_product.lo))};
+	auto const fractional_remainder{
+		(static_cast<__uint128_t>(fractional_product_middle) << 64u) |
+		fractional_low_product.lo};
+	constexpr __uint128_t half{static_cast<__uint128_t>(1u) << 127u};
+	constexpr __uint128_t maximum_ambiguity_bound{
+		static_cast<__uint128_t>(10000000000000000000ULL) *
+		((static_cast<__uint128_t>(1u) << 53u) + 1u) - 1u};
+	static_assert(maximum_ambiguity_bound < half);
+	auto const ambiguity_bound{static_cast<__uint128_t>(multiplier) *
+		((static_cast<__uint128_t>(1u) << 53u) + 1u) - 1u};
+	if (fractional_remainder - (half - ambiguity_bound) <= ambiguity_bound)
 	{
 		return {};
 	}
 	auto significand{static_cast<__uint128_t>(integral) * multiplier +
-		fractional_product.hi};
-	if (half < fractional_product.lo)
+		fractional_product_high};
+	if (half < fractional_remainder)
 	{
 		++significand;
 	}
-	auto real_exponent{decimal_exponent + 16};
+	auto real_exponent{decimal_exponent +
+		static_cast<::std::int_least32_t>(has_extra_digit ? 16u : 15u)};
 	constexpr __uint128_t decimal_limb{static_cast<::std::uint_least64_t>(10000000000000000000ULL)};
 	constexpr __uint128_t normalization_threshold{
 		decimal_limb * static_cast<::std::uint_least64_t>(1000000000000000ULL)};
