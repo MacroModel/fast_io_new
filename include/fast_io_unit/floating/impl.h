@@ -428,20 +428,55 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 		constexpr ::std::size_t decimal_extra{
 			((flags.floating == manipulators::floating_format::general) ? 3u : 0u) +
 			((flags.json_float && flags.floating != manipulators::floating_format::scientific) ? 2u : 0u)};
+		/*
+		The narrow ASCII DA renderer deliberately uses fixed-width stores.  Its
+		binary32 scientific leaf can physically reach
+
+		  sign + one leading-digit offset + nine carrier bytes + eight exponent bytes = 19,
+
+		while the logical binary32 cache is 15.  The corresponding binary64 bound
+		is 1 + 1 + 17 + 8 = 27 versus a logical cache of 24.  Decimal and
+		scientific therefore need four and three additional writable bytes,
+		respectively; general already contributes three logical-policy bytes but
+		binary32 still needs one more.  Fixed has a much larger exponent-derived
+		bound, and non-char/EBCDIC renderers do not enter this ASCII store contract.
+
+		Both explicit nearest-even and current-environment formatting receive this
+		capacity: the latter may dispatch to the former after reading the run-time
+		rounding mode.  This value is reserve capacity, not reported output length.
+		The precise-reserve CPO continues to use its independent exact size and
+		exact-store renderer.  Taking the maximum rather than adding both allowances
+		is valid because JSON's two-byte suffix is emitted only for zero, which never
+		enters the staged finite-carrier writer.
+		*/
+		constexpr bool uses_da_ascii_staging{
+			::std::same_as<char_type, char> &&
+			!::fast_io::details::is_ebcdic<char_type> &&
+			(flags.rounding == manipulators::floating_rounding::nearest_to_even ||
+			 flags.rounding == manipulators::floating_rounding::current_environment) &&
+			flags.floating != manipulators::floating_format::fixed};
+		constexpr ::std::size_t da_ascii_staging_extra{
+			uses_da_ascii_staging
+				? (trait::mbits == 23u && trait::ebits == 8u
+					   ? 4u
+					   : (trait::mbits == 52u && trait::ebits == 11u ? 3u : 0u))
+				: 0u};
+		constexpr ::std::size_t decimal_capacity_extra{
+			decimal_extra < da_ascii_staging_extra ? da_ascii_staging_extra : decimal_extra};
 		if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double> &&
 					  sizeof(flt) == sizeof(double)) // this is the case on xxx-windows-msvc
 		{
 			return ::fast_io::details::intrinsics::add_or_overflow_die(
 				details::print_rsv_fp_size_with_special_cache<details::print_rsv_cache<double, flags.floating>,
 															  flags.nan_show_type>,
-				decimal_extra);
+				decimal_capacity_extra);
 		}
 		else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
 		{
 			return ::fast_io::details::intrinsics::add_or_overflow_die(
 				details::print_rsv_fp_size_with_special_cache<details::print_rsv_cache<float, flags.floating>,
 															  flags.nan_show_type>,
-				decimal_extra);
+				decimal_capacity_extra);
 		}
 		else
 		{
@@ -451,7 +486,7 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 			return ::fast_io::details::intrinsics::add_or_overflow_die(
 				details::print_rsv_fp_size_with_special_cache<
 					details::print_rsv_cache<::std::remove_cvref_t<flt>, flags.floating>, flags.nan_show_type>,
-				decimal_extra);
+				decimal_capacity_extra);
 		}
 	}
 }

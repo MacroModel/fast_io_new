@@ -1051,6 +1051,28 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			--converted_exponent;
 		}
 	}
+	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::fixed)
+	{
+		/*
+		A fixed request never changes notation, and direct-layout availability
+		depends only on the carrier's scientific exponent and the backend's proved
+		layout interval.  Digit materialization and digit_count affect placement
+		inside an accepted layout but cannot turn a rejected exponent into one.
+		Rejecting here therefore preserves the null-fallback contract while avoiding
+		the complete SIMD/scalar digit block on every miss.  General and decimal stay
+		below the materializer because their notation decisions do depend on the
+		materialized digit count or its generated mask.
+		*/
+		auto const fixed_has_extra_digit{significand >= extra_digit_threshold};
+		auto const fixed_exponent{static_cast<::std::int_least32_t>(
+			converted_exponent + (binary32 ? 7 : 15) +
+			static_cast<::std::int_least32_t>(fixed_has_extra_digit))};
+		if (fixed_exponent < ascii_fixed_layout_cache::minimum ||
+			fast_fixed_maximum < fixed_exponent)
+		{
+			return nullptr;
+		}
+	}
 	// Little-endian AArch64 uses the sqdmulh vector lanes proved above; AArch64
 	// big-endian deliberately follows the scalar branch because reversing scalar
 	// words cannot repair the SIMD path's vector-index-to-address assumptions.
@@ -1078,7 +1100,8 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 								? block_size + static_cast<::std::uint_least32_t>(has_extra_digit)
 								: digits.span - 1u + static_cast<::std::uint_least32_t>(has_extra_digit)};
 	auto const exponent{static_cast<::std::int_least32_t>(
-		converted_exponent + (binary32 ? 7 : 15) + static_cast<::std::int_least32_t>(has_extra_digit))};
+		converted_exponent + (binary32 ? 7 : 15) +
+		static_cast<::std::int_least32_t>(has_extra_digit))};
 	bool use_fixed{};
 	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::fixed)
 	{
@@ -1190,15 +1213,18 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			converted.exponent, converted.last_digit, converted.has_last_digit);
 }
 
-// GCC 14-15 Linux System V x86-64 binary64 fixed-direct entry.  Keeping the
+// GCC 13-15 Linux System V x86-64 binary64 fixed-direct entry.  Keeping the
 // selected fixed band out of the general layout decision shortens the live range
 // between DA conversion and pshufb emission.  It is semantically identical to
-// print_ascii_shortest.  Other ABIs and compiler majors retain the compact
-// generic entry; extending this closed set requires frame, spill, call, constant-
-// load, branch and linked-text-size evidence.
+// print_ascii_shortest.  GCC 13 uses this entry only for the regular-normal hot
+// leaf; its subnormal and irregular cases remain in the generic fallback because
+// outlining those cases with the GCC 14-16 policy increased measured subnormal
+// latency.  Other ABIs and compiler majors retain the compact generic entry;
+// extending this closed set requires frame, spill, call, constant-load, branch
+// and linked-text-size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 15
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fixed_direct(
 	char *destination, conversion_result converted) noexcept

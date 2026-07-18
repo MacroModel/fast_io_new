@@ -125,6 +125,34 @@ int main()
 		return 1;
 	}
 
+	// Binary64 values with raw exponent at least 1075 are exact integers and use
+	// the P1-P14 direct integer writer.  P0 must remain on the generic terminal
+	// path because JSON still requires a floating marker even though no fractional
+	// digits were requested.  Exercise both format aliases, punctuation choices,
+	// signs and a non-narrow destination at the first qualifying exponent.
+	constexpr double exact_integer{4503599627370496.0};
+	auto const exact_integer_fixed{::fast_io::concat_std(
+		fixed<preserving_mode, nearest>(exact_integer, 0u))};
+	auto const exact_integer_fixed_json{::fast_io::concat_std(json_float(
+		fixed<preserving_mode, nearest>(exact_integer, 0u)))};
+	auto const exact_integer_decimal_json{::fast_io::concat_std(json_float(
+		decimal<preserving_mode, nearest>(exact_integer, 0u)))};
+	auto const exact_integer_comma_json{::fast_io::concat_std(json_float(
+		comma_fixed<preserving_mode, nearest>(exact_integer, 0u)))};
+	auto const exact_integer_negative_json{::fast_io::concat_std(json_float(
+		fixed<preserving_mode, nearest>(-exact_integer, 0u)))};
+	auto const exact_integer_wide_json{::fast_io::wconcat_std(json_float(
+		fixed<preserving_mode, nearest>(exact_integer, 0u)))};
+	if (exact_integer_fixed != "4503599627370496" ||
+		exact_integer_fixed_json != "4503599627370496.0" ||
+		exact_integer_decimal_json != "4503599627370496.0" ||
+		exact_integer_comma_json != "4503599627370496,0" ||
+		exact_integer_negative_json != "-4503599627370496.0" ||
+		exact_integer_wide_json != L"4503599627370496.0")
+	{
+		return 1;
+	}
+
 	// Exercise the public binary16 promotion path only when the frontend exposes
 	// that source type.  Targets without binary16 cannot form the triggering
 	// value and return successfully; binary32 has a different shortest carrier

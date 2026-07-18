@@ -9671,6 +9671,10 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_defin
 	char_type *iter, ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
 	::std::int_least32_t e10) noexcept
 {
+	// The fixed specialization is the common terminal materializer reached by the
+	// generic fallback and by the finalize-only regular-miss leaf.  Both callers
+	// supply the same finalized (m10, e10) pair, so converging here shares the
+	// complete generic fixed renderer without changing presentation semantics.
 	if constexpr (mt == ::fast_io::manipulators::floating_format::fixed)
 	{
 		return ::fast_io::details::print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(iter, m10, e10);
@@ -9701,20 +9705,23 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_with_
 	}
 }
 
-// GCC 14--16 Linux System V x86-64 LP64 use outlined subnormal, irregular and
-// generic fallback entries around the SSSE3/SSE4.1 ASCII writer.  This prevents
-// their normalization and generic renderer state from extending the regular
-// shortest path's live range.  Other GNU majors and x86 ABIs retain the portable
-// entry; no empirical layout is inferred across an ABI or compiler boundary.
+// GCC 13--16 Linux System V x86-64 LP64 use a compact regular-normal entry around
+// the SSSE3/SSE4.1 ASCII writer.  This prevents normalization and generic-renderer
+// state from extending the predominant shortest path's live range.  GCC 14--16
+// use the specialized subnormal and irregular entries below.  GCC 13 deliberately
+// sends both rare classes to the generic fallback: applying the later-major
+// placement to GCC 13 improved regular values but increased measured subnormal
+// latency by about thirty percent.  Other GNU majors and x86 ABIs retain the
+// portable entry; no empirical layout is inferred across either boundary.
 // All entries consume the same DA conversion_result and fall back before
 // committing an unsupported fixed layout.  Revalidate frame size, aggregate
 // spills, calls, constants, branches and linked text before extending this
-// closed set.  The three `noinline` attributes below enforce the measured
+// closed set.  The `noinline` attributes below enforce the measured
 // layout; a compiler that cannot express them still executes the same conversions
 // and fallback rules, but may merge their live ranges into the caller.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
 // The subnormal entry owns normalization and a possible fixed-format retry.
 // Its separate boundary is measured for the selected GCC/x86 set, not inferred
 // from subnormal arithmetic.
@@ -9811,6 +9818,13 @@ inline char_type *print_rsvflt_da_ascii_irregular(
 		flt, comma, uppercase_e, mt, json_float>(iter, finalized.m10, finalized.e10);
 }
 
+template <typename flt, bool comma, bool uppercase_e, bool json_float,
+		  ::std::integral char_type>
+[[nodiscard]] inline char_type *print_rsvflt_da_ascii_finalize_fixed(
+	char_type *iter, ::std::uint_least64_t significand,
+	::std::int_least32_t exponent, ::std::uint_least32_t last_digit,
+	bool has_last_digit) noexcept;
+
 // The generic fallback retains conversion and presentation state for cases the
 // direct ASCII writer cannot commit (notably fixed layouts).  The selected
 // GCC/x86 matrix measured the outlined boundary; attribute absence changes only
@@ -9835,6 +9849,49 @@ inline char_type *print_rsvflt_da_ascii_fallback(
 		value.json_float = json_float;
 		return value;
 	}()};
+#if __GNUC__ == 13
+	using rare_trait = ::fast_io::details::iec559_traits<flt>;
+	if constexpr (rare_trait::mbits == 52u && rare_trait::ebits == 11u &&
+				  mt != ::fast_io::manipulators::floating_format::fixed)
+	{
+		/*
+		The GCC-13 regular-normal caller returns before reaching this leaf for
+		non-fixed presentations.  Consequently exponent zero means subnormal,
+		while a nonzero exponent necessarily accompanies a zero explicit
+		mantissa and therefore selects DA's asymmetric power-of-two interval.
+		Encoding that proved precondition here removes the otherwise unreachable
+		regular conversion and writer from every rare specialization.
+
+		The subnormal expression is exactly `to_conversion_result` after its
+		raw-exponent-zero normalization: binary64 receives the unchanged explicit
+		mantissa and effective raw exponent one.  The irregular expression is the
+		same function's other branch: implicit bit 2^52 at binary exponent
+		`raw_exponent - 1075`.  Presentation and finalization are unchanged.
+		Fixed is excluded because a regular direct writer may reject its layout
+		before committing bytes and then legitimately reaches this fallback.
+		*/
+		if (exponent == 0u)
+		{
+			auto const converted{::fast_io::details::da::compute_binary64(
+				static_cast<::std::uint_least64_t>(mantissa), 1u)};
+			auto const finalized{::fast_io::details::da::trim_trailing_zeros(
+				::fast_io::details::da::finalize<flt>(converted))};
+			return ::fast_io::details::print_rsvflt_decimal_define_impl<
+				flt, comma, uppercase_e, mt, json_float>(
+				iter, finalized.m10, finalized.e10);
+		}
+		constexpr ::std::uint_least64_t implicit_bit{
+			static_cast<::std::uint_least64_t>(1u) << rare_trait::mbits};
+		constexpr ::std::int_least32_t exponent_offset{
+			(static_cast<::std::int_least32_t>(1u) << (rare_trait::ebits - 1u)) - 1 +
+			static_cast<::std::int_least32_t>(rare_trait::mbits)};
+		auto const converted{::fast_io::details::da::compute_irregular(
+			implicit_bit,
+			static_cast<::std::int_least32_t>(exponent) - exponent_offset)};
+		return ::fast_io::details::da::print_ascii_shortest<flt, direct_flags>(
+			iter, converted);
+	}
+#endif
 	auto const converted{::fast_io::details::da::to_conversion_result<flt>(
 		mantissa, static_cast<::std::int_least32_t>(exponent))};
 	if (exponent != 0u)
@@ -9849,10 +9906,48 @@ inline char_type *print_rsvflt_da_ascii_fallback(
 			return direct;
 		}
 	}
+	if constexpr (mt == ::fast_io::manipulators::floating_format::fixed)
+	{
+		return ::fast_io::details::print_rsvflt_da_ascii_finalize_fixed<
+			flt, comma, uppercase_e, json_float>(iter, converted.significand,
+												 converted.exponent, converted.last_digit, converted.has_last_digit);
+	}
+	else
+	{
+		auto const finalized{::fast_io::details::da::trim_trailing_zeros(
+			::fast_io::details::da::finalize<flt>(converted))};
+		return ::fast_io::details::print_rsvflt_decimal_define_impl<
+			flt, comma, uppercase_e, mt, json_float>(iter, finalized.m10, finalized.e10);
+	}
+}
+
+// A direct fixed-layout miss has already completed DA conversion.  This rare
+// leaf accepts scalar carrier fields rather than the original binary fields, so
+// it cannot repeat the cache multiplication performed by to_conversion_result.
+// Scalar parameters also avoid the stack-passed 24-byte conversion_result under
+// the measured System V AMD64 ABI.  finalize() is an exact representation
+// change, and trim_trailing_zeros() preserves its value while producing the
+// canonical input expected by the character-generic fixed renderer.  The
+// noinline boundary is a code-placement policy confined by the enclosing
+// compiler/ABI guard; attribute availability cannot change the conversion.
+template <typename flt, bool comma, bool uppercase_e, bool json_float,
+		  ::std::integral char_type>
+[[nodiscard]]
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline char_type *print_rsvflt_da_ascii_finalize_fixed(
+	char_type *iter, ::std::uint_least64_t significand,
+	::std::int_least32_t exponent, ::std::uint_least32_t last_digit,
+	bool has_last_digit) noexcept
+{
+	::fast_io::details::da::conversion_result const converted{
+		significand, exponent, last_digit, has_last_digit};
 	auto const finalized{::fast_io::details::da::trim_trailing_zeros(
 		::fast_io::details::da::finalize<flt>(converted))};
 	return ::fast_io::details::print_rsvflt_decimal_define_impl<
-		flt, comma, uppercase_e, mt, json_float>(iter, finalized.m10, finalized.e10);
+		flt, comma, uppercase_e, ::fast_io::manipulators::floating_format::fixed,
+		json_float>(iter, finalized.m10, finalized.e10);
 }
 #endif
 
@@ -10121,14 +10216,15 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			}()};
 			// GCC-specific shortest-emission boundaries.  Regular binary64 values
 			// keep conversion and the selected renderer close; irregular/subnormal
-			// values use the outlined entries above.  The portable branch below is
-			// semantically identical.  GCC 14--16 Linux System V x86-64 LP64 are the
-			// closed recorded matrix; every other compiler/ABI uses the portable entry.
+			// values use a compiler-major-specific rare entry.  The portable branch
+			// below is semantically identical.  GCC 13--16 Linux System V x86-64 LP64
+			// are the closed recorded matrix; every other compiler/ABI uses the
+			// portable entry.
 			// These fences protect code shape only and require per-major assembly,
 			// benchmark and linked-text-size validation before extension.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16
 			if constexpr (trait::mbits == 52u && trait::ebits == 11u)
 			{
 				if (exponent != 0u && mantissa != 0u)
@@ -10137,7 +10233,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 						(static_cast<::std::uint_least64_t>(1u) << trait::mbits)};
 					auto const regular{::fast_io::details::da::compute_binary64(
 						binary_significand, exponent)};
-					// GCC 14-15 keep selected decimal fixed bands in the direct entry so
+					// GCC 13-15 keep selected decimal fixed bands in the direct entry so
 					// the already-known layout does not flow through the general decision.
 					// GCC 16 uses the unified path after its constant/load schedule changed.
 					// The exponent bands are formatting-equivalent and were chosen from
@@ -10171,13 +10267,25 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 					}
 					else
 					{
-						return ::fast_io::details::print_rsvflt_da_ascii_fallback<
-							flt, comma, uppercase_e, mt, json_float>(iter, mantissa, exponent);
+						return ::fast_io::details::print_rsvflt_da_ascii_finalize_fixed<
+							flt, comma, uppercase_e, json_float>(iter, regular.significand,
+																 regular.exponent, regular.last_digit, regular.has_last_digit);
 					}
 				}
 			}
 			if constexpr (trait::mbits == 52u && trait::ebits == 11u)
 			{
+#if __GNUC__ == 13
+				// GCC 13 obtains the compact regular leaf from the outer placement
+				// boundary.  Reaching the non-fixed fallback therefore proves either a
+				// subnormal encoding or the asymmetric zero-mantissa normal case; the
+				// fallback records that precondition while retaining the same DA carrier
+				// and presentation rules.  Keeping subnormal finalization in that single
+				// leaf avoids the regression measured with the GCC 14--16 normalization
+				// and ASCII-direct policy.
+				return ::fast_io::details::print_rsvflt_da_ascii_fallback<
+					flt, comma, uppercase_e, mt, json_float>(iter, mantissa, exponent);
+#else
 				if (exponent != 0u)
 				{
 					return ::fast_io::details::print_rsvflt_da_ascii_irregular<
@@ -10190,6 +10298,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 				}
 				return ::fast_io::details::print_rsvflt_da_ascii_fallback<
 					flt, comma, uppercase_e, mt, json_float>(iter, mantissa, exponent);
+#endif
 			}
 			else
 			{
@@ -10268,6 +10377,37 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			return ::fast_io::details::print_rsvflt_decimal_define_impl<flt, comma, uppercase_e, mt, json_float>(
 				iter, finalized.m10, finalized.e10);
 #endif
+		}
+		else if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
+						   ((trait::mbits == 23u && trait::ebits == 8u) ||
+							(trait::mbits == 52u && trait::ebits == 11u)) &&
+						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
+						   ((sizeof(char_type) == 4u &&
+							 (::std::same_as<char_type, wchar_t> || ::std::same_as<char_type, char32_t>)) ||
+							(::std::same_as<char_type, char16_t> && trait::mbits == 52u && trait::ebits == 11u)))
+		{
+			/*
+			DA's interval computation is independent of the destination character
+			encoding.  Finalizing its carrier produces the same unique shortest
+			(m10, e10) pair consumed by the character-generic renderer, whose digit
+			and punctuation literals already model the destination character type.
+			This route therefore changes conversion work only; it does
+			not widen through a temporary byte buffer and it remains exact-store safe.
+
+			The destination restriction is an empirical code-generation policy, not a
+			numeric limitation.  Four-byte wchar_t/char32_t improved for both binary32
+			and binary64 across the measured M-series, GCC x86-64, and Clang x86-64
+			matrix; char16_t improved uniformly for binary64.  Binary32 char16_t and
+			one-byte destinations remain on the existing carrier because their
+			compiler/type pairs were not uniformly faster.  Revalidate latency and
+			linked text for every admitted type-width pair.
+			*/
+			auto const converted{::fast_io::details::da::to_conversion_result<flt>(
+				mantissa, static_cast<::std::int_least32_t>(exponent))};
+			auto const finalized{::fast_io::details::da::trim_trailing_zeros(
+				::fast_io::details::da::finalize<flt>(converted))};
+			return ::fast_io::details::print_rsvflt_decimal_define_impl<
+				flt, comma, uppercase_e, mt, json_float>(iter, finalized.m10, finalized.e10);
 		}
 		else if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
 						   sizeof(flt) < sizeof(float) &&
@@ -11594,7 +11734,21 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 			precision_mode ==
 				::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero)
 		{
-			if (15u <= precision)
+			// A normal binary64 with raw exponent at least bias + mantissa bits
+			// has a nonnegative final binary exponent and is therefore an exact
+			// integer.  For fractional fixed/decimal output its representation is
+			// that integer followed by the requested decimal point and zero field;
+			// no rounding policy can change those appended zeroes.  Admit this
+			// proved subset at P1-P14 while retaining the existing P15+ window for
+			// values with a fractional binary component.  P0 deliberately remains on
+			// the generic path because its terminal renderer owns the JSON `.0` suffix
+			// policy.  The terminal integer writer is already outlined and shared, so
+			// this adds neither a table nor a second arithmetic implementation.
+			constexpr ::std::uint_least32_t nonfractional_raw_exponent{
+				((static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u) +
+				static_cast<::std::uint_least32_t>(trait::mbits)};
+			if (15u <= precision ||
+				(precision && nonfractional_raw_exponent <= exponent))
 			{
 				auto binary_mantissa{static_cast<::std::uint_least64_t>(mantissa)};
 				::std::int_least32_t binary_exponent{};
