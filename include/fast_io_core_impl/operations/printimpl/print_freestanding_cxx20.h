@@ -4040,6 +4040,86 @@ inline constexpr ::std::size_t print_n_scatter_total_size(
 	}
 }
 
+/// @brief Tests print's retained byte threshold without multiplying a character length by its width.
+/// @details `ceil(minimum_bytes / sizeof(char_type))` is the first character count whose object representation spans
+///          the required byte extent. Division and remainder preserve the proof when multiplying an adversarial
+///          descriptor length by `sizeof(char_type)` would overflow size_t.
+template <::std::integral char_type>
+inline constexpr bool print_scatter_materialize_payload_meets_read_prfch_threshold(
+	::std::size_t length) noexcept
+{
+	constexpr ::std::size_t character_width{sizeof(char_type)};
+	constexpr ::std::size_t minimum_bytes{
+		::fast_io::print_scatter_materialize_read_prfch_minimum_payload_bytes};
+	constexpr ::std::size_t minimum_characters{
+		minimum_bytes / character_width +
+		static_cast<::std::size_t>(minimum_bytes % character_width != 0u)};
+	return minimum_characters <= length;
+}
+
+/// @brief Carries the exact scatter-prefix size and the two bounded run-time prefetch statistics.
+/// @details `nonempty_count` saturates at the policy threshold and therefore cannot overflow. The payload predicate is
+///          meaningful only at run time; constant evaluation leaves the statistics at their neutral defaults and uses
+///          the same historical materializer selected before prefetch support existed.
+struct print_scatter_materialize_read_prfch_size_result
+{
+	::std::size_t total_size{};
+	::std::size_t nonempty_count{};
+	bool every_nonempty_payload_is_large{true};
+};
+
+/// @brief Measures a proved scatter prefix and classifies prefetch eligibility in that same required traversal.
+/// @details This is instantiated only after the site concept proves the platform, static trip count, and every
+///          normalized source's provenance. No payload base is inspected here. The complete prefix is rejected when
+///          any nonempty range is below four KiB, retaining the all-large rule which excluded the measured 7--31
+///          percent small/hot regressions. The exact-size addition has the historical optional-plan semantics: SIZE_MAX
+///          returns control to the native scatter path rather than turning a valid independent descriptor chain into a
+///          fatal allocation request.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::details::decay::print_scatter_materialize_read_prfch_size_result
+print_n_scatter_total_size_with_read_prfch(T &t,
+#if __has_cpp_attribute(maybe_unused)
+										   [[maybe_unused]]
+#endif
+										   Args &...args)
+{
+	static_assert(n != 0u);
+	using nocvreft = ::std::remove_cvref_t<T>;
+	::std::size_t current{};
+	if constexpr (!::std::same_as<nocvreft, ::fast_io::io_null_t>)
+	{
+		current = print_scatter_define(::fast_io::io_reserve_type<char_type, nocvreft>, t).len;
+	}
+
+	::fast_io::details::decay::print_scatter_materialize_read_prfch_size_result result{};
+	if constexpr (1u < n)
+	{
+		result = ::fast_io::details::decay::print_n_scatter_total_size_with_read_prfch<n - 1u, char_type>(
+			args...);
+	}
+	result.total_size =
+		::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+			current, result.total_size);
+	if (!::std::is_constant_evaluated() && current != 0u)
+	{
+		if (result.nonempty_count <
+			::fast_io::print_scatter_materialize_read_prfch_minimum_descriptor_count)
+		{
+			++result.nonempty_count;
+		}
+		result.every_nonempty_payload_is_large =
+			result.every_nonempty_payload_is_large &&
+			::fast_io::details::decay::print_scatter_materialize_payload_meets_read_prfch_threshold<
+				char_type>(current);
+	}
+	return result;
+}
+
 /// @brief    Copies N scatter-printable/null arguments into a contiguous buffer.
 /// @tparam   n         the number of argument positions to consume
 /// @tparam   char_type the print character type
@@ -4093,9 +4173,136 @@ inline constexpr char_type *print_n_scatter_materialize(char_type *ptr,
 	}
 }
 
+/// @brief Copies one run-time-proved large scatter behind a deliberate code-generation boundary.
+/// @details The hinted strategy admits only payloads of at least four KiB, so one ordinary call is negligible beside
+///          the required memory transfer. Keeping the copy out of line is nevertheless material for large variadic
+///          print sites: when GCC inlines a dynamic-size memcpy after each hint, its size/alias versions can clone the
+///          following lookahead repeatedly. A 32-source assembly probe produced hundreds of duplicate prefetch sites.
+///          This boundary leaves one hint and one call per source while the compile-time-disabled and run-time-false
+///          paths continue to use the untouched tiny-scatter-aware materializer. It is non-constexpr by construction;
+///          the selector rejects constant evaluation before this function can be called.
+template <::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline char_type *print_scatter_materialize_large_copy_n(
+	char_type const *first, ::std::size_t count, char_type *result) noexcept
+{
+	return ::fast_io::details::non_overlapped_copy_n(first, count, result);
+}
+
+/// @brief Consumes a proved scatter prefix while retaining one nonempty source for one-step lookahead.
+/// @details Each scatter CPO is invoked exactly once in this copy traversal. Null and empty sources are skipped before
+///          their base can become a hint target. On observing the next nonempty range, the helper first hints that
+///          range and then copies the retained current range, preserving physical copy order. The source-side borrowed
+///          marker already proves that the sizing observation and this observation expose the same length and bytes;
+///          the read-prefetch marker independently proves that every exposed live range is ordinary cacheable memory.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr void print_n_scatter_materialize_with_read_prfch_step(
+	char_type *&ptr, ::fast_io::basic_io_scatter_t<char_type> &current, bool &has_current, T &t,
+#if __has_cpp_attribute(maybe_unused)
+	[[maybe_unused]]
+#endif
+	Args &...args)
+{
+	static_assert(n != 0u);
+	using nocvreft = ::std::remove_cvref_t<T>;
+	if constexpr (!::std::same_as<nocvreft, ::fast_io::io_null_t>)
+	{
+		auto const next{
+			print_scatter_define(::fast_io::io_reserve_type<char_type, nocvreft>, t)};
+		if (next.len != 0u)
+		{
+			if (has_current)
+			{
+				if (!::std::is_constant_evaluated())
+				{
+					// `next.len != 0` proves that `next.base` names the live range promised by the source marker.
+					::fast_io::prfch<
+						::fast_io::prfch_mode::read,
+						::fast_io::print_scatter_materialize_read_prfch_level,
+						::fast_io::print_scatter_materialize_read_prfch_retention>(next.base);
+				}
+				// The run-time gate proved this repeatable nonempty descriptor is at least four KiB. Bypassing the shared
+				// tiny-scatter switch is therefore equivalent and prevents its 0--16 dispatch from being cloned at every
+				// source position in a large variadic print specialization.
+				ptr = ::fast_io::details::decay::print_scatter_materialize_large_copy_n(
+					current.base, current.len, ptr);
+			}
+			current = next;
+			has_current = true;
+		}
+	}
+	if constexpr (1u < n)
+	{
+		::fast_io::details::decay::print_n_scatter_materialize_with_read_prfch_step<n - 1u,
+			char_type>(ptr, current, has_current, args...);
+	}
+}
+
+/// @brief Copies N proved scatter/null arguments with the measured next-nonempty-source read hint.
+/// @details The one-descriptor delay is only metadata; output bytes remain in source order. The final retained range is
+///          copied after the traversal because it has no next source to hint. Callers must not enter this helper until
+///          the existing size traversal has proved the run-time count and all-large payload threshold.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_n_scatter_materialize_with_read_prfch(
+	char_type *ptr, T &t, Args &...args)
+{
+	static_assert(n != 0u);
+	::fast_io::basic_io_scatter_t<char_type> current{};
+	bool has_current{};
+	::fast_io::details::decay::print_n_scatter_materialize_with_read_prfch_step<n, char_type>(
+		ptr, current, has_current, t, args...);
+	if (has_current)
+	{
+		// The final pending descriptor satisfies the same all-large gate as every earlier copied descriptor.
+		ptr = ::fast_io::details::decay::print_scatter_materialize_large_copy_n(
+			current.base, current.len, ptr);
+	}
+	return ptr;
+}
+
+/// @brief Selects the hinted or historical scatter materializer without adding work to a rejected run.
+/// @details The compile-time-false instantiation contains neither eligibility branches nor lookahead code. For an
+///          admitted strategy, a false run-time gate calls `print_n_scatter_materialize` directly; this is the original
+///          materializer and consequently performs no next-source search. Constant evaluation also takes that path, so
+///          compile-time print semantics never depend on a processor hint.
+template <bool read_prfch, ::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_n_scatter_materialize_selected(
+	char_type *ptr, bool runtime_read_prfch, T &t, Args &...args)
+{
+	if constexpr (read_prfch)
+	{
+		if (!::std::is_constant_evaluated() && runtime_read_prfch)
+		{
+			return ::fast_io::details::decay::print_n_scatter_materialize_with_read_prfch<n, char_type>(
+				ptr, t, args...);
+		}
+	}
+	return ::fast_io::details::decay::print_n_scatter_materialize<n, char_type>(ptr, t, args...);
+}
+
 /// @brief    Tries to emit a scatter-only prefix as one contiguous output range.
 /// @tparam   needprintlf   true when the final emitted output should append a newline
 /// @tparam   position      the number of argument positions included in the scatter prefix
+/// @tparam   descriptor_capacity the number of source descriptors, excluding nulls and a synthetic newline
 /// @tparam   char_type     the print character type
 /// @tparam   outputstmtype the decayed output stream reference type
 /// @tparam   T             the current argument type
@@ -4104,10 +4311,13 @@ inline constexpr char_type *print_n_scatter_materialize(char_type *ptr,
 /// @param    t             the current argument
 /// @param    args          the remaining arguments
 /// @return   bool true when the prefix was emitted without building scatter descriptors
-template <bool needprintlf, ::std::size_t position, ::std::integral char_type, typename outputstmtype, typename T,
-		  typename... Args>
+template <bool needprintlf, ::std::size_t position, ::std::size_t descriptor_capacity,
+		  ::std::integral char_type, typename outputstmtype, typename T, typename... Args>
 inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &optstm, T &t, Args &...args)
 {
+	constexpr bool read_prfch{
+		::fast_io::print_scatter_materialize_read_prfch_strategy<
+			::fast_io::details::native_prfch_platform, position, descriptor_capacity, T, Args...>};
 	constexpr bool has_direct_scatter{[]() constexpr {
 		if constexpr (::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>)
 		{
@@ -4129,10 +4339,31 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 	{
 		// A coalescing-capable stream measures the complete scatter prefix before choosing storage. The newline is part
 		// of the same proposed buffer; an unavailable total must return to the ordinary scatter write, not terminate.
+		::std::size_t source_size{};
+		bool runtime_read_prfch{};
+		if constexpr (read_prfch)
+		{
+			auto const measurement{
+				::fast_io::details::decay::print_n_scatter_total_size_with_read_prfch<position,
+					char_type>(t, args...)};
+			source_size = measurement.total_size;
+			if (!::std::is_constant_evaluated())
+			{
+				runtime_read_prfch =
+					measurement.every_nonempty_payload_is_large &&
+					measurement.nonempty_count ==
+						::fast_io::print_scatter_materialize_read_prfch_minimum_descriptor_count;
+			}
+		}
+		else
+		{
+			// A rejected platform, capacity, or source proof retains the exact historical sizing instantiation.
+			source_size = ::fast_io::details::decay::print_n_scatter_total_size<position, char_type>(
+				t, args...);
+		}
 		::std::size_t const total_size{
 			::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
-				::fast_io::details::decay::print_n_scatter_total_size<position, char_type>(t, args...),
-				static_cast<::std::size_t>(needprintlf))};
+				source_size, static_cast<::std::size_t>(needprintlf))};
 		if (total_size == SIZE_MAX)
 		{
 			// Retained scatter provenance explicitly permits this second observation by the normal descriptor path.
@@ -4143,6 +4374,10 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 			// A zero-sized scatter prefix completes without touching the output stream.
 			return true;
 		}
+		auto materialize = [&](char_type *destination) constexpr {
+			return ::fast_io::details::decay::print_n_scatter_materialize_selected<read_prfch,
+				position, char_type>(destination, runtime_read_prfch, t, args...);
+		};
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
 		{
 			// Buffered streams prefer direct materialization into the current put area.
@@ -4151,8 +4386,7 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 			if (static_cast<::std::size_t>(end - curr) >= total_size)
 			{
 				// The put area can hold the full scatter prefix, so no temporary stack buffer is needed.
-				char_type *ptr{
-					::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(curr, t, args...)};
+				char_type *ptr{materialize(curr)};
 				if constexpr (needprintlf)
 				{
 					// The line variant appends the trailing newline inside the same output-buffer commit.
@@ -4175,8 +4409,7 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 				{
 					// A policy threshold inside the stack budget uses one fixed stack buffer.
 					char_type buffer[threshold_chars];
-					char_type *ptr{::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(
-						buffer, t, args...)};
+					char_type *ptr{materialize(buffer)};
 					if constexpr (needprintlf)
 					{
 						// The line variant appends its newline inside the same stack allocation.
@@ -4189,8 +4422,7 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 				{
 					// A policy threshold above the stack budget allocates only the measured output size.
 					::fast_io::details::local_operator_new_array_ptr<char_type> buffer(total_size);
-					char_type *ptr{::fast_io::details::decay::print_n_scatter_materialize<position, char_type>(
-						buffer.ptr, t, args...)};
+					char_type *ptr{materialize(buffer.ptr)};
 					if constexpr (needprintlf)
 					{
 						// The line variant appends its newline inside the same dynamic allocation.
@@ -4743,8 +4975,11 @@ inline constexpr void print_controls_scatters(outputstmtype &optstm, T &t, Args 
 	using scatter_type = ::std::conditional_t<
 		::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>,
 		::fast_io::io_scatter_t, ::fast_io::basic_io_scatter_t<char_type>>;
-	if (::fast_io::details::decay::print_controls_scatters_try_materialize<needprintlf, position, char_type>(
-			optstm, t, args...))
+	static_assert(static_cast<::std::size_t>(needprintlf) <= scatterscount);
+	constexpr ::std::size_t source_scatter_capacity{
+		scatterscount - static_cast<::std::size_t>(needprintlf)};
+	if (::fast_io::details::decay::print_controls_scatters_try_materialize<
+			needprintlf, position, source_scatter_capacity, char_type>(optstm, t, args...))
 	{
 		return;
 	}

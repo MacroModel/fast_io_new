@@ -284,3 +284,33 @@ For any future fast_io/scnlib comparison:
    idle E-cores. Cross-class activity is allowed, but record it and reject a timing batch whose alternating samples
    show abnormal dispersion; package-power and memory traffic can perturb a nominally idle target core. Prefer a
    no-compilation confirmation when practical. On Apple M4, use exactly one process/thread.
+
+## Isolated scan-prefetch policy probe
+
+`scan_prefetch_probe.cc` tests two prefetch *sites* without modifying the scan dispatcher or a numeric conversion
+algorithm. In `read` mode, both kernels call the same noinline branchy token consumer; the candidate adds exactly one
+bounded L1/keep read hint before that call. In `refill` mode, both kernels perform the same `read` from `/dev/zero` into
+the destination; the candidate adds exactly one bounded L1/keep write hint. The two directions are intentionally not
+combined because a producer write and a later parser read have different instruction lowering and cache costs.
+
+`hot` mode reuses one allocation, matching the steady state of an owned input buffer. `cold` mode visits a shuffled
+ring larger than the measured machine's last-level cache. Cache scrubbing occurs outside each timed interval, sample
+order alternates, and equal checksums are required before a pair is accepted. `distance < extent` is checked before
+forming the hinted address, so the probe never relies on a one-past or unrelated address. The executable reports
+candidate/baseline paired medians; values below one favor the hint.
+
+Build and run it only in the remote Linux `/tmp` tree, after selecting an idle CPU:
+
+```sh
+g++-15 -std=c++23 -O3 -march=native -Iinclude \
+  benchmark/0020.scan_concepts/scan_prefetch_probe.cc -o scan-prefetch-probe
+
+taskset -c <idle-p-cpu> ./scan-prefetch-probe \
+  --operation read --cache cold --extent 16384 --distance 1024 \
+  --target-bytes 268435456 --cold-bytes 134217728 --scrub-bytes 67108864 \
+  --samples 11 --warmups 3 --seed 11400714819323198485
+```
+
+The probe is an admission test, not a request to emit an instruction. A positive cold-only result does not authorize a
+site used on a hot reused buffer, and instruction availability does not replace explicit source/destination provenance,
+live in-range bounds, run-time thresholds, or a constant-evaluation no-op.

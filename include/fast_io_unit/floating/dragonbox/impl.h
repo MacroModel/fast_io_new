@@ -2769,7 +2769,7 @@ binary64_scientific_precision_msvc_runtime(
 #endif
 
 // This precision specialization is attached to the native-u128 exact backend:
-// P20-P34 results require u128 coefficients, while
+// P20-P38 results require u128 coefficients, while
 // P16-P19 share the same dispatch and fallback infrastructure.  All four are
 // mathematically representable in u64; the separately proved MSVC-x64 P16-P17
 // carrier above is the only no-u128 exception.  P18-P19 and every other target
@@ -4000,13 +4000,13 @@ compute_binary64_p34_precision_carrier(
 inline constexpr __uint128_t binary64_p34_precision_coefficient_mask{
 	(static_cast<__uint128_t>(1u) << 113u) - 1u};
 
-// P34 is intentionally separate from the P20-P33 runtime writer because its
-// proof retains a second fractional word.  A successful coefficient has exactly
-// 34 digits and splits into a fixed 15-digit high part plus the existing padded
-// 19-digit limb.  Writing directly into the final scientific layout avoids an
-// intermediate numeric digit window, adds no table, and preserves every
-// requested trailing zero.  The caller restricts this writer to normal binary64
-// values, preserved scientific output and one of the six nearest policies.
+// P34 retains a constant scientific writer because paired M4 AB/BA measurements
+// showed a 3--5% regression when this path inherited the runtime P35-P38 width.
+// The coefficient still comes from the shared P34 DA proof; only presentation is
+// specialized.  Its fixed 15-digit high part and padded 19-digit low limb let the
+// compiler encode every offset and writer length immediately, while an ambiguity
+// rejection occurs before the destination is modified.  The caller admits only
+// finite normal binary64, preserved scientific output and the six nearest rules.
 template <bool comma, bool uppercase_e, ::std::integral char_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 print_rsvflt_binary64_scientific_p34_precision_impl(
@@ -7894,7 +7894,7 @@ materialize_binary64_common_significant_precision(
 	decimal.exponent = real_exponent + 1 -
 		static_cast<::std::int_least32_t>(significant);
 
-	// P20-P34 always crosses the exact window's existing 1e19 limb.  Reuse its
+	// P20-P38 always crosses the exact window's existing 1e19 limb.  Reuse its
 	// reciprocal division and digit writers; no precision table or format-
 	// specific power cache is introduced.
 	auto const division{::fast_io::details::
@@ -8071,14 +8071,11 @@ print_rsvflt_binary64_common_significant_precision_dispatch(
 				iter, mantissa, raw_exponent, significant);
 }
 
-// P34 uses the same presentation-independent decimal renderer as P23-P33, but
-// its numeric proof retains a second 64-bit fractional word.  Keeping this
-// equality case behind a separate outlined boundary prevents that longer
-// multiply/carry chain from entering the P23-P33 dispatcher or its miss path.
-// The carrier packs the complete 34-digit coefficient and leading exponent;
-// zero denotes an ambiguity rejection before any character is written.  All
-// six nearest policies may consume a success because the closed half-boundary
-// interval, including every possible tie, was rejected by the numeric helper.
+// P34 keeps its original constant renderer arguments.  Paired M4 AB/BA data
+// demonstrated that passing its width through the P35-P38 runtime dispatcher
+// regressed several output modes by 2.4--5.4%.  This small adapter invokes the
+// existing general renderer rather than cloning it; its separate presentation
+// boundary is therefore code-generation evidence, not a second decimal rule.
 template <bool comma, bool uppercase_e,
 	::fast_io::manipulators::floating_format format, bool json_float,
 	::fast_io::manipulators::floating_precision precision_mode =
@@ -8113,19 +8110,13 @@ print_rsvflt_binary64_p34_precision_dispatch(
 	if constexpr (precision_mode ==
 		::fast_io::manipulators::floating_precision::significant)
 	{
-		// Retain the measured non-preserving body: its materializer trims the
-		// rounded coefficient before general or decimal selects a layout.
 		return ::fast_io::details::render_binary64_common_significant_precision<
 			comma, uppercase_e, format, json_float>(iter,
-				carrier & binary64_p34_precision_coefficient_mask,
-				static_cast<::std::int_least32_t>(carrier >> 113u) - 512, 34u);
+			carrier & binary64_p34_precision_coefficient_mask,
+			static_cast<::std::int_least32_t>(carrier >> 113u) - 512, 34u);
 	}
 	else
 	{
-		// Significant-preserve keeps all thirty-four digits.  Scientific
-		// fractional P33 instead applies the established non-preserving trim before
-		// its renderer places the radix point.  Both cases delegate punctuation,
-		// JSON and destination-character widening to the existing renderer.
 		constexpr bool preserve{::fast_io::details::
 			floating_precision_preserves_trailing_zero<precision_mode>};
 		auto const decimal{::fast_io::details::
@@ -8135,6 +8126,165 @@ print_rsvflt_binary64_p34_precision_dispatch(
 		return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 			double, comma, uppercase_e, format, precision_mode, json_float>(
 				iter, decimal, output_precision, 34u);
+	}
+}
+
+// P35-P38 coefficients consume up to 127 bits, leaving no room to pack the
+// decimal exponent as P34 does. A coefficient/exponent aggregate is larger
+// than sixteen bytes and is returned indirectly by both AArch64 and System V
+// x86-64 ABIs. Keep the mathematical result scalarized inside a constant-width
+// helper, then return the coefficient in the native u128 result registers and
+// write the exponent through one caller-owned scalar. Zero is an unambiguous
+// failure sentinel because a successful P35 coefficient is at least 10^34.
+// These definitions intentionally follow the complete P34 presentation block:
+// their emitted arithmetic must not perturb the measured alignment or address
+// order of the unchanged P34 fused and generic controls.
+template <::std::size_t digits>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr __uint128_t
+compute_binary64_p35_p38_precision_constant_carrier(
+	::std::uint_least64_t binary_significand,
+	::std::uint_least32_t raw_exponent,
+	::std::int_least32_t &real_exponent) noexcept
+{
+	static_assert(35u <= digits && digits <= 38u);
+	auto const converted{::fast_io::details::da::
+		compute_binary64_scientific_p35_p38_precision<digits>(
+			binary_significand, raw_exponent)};
+	if (!converted.success)
+	{
+		return 0u;
+	}
+	real_exponent = converted.exponent;
+	return converted.significand;
+}
+
+// One outlined runtime carrier owns all four constant arithmetic
+// specializations. This measured shape bounds the global numeric text at about
+// 1.9--2.6 KiB instead of cloning the 128x128 carry chain into every format,
+// precision mode and destination character type. The outline is a uniform
+// floating-layer code-size policy, not an ISA or compiler semantic choice.
+// Compilers without the optional GNU attribute retain ordinary inline cost
+// modelling; widening this policy with a target conditional requires paired
+// latency, linked-text, return-ABI and spill evidence.
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+[[nodiscard]] inline constexpr __uint128_t
+compute_binary64_p35_p38_precision_carrier(
+	::std::uint_least64_t mantissa,
+	::std::uint_least32_t raw_exponent,
+	::std::size_t significant,
+	::std::int_least32_t &real_exponent) noexcept
+{
+	constexpr ::std::uint_least64_t implicit_bit{
+		static_cast<::std::uint_least64_t>(1ULL) << 52u};
+	auto const binary_significand{mantissa | implicit_bit};
+	switch (significant)
+	{
+	case 35u:
+		return ::fast_io::details::
+			compute_binary64_p35_p38_precision_constant_carrier<35u>(
+				binary_significand, raw_exponent, real_exponent);
+	case 36u:
+		return ::fast_io::details::
+			compute_binary64_p35_p38_precision_constant_carrier<36u>(
+				binary_significand, raw_exponent, real_exponent);
+	case 37u:
+		return ::fast_io::details::
+			compute_binary64_p35_p38_precision_constant_carrier<37u>(
+				binary_significand, raw_exponent, real_exponent);
+	case 38u:
+		return ::fast_io::details::
+			compute_binary64_p35_p38_precision_constant_carrier<38u>(
+				binary_significand, raw_exponent, real_exponent);
+	default:
+		return 0u;
+	}
+}
+
+// P35-P38 share one runtime presentation boundary and one global numeric
+// carrier.  Their 117--127-bit coefficients leave no exponent-packing space,
+// so the carrier returns u128 and writes one scalar exponent.  A separate copy
+// of the general renderer is unnecessary: every mode delegates punctuation,
+// widening, EBCDIC and JSON behavior to the existing renderer.  Every numeric
+// failure precedes all writes; the caller admits only finite normal binary64 and
+// the six nearest policies, for which rejection of every possible tie proves a
+// common coefficient.
+template <bool comma, bool uppercase_e,
+	::fast_io::manipulators::floating_format format, bool json_float,
+	::fast_io::manipulators::floating_precision precision_mode =
+		::fast_io::manipulators::floating_precision::significant,
+	::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *
+print_rsvflt_binary64_p35_p38_precision_dispatch(
+	char_type *iter, ::std::uint_least64_t mantissa,
+	::std::uint_least32_t raw_exponent,
+	::std::size_t significant) noexcept
+{
+	constexpr bool significant_mode{
+		precision_mode ==
+			::fast_io::manipulators::floating_precision::significant ||
+		precision_mode == ::fast_io::manipulators::floating_precision::
+			significant_preserve_trailing_zero};
+	constexpr bool scientific_fractional_mode{
+		format == ::fast_io::manipulators::floating_format::scientific &&
+		::fast_io::details::
+			floating_precision_is_fractional<precision_mode>};
+	static_assert(significant_mode || scientific_fractional_mode);
+	if (significant - 35u >= 4u)
+	{
+		return nullptr;
+	}
+	::std::int_least32_t real_exponent;
+	auto const coefficient{::fast_io::details::
+		compute_binary64_p35_p38_precision_carrier(
+			mantissa, raw_exponent, significant, real_exponent)};
+	if (!coefficient)
+	{
+		return nullptr;
+	}
+	constexpr bool fused_scientific_preserve{
+		format == ::fast_io::manipulators::floating_format::scientific &&
+		::fast_io::details::
+			floating_precision_preserves_trailing_zero<precision_mode>};
+	if constexpr (fused_scientific_preserve)
+	{
+		auto const high_digits{significant - 19u};
+		auto const division{::fast_io::details::
+			exact_precision_window_divide_128_by_decimal_limb_full(coefficient)};
+		::fast_io::details::jeaiii::jeaiii_main_len<false, false>(
+			iter + 1u,
+			static_cast<::std::uint_least64_t>(division.quotient),
+			static_cast<::std::uint_least32_t>(high_digits));
+		::fast_io::details::jeaiii::jeaiii_main_len<false, true>(
+			iter + high_digits + 1u, division.remainder, 19u);
+		*iter = iter[1];
+		iter[1] = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+		return ::fast_io::details::print_rsv_fp_e_impl<double, uppercase_e>(
+			iter + significant + 1u, real_exponent);
+	}
+	else if constexpr (precision_mode ==
+		::fast_io::manipulators::floating_precision::significant)
+	{
+		return ::fast_io::details::render_binary64_common_significant_precision<
+			comma, uppercase_e, format, json_float>(iter,
+				coefficient, real_exponent, significant);
+	}
+	else
+	{
+		constexpr bool preserve{::fast_io::details::
+			floating_precision_preserves_trailing_zero<precision_mode>};
+		auto const decimal{::fast_io::details::
+			materialize_binary64_common_significant_precision<preserve>(
+				coefficient, real_exponent, significant)};
+		auto const output_precision{scientific_fractional_mode ?
+			significant - 1u : significant};
+		return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
+			double, comma, uppercase_e, format, precision_mode, json_float>(
+				iter, decimal, output_precision, significant);
 	}
 }
 
@@ -9020,15 +9170,25 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 								}
 							}
 						}
-						// Significant P34 is outside both P20-P33 intervals.  Its
-						// independent two-word helper proves both provisional integer
-						// widths and returns to this exact-window path only near the
-						// closed half-boundary ambiguity interval.
+						// Preserve P34's measured constant-width fused writer. P35-P38
+						// enter the separate runtime-width dispatcher only after their DA
+						// proof has excluded the closed half-boundary ambiguity interval.
 						if (significant == 34u) [[unlikely]]
 						{
 							auto const fixed_width_result{::fast_io::details::
 								print_rsvflt_binary64_scientific_p34_precision_impl<
 									comma, uppercase_e>(iter, binary_mantissa, exponent)};
+							if (fixed_width_result)
+							{
+								return fixed_width_result;
+							}
+						}
+						else if (significant - 35u < 4u) [[unlikely]]
+						{
+							auto const fixed_width_result{::fast_io::details::
+								print_rsvflt_binary64_p35_p38_precision_dispatch<
+									comma, uppercase_e, format, json_float, precision_mode>(
+										iter, binary_mantissa, exponent, significant)};
 							if (fixed_width_result)
 							{
 								return fixed_width_result;
@@ -9112,15 +9272,27 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_impl(
 									return fixed_width_result;
 								}
 							}
-							// Apple AArch64 keeps the equality probe at the same
+							// Apple AArch64 keeps the P34 equality probe at the same
 							// direct-scientific placement as the established wide ranges,
-							// preserving the P1-P19 public entry shape.
+							// preserving its constant fused call shape and the P1-P19 entry.
 							if (exponent && significant == 34u) [[unlikely]]
 							{
 								auto const fixed_width_result{::fast_io::details::
 									print_rsvflt_binary64_scientific_p34_precision_impl<
 										comma, uppercase_e>(iter,
 											static_cast<::std::uint_least64_t>(mantissa), exponent)};
+								if (fixed_width_result)
+								{
+									return fixed_width_result;
+								}
+							}
+							else if (exponent && significant - 35u < 4u) [[unlikely]]
+							{
+								auto const fixed_width_result{::fast_io::details::
+									print_rsvflt_binary64_p35_p38_precision_dispatch<
+										comma, uppercase_e, format, json_float, precision_mode>(
+											iter, static_cast<::std::uint_least64_t>(mantissa),
+											exponent, significant)};
 								if (fixed_width_result)
 								{
 									return fixed_width_result;
@@ -11128,12 +11300,18 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 #endif
 
 	// Two measured semantics reuse complete DA coefficients.  General, fixed and
-	// decimal significant-preserve use P23-P34 and avoid the full exact expansion
+	// decimal significant-preserve use P23-P38 and avoid the full exact expansion
 	// while retaining every requested trailing zero.  Scientific non-preserving
-	// fractional P22-P33 requests P23-P34 significant digits, then trims exactly
+	// fractional P22-P37 requests P23-P38 significant digits, then trims exactly
 	// as its existing renderer requires.  Paired M4 and x86-64 GCC/Clang runs
 	// improve P23-P33 by roughly 30--53%; common-corpus M4 P34 improves by
-	// 39--53%, and scientific fractional P33 improves by roughly 48--52%.
+	// 39--53%, and scientific fractional P33 improves by roughly 48--52%.  The
+	// complete production P35-P38 extension was measured in one M4 process loading
+	// baseline and candidate simultaneously: four forward/reverse-load rounds,
+	// each with seven interleaved ABBA cycles, improved P35 by 41.7--60.3% and P38
+	// by 24.5--35.7% across the ten admitted presentation modes.  Unchanged P34
+	// controls stayed within 1.17% and P39 exact-fallback controls within 0.74%.
+	// These paired controls justify the constant P34 and runtime P35-P38 split.
 	// Preserving scientific output is deliberately excluded: its
 	// existing fused writer avoids numeric-digit materialization, and replacing it
 	// regressed paired M4 controls by 6--27%.
@@ -11177,9 +11355,21 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 				return da_result;
 			}
 		}
+		else if (exponent && da_significant - 35u < 4u)
+		{
+			auto const da_result{::fast_io::details::
+				print_rsvflt_binary64_p35_p38_precision_dispatch<
+					comma, uppercase_e, format, json_float, precision_mode>(
+						iter, static_cast<::std::uint_least64_t>(mantissa), exponent,
+						da_significant)};
+			if (da_result)
+			{
+				return da_result;
+			}
+		}
 	}
 #endif
-	// x86-64 and unmeasured targets defer the P23-P34 branches until this
+	// x86-64 and unmeasured targets defer the P23-P38 branches until this
 	// already-outlined slow dispatcher.  Apple AArch64 performs the identical
 	// probe in the public entry and compile-time removal prevents a duplicate.
 	// The caller has emitted the sign and rejected zero/non-finite values.
@@ -11208,6 +11398,18 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 				print_rsvflt_binary64_p34_precision_dispatch<
 					comma, uppercase_e, format, json_float>(iter,
 						static_cast<::std::uint_least64_t>(mantissa), exponent)};
+			if (da_result)
+			{
+				return da_result;
+			}
+		}
+		else if (exponent && precision - 35u < 4u)
+		{
+			auto const da_result{::fast_io::details::
+				print_rsvflt_binary64_p35_p38_precision_dispatch<
+					comma, uppercase_e, format, json_float>(iter,
+						static_cast<::std::uint_least64_t>(mantissa), exponent,
+						precision)};
 			if (da_result)
 			{
 				return da_result;
@@ -12329,8 +12531,8 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 		}
 #endif
 		// Non-preserving significant P23-P33 shares one normal-binary64 DA
-		// carrier across all four decimal presentations; P34 uses its separate
-		// two-word carrier.  Both enter outlined dispatchers so P1-P22 and P35+ do
+		// carrier across all four decimal presentations; P34-P38 use their retained
+		// two-word coefficients.  Both enter outlined dispatchers so P1-P22 and P39+ do
 		// not inherit their arithmetic or register pressure.  The sign is already
 		// emitted, and zero and non-finite values returned above.  A null result is
 		// an ambiguity rejection and leaves the existing shortest/exact path
@@ -12373,6 +12575,18 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 					print_rsvflt_binary64_p34_precision_dispatch<
 						comma, uppercase_e, mt, json_float>(iter,
 							static_cast<::std::uint_least64_t>(mantissa), exponent)};
+				if (da_result)
+				{
+					return da_result;
+				}
+			}
+			else if (exponent && precision - 35u < 4u)
+			{
+				auto const da_result{::fast_io::details::
+					print_rsvflt_binary64_p35_p38_precision_dispatch<
+						comma, uppercase_e, mt, json_float>(iter,
+							static_cast<::std::uint_least64_t>(mantissa), exponent,
+							precision)};
 				if (da_result)
 				{
 					return da_result;

@@ -250,3 +250,43 @@ did not execute equivalent semantics; its lower timing is invalid as a performan
 scalar baseline hoisted invariant target bytes outside the loop, whereas the current short-read/refill correctness
 branches prevented that transformation. Those two code-shape observations are diagnostic only and must not be
 published as direct speed regressions.
+
+## Rejected generic scan-prefetch sites
+
+`scan_prefetch_probe.cc` isolated two candidate sites after the scan dispatch audit. The read candidate placed one
+bounded L1/keep hint before the same noinline branchy consumer used by the baseline. This models the earliest generic
+point shared by precise current-span, contiguous, context-chunk, and terminal dispatch without changing a numeric
+algorithm. The refill candidate placed one bounded L1/keep write hint before the same `/dev/zero` read into an owned
+destination. GCC 15.2 emitted exactly `prefetcht0 [source + distance]` and `prefetchw [destination + distance]`, with
+the unsigned in-range comparison preceding each instruction; no other kernel-body difference was present.
+
+The final confirmation used `g++-15 -O3 -march=native` on the Intel Core i9-14900HX Linux host. The process was pinned
+to logical CPU 12 of physical P-core 6 after CPUs 12 and 13 both sampled 100% idle. Eleven timed pairs alternated order
+after three warm-up pairs for each of three seeds. Each read pair consumed 256 MiB; each refill pair transferred 128
+MiB. The cold ring was 128 MiB, larger than the 36 MiB LLC, and the 64 MiB cache scrub ran outside each timed interval.
+The table reports the range of per-run median candidate/baseline ratios; negative percentages favor the hint.
+
+| Candidate site and working set | Extent / distance | Three-seed change | Decision |
+|---|---:|---:|---|
+| contiguous consume, hot reused source | 4 KiB / 256 B | -0.18% to -0.10% | Too small and changed sign on the independent P-core screen |
+| contiguous consume, hot reused source | 16 KiB / 1 KiB | -0.08% to +0.02% | Noise / neutral |
+| contiguous consume, hot reused source | 1 MiB / 4 KiB | -0.09% to +0.05% | Noise / neutral |
+| contiguous consume, discontinuous cold source | 4 KiB--1 MiB | -0.38% to +0.14% | Direction changes with extent and seed |
+| owned refill, hot reused destination | 4 KiB / 0 B | +0.41% to +0.61% | Stable steady-state regression |
+| owned refill, hot reused destination | 16 KiB / 1 KiB | +0.28% to +0.48% | Stable steady-state regression |
+| owned refill, discontinuous cold destination | 4 KiB / 0 B | -9.77% to -8.69% | Real but wrong ownership/access pattern |
+| owned refill, discontinuous cold destination | 16 KiB / 1 KiB | -5.02% to -2.14% | Real but wrong ownership/access pattern |
+
+The preceding distance sweep supplied two additional controls. A 16 KiB cold refill hint near the end of the range was
+neutral, so the cold result is not permission to prefetch an arbitrary in-range line. More importantly, the actual
+owned input-buffer underflow repeatedly writes the same allocation and therefore follows the hot rows after its first
+use. Emitting a hint on every refill would exchange a one-time, already-resident cold diagnostic for a permanent hot
+regression. A newly returned allocation also does not prove committed pages or a resident translation, so these cold
+ring results cannot be re-labelled as evidence for the first allocation either.
+
+No scan or refill call site was modified. `scan_contiguous_consume_read_prfch_platform` and
+`scan_owned_refill_write_prfch_platform` are separately named, default-false policy concepts. Their strategy
+counterparts still require exact read provenance from the normalized input owner or exact write provenance from the
+buffer owner. A semantic scan manipulator, alias, forwarded target, raw cursor, or `basic_io_buffer_pointers` object
+does not prove the input memory domain. This separation preserves a place for future target/tune evidence without
+allowing the broad platform envelope or a successful irregular scatter-copy benchmark to force a hint into scan.

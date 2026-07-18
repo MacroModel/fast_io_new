@@ -11,6 +11,49 @@ struct basic_io_scatter_t
 	::std::size_t len;
 };
 
+/// @brief A character scatter carrying an explicit ordinary-cacheable-read assertion.
+/// @details This wrapper deliberately has the same pointer/length field layout as `basic_io_scatter_t`, so entry decay
+///          can preserve the provenance proof without enlarging the ABI transport object or retaining the identity of
+///          an otherwise copy-stable producer. Layout equality only proves equal calling cost; consumers project a
+///          value to the raw descriptor before use and must not type-pun between these distinct C++ types. Constructing
+///          the wrapper is a caller assertion: `base[0, len)` must denote ordinary cacheable memory and remain readable
+///          for the complete operation which may issue a prefetch. The wrapper does not independently prove lifetime,
+///          bounds, non-nullness, or print borrowing.
+///
+///          A raw scatter intentionally has no implicit conversion to this type. Pointer shape alone cannot distinguish
+///          normal allocations from MMIO, transient mappings, or implementation-defined non-cacheable storage. The
+///          explicit constructor keeps every proof introduction visible at the audited source boundary.
+template <typename T>
+struct basic_prfch_cacheable_io_scatter_t
+{
+	using value_type = T;
+	T const *base;
+	::std::size_t len;
+
+	inline constexpr basic_prfch_cacheable_io_scatter_t() noexcept = default;
+
+	inline explicit constexpr basic_prfch_cacheable_io_scatter_t(
+		T const *scatter_base, ::std::size_t scatter_len) noexcept
+		: base(scatter_base), len(scatter_len)
+	{}
+
+	inline explicit constexpr basic_prfch_cacheable_io_scatter_t(basic_io_scatter_t<T> scatter) noexcept
+		: base(scatter.base), len(scatter.len)
+	{}
+
+	inline constexpr basic_io_scatter_t<T> scatter() const noexcept
+	{
+		return {base, len};
+	}
+};
+
+static_assert(sizeof(basic_prfch_cacheable_io_scatter_t<void>) == sizeof(basic_io_scatter_t<void>));
+static_assert(alignof(basic_prfch_cacheable_io_scatter_t<void>) == alignof(basic_io_scatter_t<void>));
+static_assert(offsetof(basic_prfch_cacheable_io_scatter_t<void>, base) ==
+			  offsetof(basic_io_scatter_t<void>, base));
+static_assert(offsetof(basic_prfch_cacheable_io_scatter_t<void>, len) ==
+			  offsetof(basic_io_scatter_t<void>, len));
+
 // should be binary compatible with POSIX's iovec
 
 using io_scatter_t = basic_io_scatter_t<void>;

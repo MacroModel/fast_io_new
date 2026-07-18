@@ -1691,7 +1691,27 @@ inline constexpr auto operator<=>(char_type const (&buffer)[n], ::fast_io::conta
 
 #endif
 
+/// @brief Preserves cacheable-read provenance when aliasing a string whose allocator explicitly proves it.
+/// @details The allocator marker is build-sensitive: native aliases opt in only when they selected a known malloc,
+///          mimalloc, kernel, or Windows-heap backend, while custom and freestanding fallbacks remain unproved. A custom
+///          allocator can provide its own exact-true ADL marker. The owning string supplies lifetime; the allocator
+///          supplies the independent memory-domain proof. Returning the proof-carrying two-word descriptor preserves
+///          both facts through entry decay without changing the raw scatter ABI used after projection.
 template <::std::integral chtype, typename alloctype>
+	requires(::fast_io::prfch_cacheable_allocator_provenance<alloctype>)
+inline constexpr ::fast_io::basic_prfch_cacheable_io_scatter_t<chtype>
+print_alias_define(io_alias_t, basic_string<chtype, alloctype> const &str) noexcept
+{
+	return ::fast_io::basic_prfch_cacheable_io_scatter_t<chtype>{
+		str.imp.begin_ptr, static_cast<::std::size_t>(str.imp.curr_ptr - str.imp.begin_ptr)};
+}
+
+/// @brief Keeps allocator-defined storage outside the library's cacheability proof.
+/// @details A conforming custom allocator may obtain memory from MMIO, persistent mappings, accelerators, or another
+///          domain where processor prefetch is inappropriate. Contiguity and ownership prove neither cache policy nor
+///          device semantics, so this overload intentionally returns the unmarked raw scatter.
+template <::std::integral chtype, typename alloctype>
+	requires(!::fast_io::prfch_cacheable_allocator_provenance<alloctype>)
 inline constexpr ::fast_io::basic_io_scatter_t<chtype>
 print_alias_define(io_alias_t, basic_string<chtype, alloctype> const &str) noexcept
 {

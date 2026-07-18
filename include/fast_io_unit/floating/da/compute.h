@@ -360,7 +360,7 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 }
 
 // This block owns every precision carrier whose production representation uses
-// a native unsigned 128-bit type.  Scientific P20-P34 coefficients can exceed
+// a native unsigned 128-bit type.  Scientific P20-P38 coefficients can exceed
 // u64, so representing their complete domains requires u128.
 // The fixed-fractional implementation below also keeps K16-K19 in the same u128
 // result so K16-K28 has one compute/fallback contract and no second partial
@@ -370,7 +370,7 @@ compute_binary64_scientific_precision(::std::uint_least64_t binary_significand,
 #if defined(__SIZEOF_INT128__)
 struct binary64_scientific_wide_precision_result
 {
-	// 10^34 < 2^113, so every rounded P20-P34 coefficient fits in u128.
+	// 10^38 < 2^127, so every rounded P20-P38 coefficient fits in u128.
 	__uint128_t significand;
 	::std::int_least32_t exponent;
 	bool success;
@@ -595,6 +595,250 @@ compute_binary64_scientific_p34_precision(
 	if (significand == normalization_threshold)
 	{
 		significand = normalized_significand;
+		++real_exponent;
+	}
+	return {significand, real_exponent, true};
+}
+
+// Complete multiplication of two native 128-bit unsigned values. Splitting
+// each operand at the 64-bit boundary gives four exact 64x64 products. Let
+// p_ij denote limb i of the left operand times limb j of the right operand and
+// B=2^64.  Since p_ij <= (B-1)^2, high(p_00) <= B-2, so
+//
+//   middle1 <= (B-1)^2 + (B-2) = B^2-B-1 < B^2.
+//
+// Likewise middle2 <= (B-1)^2+(B-1)=B^2-B, and its carry together with
+// high(middle1) cannot overflow the returned high word because
+//
+//   p_11 + high(middle1) + high(middle2)
+//     <= (B-1)^2 + (B-2) + (B-1) = B^2-2 < B^2.
+//
+// Their high halves are therefore exactly the two carries entering p_11. The
+// returned pair is floor(product/2^128) and product mod 2^128 without division
+// or an ISA-specific intrinsic contract.
+struct uint128x2
+{
+	__uint128_t hi;
+	__uint128_t lo;
+};
+
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr uint128x2
+umul128x128(__uint128_t left, __uint128_t right) noexcept
+{
+	auto const left_low{static_cast<::std::uint_least64_t>(left)};
+	auto const left_high{static_cast<::std::uint_least64_t>(left >> 64u)};
+	auto const right_low{static_cast<::std::uint_least64_t>(right)};
+	auto const right_high{static_cast<::std::uint_least64_t>(right >> 64u)};
+	auto const product00{static_cast<__uint128_t>(left_low) * right_low};
+	auto const product01{static_cast<__uint128_t>(left_low) * right_high};
+	auto const product10{static_cast<__uint128_t>(left_high) * right_low};
+	auto const product11{static_cast<__uint128_t>(left_high) * right_high};
+	auto const middle1{product10 +
+		static_cast<::std::uint_least64_t>(product00 >> 64u)};
+	auto const middle2{product01 +
+		static_cast<::std::uint_least64_t>(middle1)};
+	return {
+		product11 + (middle1 >> 64u) + (middle2 >> 64u),
+		(static_cast<__uint128_t>(
+			static_cast<::std::uint_least64_t>(middle2)) << 64u) |
+			static_cast<::std::uint_least64_t>(product00)};
+}
+
+// P38's fifteen-digit provisional branch uses M=10^23, for which the global
+// P34 error bound exceeds one half of an output quantum. The low six bits
+// discarded while forming Q=floor(X*C/2^6) are nevertheless known. If they
+// are t, the cache endpoint contract C <= C* < C+1 proves
+//
+//   0 <= X*C*/2^6-Q < (X+t)/2^6.
+//
+// After decimal scaling, the largest integral displacement is exactly bounded
+// by floor((M*(X+t)-1)/2^6). Form M*(X+t) as three 64-bit limbs, subtract one
+// before shifting, and return false when any resulting bit reaches 2^127.
+// Thus a true result is a proved local ambiguity radius; false requests the
+// exact fallback and makes no rounding decision. This helper is mathematical
+// word arithmetic only and deliberately contains no platform selection.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+compute_binary64_p38_local_ambiguity_bound(
+	__uint128_t multiplier,
+	::std::uint_least64_t error_numerator,
+	__uint128_t &bound) noexcept
+{
+	auto const multiplier_low{
+		static_cast<::std::uint_least64_t>(multiplier)};
+	auto const multiplier_high{
+		static_cast<::std::uint_least64_t>(multiplier >> 64u)};
+	auto const product_low{::fast_io::details::da::umul64x64(
+		multiplier_low, error_numerator)};
+	auto const product_high{::fast_io::details::da::umul64x64(
+		multiplier_high, error_numerator)};
+	auto middle{static_cast<::std::uint_least64_t>(
+		product_low.hi + product_high.lo)};
+	auto high{static_cast<::std::uint_least64_t>(
+		product_high.hi + (middle < product_low.hi))};
+	auto const low{static_cast<::std::uint_least64_t>(product_low.lo - 1u)};
+	auto const borrow_low{product_low.lo == 0u};
+	auto const middle_before_borrow{middle};
+	middle = static_cast<::std::uint_least64_t>(middle - borrow_low);
+	high = static_cast<::std::uint_least64_t>(high -
+		(borrow_low && middle_before_borrow == 0u));
+	// Shifting a three-limb value right by six fits u128 only when the high
+	// limb is below 2^6. The following half comparison also rejects bit 127.
+	if (64u <= high)
+	{
+		return false;
+	}
+	auto const shifted_high{static_cast<::std::uint_least64_t>(
+		(middle >> 6u) | (high << 58u))};
+	constexpr ::std::uint_least64_t half_high{
+		static_cast<::std::uint_least64_t>(1ULL) << 63u};
+	if (half_high <= shifted_high)
+	{
+		return false;
+	}
+	bound = (static_cast<__uint128_t>(shifted_high) << 64u) |
+		static_cast<::std::uint_least64_t>(
+			(low >> 6u) | (middle << 58u));
+	return true;
+}
+
+// Convert a positive finite-normal binary64 magnitude to a correctly rounded
+// P35-P38 decimal coefficient. The P34 proof already retains the provisional
+// integer and 128 fractional bits of Q=floor(X*C/2^6), with
+//
+//   0 <= exact-Q < 2^53+1
+//
+// in those fractional units. P35-P37 and P38's sixteen-digit provisional
+// branch multiply that bound by M and reject [2^127-B,2^127], where
+// B=M*(2^53+1)-1 < 2^127. P38's M=10^23 branch uses the stricter proved local
+// bound above. Outside the rejected closed interval the exact and cached
+// values lie strictly on the same side of one half, so every one of the six
+// nearest policies agrees. Directed policies never dispatch this result.
+//
+// Both the coefficient and its possible 10^digits normalization threshold fit
+// u128 because 10^38 < 2^127. P39 is intentionally impossible in this result
+// domain: 10^39 exceeds u128. Decimal powers are generated per specialization
+// rather than stored in another table.
+template <::std::size_t digits>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+binary64_scientific_wide_precision_result
+compute_binary64_scientific_p35_p38_precision(
+	::std::uint_least64_t binary_significand,
+	::std::uint_least32_t raw_exponent) noexcept
+{
+	static_assert(35u <= digits && digits <= 38u);
+	auto const binary_exponent{
+		static_cast<::std::int_least32_t>(raw_exponent) - 1075};
+	::std::int_least32_t decimal_exponent;
+	// The high-product spelling is exhaustively equivalent to the reduced
+	// reciprocal over the complete binary64 exponent domain. Apple AArch64
+	// keeps the measured single-umulh form used by the complete P20-P38 window;
+	// this split changes exponent code generation only, not the rounding proof.
+#if defined(__APPLE__) && \
+	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
+	decimal_exponent = compute_decimal_exponent_high_product(binary_exponent);
+#else
+	decimal_exponent = compute_decimal_exponent_reduced(binary_exponent);
+#endif
+	constexpr ::std::uint_least8_t extra_shift{
+		exponent_shift_cache::extra_shift};
+	auto const shift{cached_data.exponent_shifts.data[raw_exponent]};
+	auto const power{cached_data.powers[-decimal_exponent - 1]};
+	auto const shifted_significand{binary_significand << shift};
+	auto const upper_product{::fast_io::details::da::umul64x64(
+		shifted_significand, power.hi)};
+	auto const lower_product{::fast_io::details::da::umul64x64(
+		shifted_significand, power.lo)};
+	auto const product_middle{static_cast<::std::uint_least64_t>(
+		upper_product.lo + lower_product.hi)};
+	auto const product_high{static_cast<::std::uint_least64_t>(
+		upper_product.hi + (product_middle < upper_product.lo))};
+	auto const integral{product_high >> extra_shift};
+	constexpr ::std::uint_least64_t sixteen_digit_threshold{
+		static_cast<::std::uint_least64_t>(1000000000000000ULL)};
+	auto const has_extra_digit{sixteen_digit_threshold <= integral};
+	auto const fractional_high{static_cast<::std::uint_least64_t>(
+		(product_high << (64u - extra_shift)) |
+		(product_middle >> extra_shift))};
+	auto const fractional_low{static_cast<::std::uint_least64_t>(
+		(product_middle << (64u - extra_shift)) |
+		(lower_product.lo >> extra_shift))};
+	auto const fractional{
+		(static_cast<__uint128_t>(fractional_high) << 64u) |
+		fractional_low};
+	constexpr __uint128_t extra_digit_multiplier{[]
+	{
+		__uint128_t value{1u};
+		for (::std::size_t index{16u}; index != digits; ++index)
+		{
+			value *= 10u;
+		}
+		return value;
+	}()};
+	auto const multiplier{has_extra_digit ? extra_digit_multiplier :
+		extra_digit_multiplier * 10u};
+	constexpr __uint128_t half{static_cast<__uint128_t>(1u) << 127u};
+	constexpr __uint128_t error_units{
+		(static_cast<__uint128_t>(1u) << 53u) + 1u};
+	__uint128_t ambiguity_bound;
+	if constexpr (digits == 38u)
+	{
+		// The local proof below retains the six bits discarded by Q=floor(X*C/64)
+		// and its helper divides the exact 192-bit bound by 64.  Fail compilation
+		// if the cache guard width changes; silently reusing those constants would
+		// invalidate both `discarded_mask` and the ambiguity-radius proof.
+		static_assert(exponent_shift_cache::extra_shift == 6u);
+		if (has_extra_digit)
+		{
+			ambiguity_bound = multiplier * error_units - 1u;
+			static_assert(extra_digit_multiplier * error_units - 1u < half);
+		}
+		else
+		{
+			constexpr ::std::uint_least64_t discarded_mask{
+				(static_cast<::std::uint_least64_t>(1u) << extra_shift) - 1u};
+			auto const discarded_product_bits{static_cast<::std::uint_least64_t>(
+				lower_product.lo & discarded_mask)};
+			if (!::fast_io::details::da::
+				compute_binary64_p38_local_ambiguity_bound(multiplier,
+					shifted_significand + discarded_product_bits,
+					ambiguity_bound))
+			{
+				return {};
+			}
+		}
+	}
+	else
+	{
+		ambiguity_bound = multiplier * error_units - 1u;
+		constexpr auto maximum_multiplier{extra_digit_multiplier * 10u};
+		static_assert(maximum_multiplier * error_units - 1u < half);
+	}
+	auto const fractional_product{
+		::fast_io::details::da::umul128x128(fractional, multiplier)};
+	if (fractional_product.lo - (half - ambiguity_bound) <= ambiguity_bound)
+	{
+		return {};
+	}
+	auto significand{static_cast<__uint128_t>(integral) * multiplier +
+		fractional_product.hi};
+	if (half < fractional_product.lo)
+	{
+		++significand;
+	}
+	auto real_exponent{decimal_exponent +
+		static_cast<::std::int_least32_t>(has_extra_digit ? 16u : 15u)};
+	constexpr __uint128_t normalization_threshold{[]
+	{
+		__uint128_t value{1u};
+		for (::std::size_t index{}; index != digits; ++index)
+		{
+			value *= 10u;
+		}
+		return value;
+	}()};
+	if (significand == normalization_threshold)
+	{
+		significand = normalization_threshold / 10u;
 		++real_exponent;
 	}
 	return {significand, real_exponent, true};

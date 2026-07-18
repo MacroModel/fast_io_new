@@ -169,6 +169,8 @@ inline constexpr auto small_scatter(char_type const (&s)[n]) noexcept
 	}
 	else
 	{
+		// Array type and constness do not reveal the linker section or memory domain. A named array can reside in an
+		// MMIO/non-cacheable section, so only an explicit proof wrapper may opt this raw descriptor into prefetching.
 		return basic_io_scatter_t<no_const_char_type>{s, nm1};
 	}
 }
@@ -215,6 +217,50 @@ print_scatter_define(io_reserve_type_t<char_type, basic_io_scatter_t<char_type>>
 					 basic_io_scatter_t<char_type> iosc) noexcept
 {
 	return iosc;
+}
+
+/// @brief Projects a provenance-carrying descriptor onto the existing scatter-print protocol.
+/// @details The result is intentionally the raw descriptor expected by scatter consumers. Cacheability remains a
+///          property of the producer type at policy selection time; it need not alter the descriptor ABI passed to
+///          write or copy machinery.
+template <::std::integral char_type>
+inline constexpr basic_io_scatter_t<char_type> print_scatter_define(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>,
+	basic_prfch_cacheable_io_scatter_t<char_type> iosc) noexcept
+{
+	return iosc.scatter();
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
+{
+	// Like a raw scatter, this type borrows storage explicitly supplied by its caller.
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
+{
+	// Observing an already-materialized pointer/length pair cannot inspect a destination cursor.
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
+{
+	// The descriptor's character range is its complete print semantics; no hidden formatting operation is bypassed.
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_copy_stable_borrowed_source(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
+{
+	// Copying this two-word view preserves the same external range and therefore does not retain producer identity.
+	return {};
 }
 
 namespace details
@@ -273,11 +319,13 @@ inline constexpr auto print_alias_define(io_alias_t, T const &s) noexcept
 }
 
 /// @brief Proves that a character-array alias borrows the array's own storage.
-/// @details The long-literal branch above returns a bare scatter, while its shorter branches use specialized proxy
-///          types. In every branch the address is the original array address: no helper owns temporary characters and
-///          no subsequent alias call can overwrite the array. An lvalue array remains owned by its caller, while an
-///          array temporary bound for a print expression remains alive through that full expression; either lifetime
-///          encloses the operation for which the descriptor may be retained.
+/// @details The long-array branch above returns a raw scatter, while its shorter branches use specialized proxy types.
+///          In every branch the address is the original array address: no helper owns temporary characters and no
+///          subsequent alias call can overwrite the array. An lvalue array remains owned by its caller, while an array
+///          temporary bound for a print expression remains alive through that full expression; either lifetime encloses
+///          the operation for which the descriptor may be retained. This lifetime proof is deliberately separate from
+///          cacheability: the type system cannot distinguish literal rodata from a named const array in a special
+///          MMIO/non-cacheable linker section.
 template <::std::integral char_type, typename source_char_type, ::std::size_t n>
 	requires(::std::same_as<char_type, ::std::remove_cv_t<source_char_type>>)
 inline constexpr ::std::true_type

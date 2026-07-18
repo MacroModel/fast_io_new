@@ -1104,22 +1104,56 @@ floating_precise_try_binary64_wide_da_metadata(
 	::std::uint_least64_t mantissa, ::std::uint_least32_t exponent,
 	::std::size_t significant) noexcept
 {
-	if (!exponent || 13u < significant - 20u)
+	if (!exponent || 18u < significant - 20u)
 	{
 		return {};
 	}
-	auto const converted{::fast_io::details::compute_binary64_common_significant_precision(
-		mantissa, exponent, significant)};
-	if (!converted.success)
+	__uint128_t coefficient;
+	::std::int_least32_t real_exponent;
+	if (significant - 20u < 14u)
 	{
-		return {};
+		auto const converted{::fast_io::details::
+			compute_binary64_common_significant_precision(
+				mantissa, exponent, significant)};
+		if (!converted.success)
+		{
+			return {};
+		}
+		coefficient = converted.significand;
+		real_exponent = converted.exponent;
 	}
-	// P20-P33 uses the same presentation-independent u128 coefficient as
-	// emission.  Its existing materializer removes trailing zeroes while
-	// preserving the real exponent; preserve modes reconstruct their virtual
-	// width from `significant`, so every layout can consume the same metadata.
+	else if (significant == 34u)
+	{
+		auto const carrier{::fast_io::details::
+			compute_binary64_p34_precision_carrier(mantissa, exponent)};
+		if (!carrier)
+		{
+			return {};
+		}
+		coefficient = carrier & binary64_p34_precision_coefficient_mask;
+		real_exponent =
+			static_cast<::std::int_least32_t>(carrier >> 113u) - 512;
+	}
+	else
+	{
+		coefficient = ::fast_io::details::
+			compute_binary64_p35_p38_precision_carrier(
+				mantissa, exponent, significant, real_exponent);
+		if (!coefficient)
+		{
+			return {};
+		}
+	}
+	// P20-P38 uses the same presentation-independent u128 coefficient as
+	// emission.  P34 retains its packed exponent only at the arithmetic ABI;
+	// P35-P38 return the exponent through the shared scalar output because their
+	// coefficients occupy as many as 127 bits.  Every ambiguity rejection above
+	// falls through to exact sizing before presentation observes metadata.
+	// Materialization removes trailing zeroes while preserving the real exponent;
+	// preserve modes reconstruct their virtual width from `significant`, so every
+	// layout consumes the same metadata without writing a character.
 	auto const decimal{::fast_io::details::materialize_binary64_common_significant_precision(
-		converted.significand, converted.exponent, significant)};
+		coefficient, real_exponent, significant)};
 	return {floating_precise_make_decimal_metadata<true>(decimal), true};
 }
 
@@ -1626,7 +1660,7 @@ floating_precise_prepare_precision_metadata(
 		}
 
 		// P16--P17 on MSVC x64 shares the proved outlined carrier used by emission;
-		// native-u128 targets additionally support P18--P33.  Every miss is merely
+		// native-u128 targets additionally support P18--P38.  Every miss is merely
 		// an optimization rejection and falls through to exact materialization.
 #if defined(__SIZEOF_INT128__) || \
 	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
@@ -1641,7 +1675,7 @@ floating_precise_prepare_precision_metadata(
 				{
 					return {narrow_da.decimal, narrow_da.decimal};
 				}
-				// The P20--P33 coefficient type is native u128; MSVC must not
+				// The P20--P38 coefficient type is native u128; MSVC must not
 				// name or parse this helper after its independent P16--P17 probe.
 #if defined(__SIZEOF_INT128__)
 				auto const wide_da{floating_precise_try_binary64_wide_da_metadata(

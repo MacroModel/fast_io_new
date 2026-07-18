@@ -179,6 +179,19 @@ inline constexpr auto cond(bool pred, T1 &&t1) noexcept(::fast_io::details::cond
 
 } // namespace manipulators
 
+/// @brief Propagates read-prefetch provenance only when both possible condition arms are safe.
+/// @details The run-time predicate is not part of the type, so a type-level policy cannot justify itself from the arm
+///          selected by one particular value. Requiring both arms makes the promise valid for every instance;
+///          `io_null_t` is admitted only as the vacuous alternative which exposes no external range.
+template <typename T1, typename T2>
+	requires(::fast_io::prfch_cacheable_read_or_no_external_range<T1> &&
+			 ::fast_io::prfch_cacheable_read_or_no_external_range<T2>)
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::condition<T1, T2>>) noexcept
+{
+	return {};
+}
+
 #if 0
 	namespace details
 	{

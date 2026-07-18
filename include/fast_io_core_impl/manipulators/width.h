@@ -188,6 +188,43 @@ inline constexpr auto internal(T &&t, ::std::size_t n, char_type ch)
 
 } // namespace manipulators
 
+/// @brief Propagates an established read proof through each width semantic representation.
+/// @details Width contributes padding but obtains its external source range exclusively from the stored child. Fixed
+///          versus run-time placement and default versus explicit fill characters do not change that provenance. These
+///          four overloads are kept distinct because the representation types are distinct protocol nodes; a generic
+///          structural rule would accidentally certify unrelated user types with similarly named members.
+template <manipulators::scalar_placement placement, typename T>
+	requires prfch_cacheable_read_provenance<T>
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+template <manipulators::scalar_placement placement, typename T, ::std::integral char_type>
+	requires prfch_cacheable_read_provenance<T>
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::width_ch_t<placement, T, char_type>>) noexcept
+{
+	return {};
+}
+
+template <typename T>
+	requires prfch_cacheable_read_provenance<T>
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+template <typename T, ::std::integral char_type>
+	requires prfch_cacheable_read_provenance<T>
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::width_runtime_ch_t<T, char_type>>) noexcept
+{
+	return {};
+}
+
 #if 0
 namespace details
 {

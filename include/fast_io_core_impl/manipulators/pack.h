@@ -114,4 +114,16 @@ inline constexpr auto pack(Args &&...args) noexcept((::fast_io::details::pack_al
 
 } // namespace manipulators
 
+/// @brief Propagates read-prefetch provenance through a semantic pack only when every emitted child is safe.
+/// @details A pack expands all stored elements at run time, so one unproved non-empty child would invalidate a marker
+///          on the composite even when every sibling were safe. `io_null_t` children contribute no range and therefore
+///          satisfy the proof vacuously. The empty-pack fold is likewise true because it cannot supply a hint target.
+template <typename... Args>
+	requires(::fast_io::prfch_cacheable_read_or_no_external_range<Args> && ...)
+inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	io_type_t<manipulators::pack_t<Args...>>) noexcept
+{
+	return {};
+}
+
 } // namespace fast_io

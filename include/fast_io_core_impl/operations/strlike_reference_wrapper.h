@@ -29,6 +29,20 @@ struct io_strlike_reference_wrapper
 	}
 };
 
+/// @brief Preserves an exact string-like owner's writable-memory proof through the generic output adapter.
+/// @details `io_strlike_reference_wrapper` adds no backing storage: its cursor operations always project the same `T`
+///          object. Forwarding an existing write marker is therefore sound, while inferring cacheability from
+///          `buffer_strlike` syntax would certify arbitrary user allocators and device-backed adapters. No read marker
+///          is forwarded here. This wrapper is an output protocol, and a mutable put area does not by itself advertise
+///          a live readable prefix to a scan or retained-scatter operation.
+template <::std::integral char_type, typename T>
+	requires(::fast_io::prfch_cacheable_write_provenance<T>)
+inline constexpr ::std::true_type prfch_cacheable_write_provenance_define(
+	io_type_t<io_strlike_reference_wrapper<char_type, T>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename T>
 [[nodiscard]] inline constexpr io_strlike_reference_wrapper<char_type, T>
 output_stream_ref_define(io_strlike_reference_wrapper<char_type, T> bref) noexcept

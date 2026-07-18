@@ -324,10 +324,72 @@ inline constexpr basic_io_scatter_t<ch_type> print_scatter_define_extract_one(T 
 	return print_scatter_define(io_reserve_type<ch_type, ::std::remove_cvref_t<T>>, t);
 }
 
+/// @brief Tests the retained byte threshold without multiplying a descriptor length by its character width.
+/// @details `ceil(minimum_bytes / sizeof(ch_type))` is the exact minimum character count whose object representation
+///          spans the required byte extent. Division and remainder keep the proof valid even when an adversarial
+///          descriptor length would overflow `size_t` if multiplied by `sizeof(ch_type)`.
 template <::std::integral ch_type>
-inline constexpr ::std::size_t calculate_scatter_total_size(basic_io_scatter_t<ch_type> const *first,
-															basic_io_scatter_t<ch_type> const *last)
+inline constexpr bool concat_scatter_payload_meets_read_prfch_threshold(::std::size_t length) noexcept
 {
+	constexpr ::std::size_t character_width{sizeof(ch_type)};
+	constexpr ::std::size_t minimum_bytes{
+		::fast_io::concat_scatter_chain_read_prfch_minimum_payload_bytes};
+	constexpr ::std::size_t minimum_characters{
+		minimum_bytes / character_width + static_cast<::std::size_t>(minimum_bytes % character_width != 0u)};
+	return minimum_characters <= length;
+}
+
+/// @brief Sums an exact scatter prefix and, when admitted, classifies read-prefetch eligibility in the same traversal.
+/// @details The strategy-enabled run counts nonempty descriptors up to the retained threshold and rejects the complete
+///          chain if any nonempty payload is smaller than four KiB. This conservative all-large rule is intentional:
+///          it prevents 32 ordinary 64-byte strings from paying the next-descriptor search whose isolated hot control
+///          regressed by about 7--9 percent. No payload base is inspected here. The count saturates at 32 and the byte
+///          predicate uses division, so neither statistic can overflow.
+///
+///          Constant evaluation and compile-time-disabled policies execute the historical summation loop below. They
+///          construct no eligibility counters and perform no lookahead; `runtime_read_prfch` remains false. At run time
+///          an admitted policy folds the two statistics into the summation that concat already required, avoiding a
+///          third descriptor pass before copying.
+template <bool read_prfch, ::std::integral ch_type>
+inline constexpr ::std::size_t calculate_scatter_total_size(
+	basic_io_scatter_t<ch_type> const *first, basic_io_scatter_t<ch_type> const *last,
+	bool &runtime_read_prfch)
+{
+	runtime_read_prfch = false;
+	if constexpr (read_prfch)
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			::std::size_t total_size{};
+			::std::size_t nonempty_count{};
+			bool every_nonempty_payload_is_large{true};
+			for (; first != last; ++first)
+			{
+				::std::size_t const length{first->len};
+				total_size = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(
+					total_size, length);
+				if (total_size == SIZE_MAX) [[unlikely]]
+				{
+					::fast_io::fast_terminate();
+				}
+				if (length != 0u)
+				{
+					if (nonempty_count < ::fast_io::concat_scatter_chain_read_prfch_minimum_descriptor_count)
+					{
+						++nonempty_count;
+					}
+					every_nonempty_payload_is_large =
+						every_nonempty_payload_is_large &&
+						::fast_io::details::decay::concat_scatter_payload_meets_read_prfch_threshold<ch_type>(
+							length);
+				}
+			}
+			runtime_read_prfch =
+				every_nonempty_payload_is_large &&
+				nonempty_count == ::fast_io::concat_scatter_chain_read_prfch_minimum_descriptor_count;
+			return total_size;
+		}
+	}
 	::std::size_t total_size{};
 	for (; first != last; ++first)
 	{
@@ -343,13 +405,60 @@ inline constexpr ::std::size_t calculate_scatter_total_size(basic_io_scatter_t<c
 	return total_size;
 }
 
-template <::std::integral ch_type>
+/// @brief Copies an exact retained scatter prefix, optionally applying concat's measured next-source read hint.
+/// @details The optimized loop is instantiated only after the caller proves platform, descriptor-capacity, and every
+///          normalized producer's cacheable-read provenance. The explicit run-time gate comes from the existing size
+///          traversal and proves at least 32 nonempty descriptors with every nonempty payload at least four KiB. A
+///          false gate therefore enters the original loop without executing a next-descriptor search. When true, empty
+///          descriptors are skipped by length before their `base` member is ever evaluated, and the only hinted
+///          expression is exactly the next nonempty descriptor's live-range base.
+///
+///          Constant evaluation deliberately executes the original single traversal: it performs neither a prefetch
+///          nor the next-nonempty search. At run time, three Linux P-core seeds retained about 1--2.4 percent for cold
+///          discontinuous 4--16 KiB chains and about +/-0.2 percent for the hot controls. Earlier 256/512-byte hot
+///          policies regressed by 17--31 percent, which is why this threshold and site remain independent from the
+///          broad platform capability and why no write hint is mirrored here.
+template <bool read_prfch, ::std::integral ch_type>
 inline constexpr ch_type *copy_scatter_chain_to_buffer(ch_type *iter, basic_io_scatter_t<ch_type> const *first,
-													   basic_io_scatter_t<ch_type> const *last)
+													   basic_io_scatter_t<ch_type> const *last,
+													   bool runtime_read_prfch)
 {
+	if constexpr (read_prfch)
+	{
+		if (!::std::is_constant_evaluated() && runtime_read_prfch)
+		{
+			auto current{first};
+			while (current != last && current->len == 0u)
+			{
+				// A zero-length descriptor carries no live payload premise; in particular, its base may be null.
+				++current;
+			}
+			while (current != last)
+			{
+				auto next{current + 1u};
+				while (next != last && next->len == 0u)
+				{
+					++next;
+				}
+				if (next != last)
+				{
+					::fast_io::prfch<
+						::fast_io::prfch_mode::read, ::fast_io::concat_scatter_chain_read_prfch_level,
+						::fast_io::concat_scatter_chain_read_prfch_retention>(next->base);
+				}
+				iter = ::fast_io::details::decay::small_scatter_copy_n(current->base, current->len, iter);
+				current = next;
+			}
+			return iter;
+		}
+	}
 	for (; first != last; ++first)
 	{
-		iter = ::fast_io::details::decay::small_scatter_copy_n(first->base, first->len, iter);
+		if (first->len != 0u)
+		{
+			// Preserve the same empty-descriptor rule in the baseline and constexpr paths.
+			iter = ::fast_io::details::decay::small_scatter_copy_n(first->base, first->len, iter);
+		}
 	}
 	return iter;
 }
@@ -414,11 +523,16 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline constexpr void basic_general_concat_decay_ref_impl_all_scatter_generic_with_storage(
 	::fast_io::basic_io_scatter_t<ch_type> *scatters, T &str, Args &...args)
 {
+	constexpr bool read_prfch{
+		::fast_io::concat_scatter_chain_read_prfch_strategy<
+			::fast_io::details::native_prfch_platform, sizeof...(Args), Args...>};
 	::std::size_t scatter_index{};
 	((scatters[scatter_index++] =
 		  print_scatter_define(io_reserve_type<ch_type, ::std::remove_cvref_t<Args>>, args)),
 	 ...);
-	::std::size_t total_size{calculate_scatter_total_size<ch_type>(scatters, scatters + sizeof...(Args))};
+	bool runtime_read_prfch{};
+	::std::size_t total_size{calculate_scatter_total_size<read_prfch>(
+		scatters, scatters + sizeof...(Args), runtime_read_prfch)};
 	if constexpr (line)
 	{
 		total_size = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(total_size, 1u);
@@ -439,8 +553,9 @@ inline constexpr void basic_general_concat_decay_ref_impl_all_scatter_generic_wi
 	{
 		strlike_reserve(io_strlike_type<ch_type, T>, str, total_size);
 	}
-	auto ptr{copy_scatter_chain_to_buffer(strlike_begin(io_strlike_type<ch_type, T>, str), scatters,
-										  scatters + sizeof...(Args))};
+	auto ptr{copy_scatter_chain_to_buffer<read_prfch>(
+		strlike_begin(io_strlike_type<ch_type, T>, str), scatters, scatters + sizeof...(Args),
+		runtime_read_prfch)};
 	if constexpr (line)
 	{
 		*ptr = char_literal_v<u8'\n', ch_type>;
@@ -604,6 +719,11 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline constexpr void basic_general_concat_decay_ref_impl_all_reserve_scatters_materialized(
 	T &str, ::fast_io::basic_io_scatter_t<ch_type> *scatters, ch_type *reserve, Args &...args)
 {
+	constexpr auto aggregate_capacity{
+		::fast_io::details::decay::concat_retained_reserve_scatters_capacity<ch_type, Args...>()};
+	constexpr bool read_prfch{
+		::fast_io::concat_scatter_chain_read_prfch_strategy<
+			::fast_io::details::native_prfch_platform, aggregate_capacity.scatters_size, Args...>};
 	auto scatter_curr{scatters};
 	auto reserve_curr{reserve};
 	auto materialize_one = [&scatter_curr, &reserve_curr](auto &arg) constexpr {
@@ -630,8 +750,10 @@ inline constexpr void basic_general_concat_decay_ref_impl_all_reserve_scatters_m
 	};
 	(materialize_one(args), ...);
 
+	bool runtime_read_prfch{};
 	::std::size_t const payload_size{
-		::fast_io::details::decay::calculate_scatter_total_size<ch_type>(scatters, scatter_curr)};
+		::fast_io::details::decay::calculate_scatter_total_size<read_prfch>(
+			scatters, scatter_curr, runtime_read_prfch)};
 	::std::size_t const total_size{
 		::fast_io::details::decay::concat_precise_size_with_line<line>(payload_size)};
 	if constexpr (::fast_io::sso_buffer_strlike<ch_type, T>)
@@ -647,8 +769,9 @@ inline constexpr void basic_general_concat_decay_ref_impl_all_reserve_scatters_m
 	{
 		strlike_reserve(::fast_io::io_strlike_type<ch_type, T>, str, total_size);
 	}
-	auto iter{::fast_io::details::decay::copy_scatter_chain_to_buffer(
-		strlike_begin(::fast_io::io_strlike_type<ch_type, T>, str), scatters, scatter_curr)};
+	auto iter{::fast_io::details::decay::copy_scatter_chain_to_buffer<read_prfch>(
+		strlike_begin(::fast_io::io_strlike_type<ch_type, T>, str), scatters, scatter_curr,
+		runtime_read_prfch)};
 	if constexpr (line)
 	{
 		*iter++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
