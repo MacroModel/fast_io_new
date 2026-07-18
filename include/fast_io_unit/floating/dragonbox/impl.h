@@ -7680,10 +7680,53 @@ inline constexpr char_type *exact_precision_scientific(
 	return ::fast_io::details::print_rsv_fp_e_impl<flt, uppercase_e>(iter, real_exponent);
 }
 
+// Keep the ordinary scientific renderer as the shared leaf for every existing
+// caller.  This forwarding boundary is instantiated only by an explicitly
+// measured placement policy; flatten plus always-inline makes that caller reuse
+// the exact same encoding-independent body without maintaining a second copy
+// of its digit, punctuation or exponent rules.
+template <typename flt, bool comma, bool uppercase_e, ::std::integral char_type,
+		  typename decimal_type>
+#if __has_cpp_attribute(__gnu__::__flatten__)
+[[__gnu__::__flatten__]]
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+exact_precision_scientific_direct(
+	char_type *iter, decimal_type const &decimal,
+	::std::size_t fractional_precision, bool preserve) noexcept
+{
+	return ::fast_io::details::exact_precision_scientific<
+		flt, comma, uppercase_e>(iter, decimal, fractional_precision, preserve);
+}
+
+// GCC 15 on Linux System V x86-64 LP64 stopped inlining the final scientific
+// renderer into the binary64 P34 decimal dispatcher after the P35-P38
+// extension changed its instantiation graph.  Paired forward/reverse data from
+// the single-destination benchmark DSO recovered about 5.0% for significant
+// and 3.2% for preserving char output at a bounded 1,152-byte linked-text cost.
+// Unconditional inlining was rejected after growing that DSO by 52,096 bytes.
+// A five-destination audit also rejected widening this policy: enabling char,
+// wchar_t, char8_t, char16_t and char32_t together cost 12,288 bytes, while no
+// non-char P34 pair cleared a two percent win.  The char-only policy reduced
+// that complete DSO delta to 5,120 bytes and held every non-char P34/P35/P38/P39
+// control within 0.75%.  This closed compiler/ABI policy controls placement
+// only; x32, MinGW, ARM64EC, Clang and other GCC majors must retain the shared
+// leaf until independently audited.
+inline constexpr bool binary64_p34_decimal_direct_scientific{
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+	true
+#else
+	false
+#endif
+};
+
 template <typename flt, bool comma, bool uppercase_e,
 		  ::fast_io::manipulators::floating_format format,
 		  ::fast_io::manipulators::floating_precision precision_mode,
-		  bool json_float, ::std::integral char_type, typename decimal_type>
+		  bool json_float, bool direct_scientific = false,
+		  ::std::integral char_type, typename decimal_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_precision_define_impl(
 	char_type *iter, decimal_type const &decimal, ::std::size_t precision,
 	::std::size_t significant) noexcept
@@ -7694,6 +7737,11 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 	if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
 	{
 		auto const fractional_digits{fractional ? precision : significant - 1u};
+		if constexpr (direct_scientific)
+		{
+			return ::fast_io::details::exact_precision_scientific_direct<
+				flt, comma, uppercase_e>(iter, decimal, fractional_digits, preserve);
+		}
 		return ::fast_io::details::exact_precision_scientific<flt, comma, uppercase_e>(
 			iter, decimal, fractional_digits, preserve);
 	}
@@ -7757,6 +7805,11 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 		// `0`.  Non-preserving and significant modes retain their established path.
 		return ::fast_io::details::exact_precision_fixed<comma, json_float>(
 			iter, decimal, virtual_size, fractional && preserve, precision);
+	}
+	if constexpr (direct_scientific)
+	{
+		return ::fast_io::details::exact_precision_scientific_direct<
+			flt, comma, uppercase_e>(iter, decimal, virtual_size - 1u, preserve);
 	}
 	return ::fast_io::details::exact_precision_scientific<flt, comma, uppercase_e>(
 		iter, decimal, virtual_size - 1u, preserve);
@@ -7944,7 +7997,7 @@ materialize_binary64_common_significant_precision(
 
 template <bool comma, bool uppercase_e,
 	::fast_io::manipulators::floating_format format, bool json_float,
-	::std::integral char_type>
+	bool direct_scientific = false, ::std::integral char_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 render_binary64_common_significant_precision(
 	char_type *iter, __uint128_t coefficient,
@@ -7957,7 +8010,8 @@ render_binary64_common_significant_precision(
 	// renderers retain comma-point, JSON suffix and character conversion rules.
 	return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 		double, comma, uppercase_e, format,
-		::fast_io::manipulators::floating_precision::significant, json_float>(
+		::fast_io::manipulators::floating_precision::significant, json_float,
+		direct_scientific>(
 			iter, decimal, significant, significant);
 }
 
@@ -8107,11 +8161,15 @@ print_rsvflt_binary64_p34_precision_dispatch(
 	{
 		return nullptr;
 	}
+	constexpr bool direct_scientific{
+		::fast_io::details::binary64_p34_decimal_direct_scientific &&
+		format == ::fast_io::manipulators::floating_format::decimal &&
+		::std::same_as<char_type, char>};
 	if constexpr (precision_mode ==
 		::fast_io::manipulators::floating_precision::significant)
 	{
 		return ::fast_io::details::render_binary64_common_significant_precision<
-			comma, uppercase_e, format, json_float>(iter,
+			comma, uppercase_e, format, json_float, direct_scientific>(iter,
 			carrier & binary64_p34_precision_coefficient_mask,
 			static_cast<::std::int_least32_t>(carrier >> 113u) - 512, 34u);
 	}
@@ -8124,7 +8182,8 @@ print_rsvflt_binary64_p34_precision_dispatch(
 				carrier & binary64_p34_precision_coefficient_mask,
 				static_cast<::std::int_least32_t>(carrier >> 113u) - 512, 34u)};
 		return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
-			double, comma, uppercase_e, format, precision_mode, json_float>(
+			double, comma, uppercase_e, format, precision_mode, json_float,
+			direct_scientific>(
 				iter, decimal, output_precision, 34u);
 	}
 }
