@@ -2,7 +2,6 @@
 
 #include "time.h"
 #include "fast_io_time.h"
-#include "chrono.h"
 #include "builtin_diagnostics.h"
 #include "custom.h"
 #include "field.h"
@@ -74,7 +73,7 @@ concept brace_chrono_replacement_rule =
 	(!brace_direct_identity_rule<format_literal, field, value_type>) &&
 	(!brace_custom_replacement_rule<format_literal, field, value_type>) &&
 	(!brace_format_as_replacement_rule<format_literal, field, value_type>) &&
-	chrono_format_value<::std::remove_cvref_t<value_type>>;
+	time_format_value<::std::remove_cvref_t<value_type>>;
 
 template <auto format_literal, auto field, typename value_type>
 concept brace_range_replacement_rule =
@@ -371,22 +370,15 @@ template <auto format_literal, auto field, typename value_type,
 	static_assert(field.specification.sign == format_sign::default_sign &&
 					  !field.specification.alternate_form &&
 					  !field.specification.zero_padding,
-				  "fast_io format: chrono fields do not accept scalar sign, #, or zero flags");
+				  "fast_io format: time fields do not accept scalar sign, #, or zero flags");
 	static_assert(!field.specification.locale_specific,
-				  "fast_io format: locale-specific chrono formatting requires an explicit locale frontend");
+				  "fast_io format: locale-specific time formatting requires an explicit locale frontend");
+	static_assert(field.specification.precision.kind == format_parameter_kind::none,
+				  "fast_io format: precision is not permitted for fast_io time fields");
 	auto const width{resolve_format_parameter<format_literal,
 											  field.specification.width>(arguments)};
-	auto const precision{resolve_format_parameter<format_literal,
-												  field.specification.precision>(arguments)};
-	if (precision.negative) [[unlikely]]
-	{
-		::fast_io::fast_terminate();
-	}
-	constexpr bool has_precision{
-		field.specification.precision.kind != format_parameter_kind::none};
 	auto formatted{make_chrono_field<format_literal,
-									 field.specification.type_directed_specification, has_precision>(
-		value, precision.value)};
+									 field.specification.type_directed_specification>(value)};
 	return apply_field_width<field.specification, false, false>(
 		::std::move(formatted), width);
 }

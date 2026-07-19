@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 // Native fast_io calendar providers are layered on the common time grammar and
-// emitter.  Standard-library compatibility belongs in chrono.h.
+// emitter.  No standard-library chrono compatibility is provided here.
 #include "time.h"
 
 namespace fast_io::fmt::details
@@ -28,7 +28,7 @@ struct is_time_format_source<::fast_io::basic_timestamp<offset_to_epoch>>
 	}
 	return month_lengths[month - 1u] +
 		   static_cast<unsigned>(month == 2u &&
-							 chrono_is_gregorian_leap_year(year));
+								 chrono_is_gregorian_leap_year(year));
 }
 
 [[nodiscard]] inline constexpr unsigned fast_io_time_year_day(
@@ -57,7 +57,7 @@ struct is_time_format_source<::fast_io::basic_timestamp<offset_to_epoch>>
 	// overflow edge for the full int64_t native year domain, including Jan/Feb
 	// of INT64_MIN.
 	constexpr unsigned month_offsets[]{0u, 3u, 2u, 5u, 0u, 3u,
-									  5u, 1u, 4u, 6u, 2u, 4u};
+									   5u, 1u, 4u, 6u, 2u, 4u};
 	if (value.month < 1u || value.month > 12u)
 	{
 		::fast_io::fast_terminate();
@@ -92,38 +92,30 @@ make_chrono_calendar_state_from_iso(
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision>
+		  source_slice specification>
 [[nodiscard]] inline constexpr auto make_chrono_field(
-	::fast_io::iso8601_timestamp const &value,
-	::std::size_t precision = 0u) noexcept
+	::fast_io::iso8601_timestamp const &value) noexcept
 {
-	static_assert(!has_precision,
-				  "fast_io time: precision is not permitted for an iso8601_timestamp");
 	auto state{make_chrono_calendar_state_from_iso<true, false>(
 		value, ::std::numeric_limits<::std::uint_least64_t>::digits10,
 		value.timezone)};
 	return ::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, false, decltype(state)>{
-		state, precision};
+		format_literal, specification, decltype(state)>{state};
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision,
+		  source_slice specification,
 		  ::std::int_least64_t offset_to_epoch>
 [[nodiscard]] inline constexpr auto make_chrono_field(
-	::fast_io::basic_timestamp<offset_to_epoch> value,
-	::std::size_t precision = 0u) noexcept
+	::fast_io::basic_timestamp<offset_to_epoch> value) noexcept
 {
-	static_assert(!has_precision,
-				  "fast_io time: precision is not permitted for a basic_timestamp");
 	// Normalize exactly once at the lowering boundary.  The printable owns the
 	// resulting civil state, so reserve sizing and emission do not call utc().
 	auto const iso{::fast_io::utc(value)};
 	auto state{make_chrono_calendar_state_from_iso<true, true>(
 		iso, ::std::numeric_limits<::std::uint_least64_t>::digits10, 0)};
 	return ::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, false, decltype(state)>{
-		state, precision};
+		format_literal, specification, decltype(state)>{state};
 }
 
 } // namespace fast_io::fmt::details

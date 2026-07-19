@@ -28,14 +28,22 @@ struct compiled_literal_run
 	static_assert(operation.kind == format_operation_kind::literal);
 	static inline constexpr auto run{program.literal_runs[operation.payload_index]};
 	using char_type = typename decltype(format_literal)::value_type;
-	static inline constexpr auto storage = []() consteval {
+
+	[[nodiscard]] static consteval auto make_storage() noexcept
+	{
 		::std::array<char_type, run.size> result{};
 		for (::std::size_t i{}; i != run.size; ++i)
 		{
 			result[i] = program.literal_storage[run.offset + i];
 		}
 		return result;
-	}();
+	}
+
+	static inline constexpr auto storage
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+		__attribute__((visibility("hidden")))
+#endif
+		{make_storage()};
 };
 
 template <typename literal_type, ::std::size_t... index>
@@ -82,11 +90,21 @@ template <auto format_literal, typename grammar_tag, ::std::size_t operation_ind
 		return make_small_literal_pack<literal_type>(
 			::std::make_index_sequence<literal_type::run.size>{});
 	}
-	else
+	else if constexpr (literal_type::run.size < 64u)
 	{
 		return ::fast_io::manipulators::static_scatter_t<
 			typename literal_type::char_type, literal_type::run.size>{
 			literal_type::storage.data()};
+	}
+	else
+	{
+		// Match the core array-alias boundary: a large literal is already stable
+		// borrowed storage, so an unbuffered destination can pass its address
+		// straight to write instead of copying it through a temporary reserve
+		// buffer.  Shorter literals retain the fixed-extent reserve node because
+		// it lets buffered destinations merge their stores with adjacent leaves.
+		return ::fast_io::basic_io_scatter_t<typename literal_type::char_type>{
+			literal_type::storage.data(), literal_type::run.size};
 	}
 }
 

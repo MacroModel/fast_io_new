@@ -2,18 +2,15 @@
 
 #include "program.h"
 #include "../types.h"
-// Chrono lowering consumes only the freestanding print CPOs.  Pulling hosted
+// Time lowering consumes only the freestanding print CPOs.  Pulling hosted
 // filesystem and legacy-stream adapters into a string-only format operation
 // would make that operation depend on facilities it can never call.
 #include "../../fast_io_freestanding.h"
 
-#include <chrono>
-#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <ratio>
 #include <type_traits>
 #include <utility>
 
@@ -89,9 +86,6 @@ template <typename integer_type>
 [[nodiscard]] inline constexpr ::std::size_t chrono_padded_integer_size(
 	integer_type value, unsigned width, chrono_padding padding) noexcept;
 
-template <typename period_type>
-[[nodiscard]] consteval unsigned chrono_fractional_digits() noexcept;
-
 template <typename signed_type>
 [[nodiscard]] inline constexpr ::std::make_unsigned_t<signed_type>
 chrono_unsigned_magnitude(signed_type value) noexcept;
@@ -103,27 +97,12 @@ template <::fast_io::fmt::format_character char_type>
 inline constexpr char_type *write_chrono_separator(
 	char_type *output, char8_t separator) noexcept;
 
-/**
- * The semantic domain selected before a chrono specification is compiled.
- *
- * A duration and a civil/UTC calendar value deliberately do not share one
- * permissive program.  Rejecting `%Y` for a duration during constant evaluation
- * is both a better diagnostic and a useful code-generation proof: an emitted
- * duration leaf can never retain a run-time "does this opcode apply?" branch.
- */
-enum class chrono_value_domain : unsigned char
-{
-	duration,
-	calendar
-};
-
 enum class chrono_parse_error : unsigned char
 {
 	none,
 	invalid_slice,
 	dangling_percent,
 	invalid_conversion,
-	conversion_not_supported_for_value,
 	utc_offset_not_supported,
 	time_zone_name_not_supported,
 	locale_modifier_not_supported,
@@ -171,8 +150,6 @@ enum class chrono_opcode : unsigned char
 	month,
 	minute,
 	am_pm,
-	duration_unit,
-	duration_value,
 	time_12,
 	time_hm,
 	second,
@@ -363,14 +340,6 @@ template <::fast_io::fmt::format_character char_type>
 	{
 		opcode = chrono_opcode::am_pm;
 	}
-	else if (is_syntax_character<u8'q'>(value))
-	{
-		opcode = chrono_opcode::duration_unit;
-	}
-	else if (is_syntax_character<u8'Q'>(value))
-	{
-		opcode = chrono_opcode::duration_value;
-	}
 	else if (is_syntax_character<u8'r'>(value))
 	{
 		opcode = chrono_opcode::time_12;
@@ -446,27 +415,6 @@ template <::fast_io::fmt::format_character char_type>
 	return true;
 }
 
-[[nodiscard]] inline constexpr bool chrono_opcode_supported(
-	chrono_value_domain domain, chrono_opcode opcode) noexcept
-{
-	if (domain == chrono_value_domain::calendar)
-	{
-		return opcode != chrono_opcode::duration_value &&
-			   opcode != chrono_opcode::duration_unit;
-	}
-
-	// fmt's duration grammar intentionally exposes clock-like decompositions but
-	// rejects every calendar component at compile time.
-	return opcode == chrono_opcode::literal || opcode == chrono_opcode::percent ||
-		   opcode == chrono_opcode::newline || opcode == chrono_opcode::tab ||
-		   opcode == chrono_opcode::hour_24 || opcode == chrono_opcode::hour_12 ||
-		   opcode == chrono_opcode::day_of_year || opcode == chrono_opcode::minute ||
-		   opcode == chrono_opcode::am_pm || opcode == chrono_opcode::duration_unit ||
-		   opcode == chrono_opcode::duration_value || opcode == chrono_opcode::time_12 ||
-		   opcode == chrono_opcode::time_hm || opcode == chrono_opcode::second ||
-		   opcode == chrono_opcode::time_hms;
-}
-
 [[nodiscard]] inline constexpr bool chrono_padding_supported(chrono_opcode opcode) noexcept
 {
 	return opcode == chrono_opcode::hour_24 || opcode == chrono_opcode::hour_12 ||
@@ -487,13 +435,12 @@ template <::fast_io::fmt::format_character char_type>
  * program is compiler metadata rather than a run-time bytecode stream.
  */
 template <::fast_io::fmt::basic_fixed_string format_literal, source_slice specification,
-		  chrono_value_domain domain, bool has_utc_offset = false,
-		  bool has_time_zone_name = false>
+		  bool has_utc_offset = false, bool has_time_zone_name = false>
 [[nodiscard]] consteval auto parse_chrono_program() noexcept
 {
 	using char_type = typename decltype(format_literal)::value_type;
 	constexpr ::std::size_t format_size{format_literal.size()};
-	using program_type = basic_chrono_program<char_type, specification.size == 0u ? 2u : specification.size>;
+	using program_type = basic_chrono_program<char_type, specification.size == 0u ? 1u : specification.size>;
 	chrono_parse_result<program_type> result{};
 
 	if (specification.offset > format_size ||
@@ -505,15 +452,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal, source_slice specif
 
 	if constexpr (specification.size == 0u)
 	{
-		if constexpr (domain == chrono_value_domain::duration)
-		{
-			(void)result.program.append_conversion(chrono_opcode::duration_value);
-			(void)result.program.append_conversion(chrono_opcode::duration_unit);
-		}
-		else
-		{
-			(void)result.program.append_conversion(chrono_opcode::default_date_time);
-		}
+		(void)result.program.append_conversion(chrono_opcode::default_date_time);
 		return result;
 	}
 
@@ -574,11 +513,6 @@ template <::fast_io::fmt::basic_fixed_string format_literal, source_slice specif
 			set_chrono_error(result, chrono_parse_error::invalid_conversion, cursor);
 			return result;
 		}
-		if (!chrono_opcode_supported(domain, opcode))
-		{
-			set_chrono_error(result, chrono_parse_error::conversion_not_supported_for_value, cursor);
-			return result;
-		}
 		if (opcode == chrono_opcode::utc_offset && !has_utc_offset)
 		{
 			set_chrono_error(result, chrono_parse_error::utc_offset_not_supported, cursor);
@@ -609,607 +543,60 @@ consteval void diagnose_chrono_parse_error()
 {
 	if constexpr (error == chrono_parse_error::invalid_slice)
 	{
-		static_assert(error == chrono_parse_error::none, "fast_io chrono: invalid source slice");
+		static_assert(error == chrono_parse_error::none, "fast_io time: invalid source slice");
 	}
 	else if constexpr (error == chrono_parse_error::dangling_percent)
 	{
-		static_assert(error == chrono_parse_error::none, "fast_io chrono: dangling percent conversion");
+		static_assert(error == chrono_parse_error::none, "fast_io time: dangling percent conversion");
 	}
 	else if constexpr (error == chrono_parse_error::invalid_conversion)
 	{
-		static_assert(error == chrono_parse_error::none, "fast_io chrono: invalid conversion specifier");
-	}
-	else if constexpr (error == chrono_parse_error::conversion_not_supported_for_value)
-	{
-		static_assert(error == chrono_parse_error::none,
-					  "fast_io chrono: conversion is not supported for this chrono value domain");
+		static_assert(error == chrono_parse_error::none, "fast_io time: invalid conversion specifier");
 	}
 	else if constexpr (error == chrono_parse_error::utc_offset_not_supported)
 	{
 		static_assert(error == chrono_parse_error::none,
-					  "fast_io chrono: %z requires a value with a numeric UTC offset");
+					  "fast_io time: %z requires a value with a numeric UTC offset");
 	}
 	else if constexpr (error == chrono_parse_error::time_zone_name_not_supported)
 	{
 		static_assert(error == chrono_parse_error::none,
-					  "fast_io chrono: %Z requires a value with a time-zone name");
+					  "fast_io time: %Z requires a value with a time-zone name");
 	}
 	else if constexpr (error == chrono_parse_error::locale_modifier_not_supported)
 	{
 		static_assert(error == chrono_parse_error::none,
-					  "fast_io chrono: E/O locale modifiers require a locale-aware format overload");
+					  "fast_io time: E/O locale modifiers require a locale-aware format overload");
 	}
 	else if constexpr (error == chrono_parse_error::brace_in_chrono_literal)
 	{
 		static_assert(error == chrono_parse_error::none,
-					  "fast_io chrono: brace is not permitted as a chrono literal");
+					  "fast_io time: brace is not permitted as a time-format literal");
 	}
 	else if constexpr (error == chrono_parse_error::capacity_exceeded)
 	{
-		static_assert(error == chrono_parse_error::none, "fast_io chrono: internal program capacity exceeded");
+		static_assert(error == chrono_parse_error::none, "fast_io time: internal program capacity exceeded");
 	}
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal, source_slice specification,
-		  chrono_value_domain domain, bool has_utc_offset = false,
-		  bool has_time_zone_name = false>
-inline constexpr auto checked_chrono_program = []() consteval {
-	constexpr auto parsed{parse_chrono_program<format_literal, specification, domain,
-											  has_utc_offset, has_time_zone_name>()};
+		  bool has_utc_offset = false, bool has_time_zone_name = false>
+[[nodiscard]] consteval auto make_checked_chrono_program()
+{
+	constexpr auto parsed{parse_chrono_program<format_literal, specification,
+											   has_utc_offset, has_time_zone_name>()};
 	if constexpr (parsed.error != chrono_parse_error::none)
 	{
 		diagnose_chrono_parse_error<parsed.error>();
 	}
 	return parsed.program;
-}();
-
-} // namespace fast_io::fmt::details
-
-namespace fast_io::fmt::details
-{
-
-template <typename duration_type>
-struct chrono_duration_state;
-
-template <typename rep_type, typename period_type>
-struct chrono_duration_state<::std::chrono::duration<rep_type, period_type>>
-{
-	using duration_type = ::std::chrono::duration<rep_type, period_type>;
-	using rep = rep_type;
-	using period = period_type;
-	using magnitude_type = ::std::conditional_t<::std::integral<rep_type>,
-												::std::make_unsigned_t<rep_type>, rep_type>;
-
-	magnitude_type magnitude{};
-	long double absolute_seconds{};
-	bool negative_pending{};
-	bool finite{true};
-	bool not_a_number{};
-	unsigned default_fractional_precision{};
-};
-
-template <typename rep_type, typename period_type>
-[[nodiscard]] inline chrono_duration_state<::std::chrono::duration<rep_type, period_type>>
-make_chrono_duration_state(::std::chrono::duration<rep_type, period_type> value) noexcept
-{
-	static_assert(::std::integral<rep_type> || ::std::floating_point<rep_type>,
-				  "fast_io chrono: duration representation must be an arithmetic scalar");
-	using state_type = chrono_duration_state<::std::chrono::duration<rep_type, period_type>>;
-	state_type state{};
-	if constexpr (::std::integral<rep_type>)
-	{
-		state.negative_pending = ::std::is_signed_v<rep_type> && value.count() < 0;
-		state.magnitude = chrono_unsigned_magnitude(value.count());
-		state.absolute_seconds = static_cast<long double>(state.magnitude) *
-								 static_cast<long double>(period_type::num) /
-								 static_cast<long double>(period_type::den);
-		state.default_fractional_precision = chrono_fractional_digits<period_type>();
-	}
-	else
-	{
-		auto const count{value.count()};
-		state.finite = ::std::isfinite(count);
-		state.not_a_number = ::std::isnan(count);
-		state.negative_pending = ::std::signbit(count) && !state.not_a_number;
-		state.magnitude = static_cast<rep_type>(::std::fabs(count));
-		state.absolute_seconds = static_cast<long double>(state.magnitude) *
-								 static_cast<long double>(period_type::num) /
-								 static_cast<long double>(period_type::den);
-		state.default_fractional_precision = chrono_fractional_digits<period_type>();
-		if (state.finite && state.default_fractional_precision < 6u &&
-			::std::round(state.absolute_seconds) != state.absolute_seconds)
-		{
-			state.default_fractional_precision = 6u;
-		}
-	}
-	return state;
 }
 
-template <::fast_io::fmt::format_character char_type, typename state_type>
-inline constexpr char_type *consume_chrono_duration_sign(
-	char_type *output, state_type &state) noexcept
-{
-	if (state.negative_pending)
-	{
-		*output++ = chrono_basic_latin<char_type>(u8'-');
-		state.negative_pending = false;
-	}
-	return output;
-}
-
-template <typename state_type>
-[[nodiscard]] inline constexpr ::std::size_t consume_chrono_duration_sign_size(
-	state_type &state) noexcept
-{
-	auto const size{static_cast<::std::size_t>(state.negative_pending)};
-	state.negative_pending = false;
-	return size;
-}
-
-template <::fast_io::fmt::format_character char_type, typename state_type>
-inline char_type *write_chrono_nonfinite(char_type *output, state_type &state) noexcept
-{
-	output = consume_chrono_duration_sign(output, state);
-	return state.not_a_number ? write_chrono_ascii(output, u8"nan") : write_chrono_ascii(output, u8"inf");
-}
-
-template <typename state_type>
-[[nodiscard]] inline ::std::uintmax_t chrono_duration_component(
-	state_type const &state, long double divisor, ::std::uintmax_t modulus = 0u)
-{
-	auto result{::std::floor(state.absolute_seconds / divisor)};
-	if (modulus != 0u)
-	{
-		result = ::std::fmod(result, static_cast<long double>(modulus));
-	}
-	if (result < 0.0L ||
-		result > static_cast<long double>((::std::numeric_limits<::std::uintmax_t>::max)()))
-	{
-		::fast_io::fast_terminate();
-	}
-	return static_cast<::std::uintmax_t>(result);
-}
-
-template <bool fixed, ::fast_io::fmt::format_character char_type,
-	typename floating_type>
-inline char_type *write_chrono_floating(
-	char_type *output, floating_type value, ::std::size_t precision)
-{
-	using alias_type = ::fast_io::details::float_alias_type<floating_type>;
-	if constexpr (fixed)
-	{
-		constexpr auto flags{::fast_io::manipulators::scalar_flags{
-			.floating = ::fast_io::manipulators::floating_format::fixed,
-			.precision = ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero}};
-		auto scalar{::fast_io::manipulators::scalar_manip_precision_t<flags, alias_type>{
-			static_cast<alias_type>(value), precision}};
-		static_assert(::fast_io::dynamic_reserve_printable<
-			char_type, decltype(scalar)>,
-			"fast_io chrono: the floating representation has no exact fixed-precision print concept");
-		return ::fast_io::print_reserve_define(
-			::fast_io::io_reserve_type<char_type, decltype(scalar)>, output, scalar);
-	}
-	else
-	{
-		constexpr auto flags{
-			::fast_io::manipulators::floating_point_default_scalar_flags};
-		auto scalar{::fast_io::manipulators::scalar_manip_t<flags, alias_type>{
-			static_cast<alias_type>(value)}};
-		static_assert(::fast_io::reserve_printable<char_type, decltype(scalar)>,
-			"fast_io chrono: the floating representation has no shortest-decimal print concept; request an explicit precision");
-		return ::fast_io::print_reserve_define(
-			::fast_io::io_reserve_type<char_type, decltype(scalar)>, output, scalar);
-	}
-}
-
-template <bool fixed, ::fast_io::fmt::format_character char_type,
-	typename floating_type>
-[[nodiscard]] inline ::std::size_t chrono_floating_capacity(
-	floating_type value, ::std::size_t precision) noexcept
-{
-	using alias_type = ::fast_io::details::float_alias_type<floating_type>;
-	if constexpr (fixed)
-	{
-		constexpr auto flags{::fast_io::manipulators::scalar_flags{
-			.floating = ::fast_io::manipulators::floating_format::fixed,
-			.precision = ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero}};
-		auto scalar{::fast_io::manipulators::scalar_manip_precision_t<flags, alias_type>{
-			static_cast<alias_type>(value), precision}};
-		static_assert(::fast_io::dynamic_reserve_printable<
-			char_type, decltype(scalar)>,
-			"fast_io chrono: the floating representation has no exact fixed-precision print concept");
-		return ::fast_io::print_reserve_size(
-			::fast_io::io_reserve_type<char_type, decltype(scalar)>, scalar);
-	}
-	else
-	{
-		constexpr auto flags{
-			::fast_io::manipulators::floating_point_default_scalar_flags};
-		using scalar_type =
-			::fast_io::manipulators::scalar_manip_t<flags, alias_type>;
-		static_assert(::fast_io::reserve_printable<char_type, scalar_type>,
-			"fast_io chrono: the floating representation has no shortest-decimal print concept; request an explicit precision");
-		return ::fast_io::print_reserve_size(
-			::fast_io::io_reserve_type<char_type, scalar_type>);
-	}
-}
-
-template <typename period_type>
-[[nodiscard]] inline constexpr ::std::size_t chrono_duration_unit_capacity() noexcept
-{
-	if constexpr (::std::same_as<period_type, ::std::atto> ||
-				  ::std::same_as<period_type, ::std::femto> ||
-				  ::std::same_as<period_type, ::std::pico> ||
-				  ::std::same_as<period_type, ::std::nano> ||
-				  ::std::same_as<period_type, ::std::micro> ||
-				  ::std::same_as<period_type, ::std::milli> ||
-				  ::std::same_as<period_type, ::std::centi> ||
-				  ::std::same_as<period_type, ::std::deci> ||
-				  ::std::same_as<period_type, ::std::ratio<1>>)
-	{
-		return 2u;
-	}
-	else if constexpr (::std::same_as<period_type, ::std::deca> ||
-					   ::std::same_as<period_type, ::std::hecto> ||
-					   ::std::same_as<period_type, ::std::kilo> ||
-					   ::std::same_as<period_type, ::std::mega> ||
-					   ::std::same_as<period_type, ::std::giga> ||
-					   ::std::same_as<period_type, ::std::tera> ||
-					   ::std::same_as<period_type, ::std::peta> ||
-					   ::std::same_as<period_type, ::std::exa> ||
-					   ::std::same_as<period_type, ::std::ratio<60>>)
-	{
-		return 3u;
-	}
-	else if constexpr (::std::same_as<period_type, ::std::ratio<3600>> ||
-					   ::std::same_as<period_type, ::std::ratio<86400>>)
-	{
-		return 1u;
-	}
-	else
-	{
-		return 2u * print_reserve_size(
-						::fast_io::io_reserve_type<char, ::std::intmax_t>) +
-			   4u;
-	}
-}
-
-template <::fast_io::fmt::format_character char_type, typename period_type>
-inline char_type *write_chrono_duration_unit(char_type *output) noexcept
-{
-	if constexpr (::std::same_as<period_type, ::std::atto>)
-	{
-		return write_chrono_ascii(output, u8"as");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::femto>)
-	{
-		return write_chrono_ascii(output, u8"fs");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::pico>)
-	{
-		return write_chrono_ascii(output, u8"ps");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::nano>)
-	{
-		return write_chrono_ascii(output, u8"ns");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::micro>)
-	{
-		return write_chrono_ascii(output, u8"us");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::milli>)
-	{
-		return write_chrono_ascii(output, u8"ms");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::centi>)
-	{
-		return write_chrono_ascii(output, u8"cs");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::deci>)
-	{
-		return write_chrono_ascii(output, u8"ds");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::ratio<1>>)
-	{
-		return write_chrono_ascii(output, u8"s");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::deca>)
-	{
-		return write_chrono_ascii(output, u8"das");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::hecto>)
-	{
-		return write_chrono_ascii(output, u8"hs");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::kilo>)
-	{
-		return write_chrono_ascii(output, u8"ks");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::mega>)
-	{
-		return write_chrono_ascii(output, u8"Ms");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::giga>)
-	{
-		return write_chrono_ascii(output, u8"Gs");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::tera>)
-	{
-		return write_chrono_ascii(output, u8"Ts");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::peta>)
-	{
-		return write_chrono_ascii(output, u8"Ps");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::exa>)
-	{
-		return write_chrono_ascii(output, u8"Es");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::ratio<60>>)
-	{
-		return write_chrono_ascii(output, u8"min");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::ratio<3600>>)
-	{
-		return write_chrono_ascii(output, u8"h");
-	}
-	else if constexpr (::std::same_as<period_type, ::std::ratio<86400>>)
-	{
-		return write_chrono_ascii(output, u8"d");
-	}
-	else
-	{
-		output = write_chrono_separator(output, u8'[');
-		output = write_chrono_integer(output, static_cast<::std::intmax_t>(period_type::num));
-		if constexpr (period_type::den != 1)
-		{
-			output = write_chrono_separator(output, u8'/');
-			output = write_chrono_integer(output, static_cast<::std::intmax_t>(period_type::den));
-		}
-		output = write_chrono_separator(output, u8']');
-		return write_chrono_separator(output, u8's');
-	}
-}
-
-template <bool has_precision, ::fast_io::fmt::format_character char_type,
-		  typename state_type>
-inline char_type *write_chrono_duration_value(
-	char_type *output, state_type &state, ::std::size_t precision)
-{
-	output = consume_chrono_duration_sign(output, state);
-	if constexpr (::std::integral<typename state_type::rep>)
-	{
-		static_assert(!has_precision,
-					  "fast_io chrono: precision is not permitted for an integral duration representation");
-		return write_chrono_integer(output, state.magnitude);
-	}
-	else
-	{
-		return write_chrono_floating<has_precision, char_type>(
-			output, state.magnitude, precision);
-	}
-}
-
-template <bool has_precision, ::fast_io::fmt::format_character char_type,
-		  typename state_type>
-[[nodiscard]] inline ::std::size_t chrono_duration_value_capacity(
-	state_type &state, ::std::size_t precision) noexcept
-{
-	auto capacity{consume_chrono_duration_sign_size(state)};
-	if constexpr (::std::integral<typename state_type::rep>)
-	{
-		static_assert(!has_precision,
-					  "fast_io chrono: precision is not permitted for an integral duration representation");
-		return capacity + print_reserve_size(
-							  ::fast_io::io_reserve_type<char, typename state_type::magnitude_type>);
-	}
-	else
-	{
-		return capacity + chrono_floating_capacity<has_precision, char_type>(
-							  state.magnitude, precision);
-	}
-}
-
-template <bool has_precision, ::fast_io::fmt::format_character char_type,
-		  typename state_type>
-inline char_type *write_chrono_duration_second(
-	char_type *output, state_type &state, ::std::size_t precision,
-	chrono_padding padding)
-{
-	if (!state.finite)
-	{
-		return write_chrono_nonfinite(output, state);
-	}
-	output = consume_chrono_duration_sign(output, state);
-	auto const second{::std::fmod(state.absolute_seconds, 60.0L)};
-	auto const actual_precision{
-		has_precision ? static_cast<unsigned>(precision) : state.default_fractional_precision};
-	if (second < 10.0L && padding != chrono_padding::none)
-	{
-		*output++ = chrono_basic_latin<char_type>(
-			padding == chrono_padding::space ? u8' ' : u8'0');
-	}
-	if (actual_precision == 0u)
-	{
-		return write_chrono_integer(output, static_cast<::std::uintmax_t>(second));
-	}
-	return write_chrono_floating<true, char_type>(
-		output, second, actual_precision);
-}
-
-template <bool has_precision, ::fast_io::fmt::format_character char_type,
-		  typename state_type>
-[[nodiscard]] inline ::std::size_t chrono_duration_second_capacity(
-	state_type &state, ::std::size_t precision, chrono_padding padding) noexcept
-{
-	auto capacity{consume_chrono_duration_sign_size(state)};
-	if (!state.finite)
-	{
-		return capacity + 3u;
-	}
-	auto const second{::std::fmod(state.absolute_seconds, 60.0L)};
-	auto const actual_precision{
-		has_precision ? static_cast<unsigned>(precision) : state.default_fractional_precision};
-	capacity += static_cast<::std::size_t>(second < 10.0L && padding != chrono_padding::none);
-	if (actual_precision == 0u)
-	{
-		return capacity + 2u;
-	}
-	return capacity + chrono_floating_capacity<true, char_type>(
-						  second, actual_precision);
-}
-
-template <chrono_opcode opcode, chrono_padding padding, bool has_precision,
-		  ::fast_io::fmt::format_character char_type, typename state_type>
-inline char_type *emit_chrono_duration_operation(
-	char_type *output, state_type &state, ::std::size_t precision)
-{
-	if constexpr (opcode == chrono_opcode::duration_unit)
-	{
-		return write_chrono_duration_unit<char_type, typename state_type::period>(output);
-	}
-	else if constexpr (opcode == chrono_opcode::duration_value)
-	{
-		return write_chrono_duration_value<has_precision>(output, state, precision);
-	}
-	else if constexpr (opcode == chrono_opcode::second)
-	{
-		return write_chrono_duration_second<has_precision>(output, state, precision, padding);
-	}
-	else if constexpr (opcode == chrono_opcode::am_pm)
-	{
-		if (!state.finite)
-		{
-			return write_chrono_nonfinite(output, state);
-		}
-		auto const hour{chrono_duration_component(state, 3600.0L, 24u)};
-		return write_chrono_ascii(output, hour < 12u ? u8"AM" : u8"PM");
-	}
-	else if constexpr (opcode == chrono_opcode::day_of_year ||
-					   opcode == chrono_opcode::hour_24 || opcode == chrono_opcode::hour_12 ||
-					   opcode == chrono_opcode::minute)
-	{
-		if (!state.finite)
-		{
-			return write_chrono_nonfinite(output, state);
-		}
-		output = consume_chrono_duration_sign(output, state);
-		auto component = [&]() {
-			if constexpr (opcode == chrono_opcode::day_of_year)
-			{
-				return chrono_duration_component(state, 86400.0L);
-			}
-			else if constexpr (opcode == chrono_opcode::hour_24)
-			{
-				return chrono_duration_component(state, 3600.0L, 24u);
-			}
-			else if constexpr (opcode == chrono_opcode::hour_12)
-			{
-				auto result{chrono_duration_component(state, 3600.0L, 12u)};
-				return result == 0u ? static_cast<::std::uintmax_t>(12u) : result;
-			}
-			else
-			{
-				return chrono_duration_component(state, 60.0L, 60u);
-			}
-		}();
-		constexpr unsigned width{opcode == chrono_opcode::day_of_year ? 0u : 2u};
-		return write_chrono_padded_integer(output, component, width, padding);
-	}
-	else if constexpr (opcode == chrono_opcode::time_hm ||
-					   opcode == chrono_opcode::time_hms || opcode == chrono_opcode::time_12)
-	{
-		if (!state.finite)
-		{
-			return write_chrono_nonfinite(output, state);
-		}
-		output = consume_chrono_duration_sign(output, state);
-		auto hour{chrono_duration_component(state, 3600.0L,
-											opcode == chrono_opcode::time_12 ? 12u : 24u)};
-		if constexpr (opcode == chrono_opcode::time_12)
-		{
-			if (hour == 0u)
-			{
-				hour = 12u;
-			}
-		}
-		output = write_chrono_padded_integer(output, hour, 2u, chrono_padding::zero);
-		output = write_chrono_separator(output, u8':');
-		output = write_chrono_padded_integer(output,
-											 chrono_duration_component(state, 60.0L, 60u), 2u, chrono_padding::zero);
-		if constexpr (opcode != chrono_opcode::time_hm)
-		{
-			output = write_chrono_separator(output, u8':');
-			output = write_chrono_duration_second<has_precision>(
-				output, state, precision, chrono_padding::zero);
-		}
-		if constexpr (opcode == chrono_opcode::time_12)
-		{
-			output = write_chrono_separator(output, u8' ');
-			output = write_chrono_ascii(output,
-										chrono_duration_component(state, 3600.0L, 24u) < 12u ? u8"AM" : u8"PM");
-		}
-		return output;
-	}
-	else
-	{
-		static_assert(opcode == chrono_opcode::literal || opcode == chrono_opcode::percent ||
-						  opcode == chrono_opcode::newline || opcode == chrono_opcode::tab,
-					  "fast_io chrono: unhandled duration opcode");
-		return output;
-	}
-}
-
-template <chrono_opcode opcode, chrono_padding padding, bool has_precision,
-		  ::fast_io::fmt::format_character char_type, typename state_type>
-[[nodiscard]] inline ::std::size_t chrono_duration_operation_capacity(
-	state_type &state, ::std::size_t precision)
-{
-	if constexpr (opcode == chrono_opcode::duration_unit)
-	{
-		return chrono_duration_unit_capacity<typename state_type::period>();
-	}
-	else if constexpr (opcode == chrono_opcode::duration_value)
-	{
-		return chrono_duration_value_capacity<has_precision, char_type>(state, precision);
-	}
-	else if constexpr (opcode == chrono_opcode::second)
-	{
-		return chrono_duration_second_capacity<has_precision, char_type>(state, precision, padding);
-	}
-	else if constexpr (opcode == chrono_opcode::am_pm)
-	{
-		return state.finite ? 2u : consume_chrono_duration_sign_size(state) + 3u;
-	}
-	else if constexpr (opcode == chrono_opcode::day_of_year)
-	{
-		return consume_chrono_duration_sign_size(state) +
-			   print_reserve_size(::fast_io::io_reserve_type<char, ::std::uintmax_t>);
-	}
-	else if constexpr (opcode == chrono_opcode::hour_24 ||
-					   opcode == chrono_opcode::hour_12 || opcode == chrono_opcode::minute)
-	{
-		return consume_chrono_duration_sign_size(state) + 3u;
-	}
-	else if constexpr (opcode == chrono_opcode::time_hm)
-	{
-		return consume_chrono_duration_sign_size(state) + 5u;
-	}
-	else if constexpr (opcode == chrono_opcode::time_hms)
-	{
-		return consume_chrono_duration_sign_size(state) + 6u +
-			   chrono_duration_second_capacity<has_precision, char_type>(state, precision, chrono_padding::zero);
-	}
-	else if constexpr (opcode == chrono_opcode::time_12)
-	{
-		return consume_chrono_duration_sign_size(state) + 9u +
-			   chrono_duration_second_capacity<has_precision, char_type>(state, precision, chrono_padding::zero);
-	}
-	else
-	{
-		return 1u;
-	}
-}
+template <::fast_io::fmt::basic_fixed_string format_literal, source_slice specification,
+		  bool has_utc_offset = false, bool has_time_zone_name = false>
+inline constexpr auto checked_chrono_program{
+	make_checked_chrono_program<format_literal, specification,
+								has_utc_offset, has_time_zone_name>()};
 
 } // namespace fast_io::fmt::details
 
@@ -1430,7 +817,8 @@ inline char_type *write_chrono_calendar_second(
 	*output++ = chrono_basic_latin<char_type>(u8'.');
 	auto fraction{state.fractional_second};
 	for (unsigned discarded{static_cast<unsigned>(
-			 ::std::numeric_limits<::std::uint_least64_t>::digits10) - precision};
+								::std::numeric_limits<::std::uint_least64_t>::digits10) -
+							precision};
 		 discarded != 0u; --discarded)
 	{
 		fraction /= 10u;
@@ -1670,7 +1058,7 @@ inline char_type *emit_chrono_calendar_operation(
 	else if constexpr (opcode == chrono_opcode::utc_offset)
 	{
 		static_assert(state_type::has_utc_offset,
-					  "fast_io chrono: internal UTC-offset capability mismatch");
+					  "fast_io time: internal UTC-offset capability mismatch");
 		auto offset{static_cast<::std::int_least64_t>(state.utc_offset)};
 		*output++ = chrono_basic_latin<char_type>(offset < 0 ? u8'-' : u8'+');
 		auto magnitude{chrono_unsigned_magnitude(offset)};
@@ -1692,14 +1080,14 @@ inline char_type *emit_chrono_calendar_operation(
 	else if constexpr (opcode == chrono_opcode::time_zone_name)
 	{
 		static_assert(state_type::has_time_zone_name,
-					  "fast_io chrono: internal time-zone-name capability mismatch");
+					  "fast_io time: internal time-zone-name capability mismatch");
 		return write_chrono_ascii(output, u8"UTC");
 	}
 	else
 	{
 		static_assert(opcode == chrono_opcode::literal || opcode == chrono_opcode::percent ||
 						  opcode == chrono_opcode::newline || opcode == chrono_opcode::tab,
-					  "fast_io chrono: unhandled calendar opcode");
+					  "fast_io time: unhandled calendar opcode");
 		return output;
 	}
 }
@@ -1879,8 +1267,7 @@ template <chrono_opcode opcode, chrono_padding padding, typename state_type>
 			static_cast<::std::int_least64_t>(state.utc_offset))};
 		auto const seconds{magnitude % 60u};
 		magnitude /= 3600u;
-		return 1u + chrono_padded_integer_size(
-					 magnitude, 2u, chrono_padding::zero) +
+		return 1u + chrono_padded_integer_size(magnitude, 2u, chrono_padding::zero) +
 			   2u + static_cast<::std::size_t>(seconds != 0u) * 2u;
 	}
 	else if constexpr (opcode == chrono_opcode::time_zone_name)
@@ -1916,14 +1303,6 @@ namespace fast_io::fmt::details
 {
 
 template <typename T>
-struct is_chrono_duration : ::std::false_type
-{};
-
-template <typename T>
-inline constexpr bool is_chrono_duration_v{
-	is_chrono_duration<::std::remove_cvref_t<T>>::value};
-
-template <typename T>
 struct is_time_format_source : ::std::false_type
 {};
 
@@ -1931,55 +1310,8 @@ template <typename T>
 inline constexpr bool is_time_format_source_v{
 	is_time_format_source<::std::remove_cvref_t<T>>::value};
 
-/**
- * Decimal precision selected from a standard duration period.
- */
-template <typename period_type>
-[[nodiscard]] consteval unsigned chrono_fractional_digits() noexcept
-{
-	// Reduce the period's denominator by the numerator: only the reduced
-	// denominator determines whether one tick has a terminating decimal spelling.
-	::std::uintmax_t numerator{
-		static_cast<::std::uintmax_t>(period_type::num < 0 ? -period_type::num : period_type::num)};
-	::std::uintmax_t denominator{static_cast<::std::uintmax_t>(period_type::den)};
-	auto gcd = [](auto lhs, auto rhs) constexpr {
-		while (rhs != 0u)
-		{
-			auto const remainder{lhs % rhs};
-			lhs = rhs;
-			rhs = remainder;
-		}
-		return lhs;
-	};
-	auto const common{gcd(numerator, denominator)};
-	denominator /= common;
-	unsigned twos{};
-	unsigned fives{};
-	while ((denominator % 2u) == 0u)
-	{
-		denominator /= 2u;
-		++twos;
-	}
-	while ((denominator % 5u) == 0u)
-	{
-		denominator /= 5u;
-		++fives;
-	}
-	if (denominator != 1u)
-	{
-		return 6u;
-	}
-	auto const digits{twos < fives ? fives : twos};
-	return digits < 19u ? digits : 19u;
-}
-
 template <typename T>
-concept chrono_format_value = is_chrono_duration_v<T> ||
-							  is_time_format_source_v<T>;
-
-template <typename T>
-inline constexpr chrono_value_domain chrono_domain_v =
-	is_chrono_duration_v<T> ? chrono_value_domain::duration : chrono_value_domain::calendar;
+concept time_format_value = is_time_format_source_v<T>;
 
 /** Converts an invariant UTF-8/ASCII code unit to the selected execution character type. */
 template <::fast_io::fmt::format_character char_type>
@@ -2375,12 +1707,49 @@ chrono_unsigned_magnitude(signed_type value) noexcept
 	}
 }
 
+template <::fast_io::fmt::format_character char_type, typename unsigned_type>
+inline constexpr void write_chrono_integer_constant(
+	char_type *output, ::std::size_t size, unsigned_type magnitude,
+	bool negative) noexcept
+{
+	auto *cursor{output + size};
+	do
+	{
+		*--cursor = ::fast_io::char_literal_add<char_type>(
+			static_cast<unsigned>(magnitude % 10u));
+		magnitude /= 10u;
+	} while (magnitude != 0u);
+	if (negative)
+	{
+		*output = chrono_basic_latin<char_type>(u8'-');
+	}
+}
+
 template <::fast_io::fmt::format_character char_type, typename integer_type>
 inline constexpr char_type *write_chrono_integer(
 	char_type *output, integer_type value) noexcept
 {
-	return print_reserve_define(
-		::fast_io::io_reserve_type<char_type, integer_type>, output, value);
+	// The ordinary integral reserve writer is allowed to use a wider final store
+	// inside its fixed maximum-capacity contract.  A time field, however, first
+	// computes its exact dynamic size and may place a one-digit component at the
+	// very end of that allocation.  Both paths below write exactly the measured
+	// character count: constant evaluation uses the scalar loop (which remains
+	// portable across compiler evaluators), while runtime retains the optimized
+	// precise-length integral writer.
+	auto const magnitude{chrono_unsigned_magnitude(value)};
+	bool const negative{::std::is_signed_v<integer_type> && value < 0};
+	auto const size{chrono_decimal_digits(magnitude) +
+					static_cast<::std::size_t>(negative)};
+	if (::std::is_constant_evaluated())
+	{
+		write_chrono_integer_constant(output, size, magnitude, negative);
+	}
+	else
+	{
+		::fast_io::details::print_reserve_integral_define_precise<10u>(
+			output, size, value);
+	}
+	return output + size;
 }
 
 template <typename integer_type>
@@ -2428,23 +1797,21 @@ namespace fast_io::manipulators
 {
 
 /**
- * Printable semantic leaf produced by the brace chrono lowering.
+ * Printable semantic leaf produced by brace time lowering.
  *
- * The format literal and chrono source slice are type properties.  The object
- * itself stores only normalized value state and, when the generic brace prefix
- * requested it, a resolved precision.  Consequently neither a format pointer
- * nor a token-program address crosses the public print/concat boundary.
+ * The format literal and time source slice are type properties.  The object
+ * itself stores only normalized value state.  Consequently neither a format
+ * pointer nor a token-program address crosses the public print/concat boundary.
  */
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  ::fast_io::fmt::details::source_slice specification,
-		  bool has_precision, typename storage_type>
+		  typename storage_type>
 struct basic_chrono_field_t
 {
 	using manip_tag = ::fast_io::manip_tag_t;
 	using value_type = storage_type;
 
 	storage_type value;
-	::std::size_t precision{};
 };
 
 } // namespace fast_io::manipulators
@@ -2453,16 +1820,14 @@ namespace fast_io::fmt::details
 {
 
 template <typename storage_type>
-using chrono_runtime_state_t = ::std::conditional_t<
-	is_chrono_duration_v<storage_type>,
-	chrono_duration_state<::std::remove_cvref_t<storage_type>>,
-	::std::remove_cvref_t<storage_type>>;
+using chrono_runtime_state_t = ::std::remove_cvref_t<storage_type>;
 
 template <typename storage_type>
-inline constexpr bool chrono_has_utc_offset_v = []() consteval {
+[[nodiscard]] consteval bool chrono_has_utc_offset() noexcept
+{
 	if constexpr (requires {
-				  ::std::remove_cvref_t<storage_type>::has_utc_offset;
-			  })
+					  ::std::remove_cvref_t<storage_type>::has_utc_offset;
+				  })
 	{
 		return ::std::remove_cvref_t<storage_type>::has_utc_offset;
 	}
@@ -2470,13 +1835,18 @@ inline constexpr bool chrono_has_utc_offset_v = []() consteval {
 	{
 		return false;
 	}
-}();
+}
 
 template <typename storage_type>
-inline constexpr bool chrono_has_time_zone_name_v = []() consteval {
+inline constexpr bool chrono_has_utc_offset_v{
+	chrono_has_utc_offset<storage_type>()};
+
+template <typename storage_type>
+[[nodiscard]] consteval bool chrono_has_time_zone_name() noexcept
+{
 	if constexpr (requires {
-				  ::std::remove_cvref_t<storage_type>::has_time_zone_name;
-			  })
+					  ::std::remove_cvref_t<storage_type>::has_time_zone_name;
+				  })
 	{
 		return ::std::remove_cvref_t<storage_type>::has_time_zone_name;
 	}
@@ -2484,34 +1854,24 @@ inline constexpr bool chrono_has_time_zone_name_v = []() consteval {
 	{
 		return false;
 	}
-}();
-
-template <typename storage_type>
-[[nodiscard]] inline auto make_chrono_runtime_state(storage_type const &value)
-{
-	if constexpr (is_chrono_duration_v<storage_type>)
-	{
-		return make_chrono_duration_state(value);
-	}
-	else
-	{
-		return value;
-	}
 }
 
+template <typename storage_type>
+inline constexpr bool chrono_has_time_zone_name_v{
+	chrono_has_time_zone_name<storage_type>()};
+
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision, typename storage_type,
+		  source_slice specification, typename storage_type,
 		  ::std::size_t operation_index, ::fast_io::fmt::format_character char_type>
 [[nodiscard]] inline ::std::size_t chrono_operation_capacity(
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field,
+		format_literal, specification, storage_type> const &,
 	chrono_runtime_state_t<storage_type> &state)
 {
-	constexpr auto domain{chrono_domain_v<storage_type>};
 	constexpr auto const &program{
-		checked_chrono_program<format_literal, specification, domain,
-						   chrono_has_utc_offset_v<storage_type>,
-						   chrono_has_time_zone_name_v<storage_type>>};
+		checked_chrono_program<format_literal, specification,
+							   chrono_has_utc_offset_v<storage_type>,
+							   chrono_has_time_zone_name_v<storage_type>>};
 	constexpr auto operation{program.operations[operation_index]};
 	if constexpr (operation.opcode == chrono_opcode::literal)
 	{
@@ -2523,11 +1883,6 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 	{
 		return 1u;
 	}
-	else if constexpr (domain == chrono_value_domain::duration)
-	{
-		return chrono_duration_operation_capacity<operation.opcode,
-												  operation.padding, has_precision, char_type>(state, field.precision);
-	}
 	else
 	{
 		return chrono_calendar_operation_capacity<operation.opcode,
@@ -2536,19 +1891,18 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision, typename storage_type,
+		  source_slice specification, typename storage_type,
 		  ::std::size_t operation_index, ::fast_io::fmt::format_character char_type>
 inline char_type *emit_chrono_operation(
 	char_type *output,
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field,
+		format_literal, specification, storage_type> const &,
 	chrono_runtime_state_t<storage_type> &state)
 {
-	constexpr auto domain{chrono_domain_v<storage_type>};
 	constexpr auto const &program{
-		checked_chrono_program<format_literal, specification, domain,
-						   chrono_has_utc_offset_v<storage_type>,
-						   chrono_has_time_zone_name_v<storage_type>>};
+		checked_chrono_program<format_literal, specification,
+							   chrono_has_utc_offset_v<storage_type>,
+							   chrono_has_time_zone_name_v<storage_type>>};
 	constexpr auto operation{program.operations[operation_index]};
 	if constexpr (operation.opcode == chrono_opcode::literal)
 	{
@@ -2573,11 +1927,6 @@ inline char_type *emit_chrono_operation(
 		*output++ = chrono_basic_latin<char_type>(u8'\t');
 		return output;
 	}
-	else if constexpr (domain == chrono_value_domain::duration)
-	{
-		return emit_chrono_duration_operation<operation.opcode,
-											  operation.padding, has_precision>(output, state, field.precision);
-	}
 	else
 	{
 		return emit_chrono_calendar_operation<operation.opcode,
@@ -2586,33 +1935,33 @@ inline char_type *emit_chrono_operation(
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision, typename storage_type,
+		  source_slice specification, typename storage_type,
 		  ::fast_io::fmt::format_character char_type, ::std::size_t... operation_index>
 [[nodiscard]] inline ::std::size_t chrono_program_capacity_impl(
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field,
+		format_literal, specification, storage_type> const &field,
 	::std::index_sequence<operation_index...>)
 {
-	auto state{make_chrono_runtime_state(field.value)};
+	auto state{field.value};
 	::std::size_t result{};
 	((result += chrono_operation_capacity<format_literal, specification,
-										  has_precision, storage_type, operation_index, char_type>(field, state)),
+										  storage_type, operation_index, char_type>(field, state)),
 	 ...);
 	return result;
 }
 
 template <::fast_io::fmt::basic_fixed_string format_literal,
-		  source_slice specification, bool has_precision, typename storage_type,
+		  source_slice specification, typename storage_type,
 		  ::fast_io::fmt::format_character char_type, ::std::size_t... operation_index>
 inline char_type *emit_chrono_program_impl(
 	char_type *output,
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field,
+		format_literal, specification, storage_type> const &field,
 	::std::index_sequence<operation_index...>)
 {
-	auto state{make_chrono_runtime_state(field.value)};
+	auto state{field.value};
 	((output = emit_chrono_operation<format_literal, specification,
-									 has_precision, storage_type, operation_index>(output, field, state)),
+									 storage_type, operation_index>(output, field, state)),
 	 ...);
 	return output;
 }
@@ -2625,53 +1974,49 @@ namespace fast_io
 template <::std::integral char_type,
 		  ::fast_io::fmt::basic_fixed_string format_literal,
 		  ::fast_io::fmt::details::source_slice specification,
-		  bool has_precision, typename storage_type>
+		  typename storage_type>
 	requires ::std::same_as<char_type,
 							typename decltype(format_literal)::value_type>
 [[nodiscard]] inline ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::basic_chrono_field_t<
-									 format_literal, specification, has_precision, storage_type>>,
+									 format_literal, specification, storage_type>>,
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field)
+		format_literal, specification, storage_type> const &field)
 {
-	constexpr auto domain{
-		::fast_io::fmt::details::chrono_domain_v<storage_type>};
 	constexpr auto operation_count{
 		::fast_io::fmt::details::checked_chrono_program<
-			format_literal, specification, domain,
+			format_literal, specification,
 			::fast_io::fmt::details::chrono_has_utc_offset_v<storage_type>,
 			::fast_io::fmt::details::chrono_has_time_zone_name_v<storage_type>>
 			.operation_count};
 	return ::fast_io::fmt::details::chrono_program_capacity_impl<
-		format_literal, specification, has_precision, storage_type, char_type>(
+		format_literal, specification, storage_type, char_type>(
 		field, ::std::make_index_sequence<operation_count>{});
 }
 
 template <::std::integral char_type,
 		  ::fast_io::fmt::basic_fixed_string format_literal,
 		  ::fast_io::fmt::details::source_slice specification,
-		  bool has_precision, typename storage_type>
+		  typename storage_type>
 	requires ::std::same_as<char_type,
 							typename decltype(format_literal)::value_type>
 inline char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::basic_chrono_field_t<
-									 format_literal, specification, has_precision, storage_type>>,
+									 format_literal, specification, storage_type>>,
 	char_type *output,
 	::fast_io::manipulators::basic_chrono_field_t<
-		format_literal, specification, has_precision, storage_type> const &field)
+		format_literal, specification, storage_type> const &field)
 {
-	constexpr auto domain{
-		::fast_io::fmt::details::chrono_domain_v<storage_type>};
 	constexpr auto operation_count{
 		::fast_io::fmt::details::checked_chrono_program<
-			format_literal, specification, domain,
+			format_literal, specification,
 			::fast_io::fmt::details::chrono_has_utc_offset_v<storage_type>,
 			::fast_io::fmt::details::chrono_has_time_zone_name_v<storage_type>>
 			.operation_count};
 	return ::fast_io::fmt::details::emit_chrono_program_impl<
-		format_literal, specification, has_precision, storage_type>(
+		format_literal, specification, storage_type>(
 		output, field, ::std::make_index_sequence<operation_count>{});
 }
 

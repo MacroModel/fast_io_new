@@ -14,14 +14,20 @@ template <::fast_io::fmt::format_character char_type>
 [[nodiscard]] consteval bool is_brace_alignment(char_type value) noexcept
 {
 	return is_syntax_character<u8'<'>(value) || is_syntax_character<u8'>'>(value) ||
-		is_syntax_character<u8'^'>(value);
+		   is_syntax_character<u8'^'>(value);
 }
 
 template <::fast_io::fmt::format_character char_type>
 [[nodiscard]] consteval format_alignment brace_alignment(char_type value) noexcept
 {
-	if (is_syntax_character<u8'<'>(value)) return format_alignment::left;
-	if (is_syntax_character<u8'>'>(value)) return format_alignment::right;
+	if (is_syntax_character<u8'<'>(value))
+	{
+		return format_alignment::left;
+	}
+	if (is_syntax_character<u8'>'>(value))
+	{
+		return format_alignment::right;
+	}
 	return format_alignment::center;
 }
 
@@ -37,7 +43,7 @@ template <::fast_io::fmt::format_character char_type>
 	using unsigned_type = ::std::make_unsigned_t<char_type>;
 	auto unsigned_value{static_cast<unsigned_type>(value)};
 	if constexpr (::std::same_as<char_type, wchar_t> &&
-		::fast_io::details::wide_is_none_utf_endian)
+				  ::fast_io::details::wide_is_none_utf_endian)
 	{
 		unsigned_value = ::fast_io::byte_swap(unsigned_value);
 	}
@@ -65,8 +71,7 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 	else if constexpr (::std::same_as<char_type, char> || ::std::same_as<char_type, char8_t>)
 	{
 		auto const first{unicode_code_unit_value(format_string[cursor])};
-		auto continuation = [](::std::uint_least32_t value) constexpr noexcept
-		{
+		auto continuation = [](::std::uint_least32_t value) constexpr noexcept {
 			return 0x80u <= value && value <= 0xbfu;
 		};
 		if (first <= 0x7fu)
@@ -76,7 +81,7 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 		if (0xc2u <= first && first <= 0xdfu)
 		{
 			return {2u, cursor + 1u < size &&
-				continuation(unicode_code_unit_value(format_string[cursor + 1u]))};
+							continuation(unicode_code_unit_value(format_string[cursor + 1u]))};
 		}
 		if (0xe0u <= first && first <= 0xefu)
 		{
@@ -104,12 +109,12 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 				(first != 0xf0u || 0x90u <= second) &&
 				(first != 0xf4u || second <= 0x8fu)};
 			return {4u, restricted_second && continuation(second) && continuation(third) &&
-				continuation(fourth)};
+							continuation(fourth)};
 		}
 		return {1u, false};
 	}
 	else if constexpr (::std::same_as<char_type, char16_t> ||
-		(::std::same_as<char_type, wchar_t> && sizeof(wchar_t) == sizeof(char16_t)))
+					   (::std::same_as<char_type, wchar_t> && sizeof(wchar_t) == sizeof(char16_t)))
 	{
 		auto const first{unicode_code_unit_value(format_string[cursor])};
 		if (0xd800u <= first && first <= 0xdbffu)
@@ -133,32 +138,89 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 template <::fast_io::fmt::format_character char_type>
 [[nodiscard]] consteval bool brace_presentation(char_type value, presentation_type &result) noexcept
 {
-	if (is_syntax_character<u8'a'>(value)) result = presentation_type::hexfloat_lower;
-	else if (is_syntax_character<u8'A'>(value)) result = presentation_type::hexfloat_upper;
-	else if (is_syntax_character<u8'b'>(value)) result = presentation_type::binary_lower;
-	else if (is_syntax_character<u8'B'>(value)) result = presentation_type::binary_upper;
-	else if (is_syntax_character<u8'c'>(value)) result = presentation_type::character;
-	else if (is_syntax_character<u8'd'>(value)) result = presentation_type::decimal;
-	else if (is_syntax_character<u8'e'>(value)) result = presentation_type::scientific_lower;
-	else if (is_syntax_character<u8'E'>(value)) result = presentation_type::scientific_upper;
-	else if (is_syntax_character<u8'f'>(value)) result = presentation_type::fixed_lower;
-	else if (is_syntax_character<u8'F'>(value)) result = presentation_type::fixed_upper;
-	else if (is_syntax_character<u8'g'>(value)) result = presentation_type::general_lower;
-	else if (is_syntax_character<u8'G'>(value)) result = presentation_type::general_upper;
-	else if (is_syntax_character<u8'o'>(value)) result = presentation_type::octal;
-	else if (is_syntax_character<u8'p'>(value)) result = presentation_type::pointer;
-	else if (is_syntax_character<u8's'>(value)) result = presentation_type::string;
-	else if (is_syntax_character<u8'x'>(value)) result = presentation_type::hex_lower;
-	else if (is_syntax_character<u8'X'>(value)) result = presentation_type::hex_upper;
-	else if (is_syntax_character<u8'?'>(value)) result = presentation_type::debug;
-	else return false;
+	if (is_syntax_character<u8'a'>(value))
+	{
+		result = presentation_type::hexfloat_lower;
+	}
+	else if (is_syntax_character<u8'A'>(value))
+	{
+		result = presentation_type::hexfloat_upper;
+	}
+	else if (is_syntax_character<u8'b'>(value))
+	{
+		result = presentation_type::binary_lower;
+	}
+	else if (is_syntax_character<u8'B'>(value))
+	{
+		result = presentation_type::binary_upper;
+	}
+	else if (is_syntax_character<u8'c'>(value))
+	{
+		result = presentation_type::character;
+	}
+	else if (is_syntax_character<u8'd'>(value))
+	{
+		result = presentation_type::decimal;
+	}
+	else if (is_syntax_character<u8'e'>(value))
+	{
+		result = presentation_type::scientific_lower;
+	}
+	else if (is_syntax_character<u8'E'>(value))
+	{
+		result = presentation_type::scientific_upper;
+	}
+	else if (is_syntax_character<u8'f'>(value))
+	{
+		result = presentation_type::fixed_lower;
+	}
+	else if (is_syntax_character<u8'F'>(value))
+	{
+		result = presentation_type::fixed_upper;
+	}
+	else if (is_syntax_character<u8'g'>(value))
+	{
+		result = presentation_type::general_lower;
+	}
+	else if (is_syntax_character<u8'G'>(value))
+	{
+		result = presentation_type::general_upper;
+	}
+	else if (is_syntax_character<u8'o'>(value))
+	{
+		result = presentation_type::octal;
+	}
+	else if (is_syntax_character<u8'p'>(value))
+	{
+		result = presentation_type::pointer;
+	}
+	else if (is_syntax_character<u8's'>(value))
+	{
+		result = presentation_type::string;
+	}
+	else if (is_syntax_character<u8'x'>(value))
+	{
+		result = presentation_type::hex_lower;
+	}
+	else if (is_syntax_character<u8'X'>(value))
+	{
+		result = presentation_type::hex_upper;
+	}
+	else if (is_syntax_character<u8'?'>(value))
+	{
+		result = presentation_type::debug;
+	}
+	else
+	{
+		return false;
+	}
 	return true;
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool brace_select_automatic_argument(result_type &result,
-	argument_reference &reference, brace_indexing_state &indexing_state,
-	::std::size_t &next_automatic_index, ::std::size_t position) noexcept
+											   argument_reference &reference, brace_indexing_state &indexing_state,
+											   ::std::size_t &next_automatic_index, ::std::size_t position) noexcept
 {
 	if (indexing_state == brace_indexing_state::manual)
 	{
@@ -177,8 +239,8 @@ consteval bool brace_select_automatic_argument(result_type &result,
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool brace_select_manual_argument(result_type &result,
-	argument_reference &reference, brace_indexing_state &indexing_state,
-	::std::size_t index, ::std::size_t position) noexcept
+											argument_reference &reference, brace_indexing_state &indexing_state,
+											::std::size_t index, ::std::size_t position) noexcept
 {
 	if (indexing_state == brace_indexing_state::automatic)
 	{
@@ -198,14 +260,13 @@ consteval bool brace_select_manual_argument(result_type &result,
  */
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool parse_brace_argument_reference(result_type &result,
-	::std::size_t &cursor, bool allow_colon, argument_reference &reference,
-	brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
+											  ::std::size_t &cursor, bool allow_colon, argument_reference &reference,
+											  brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {
 	constexpr ::std::size_t size{format_string.size()};
-	auto is_delimiter = [allow_colon](auto value) constexpr noexcept
-	{
+	auto is_delimiter = [allow_colon](auto value) constexpr noexcept {
 		return is_syntax_character<u8'}'>(value) ||
-			(allow_colon && is_syntax_character<u8':'>(value));
+			   (allow_colon && is_syntax_character<u8':'>(value));
 	};
 
 	if (cursor == size)
@@ -216,7 +277,7 @@ consteval bool parse_brace_argument_reference(result_type &result,
 	if (is_delimiter(format_string[cursor]))
 	{
 		return brace_select_automatic_argument<format_string>(result, reference, indexing_state,
-			next_automatic_index, reference_position);
+															  next_automatic_index, reference_position);
 	}
 
 	if (syntax_digit_value(format_string[cursor]) != 10u)
@@ -228,7 +289,7 @@ consteval bool parse_brace_argument_reference(result_type &result,
 			// fmt's manual argument grammar admits the single identifier `0`,
 			// but not a decimal spelling with a leading zero such as `{00}`.
 			return set_parse_error(result,
-				format_parse_error::invalid_argument_identifier, cursor + 1u);
+								   format_parse_error::invalid_argument_identifier, cursor + 1u);
 		}
 		::std::size_t index{};
 		do
@@ -239,12 +300,11 @@ consteval bool parse_brace_argument_reference(result_type &result,
 				return set_parse_error(result, format_parse_error::argument_index_overflow, cursor);
 			}
 			++cursor;
-		}
-		while (cursor != size && syntax_digit_value(format_string[cursor]) != 10u);
+		} while (cursor != size && syntax_digit_value(format_string[cursor]) != 10u);
 		if (static_cast<::std::size_t>(INT_MAX) < index)
 		{
 			return set_parse_error(result,
-				format_parse_error::argument_index_overflow, reference_position);
+								   format_parse_error::argument_index_overflow, reference_position);
 		}
 
 		if (cursor == size || !is_delimiter(format_string[cursor]))
@@ -252,7 +312,7 @@ consteval bool parse_brace_argument_reference(result_type &result,
 			return set_parse_error(result, format_parse_error::invalid_argument_identifier, cursor);
 		}
 		return brace_select_manual_argument<format_string>(result, reference, indexing_state, index,
-			reference_position);
+														   reference_position);
 	}
 
 	if (!is_identifier_initial(format_string[cursor]))
@@ -275,15 +335,15 @@ consteval bool parse_brace_argument_reference(result_type &result,
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool parse_brace_dynamic_parameter(result_type &result,
-	::std::size_t &cursor, format_parameter &parameter,
-	brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
+											 ::std::size_t &cursor, format_parameter &parameter,
+											 brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {
 	constexpr ::std::size_t size{format_string.size()};
 	::std::size_t const opening_position{cursor};
 	++cursor; // consume '{'
 	parameter.kind = format_parameter_kind::argument;
 	if (!parse_brace_argument_reference<format_string>(result, cursor, false, parameter.argument,
-		indexing_state, next_automatic_index))
+													   indexing_state, next_automatic_index))
 	{
 		return false;
 	}
@@ -297,7 +357,7 @@ consteval bool parse_brace_dynamic_parameter(result_type &result,
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool parse_brace_unsigned(result_type &result, ::std::size_t &cursor,
-	::std::size_t &value, format_parse_error overflow_error) noexcept
+									::std::size_t &value, format_parse_error overflow_error) noexcept
 {
 	constexpr ::std::size_t size{format_string.size()};
 	value = 0u;
@@ -309,17 +369,15 @@ consteval bool parse_brace_unsigned(result_type &result, ::std::size_t &cursor,
 			return set_parse_error(result, overflow_error, cursor);
 		}
 		++cursor;
-	}
-	while (cursor != size && syntax_digit_value(format_string[cursor]) != 10u);
+	} while (cursor != size && syntax_digit_value(format_string[cursor]) != 10u);
 	return true;
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
 consteval bool parse_brace_specification(result_type &result, ::std::size_t &cursor,
-	format_specification<typename decltype(format_string)::value_type> &specification,
-	brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
+										 format_specification<typename decltype(format_string)::value_type> &specification,
+										 brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {
-	using char_type = typename decltype(format_string)::value_type;
 	constexpr ::std::size_t size{format_string.size()};
 	auto const specification_begin{cursor};
 	specification.raw_format_specification.offset = specification_begin;
@@ -402,7 +460,7 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 		if (cursor != size && is_syntax_character<u8'0'>(format_string[cursor]))
 		{
 			return set_parse_error(result,
-				format_parse_error::invalid_format_specification, cursor);
+								   format_parse_error::invalid_format_specification, cursor);
 		}
 	}
 
@@ -411,7 +469,7 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 		::std::size_t const width_position{cursor};
 		specification.width.kind = format_parameter_kind::literal;
 		if (!parse_brace_unsigned<format_string>(result, cursor, specification.width.value,
-			format_parse_error::width_overflow))
+												 format_parse_error::width_overflow))
 		{
 			return false;
 		}
@@ -424,7 +482,7 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 	else if (cursor != size && is_syntax_character<u8'{'>(format_string[cursor]))
 	{
 		if (!parse_brace_dynamic_parameter<format_string>(result, cursor, specification.width,
-			indexing_state, next_automatic_index))
+														  indexing_state, next_automatic_index))
 		{
 			return false;
 		}
@@ -438,7 +496,7 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 			::std::size_t const precision_position{cursor};
 			specification.precision.kind = format_parameter_kind::literal;
 			if (!parse_brace_unsigned<format_string>(result, cursor, specification.precision.value,
-				format_parse_error::precision_overflow))
+													 format_parse_error::precision_overflow))
 			{
 				return false;
 			}
@@ -446,13 +504,13 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 				specification.precision.value)
 			{
 				return set_parse_error(result, format_parse_error::precision_overflow,
-					precision_position);
+									   precision_position);
 			}
 		}
 		else if (cursor != size && is_syntax_character<u8'{'>(format_string[cursor]))
 		{
 			if (!parse_brace_dynamic_parameter<format_string>(result, cursor, specification.precision,
-				indexing_state, next_automatic_index))
+															  indexing_state, next_automatic_index))
 			{
 				return false;
 			}
@@ -489,35 +547,35 @@ consteval bool parse_brace_specification(result_type &result, ::std::size_t &cur
 				++cursor;
 			}
 		}
-			if (cursor != size && !is_syntax_character<u8'}'>(format_string[cursor]))
+		if (cursor != size && !is_syntax_character<u8'}'>(format_string[cursor]))
+		{
+			// The common grammar has ended. Preserve the remaining characters for a
+			// type-directed consteval parser (ranges, chrono, or an ADL formatter).
+			// Nested fields are validated here because they belong to the one global
+			// indexing domain even though their width/precision meaning is decided by
+			// the type-directed parser. This is flat compile-time IR data, never a
+			// runtime parser fallback.
+			auto const tail_begin{cursor};
+			specification.format_tail_indexing_state = indexing_state;
+			specification.format_tail_next_automatic_index = next_automatic_index;
+			while (cursor != size && !is_syntax_character<u8'}'>(format_string[cursor]))
 			{
-				// The common grammar has ended. Preserve the remaining characters for a
-				// type-directed consteval parser (ranges, chrono, or an ADL formatter).
-				// Nested fields are validated here because they belong to the one global
-				// indexing domain even though their width/precision meaning is decided by
-				// the type-directed parser. This is flat compile-time IR data, never a
-				// runtime parser fallback.
-				auto const tail_begin{cursor};
-				specification.format_tail_indexing_state = indexing_state;
-				specification.format_tail_next_automatic_index = next_automatic_index;
-				while (cursor != size && !is_syntax_character<u8'}'>(format_string[cursor]))
+				if (is_syntax_character<u8'{'>(format_string[cursor]))
 				{
-					if (is_syntax_character<u8'{'>(format_string[cursor]))
+					format_parameter nested_parameter{};
+					if (!parse_brace_dynamic_parameter<format_string>(result, cursor,
+																	  nested_parameter, indexing_state, next_automatic_index))
 					{
-						format_parameter nested_parameter{};
-						if (!parse_brace_dynamic_parameter<format_string>(result, cursor,
-							nested_parameter, indexing_state, next_automatic_index))
-						{
-							return false;
-						}
-					}
-					else
-					{
-						++cursor;
+						return false;
 					}
 				}
-				specification.format_tail = {tail_begin, cursor - tail_begin};
+				else
+				{
+					++cursor;
+				}
 			}
+			specification.format_tail = {tail_begin, cursor - tail_begin};
+		}
 	}
 	if (cursor == size || !is_syntax_character<u8'}'>(format_string[cursor]))
 	{
@@ -571,7 +629,7 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 			replacement_field<char_type> field{};
 			field.source.offset = opening_position;
 			if (!parse_brace_argument_reference<format_string>(result, cursor, true, field.argument,
-				indexing_state, next_automatic_index))
+															   indexing_state, next_automatic_index))
 			{
 				return result;
 			}
@@ -579,7 +637,7 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 			{
 				++cursor;
 				if (!parse_brace_specification<format_string>(result, cursor, field.specification,
-					indexing_state, next_automatic_index))
+															  indexing_state, next_automatic_index))
 				{
 					return result;
 				}

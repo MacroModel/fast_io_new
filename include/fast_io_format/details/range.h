@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include "chrono.h"
 #include "builtin_diagnostics.h"
 #include "custom.h"
 #include "debug.h"
