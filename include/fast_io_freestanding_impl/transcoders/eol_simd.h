@@ -19,10 +19,13 @@ simd_lf_crlf_process_chars(char_type const *fromfirst, char_type const *fromlast
 
 	constexpr char_type tofdch{cr ? lfchr : lfchct};
 #if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
-	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(characters_array_impl<tofdch, char_type, N>)};
+	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(tofdch))};
 #else
 	simd_vector_type charsvec;
-	charsvec.load(characters_array_impl<tofdch, char_type, N>.data());
+	constexpr auto chars_array{
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(tofdch)};
+	charsvec.load(chars_array.data());
 #endif
 	simd_vector_type vec;
 	for (; fromfirst != fromlast && tofirst != tolast; ++fromfirst)
@@ -107,10 +110,13 @@ simd_crlf_lf_process_chars(char_type const *fromfirst, char_type const *fromlast
 	constexpr char_type lfchct{char_literal_v<u8'\n', ::std::remove_cvref_t<char_type>>};
 	constexpr char_type lfchr{char_literal_v<u8'\r', ::std::remove_cvref_t<char_type>>};
 #if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
-	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(characters_array_impl<lfchr, char_type, N>)};
+	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(lfchr))};
 #else
 	simd_vector_type charsvec;
-	charsvec.load(characters_array_impl<lfchr, char_type, N>.data());
+	constexpr auto chars_array{
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(lfchr)};
+	charsvec.load(chars_array.data());
 #endif
 	for (simd_vector_type vec;;)
 	{
@@ -161,11 +167,14 @@ simd_lf_cr_process_chars(char_type const *fromfirst, char_type const *fromlast, 
 	constexpr char_type lfchr{char_literal_v<u8'\r', ::std::remove_cvref_t<char_type>>};
 	constexpr char_type tofdch{cr ? lfchr : lfchct};
 #if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
-	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(characters_array_impl<tofdch, char_type, N>)};
+	constexpr simd_vector_type charsvec{::std::bit_cast<simd_vector_type>(
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(tofdch))};
 	constexpr simd_vector_type threevec{::std::bit_cast<simd_vector_type>(characters_array_impl<3, char_type, N>)};
 #else
 	simd_vector_type charsvec;
-	charsvec.load(characters_array_impl<tofdch, char_type, N>.data());
+	constexpr auto chars_array{
+		create_find_simd_vector_with_unsigned_toggle<false, char_type, N>(tofdch)};
+	charsvec.load(chars_array.data());
 	simd_vector_type threevec;
 	threevec.load(characters_array_impl<3, char_type, N>.data());
 #endif

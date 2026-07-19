@@ -55,11 +55,11 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 		return {};
 	}
 
-	if constexpr (::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<char_type>)
 	{
-		// The execution character is already one char_type object.  In particular,
-		// applying UTF byte-range tests to an EBCDIC format string would reject
-		// valid fills and would contradict the execution character-set model.
+		// The execution character is already one char_type object.  Applying UTF
+		// code-unit tests to an implementation-defined SBCS format string would
+		// reject valid fills and contradict the execution character-set model.
 		return {1u, true};
 	}
 	else if constexpr (::std::same_as<char_type, char> || ::std::same_as<char_type, char8_t>)

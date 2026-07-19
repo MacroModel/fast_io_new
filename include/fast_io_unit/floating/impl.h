@@ -258,7 +258,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 inline constexpr bool print_staged_fallback_inline(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
-	return ::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type> &&
+	return ::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type> &&
 		   flags.floating == ::fast_io::manipulators::floating_format::decimal &&
 		   ::fast_io::details::da::staged_inline_fallback_supported<::std::remove_cvref_t<flt>>;
 }
@@ -341,7 +341,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 		(void)exponent;
 		negative = sign;
 	}
-	if constexpr (::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type>)
 	{
 		if (!::std::is_constant_evaluated())
 		{
@@ -452,7 +452,7 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 		*/
 		constexpr bool uses_da_ascii_staging{
 			::std::same_as<char_type, char> &&
-			!::fast_io::details::is_ebcdic<char_type> &&
+			::fast_io::details::is_ascii<char_type> &&
 			(flags.rounding == manipulators::floating_rounding::nearest_to_even ||
 			 flags.rounding == manipulators::floating_rounding::current_environment) &&
 			flags.floating != manipulators::floating_format::fixed};

@@ -37,7 +37,9 @@ inline constexpr char_type to_char_single_digit(T t) noexcept
 		}
 		else
 		{
-			if constexpr (is_ebcdic<char_type>)
+			if constexpr (is_classic_ebcdic<char_type> &&
+						  (!::std::same_as<char_type, wchar_t> ||
+						   !::fast_io::details::wide_is_none_ebcdic_endian))
 			{
 				if constexpr (base <= 19)
 				{
@@ -112,9 +114,14 @@ inline constexpr char_type to_char_single_digit(T t) noexcept
 					}
 				}
 			}
-			else
+			else if constexpr (is_ascii<char_type>)
 			{
 				return ::fast_io::char_literal_add<char_type, (uppercase ? u8'A' : u8'a')>(t - ten);
+			}
+			else
+			{
+				return ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+					static_cast<char8_t>(t));
 			}
 		}
 	}

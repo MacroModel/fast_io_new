@@ -58,7 +58,7 @@ template <::std::integral char_type>
 {
 	using unsigned_char_type = ::fast_io::details::my_make_unsigned_t<char_type>;
 	auto uch{static_cast<unsigned_char_type>(ch)};
-	if constexpr (sizeof(char_type) == sizeof(char8_t) && !::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type>)
 	{
 		constexpr auto zero{static_cast<unsigned_char_type>(::fast_io::char_literal_v<u8'0', char_type>)};
 		auto const value{static_cast<unsigned_char_type>(uch - zero)};
@@ -543,7 +543,7 @@ inline constexpr char_type const *scan_hexfloat_skip_after_storage_limit_run(cha
 	if (!__builtin_is_constant_evaluated())
 #endif
 	{
-		if constexpr (!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t) &&
+		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
 		{
 			constexpr auto simd_size{
@@ -674,7 +674,7 @@ inline constexpr char_type const *scan_hexfloat_significand_run(char_type const 
 	if (!__builtin_is_constant_evaluated())
 #endif
 	{
-		if constexpr (!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t) &&
+		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
 		{
 			for (; static_cast<::std::size_t>(last - first) >= sizeof(::std::uint_least64_t);)

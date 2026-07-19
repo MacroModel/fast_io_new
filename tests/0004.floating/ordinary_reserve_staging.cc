@@ -63,13 +63,13 @@ bool check_type() noexcept
 		test_flags<::fast_io::manipulators::floating_format::scientific, false>, flt>;
 	using general_manipulator = ::fast_io::manipulators::scalar_manip_t<
 		test_flags<::fast_io::manipulators::floating_format::general, false>, flt>;
-	static_assert(::fast_io::details::is_ebcdic<char> ||
+	static_assert(!::fast_io::details::is_ascii<char> ||
 				  ::fast_io::print_reserve_size(
 					  ::fast_io::io_reserve_type<char, decimal_manipulator>) >= minimum_reserve);
-	static_assert(::fast_io::details::is_ebcdic<char> ||
+	static_assert(!::fast_io::details::is_ascii<char> ||
 				  ::fast_io::print_reserve_size(
 					  ::fast_io::io_reserve_type<char, scientific_manipulator>) >= minimum_reserve);
-	static_assert(::fast_io::details::is_ebcdic<char> ||
+	static_assert(!::fast_io::details::is_ascii<char> ||
 				  ::fast_io::print_reserve_size(
 					  ::fast_io::io_reserve_type<char, general_manipulator>) >= minimum_reserve);
 	return check_value<flt, ::fast_io::manipulators::floating_format::decimal,

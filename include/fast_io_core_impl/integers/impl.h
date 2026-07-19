@@ -1865,7 +1865,7 @@ non-x86 callers remain on the generic formatter.
 	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128)
 template <bool uppercase, ::std::integral char_type, my_unsigned_integral T>
 	requires(sizeof(T) == sizeof(::std::uint_least64_t) &&
-			 sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+			 sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type>)
 inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) noexcept
 {
 	using v16qi [[__gnu__::__vector_size__(16)]] = char;
@@ -2220,7 +2220,7 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 	FAST_IO_HAS_BUILTIN(__builtin_ia32_pshufb128) &&                     \
 	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128)
 	if constexpr (base == 16u && sizeof(T) == sizeof(::std::uint_least64_t) &&
-				  sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+				  sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type>)
 	{
 		/*
 		The threshold is the no-leading-zero proof: every admitted value has
@@ -2974,7 +2974,7 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 				*/
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
 				if constexpr ((::std::same_as<char_type, char8_t> ||
-							   (::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)) &&
+							   (::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type>)) &&
 							  sizeof(T) == sizeof(::std::uint_least64_t))
 				{
 					if (!::std::is_constant_evaluated())
@@ -3603,7 +3603,7 @@ static_assert(sizeof(print_integer_staged_u64_state) == 24u);
 template <::fast_io::manipulators::scalar_flags flags, typename T, typename char_type>
 inline constexpr bool print_integer_staged_u64_supported{
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
-	::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type> &&
+	::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type> &&
 	::fast_io::details::my_integral<T> &&
 	!::std::same_as<::std::remove_cv_t<T>, bool> &&
 	sizeof(T) == sizeof(::std::uint_least64_t) && flags.base == 10u && !flags.alphabet &&

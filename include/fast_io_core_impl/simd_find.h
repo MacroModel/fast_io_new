@@ -577,7 +577,10 @@ inline constexpr char_type const *find_space_common_cold_impl(char_type const *f
 	if (!__builtin_is_constant_evaluated())
 #endif
 	{
-		if constexpr (::fast_io::details::optimal_simd_vector_run_with_cpu_instruction_size)
+		if constexpr (::fast_io::details::optimal_simd_vector_run_with_cpu_instruction_size &&
+					  (::fast_io::details::is_ascii<char_type> ||
+					   (sizeof(char_type) == 1u &&
+						::fast_io::details::is_classic_ebcdic<char_type>)))
 		{
 			first = find_space_simd_common_impl<ishtml, findnot,
 												::fast_io::details::optimal_simd_vector_run_with_cpu_instruction_size>(

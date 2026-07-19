@@ -144,7 +144,7 @@ template <::std::integral char_type>
 {
 	using unsigned_char_type = ::fast_io::details::my_make_unsigned_t<char_type>;
 	auto uch{static_cast<unsigned_char_type>(ch)};
-	if constexpr (sizeof(char_type) == sizeof(char8_t) && !::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type>)
 	{
 		constexpr auto zero{static_cast<unsigned_char_type>(::fast_io::char_literal_v<u8'0', char_type>)};
 		auto const value{static_cast<unsigned_char_type>(uch - zero)};
@@ -2056,7 +2056,7 @@ inline constexpr char_type const *scan_decfloat_skip_after_exact_limit_run(
 	if (!__builtin_is_constant_evaluated())
 #endif
 	{
-		if constexpr (!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t) &&
+		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
 		{
 			constexpr auto simd_size{
@@ -2239,7 +2239,7 @@ scan_decfloat_digits(char_type const *first, char_type const *last, bool after_d
 {
 	constexpr auto digit_limit{::fast_io::details::scan_decfloat_significand_digit_limit<T>};
 	char8_t digit{};
-	if constexpr (sizeof(char_type) == sizeof(char8_t) && !::fast_io::details::is_ebcdic<char_type> &&
+	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type> &&
 				  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
 	{
 #ifdef __cpp_if_consteval
@@ -2327,7 +2327,7 @@ template <::std::integral char_type>
 [[nodiscard]] inline constexpr ::fast_io::parse_result<char_type const *>
 scan_decfloat_exponent(char_type const *first, char_type const *last, ::std::int_least64_t &exponent) noexcept
 {
-	if constexpr (sizeof(char_type) == sizeof(char8_t) && !::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type>)
 	{
 #ifdef __cpp_if_consteval
 		if !consteval
@@ -2763,7 +2763,7 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type const *first,
 										   char_type const *end, bool negative, T &value) noexcept
 {
-	if constexpr (sizeof(char_type) != sizeof(char8_t) || ::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (sizeof(char_type) != sizeof(char8_t) || !::fast_io::details::is_ascii<char_type>)
 	{
 		return {};
 	}
@@ -3062,7 +3062,7 @@ scan_decfloat_contiguous_define(char_type const *begin, char_type const *end, T 
 			return {begin, ::fast_io::parse_code::end_of_file};
 		}
 		bool has_space{};
-		if constexpr (sizeof(char_type) == sizeof(char8_t) && !::fast_io::details::is_ebcdic<char_type>)
+		if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type>)
 		{
 			using unsigned_char_type = ::fast_io::details::my_make_unsigned_t<char_type>;
 			auto const ch{static_cast<unsigned_char_type>(*begin)};

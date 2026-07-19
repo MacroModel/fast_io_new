@@ -30,7 +30,7 @@ inline constexpr auto generate_sto_ascii_digit_table() noexcept
 inline constexpr auto sto_ascii_digit_table{::fast_io::details::generate_sto_ascii_digit_table()};
 
 template <::std::integral char_type>
-	requires(!::fast_io::details::is_ebcdic<char_type>)
+	requires(::fast_io::details::is_ascii<char_type>)
 inline constexpr char8_t sto_ascii_digit_table_lookup(my_make_unsigned_t<char_type> ch) noexcept
 {
 	if constexpr (sizeof(char_type) != sizeof(char8_t))
@@ -45,16 +45,49 @@ inline constexpr char8_t sto_ascii_digit_table_lookup(my_make_unsigned_t<char_ty
 }
 
 template <char8_t base, ::std::integral char_type>
+	requires(2 <= base && base <= 36 &&
+			 !::fast_io::details::is_ascii<char_type> &&
+			 !::fast_io::details::is_classic_ebcdic<char_type>)
+inline constexpr char8_t sto_other_execution_digit_lookup(
+	my_make_unsigned_t<char_type> ch) noexcept
+{
+	using unsigned_char_type = my_make_unsigned_t<char_type>;
+	for (char8_t digit{}; digit != base; ++digit)
+	{
+		char8_t const lower_literal{digit < 10u
+								 ? static_cast<char8_t>(u8'0' + digit)
+								 : static_cast<char8_t>(u8'a' + (digit - 10u))};
+		if (ch == static_cast<unsigned_char_type>(
+				  ::fast_io::arithmetic_char_literal<char_type>(lower_literal)))
+		{
+			return digit;
+		}
+		if (10u <= digit)
+		{
+			char8_t const upper_literal{
+				static_cast<char8_t>(u8'A' + (digit - 10u))};
+			if (ch == static_cast<unsigned_char_type>(
+						  ::fast_io::arithmetic_char_literal<char_type>(upper_literal)))
+			{
+				return digit;
+			}
+		}
+	}
+	return static_cast<char8_t>(0xffu);
+}
+
+template <char8_t base, ::std::integral char_type>
 	requires(2 <= base && base <= 36)
 inline constexpr bool char_digit_to_literal(my_make_unsigned_t<char_type> &ch) noexcept
 {
 	using unsigned_char_type = my_make_unsigned_t<char_type>;
 	constexpr bool ebcdic{::fast_io::details::is_ebcdic<char_type>};
+	constexpr bool classic_ebcdic{::fast_io::details::is_classic_ebcdic<char_type>};
+	constexpr bool ascii{::fast_io::details::is_ascii<char_type>};
 	if constexpr (::std::same_as<char_type, wchar_t> &&
-				  (::fast_io::details::wide_is_none_utf_endian ||
-				   ::fast_io::details::wide_is_none_ebcdic_endian))
+				  ::fast_io::details::wide_is_none_execution_endian)
 	{
-		ch = static_cast<char_type>(::fast_io::byte_swap(static_cast<unsigned_char_type>(ch)));
+		ch = ::fast_io::byte_swap(static_cast<unsigned_char_type>(ch));
 	}
 	if constexpr (base <= 10)
 	{
@@ -63,15 +96,22 @@ inline constexpr bool char_digit_to_literal(my_make_unsigned_t<char_type> &ch) n
 		{
 			ch -= static_cast<unsigned_char_type>(240);
 		}
-		else
+		else if constexpr (ascii)
 		{
 			ch -= static_cast<unsigned_char_type>(u8'0');
+		}
+		else
+		{
+			auto const digit{
+				::fast_io::details::sto_other_execution_digit_lookup<base, char_type>(ch)};
+			ch = static_cast<unsigned_char_type>(digit);
+			return base <= digit;
 		}
 		return base_char_type <= ch;
 	}
 	else
 	{
-		if constexpr (ebcdic)
+		if constexpr (classic_ebcdic)
 		{
 			if constexpr (base <= 19)
 			{
@@ -176,9 +216,16 @@ inline constexpr bool char_digit_to_literal(my_make_unsigned_t<char_type> &ch) n
 				return false;
 			}
 		}
-		else
+		else if constexpr (ascii)
 		{
 			auto const digit{::fast_io::details::sto_ascii_digit_table_lookup<char_type>(ch)};
+			ch = static_cast<unsigned_char_type>(digit);
+			return base <= digit;
+		}
+		else
+		{
+			auto const digit{
+				::fast_io::details::sto_other_execution_digit_lookup<base, char_type>(ch)};
 			ch = static_cast<unsigned_char_type>(digit);
 			return base <= digit;
 		}
@@ -191,12 +238,13 @@ inline constexpr bool char_is_digit(my_make_unsigned_t<char_type> ch) noexcept
 {
 	using unsigned_char_type = my_make_unsigned_t<char_type>;
 	constexpr bool ebcdic{::fast_io::details::is_ebcdic<char_type>};
+	constexpr bool classic_ebcdic{::fast_io::details::is_classic_ebcdic<char_type>};
+	constexpr bool ascii{::fast_io::details::is_ascii<char_type>};
 	constexpr unsigned_char_type base_char_type(base);
 	if constexpr (::std::same_as<char_type, wchar_t> &&
-				  (::fast_io::details::wide_is_none_utf_endian ||
-				   ::fast_io::details::wide_is_none_ebcdic_endian))
+				  ::fast_io::details::wide_is_none_execution_endian)
 	{
-		ch = static_cast<char_type>(::fast_io::byte_swap(static_cast<unsigned_char_type>(ch)));
+		ch = ::fast_io::byte_swap(static_cast<unsigned_char_type>(ch));
 	}
 	if constexpr (base <= 10)
 	{
@@ -204,15 +252,19 @@ inline constexpr bool char_is_digit(my_make_unsigned_t<char_type> ch) noexcept
 		{
 			ch -= static_cast<unsigned_char_type>(240);
 		}
-		else
+		else if constexpr (ascii)
 		{
 			ch -= static_cast<unsigned_char_type>(u8'0');
+		}
+		else
+		{
+			return ::fast_io::details::sto_other_execution_digit_lookup<base, char_type>(ch) < base;
 		}
 		return ch < base_char_type;
 	}
 	else
 	{
-		if constexpr (ebcdic)
+		if constexpr (classic_ebcdic)
 		{
 			if constexpr (base <= 19)
 			{
@@ -257,9 +309,13 @@ inline constexpr bool char_is_digit(my_make_unsigned_t<char_type> ch) noexcept
 				return (ch6 < mns) | (ch7 < mns) | (ch4 < 9u) | (ch5 < 9u) | (ch2 < 9u) | (ch3 < 9u) | (ch < 10u);
 			}
 		}
-		else
+		else if constexpr (ascii)
 		{
 			return ::fast_io::details::sto_ascii_digit_table_lookup<char_type>(ch) < base;
+		}
+		else
+		{
+			return ::fast_io::details::sto_other_execution_digit_lookup<base, char_type>(ch) < base;
 		}
 	}
 }
@@ -600,7 +656,7 @@ template <char8_t base, my_unsigned_integral T, ::std::size_t n>
 inline constexpr ::fast_io::freestanding::array<T, n> pow_table_n{::fast_io::details::generate_pow_table<base, T, n>()};
 
 template <::std::integral char_type>
-	requires(!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t))
+	requires(::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t))
 inline constexpr char8_t ascii_hex_digit_value(my_make_unsigned_t<char_type> ch) noexcept
 {
 	// Scalar tails contain an unpredictable mix of decimal and alphabetic
@@ -630,7 +686,7 @@ inline constexpr ::std::uint_least32_t ascii_hex_word_to_u32(::std::uint_least64
 }
 
 template <::std::integral char_type, my_unsigned_integral T>
-	requires(!::fast_io::details::is_ebcdic<char_type> && sizeof(char_type) == sizeof(char8_t))
+	requires(::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t))
 inline constexpr char_type const *scan_ascii_hex_digits_scalar(char_type const *first, char_type const *last,
 															   T &res) noexcept
 {
@@ -742,7 +798,7 @@ helper and stay on the scalar parser.
 	defined(__ARM_NEON)
 template <::std::integral char_type>
 	requires(sizeof(char_type) == sizeof(char8_t) &&
-			 !::fast_io::details::is_ebcdic<char_type>)
+			 ::fast_io::details::is_ascii<char_type>)
 [[gnu::always_inline]] inline bool
 aarch64_builtin_parse_16_decimal_digits(char_type const *first,
 										::std::uint_least64_t &value) noexcept
@@ -888,7 +944,7 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 	{
 		if (20u <= diff) [[unlikely]]
@@ -956,7 +1012,8 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	fallback; byte-order conversion never assumes an execution character set.
 	*/
 	constexpr bool isebcdic{::fast_io::details::is_ebcdic<char_type>};
-	if constexpr (!isebcdic && (::std::numeric_limits<::std::uint_least64_t>::digits == 64u))
+	if constexpr (::fast_io::details::is_ascii<char_type> &&
+				  (::std::numeric_limits<::std::uint_least64_t>::digits == 64u))
 	{
 		if constexpr (sizeof(::std::uint_least32_t) < sizeof(::std::size_t))
 		{
@@ -1484,7 +1541,7 @@ scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, cha
 	{
 		using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
 		if constexpr (base == 16 && sizeof(char_type) == sizeof(char8_t) &&
-					  !::fast_io::details::is_ebcdic<char_type> &&
+					  ::fast_io::details::is_ascii<char_type> &&
 					  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
 		{
 			return ::fast_io::details::scan_int_contiguous_ascii_hex_space_part_define_impl<char_type, T>(
@@ -1514,7 +1571,7 @@ assembly support the helper, independently of this arithmetic proof.
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <::std::size_t base, ::std::integral char_type>
 	requires(2u <= base && base <= 10u && sizeof(char_type) == sizeof(char8_t) &&
-			 !::fast_io::details::is_ebcdic<char_type>)
+			 ::fast_io::details::is_ascii<char_type>)
 [[gnu::always_inline]] inline bool
 scan_int_contiguous_x86_parse_four_digits(char_type const *first,
 										  ::std::uint_least64_t &value) noexcept
@@ -1553,7 +1610,7 @@ not on a claim that these isolated multiply-add instructions are slow.
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 template <::std::size_t base, ::std::integral char_type>
 	requires(5u <= base && base <= 36u && sizeof(char_type) == sizeof(char8_t) &&
-			 !::fast_io::details::is_ebcdic<char_type>)
+			 ::fast_io::details::is_ascii<char_type>)
 [[gnu::always_inline]] inline bool
 scan_int_contiguous_x86_sse_parse_eight(char_type const *first,
 										::std::uint_least64_t &value) noexcept
@@ -2100,7 +2157,7 @@ microarchitecture dispatch.
 #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && \
 	!defined(__CUDACC__) && __GNUC__ == 15 && defined(__AVX__) &&             \
 	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+	!(defined(__arm64ec__) || defined(_M_ARM64EC)) && ('A' == 0x41)
 [[gnu::optimize("no-tree-loop-vectorize")]]
 #endif
 inline constexpr parse_result<char_type const *>
@@ -2230,7 +2287,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
 	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		auto const next{first + 1u};
 		if (next == last ||
@@ -2257,7 +2314,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 	if constexpr (17u <= base && sizeof(T) == 1u &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		auto const second{first + 1u};
 		if (second == last) [[unlikely]]
@@ -2323,7 +2380,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		return {iter, parse_code::ok};
 	}
 	if constexpr (17u <= base && sizeof(T) == 2u &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		::std::uint_least32_t value{static_cast<::std::uint_least32_t>(first_digit)};
 		auto iter{first + 1u};
@@ -2400,7 +2457,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	constexpr bool use_bounded_u32_midbase{false};
 #endif
 	if constexpr (use_bounded_u32_midbase && sizeof(T) == 4u &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		if (9u <= static_cast<::std::size_t>(last - first) &&
 			char_is_digit<base, char_type>(static_cast<unsigned_char_type>(first[8u])))
@@ -2471,7 +2528,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		}
 	}
 	if constexpr (17u <= base && sizeof(T) == 4u &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		// This is the 32-bit member of the bounded high-base family documented at
 		// the enclosing native-x86 guard; it inherits that measurement scope,
@@ -2527,7 +2584,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	if constexpr (my_unsigned_integral<T> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  (base == 3u || base == 4u || (11u <= base && base <= 16u)))
 	{
 		constexpr ::std::size_t short_limit{8u};
@@ -2599,7 +2656,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	if constexpr (base <= 10u && my_unsigned_integral<T> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		auto const swar_remaining{static_cast<::std::size_t>(last - first)};
 		if (!__builtin_is_constant_evaluated() && 4u <= swar_remaining &&
@@ -2637,7 +2694,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	if constexpr (base == 8u && my_unsigned_integral<T> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		constexpr auto max_digits{
 			::fast_io::details::max_int_size_result<unsigned_type, base>};
@@ -2690,7 +2747,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 				  my_unsigned_integral<T> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t) &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		constexpr auto max_digits{
 			::fast_io::details::max_int_size_result<unsigned_type, base>};
@@ -2754,7 +2811,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #endif
 #endif
 	if constexpr (base <= 16 && sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
 	{
 		constexpr bool inline_nonoverflowing_alnum{
@@ -3313,7 +3370,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	// extra SWAR graph does not sit on their control-flow path.
 	if constexpr (base == 10u && my_unsigned_integral<T> && sizeof(T) == 4u &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type>)
+				  ::fast_io::details::is_ascii<char_type>)
 	{
 		auto const decimal_remaining{static_cast<::std::size_t>(last - first)};
 		if (!__builtin_is_constant_evaluated() && 9u <= decimal_remaining &&
@@ -3356,7 +3413,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	defined(__ARM_NEON)
 	if constexpr (base == 10u && my_unsigned_integral<T> &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 	{
 		auto const remaining{static_cast<::std::size_t>(last - first)};
@@ -3409,7 +3466,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t) &&
 				  (sizeof(T) >= sizeof(::std::uint_least32_t) ||
 				   (::fast_io::details::my_signed_integral<T> &&
@@ -3418,6 +3475,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		constexpr ::std::size_t max_digits{
 			::fast_io::details::max_int_size_result<unsigned_type, base>};
 		auto const remaining{static_cast<::std::size_t>(last - first)};
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
 		if (remaining < max_digits ||
 			(remaining == max_digits &&
 			 !char_is_digit<base, char_type>(
@@ -3426,6 +3487,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			res = static_cast<unsigned_type>(first_digit);
 			parse_first = first + 1u;
 		}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 	}
 #endif
 	/*
@@ -3440,7 +3504,7 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #if defined(__aarch64__) || defined(_M_ARM64)
 	if constexpr (((5u <= base && base <= 9u) || 16u < base) && my_unsigned_integral<T> &&
 				  sizeof(char_type) == sizeof(char8_t) &&
-				  !::fast_io::details::is_ebcdic<char_type> &&
+				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 	{
 		constexpr ::std::size_t max_digits{
@@ -3468,7 +3532,10 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	scan_int_contiguous_none_simd_space_part_define_impl as the exact fallback.
 	*/
 #if defined(__SSE4_1__) && ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
-	if constexpr (base == 10 && sizeof(char_type) == 1 && sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
+	if constexpr (base == 10 && sizeof(char_type) == 1 &&
+				  (::fast_io::details::is_ascii<char_type> ||
+				   ::fast_io::details::is_ebcdic<char_type>) &&
+				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
 	{
 		if (
 #if __cpp_lib_is_constant_evaluated >= 201811L

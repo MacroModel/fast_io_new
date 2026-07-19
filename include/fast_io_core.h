@@ -46,6 +46,7 @@
 #include "fast_io_core_impl/prfch/impl.h"
 #include "fast_io_core_impl/parse_code.h"
 
+#include "fast_io_core_impl/literals/none_ascii.h"
 #include "fast_io_core_impl/ebcdic.h"
 #include "fast_io_core_impl/literals/literal.h"
 #include "fast_io_core_impl/char_category/impl.h"

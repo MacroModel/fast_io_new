@@ -34,7 +34,7 @@ format_unicode_code_unit_value(char_type value) noexcept
 	using unsigned_type = ::std::make_unsigned_t<clean_type>;
 	auto result{static_cast<unsigned_type>(value)};
 	if constexpr (::std::same_as<clean_type, wchar_t> &&
-				  ::fast_io::details::wide_is_none_utf_endian)
+				  ::fast_io::details::wide_is_none_execution_endian)
 	{
 		result = ::fast_io::byte_swap(result);
 	}
@@ -61,11 +61,11 @@ format_unicode_code_unit_value(char_type value) noexcept
  * every original storage element instead of silently replacing or skipping a
  * malformed suffix.
  *
- * EBCDIC execution characters intentionally take the conservative branch.
- * fast_io supports UTF-EBCDIC conversion elsewhere, but an ordinary format
- * string value does not prove that its argument is UTF-EBCDIC rather than an
- * implementation-defined single-byte code page.  Treating each code unit as
- * one display column is therefore the only encoding-neutral promise here.
+ * Non-Unicode execution characters intentionally take the conservative
+ * branch.  An ordinary format string value does not prove that its argument
+ * uses a particular implementation-defined single-byte code page.  Treating
+ * each code unit as one display column is therefore the only encoding-neutral
+ * promise here.
  */
 template <::fast_io::fmt::format_character char_type>
 [[nodiscard]] inline constexpr decoded_unicode_scalar decode_unicode_scalar(
@@ -78,7 +78,7 @@ template <::fast_io::fmt::format_character char_type>
 
 	using clean_type = ::std::remove_cv_t<char_type>;
 	auto const first_value{format_unicode_code_unit_value(*first)};
-	if constexpr (::fast_io::details::is_ebcdic<clean_type>)
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<clean_type>)
 	{
 		return {static_cast<char32_t>(first_value), 1u, true};
 	}
@@ -198,7 +198,7 @@ template <::fast_io::fmt::format_character char_type>
 	char_type const *data, ::std::size_t size,
 	::std::size_t maximum_display_width = SIZE_MAX) noexcept
 {
-	if constexpr (::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<char_type>)
 	{
 		auto const selected{size < maximum_display_width ? size : maximum_display_width};
 		return {selected, selected};

@@ -142,9 +142,9 @@ template <debug_text_kind text_kind, ::fast_io::fmt::format_character char_type>
 	}
 
 	bool needs_escape{};
-	if constexpr (::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<char_type>)
 	{
-		// Preserve the one-code-unit policy used by Unicode width on EBCDIC.
+		// Preserve the one-code-unit policy used by width measurement for SBCS.
 		needs_escape = ::fast_io::char_category::is_c_cntrl(*source);
 	}
 	else

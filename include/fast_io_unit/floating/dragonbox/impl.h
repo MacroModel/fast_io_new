@@ -4333,7 +4333,7 @@ template <bool comma, ::std::integral char_type>
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC)) && \
-	__has_cpp_attribute(__gnu__::__optimize__)
+	__has_cpp_attribute(__gnu__::__optimize__) && ('A' == 0x41)
 [[__gnu__::__optimize__("Os")]]
 #endif
 inline constexpr char_type *
@@ -7578,7 +7578,7 @@ inline constexpr char_type *exact_precision_copy(
 		}
 		return iter;
 	}
-	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+	if constexpr (sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type>)
 	{
 		// Copy each complete eight-digit numeric block through an unaligned u64,
 		// then add the ASCII zero bias lane-wise.  The builtin spelling carries the
@@ -10918,7 +10918,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 						   ((trait::mbits == 23u && trait::ebits == 8u) ||
 							(trait::mbits == 52u && trait::ebits == 11u)) &&
 						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
-						   ::std::same_as<char_type, char> && !::fast_io::details::is_ebcdic<char_type>)
+						   ::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type>)
 		{
 			if constexpr (exact_bounds)
 			{

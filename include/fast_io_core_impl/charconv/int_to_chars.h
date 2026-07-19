@@ -294,7 +294,7 @@ to_chars_integral_decimal_unchecked(char_type *first, U value) noexcept
 	encoding, or constant-evaluation condition is false.
 	*/
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-	if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+	if constexpr (sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(U) == sizeof(::std::uint_least64_t))
 	{
 		if (!::std::is_constant_evaluated())
@@ -350,7 +350,7 @@ to_chars_integral_decimal(char_type *first, char_type *last, U value, bool negat
 			*first = ::fast_io::char_literal_add<char_type>(value);
 			return {first + 1u, {}};
 		}
-		if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+		if constexpr (sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type> &&
 					  sizeof(U) == sizeof(::std::uint_least64_t))
 		{
 			if (!::std::is_constant_evaluated())
@@ -394,7 +394,7 @@ to_chars_integral_fixed_base(char_type *first, char_type *last, U value, bool ne
 			// Same ISA, encoding, type, and constant-evaluation proof as the primary
 			// AVX-512 dispatch above.
 #if defined(__AVX512IFMA__) && defined(__AVX512VBMI__) && defined(__AVX512BW__) && defined(__AVX512VL__)
-			if constexpr (sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type> &&
+			if constexpr (sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type> &&
 						  sizeof(U) == sizeof(::std::uint_least64_t))
 			{
 				if (value < 10u)
@@ -536,7 +536,7 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 	FAST_IO_HAS_BUILTIN(__builtin_ia32_psrlwi128) && defined(__GNUC__) && \
 	!defined(__clang__) && __GNUC__ >= 16
 			if constexpr (sizeof(U) == sizeof(::std::uint_least64_t) &&
-						  sizeof(char_type) == 1u && !::fast_io::details::is_ebcdic<char_type>)
+						  sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type>)
 			{
 				if (!::std::is_constant_evaluated() && digits == 16u)
 				{

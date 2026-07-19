@@ -11,13 +11,16 @@ template <::std::integral ch_type>
 #endif
 inline constexpr ch_type char_literal(char8_t ch) noexcept
 {
-#if (('A' != 0x41) || (L'A' != 0x41))
-#include "none_ascii.h"
-#endif
+	using clean_type = ::std::remove_cv_t<ch_type>;
+	if constexpr (!::fast_io::details::is_ascii<clean_type> &&
+				  (::std::same_as<clean_type, char> ||
+				   ::std::same_as<clean_type, wchar_t>))
 	{
-		using unsigned_t = ::std::make_unsigned_t<ch_type>;
-		return static_cast<ch_type>(static_cast<unsigned_t>(ch));
+		return static_cast<ch_type>(
+			::fast_io::details::execution_character_literal<clean_type>(ch));
 	}
+	using unsigned_t = ::std::make_unsigned_t<clean_type>;
+	return static_cast<ch_type>(static_cast<unsigned_t>(ch));
 }
 template <char8_t ch, ::std::integral ch_type>
 inline constexpr ch_type char_literal_v{char_literal<ch_type>(ch)};
@@ -62,21 +65,30 @@ template <::std::integral ch_type>
 #endif
 inline constexpr ch_type arithmetic_char_literal(char8_t ch) noexcept
 {
-	if constexpr (::std::same_as<ch_type, wchar_t> && ::fast_io::details::wide_is_none_utf_endian)
+	using clean_type = ::std::remove_cv_t<ch_type>;
+	if constexpr (::std::same_as<clean_type, wchar_t> &&
+				  ::fast_io::details::wide_is_none_utf_endian)
 	{
-		using unsigned_t = ::std::make_unsigned_t<ch_type>;
+		using unsigned_t = ::std::make_unsigned_t<clean_type>;
 		return static_cast<ch_type>(static_cast<unsigned_t>(ch));
 	}
-	else if constexpr (::std::same_as<ch_type, wchar_t> &&
+	else if constexpr (::std::same_as<clean_type, wchar_t> &&
 					   ::fast_io::details::wide_is_none_ebcdic_endian)
 	{
-		using unsigned_t = ::std::make_unsigned_t<ch_type>;
+		using unsigned_t = ::std::make_unsigned_t<clean_type>;
 		return static_cast<ch_type>(::fast_io::byte_swap(
-			static_cast<unsigned_t>(::fast_io::char_literal<ch_type>(ch))));
+			static_cast<unsigned_t>(::fast_io::char_literal<clean_type>(ch))));
+	}
+	else if constexpr (::std::same_as<clean_type, wchar_t> &&
+					   ::fast_io::details::wide_is_none_single_byte_endian)
+	{
+		using unsigned_t = ::std::make_unsigned_t<clean_type>;
+		return static_cast<ch_type>(::fast_io::byte_swap(
+			static_cast<unsigned_t>(::fast_io::char_literal<clean_type>(ch))));
 	}
 	else
 	{
-		return char_literal<ch_type>(ch);
+		return static_cast<ch_type>(char_literal<clean_type>(ch));
 	}
 }
 
@@ -106,20 +118,23 @@ inline constexpr char_type char_literal_add(T offs) noexcept
 		::std::remove_cvref_t<decltype(integral_lifting(arithmetic_char_literal_v<ch, char_type>) + integral_lifting(offs))>>;
 
 	if constexpr (::std::same_as<char_type, wchar_t> &&
-				  (::fast_io::details::wide_is_none_utf_endian ||
-				   ::fast_io::details::wide_is_none_ebcdic_endian))
+				  ::fast_io::details::wide_is_none_execution_endian)
 	{
 		static_assert(::std::numeric_limits<::std::uint_least8_t>::digits <= ::std::numeric_limits<wchar_t>::digits);
 		constexpr unsigned leftshift_offset{static_cast<unsigned>(::std::numeric_limits<unsigned_char_type>::digits -
 																  ::std::numeric_limits<::std::uint_least8_t>::digits)};
 		return static_cast<char_type>(static_cast<unsigned_char_type>(static_cast<unsigned_result_type>(
-										  integral_lifting(arithmetic_char_literal_v<ch, char_type>) + integral_lifting(offs)))
+										  static_cast<unsigned_result_type>(
+											  integral_lifting(arithmetic_char_literal_v<ch, char_type>)) +
+										  static_cast<unsigned_result_type>(integral_lifting(offs))))
 									  << leftshift_offset);
 	}
 	else
 	{
 		return static_cast<char_type>(static_cast<unsigned_char_type>(
-			static_cast<unsigned_result_type>(integral_lifting(arithmetic_char_literal_v<ch, char_type>) + integral_lifting(offs))));
+			static_cast<unsigned_result_type>(
+				integral_lifting(arithmetic_char_literal_v<ch, char_type>)) +
+			static_cast<unsigned_result_type>(integral_lifting(offs))));
 	}
 }
 

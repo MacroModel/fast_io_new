@@ -309,7 +309,7 @@ template <auto specification>
 	{
 		text[index] = specification.element_specification[index];
 	}
-	text[element_size] = ::fast_io::char_literal_v<u8'}', char_type>;
+	text[element_size] = ::fast_io::arithmetic_char_literal_v<u8'}', char_type>;
 	return ::fast_io::fmt::basic_fixed_string<char_type, element_size + 2u>{text};
 }
 
@@ -412,7 +412,7 @@ template <::fast_io::fmt::format_character char_type>
 debug_scalar_target_units(char_type first) noexcept
 {
 	using clean_type = ::std::remove_cv_t<char_type>;
-	if constexpr (::fast_io::details::is_ebcdic<clean_type> ||
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<clean_type> ||
 				  ::std::same_as<clean_type, char32_t> ||
 				  (::std::same_as<clean_type, wchar_t> && sizeof(wchar_t) == 4u))
 	{

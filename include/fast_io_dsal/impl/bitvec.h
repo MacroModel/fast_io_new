@@ -2524,6 +2524,8 @@ inline constexpr chtype *pr_rsv_bin_full(chtype *outit, underlying const *first,
 				  ::std::numeric_limits<::std::uint_least32_t>::digits == 32 &&
 				  ::std::numeric_limits<::std::uint_least64_t>::digits == 64 &&
 				  (sizeof(chtype) == 1) &&
+				  (::fast_io::details::is_ascii<chtype> ||
+				   ::fast_io::details::is_ebcdic<chtype>) &&
 				  ::std::numeric_limits<underlying>::digits == 8 &&
 				  64 <= ::std::numeric_limits<::std::size_t>::digits)
 	{

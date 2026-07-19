@@ -130,7 +130,8 @@ struct basic_eol
 						   (fromscheme == eol_scheme::cr && toscheme == eol_scheme::lf))
 		{
 			constexpr bool cr{(fromscheme == eol_scheme::cr && toscheme == eol_scheme::lf)};
-			if constexpr (0 < initialdiffn)
+			if constexpr (0 < initialdiffn &&
+						  ::fast_io::details::is_ascii<char_type>)
 			{
 				auto [fromit,
 					  toit]{::fast_io::details::simd_lf_cr_process_chars<cr>(fromfirst, fromlast, tofirst, tolast)};
@@ -147,6 +148,22 @@ struct basic_eol
 				*tofirst = ch;
 				++fromfirst;
 				++tofirst;
+			}
+		}
+		else if constexpr ((fromscheme == eol_scheme::lf && toscheme == eol_scheme::nl) ||
+						   (fromscheme == eol_scheme::nl && toscheme == eol_scheme::lf))
+		{
+			constexpr bool from_nl{fromscheme == eol_scheme::nl};
+			constexpr char_type from_character{
+				from_nl ? ::fast_io::details::execution_newline_literal<char_type>()
+						: ::fast_io::char_literal_v<u8'\n', char_type>};
+			constexpr char_type to_character{
+				from_nl ? ::fast_io::char_literal_v<u8'\n', char_type>
+						: ::fast_io::details::execution_newline_literal<char_type>()};
+			for (; fromfirst != fromlast && tofirst != tolast;
+				 ++fromfirst, ++tofirst)
+			{
+				*tofirst = *fromfirst == from_character ? to_character : *fromfirst;
 			}
 		}
 		else /*For debugging purposes*/

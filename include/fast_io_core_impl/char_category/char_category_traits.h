@@ -231,7 +231,7 @@ struct to_c_common_fn_impl
 		using unsigned_char_type = ::std::make_unsigned_t<char_type>;
 		if constexpr (fam == ::fast_io::char_category::char_category_family::c_lower)
 		{
-			if constexpr (!::fast_io::details::is_ebcdic<char_type>)
+			if constexpr (::fast_io::details::is_ascii<char_type>)
 			{
 				return static_cast<char_type>(
 					static_cast<unsigned_char_type>(::fast_io::char_category::details::to_c_lower_ascii_impl(static_cast<unsigned_char_type>(ch))));
@@ -359,7 +359,7 @@ struct to_c_common_fn_impl
 		}
 		else if constexpr (fam == ::fast_io::char_category::char_category_family::c_upper)
 		{
-			if constexpr (!::fast_io::details::is_ebcdic<char_type>)
+			if constexpr (::fast_io::details::is_ascii<char_type>)
 			{
 				return static_cast<char_type>(
 					static_cast<unsigned_char_type>(::fast_io::char_category::details::to_c_upper_ascii_impl(static_cast<unsigned_char_type>(ch))));
@@ -487,7 +487,25 @@ struct to_c_common_fn_impl
 		}
 		else if constexpr (fam == ::fast_io::char_category::char_category_family::c_halfwidth)
 		{
-			if constexpr (sizeof(char_type) < sizeof(char32_t))
+			if constexpr (!::fast_io::details::is_ascii<char_type>)
+			{
+				if constexpr (::std::same_as<char_type, wchar_t> &&
+							  ::fast_io::details::wide_is_none_utf_endian)
+				{
+					constexpr unsigned_char_type fullwidth_exclaimation_mark_val{0xFF01};
+					constexpr unsigned_char_type num{94};
+					unsigned_char_type const normalized{
+						::fast_io::byte_swap(static_cast<unsigned_char_type>(ch))};
+					unsigned_char_type const umav{
+						static_cast<unsigned_char_type>(normalized - fullwidth_exclaimation_mark_val)};
+					if (umav < num)
+					{
+						return ::fast_io::char_literal_add<char_type, u8'!'>(umav);
+					}
+				}
+				return ch;
+			}
+			else if constexpr (sizeof(char_type) < sizeof(char32_t))
 			{
 				return ch;
 			}
