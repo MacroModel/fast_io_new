@@ -44,45 +44,48 @@ inline constexpr bool staged_supported{
 ///          binary64 and GCC 15 binary32 regress the regular corpus by up to 1.8%; on Linux x86-64, GCC 13--15
 ///          binary32 either regress or enlarge the complete hot body. GCC 16 binary32 improves in isolation, but
 ///          removing its earlier cold specialization shifts the binary64 cold path and regresses a mixed
-///          binary32/binary64 object by 11--17%, so GCC 16 is excluded as a whole. These combinations retain the cold
-///          fallback. The accepted combinations improve the ineligible corpus with neutral or better regular timing
-///          and reduce the complete object. Closed major-version, operating-system, ISA, and LP64 gates prevent an
-///          unaudited optimizer or ABI from inheriting this code-placement decision. Re-audit complete callers before
-///          extending any gate.
+///          binary32/binary64 object by 11--17%, so GCC 16 is a measured negative exception. That release retains the
+///          cold fallback. The accepted combinations improve the ineligible corpus with neutral or better regular timing
+///          and reduce the complete object. Operating-system, ISA, ABI, compiler-family, and evidence-backed compiler
+///          lower bounds prevent an older optimizer from inheriting a code-placement decision which its complete caller
+///          does not preserve. Later compiler majors are admitted by default; a measured counterexample must narrow the
+///          corresponding family policy. Re-audit complete callers rather than isolated leaves when changing a bound.
 template <typename flt>
 inline constexpr bool staged_inline_fallback_supported{
-// Apple AArch64 is restricted to the three front ends measured on an Apple M4. Apple Clang is distinguished from
-// upstream Clang by __apple_build_version__ because both define the ordinary Clang compatibility macros.
+// Apple AArch64 uses continuous family lower bounds instead of a list of individual releases. Apple Clang 21 has
+// physical-M4 whole-call evidence. For upstream Clang, the complete six-value staged caller emitted 1,613 normalized
+// instructions with exactly the same instruction-sequence digest under Clang 22 and 23; Clang 20 emitted a different
+// sequence and therefore remains below the proved transition. Later majors inherit the policy unless a complete-caller
+// counterexample is measured. __apple_build_version__ distinguishes Apple Clang from upstream Clang because both define
+// the ordinary Clang compatibility macros.
 #if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
-	defined(__clang__) && defined(__apple_build_version__) && __clang_major__ == 21
+	defined(__clang__) && defined(__apple_build_version__) && 21 <= __clang_major__
 	::std::same_as<::std::remove_cvref_t<flt>, float>
 #elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
-	defined(__clang__) && !defined(__apple_build_version__) && __clang_major__ == 23
+	defined(__clang__) && !defined(__apple_build_version__) && 22 <= __clang_major__
 	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15
+	defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 // Linux System V x86-64 LP64 uses the per-front-end and per-type decisions established by isolated same-process
-// AB/BA measurements. x32 and non-System-V targets have different argument and stack-placement costs.
+// AB/BA measurements. GCC 16 is the only measured negative GNU transition, so it is excluded explicitly; GCC 17 and
+// later inherit the GCC 15 policy instead of falling outside an arbitrary tested-version ceiling. x32 and non-System-V
+// targets have different argument and stack-placement costs. Compiler Explorer complete-caller comparisons cover Clang
+// 16--22 and current trunk Clang 24; none reproduces the Clang-23 placement. Representative two-sided results are that
+// forcing it adds four calls and grows the frame from 280 to 328 bytes on 22, and adds four calls plus 32 frame bytes on
+// 24. The exact Clang-23 predicate is therefore a measured transition, not an untested whitelist.
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, float> ||
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13 && \
+	defined(__GNUC__) && !defined(__clang__) && \
+	13 <= __GNUC__ && __GNUC__ != 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
-#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 14 && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-	::std::same_as<::std::remove_cvref_t<flt>, double>
-#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-	::std::same_as<::std::remove_cvref_t<flt>, double>
-// Every unmeasured ISA, ABI, operating system, compiler, and compiler major keeps the size-bounded cold fallback.
+// Every ISA, ABI, operating system and compiler family outside the predicates keeps the size-bounded cold fallback.
 #else
 	false
 #endif
@@ -91,17 +94,24 @@ inline constexpr bool staged_inline_fallback_supported{
 /// @brief Indicates whether the staged decimal state carries the original sign on this compiler target.
 /// @details This is a register-allocation policy, not part of the decimal result.  On Linux System V x86-64 LP64,
 ///          Clang 23 reduces the six-value binary64 explicit stack allocation from 128 to 64 bytes when the sign is
-///          prepared, while GCC 15 improves complete two-, four- and six-value runs despite a larger frame.  GCC 13
-///          is deliberately excluded: paired runs make independent sign extraction 3--7% faster and reduce text;
-///          the four- and six-value bodies also have less stack traffic.  Closed compiler-version sets prevent an
-///          unmeasured future major or ABI from inheriting an empirical schedule.  x32, MinGW, non-Linux x86-64,
-///          native MSVC and clang-cl use the portable independent extraction.
-///          Re-audit the complete caller, not only sign extraction, before extending either version set.
+///          prepared, while GCC 15 improves complete two-, four- and six-value runs despite a larger frame. Physical-
+///          core GCC 16 AB/BA runs confirm that the carried sign improves six-value broad groups by 4.5--5.7% and common
+///          groups by 1.6--2.5%; two-/four-value and mixed-ineligible controls remain approximately neutral, linked text
+///          grows by only 43 bytes, and output hashes are identical. GCC 13 is deliberately excluded: paired runs make
+///          independent sign extraction 3--7% faster and reduce text; the four- and six-value bodies also have less stack
+///          traffic. GCC 14 is a second measured rejection: physical-core AB/BA runs regress the six-value broad corpus
+///          by 1.8--2.3%, are 0.7% slower in aggregate, and add 46 text bytes and 20 instructions. GCC 15 is therefore a
+///          continuous GNU lower bound. The Clang family is different: whole-caller
+///          Compiler Explorer audits cover Clang 16--22 and current trunk Clang 24, and none reproduces 23. On the two
+///          adjacent audited sides, sign preparation adds 48 stack bytes on 22 and 32 on 24. Only Clang 23 retains the
+///          measured schedule. x32,
+///          MinGW, non-Linux x86-64, native MSVC and clang-cl use portable independent extraction. Re-audit the complete
+///          caller, not only sign extraction, before moving either compiler transition.
 template <typename flt>
 inline constexpr bool staged_prepares_sign{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	((defined(__clang__) && __clang_major__ == 23) || \
-	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15)) && \
+	 (defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__)) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC))
 	::std::same_as<::std::remove_cvref_t<flt>, double>
 #else

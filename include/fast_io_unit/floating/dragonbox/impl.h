@@ -2255,12 +2255,13 @@ inline constexpr void print_rsv_fp_digits_len(
 		// primitive and pass the same logical length.  Both are exact integer-to-
 		// digit writers.  This is a code-generation partition: revalidate calls,
 		// branches, register pressure and stores before changing its compiler fence.
-		// The recorded matrix is the closed Linux System V x86-64 LP64 GCC 13--16
-		// set.  x32, MinGW, the Microsoft ABI, non-Linux x86-64 and other GNU majors
-		// use the fixed hash writer.  The two writers are semantically identical;
-		// widening this predicate requires whole-caller assembly and size evidence.
+		// GCC 13--16 form the measured Linux System V x86-64 LP64 matrix; GCC 13 is
+		// the continuous lower bound, so later GNU frontends inherit the latest
+		// proved writer.  x32, MinGW, the Microsoft ABI and non-Linux x86-64 use the
+		// fixed hash writer.  The two writers are semantically identical; moving the
+		// lower bound requires whole-caller assembly and size evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		::fast_io::details::jeaiii::jeaiii_main_len<true>(iter, value, length);
 #else
@@ -2291,11 +2292,12 @@ inline constexpr char_type *print_rsv_fp_digits(
 		// path lets jeaiii compute the end directly; the alternative computes the
 		// proven base-10 length and invokes the fixed nine-digit writer.  Output is
 		// identical, so this fence must remain justified by assembly rather than by
-		// floating-point semantics.  The closed evidence set is Linux System V
-		// x86-64 LP64 GCC 13--16; every other ABI or GNU major uses the fixed hash
+		// floating-point semantics.  GCC 13--16 form the measured Linux System V
+		// x86-64 LP64 matrix, and later GNU frontends inherit the GCC-16 policy from
+		// the continuous GCC-13 lower bound.  Every other ABI uses the fixed hash
 		// writer until its calls, stores, live ranges and linked text are re-audited.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 		return ::fast_io::details::jeaiii::jeaiii_main<false>(iter, value);
 #else
@@ -2858,17 +2860,29 @@ inline constexpr char_type *print_rsvflt_binary64_scientific_precision_runtime_i
 	}
 }
 
-// Placement is a closed code-generation policy, not part of DA correctness.
-// Linux System V x86-64 LP64 Clang 23 and GCC 13--16 probe P16-P19 before the
+// The Linux x86 Clang policies in this precision section were audited through
+// isolated scientific-preserve and scientific-significant consumers on Compiler
+// Explorer Clang 16, 17, 18, 19, 20, 21, 22 and current trunk Clang 24. Every
+// tested compiler changes the complete target instructions for each forced
+// Clang-23 policy: P16--P19 outer placement, P20--P33 selection/runtime body,
+// P34 placement, direct-negative and aligned block streams, the long stream, and
+// P20--P22 direct emission. Thus the exact Clang-23 predicates below are measured
+// code-generation transitions; no supported intermediate release was skipped.
+//
+// Placement is a code-generation policy, not part of DA correctness. Linux
+// System V x86-64 LP64 Clang 23 and GCC 13 or later probe P16-P19 before the
 // large exact-window prologue so a successful carrier does not inherit its frame
 // and live ranges.  Other x86 ABIs and compiler majors keep the probe inside
 // that window, as does AArch64, where cache-base and fallback state are already
-// live.  Both placements compute the same carrier.  Extending the closed set
-// requires hit/miss frame, spill, call, branch and linked-text-size evidence.
+// live. Both placements compute the same carrier. Compiler Explorer complete-
+// dispatch probes for Clang 22 and trunk Clang 24 are not instruction-identical:
+// each forced body adds one call despite removing one instruction. Clang therefore
+// remains an exact measured transition; GNU uses its continuous lower bound.
+// Moving either requires hit/miss frame, spill, call, branch and linked-text evidence.
 inline constexpr bool binary64_scientific_precision_outer_dispatch{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	((defined(__clang__) && __clang_major__ == 23) || \
-	 (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16)) && \
+	 (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__)) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -2898,7 +2912,10 @@ inline constexpr bool binary64_scientific_wide_precision_direct_block{
 // other compiler/ABI keeps constant P20-P24 cases and a shared P25-P33 tail where
 // compile-time scales and widths remove address/length work.  Both forms use the
 // same proved carrier and shared data.  Revalidate text size, front-end pressure,
-// dependency chains, spills and calls before widening this closed partition.
+// dependency chains, spills and calls before changing the exact transition.
+// In the isolated scientific-preserve consumer, Clang 22's selected body has 17
+// calls and its runtime body has 23, versus 16 in the fallback; trunk Clang 24
+// likewise emits a different complete instruction stream.
 inline constexpr bool binary64_scientific_wide_precision_runtime_is_extended{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
@@ -2914,16 +2931,17 @@ inline constexpr bool binary64_scientific_wide_precision_runtime_is_extended{
 // removes that copy and measured progressively larger wins on all four
 // frontends; Clang 18--23 and Apple AArch64 already optimize the compact copy to
 // parity, so the extra probe and outlined bodies only increase text there.
-// Close the policy to the measured System V ABI/compiler set.  Because the
+// GCC 13 is the measured continuous lower bound; later GNU frontends inherit
+// the GCC-16 direct-stream policy.  Because the
 // dispatch is an `if constexpr`, Apple M-series and every other excluded target
 // instantiate the unchanged fallback and are byte-identical to the baseline;
 // this was checked with Apple Clang 21, Clang 23 and GCC 15 on Apple AArch64.
 // The arithmetic helper itself is target independent.  Widen only with
-// hit/miss latency, frame, call-graph and linked-text-size evidence for the new
-// compiler/ABI pair.
+// hit/miss latency, frame, call-graph and linked-text-size evidence before
+// moving that lower bound or extending it to another ABI.
 inline constexpr bool binary64_significant_fixed_direct_block{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -3640,18 +3658,20 @@ inline constexpr void exact_precision_copy_character_digits_numeric(
 	// Ryu's reciprocal reduction. Only the low 61 bits of the shifted high
 	// product are needed before the final uint32_t truncation.
 	::std::uint_least64_t multiplied;
-	// GCC 14-15 with BMI2 otherwise retain zero-valued carry temporaries in
+	// GCC 14--15 with BMI2 otherwise retain zero-valued carry temporaries in
 	// callee-saved registers for this reciprocal reduction.  The mulx sequence
 	// computes only product limb 2, the sole limb used after the 29-bit shift,
-	// and carries are explicit.  GCC 13/16, Clang, non-x86 and non-BMI2 targets
-	// use the portable u128 expression.  The split is correct only while random
+	// and carries are explicit.  GCC 13 and GCC 16 or later, Clang, non-x86 and
+	// non-BMI2 targets use the portable u128 expression.  Thus future GNU
+	// frontends inherit the latest GCC-16 lowering instead of falling outside the
+	// algorithm.  The split is correct only while random
 	// differential tests prove limb identity and assembly audits confirm no
 	// helper call or new spill on the selected GCC majors.  GNU extended assembly
 	// and the register contract are closed to the measured Linux System V LP64
 	// artifact; every other ABI uses the exact portable carry expression.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__BMI2__) && defined(__GNUC__) && !defined(__clang__) && \
-	14 <= __GNUC__ && __GNUC__ <= 15 && \
+	14 <= __GNUC__ && __GNUC__ < 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if (!__builtin_is_constant_evaluated())
 	{
@@ -3964,10 +3984,12 @@ print_rsvflt_binary64_scientific_wide_precision_impl(
 // share one coalesced body returning two registers.  Across the complete
 // nine-mode probe this removed 2.9--7.9 KiB versus cloning, while P34 remained
 // within about 0--4.5% of cloned latency and retained a 34--50% win over exact
-// fallback.  Unlisted compilers and ABIs retain the ordinary compiler cost
-// model.  This conditional is code-generation policy only; every form returns
-// the same packed coefficient and exponent.  Widen it only after frame,
-// register-return, linked-text and hit/miss evidence for the new compiler/ABI.
+// fallback. GCC 13 is the continuous GNU lower bound. Clang 22 and current
+// trunk Clang 24 each add two calls when this boundary is forced, so only the
+// measured Clang 23 artifact uses it. Other compilers and
+// ABIs retain the ordinary compiler cost model. This conditional is code-generation
+// policy only; every form returns the same packed coefficient and exponent.
+// Move a bound only after frame, register-return, linked-text and hit/miss evidence.
 #if defined(__clang__) && defined(__APPLE__) && \
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 FAST_IO_GNU_ALWAYS_INLINE
@@ -3975,7 +3997,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	!(defined(__arm64ec__) || defined(_M_ARM64EC)) && \
 	((defined(__clang__) && __clang_major__ == 23) || \
 	 (defined(__GNUC__) && !defined(__clang__) && \
-	  13 <= __GNUC__ && __GNUC__ <= 16)) && \
+	  13 <= __GNUC__)) && \
 	__has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
@@ -4038,9 +4060,10 @@ print_rsvflt_binary64_scientific_p34_precision_impl(
 
 // One Clang x86-64 entry shares runtime scale, split position and writer length
 // across P20-P33, bounding emitted text and front-end pressure.  The recorded
-// compiler is Clang 23; other Clang majors inherit this conservative frontend
-// policy until their frame, calls and dependency chain are re-audited.  Other
-// targets keep constant P20-P24 writer widths because the measured GCC/M4
+// compiler transition is Clang 23. Complete Clang 22 and trunk Clang 24 probes
+// are not instruction-identical when this body is selected, so both use the
+// conservative constant-width frontend until paired runtime data proves a win.
+// Other targets keep constant P20-P24 writer widths because the measured GCC/M4
 // assembly folds the scale/offset and shortens the dependency chain.  Both
 // forms reuse the same DA cache, power-of-ten data and 1e19 split.  This
 // source-level sharing does not promise identical renderer text: punctuation
@@ -4060,9 +4083,9 @@ print_rsvflt_binary64_scientific_wide_precision_runtime_impl(
 	// Clang 23 Linux System V x86-64 LP64 keeps runtime scale and length in
 	// registers without a frame or division helper.  Other configurations dispatch
 	// P20-P24 to constant specializations to preserve immediate offsets and fixed
-	// writer lengths.  Both branches emit identical character sequences; widening
-	// the closed set requires text-size, front-end, spill, call and dependency-chain
-	// evidence.
+	// writer lengths.  Both branches emit identical character sequences; moving
+	// the lower bound requires text-size, front-end, spill, call and dependency-
+	// chain evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -4145,15 +4168,16 @@ print_rsvflt_binary64_scientific_extended_precision_runtime_impl(
 	{
 		return nullptr;
 	}
-	// GCC 13-15 constant-fold P25-P28 scale and writer widths into the selected
-	// x86 hot shape.  P29-P33 share the runtime tail to bound emitted text and
+	// GCC 13--15 constant-fold P25-P28 scale and writer widths into the selected
+	// x86 hot shape.  GCC 16 and later inherit the shared runtime tail, as do
+	// P29-P33 on every GNU release, to bound emitted text and
 	// front-end pressure.  This partition changes no arithmetic; retain it only
 	// while the supported assembly matrix confirms constant folding, the intended
 	// dependency chain, and the absence of new spills or calls.  The retained
-	// evidence is closed to Linux System V x86-64 LP64; other ABIs use the shared
-	// runtime tail and do not instantiate these specializations.
+	// evidence is specific to Linux System V x86-64 LP64; other ABIs use the
+	// shared runtime tail and do not instantiate these specializations.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ < 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	switch (significant)
 	{
@@ -4288,9 +4312,29 @@ print_rsvflt_binary64_fixed_fractional_da_wide_write(
 // Both entries receive the magnitude iterator after the public formatter has
 // already emitted its sign; adding `negative` here would duplicate '-' rather
 // than repair rounding, which the proved nearest-only carrier has completed.
+//
+// GCC 15 at -Ofast changes its translation-unit inlining budget when the low-P
+// entry below is present: this already-outlined narrow writer and an unrelated
+// exact fallback are expanded, making the complete linked text 2,064 bytes
+// larger. Applying `Os` only to this shared leaf restores the calls chosen by
+// the baseline and limits the complete delta to 544 bytes. The low-P common
+// corpus still improves by 8.8%--28.3%, while its broad controls remain within
+// 1.15%. GCC 13, 14 and 16 and Clang do not exhibit that layout transition, so
+// the exact GCC 15 exception is code-generation policy rather than an arithmetic
+// or availability condition. The evidence is specific to Linux System V x86-64
+// LP64, so every other ABI keeps the ordinary optimization level. Revalidate
+// whole-object symbol sizes, calls and hit/miss latency before changing it;
+// future GNU versions remain normally optimized rather than inheriting the
+// GCC 15 exception.
 template <bool comma, ::std::integral char_type>
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
+#endif
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC)) && \
+	__has_cpp_attribute(__gnu__::__optimize__)
+[[__gnu__::__optimize__("Os")]]
 #endif
 inline constexpr char_type *
 print_rsvflt_binary64_fixed_fractional_da_narrow_impl(
@@ -4331,6 +4375,93 @@ print_rsvflt_binary64_fixed_fractional_da_wide_impl(
 	}
 	return ::fast_io::details::print_rsvflt_binary64_fixed_fractional_da_wide_write<
 		comma>(iter, converted, fractional_precision);
+}
+
+// Linux System V x86-64 Clang 23 produces the best P15--P128 miss layout when
+// the low-P probe is the `else` arm of the existing exact fixed window: across
+// the complete sweep its mean control change is +0.11%. A separate Clang 22
+// physical-core ABBA/BAAB sweep instead gives the standalone precision-first
+// probe a +0.34% mean control change, a -1.09% worst row and no row below -2%.
+// Clang 22, GCC and other targets use the standalone placement below. Current
+// trunk Clang 24 also remains standalone because its complete precision caller
+// is not instruction-identical to 23 and has no paired runtime admission. Thus
+// the exact Clang 23 predicate is measured on both sides, not an untested hole.
+// Both placements call the same outlined converter and exact fallback, so this
+// policy changes branch placement and text, never digits.
+inline constexpr bool binary64_fixed_fractional_low_integrated_dispatch{
+#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__clang__) && __clang_major__ == 23 && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+	true
+#else
+	false
+#endif
+};
+
+// The public formatter has already emitted the sign and rejected zero,
+// subnormal and non-finite inputs before entering this normal-only leaf. It is
+// outlined so runtime scale, division and digit-placement state are shared by
+// the six nearest rounding rules and do not lengthen their exact fallback.
+// A null return means that the cache proof could not exclude a half boundary.
+//
+// On success rounded_integer is abs(value)*10^P rounded to an integer. Because
+// P is at least one, both fixed and fractional-decimal presentations necessarily
+// contain a radix point and JSON needs no additional `.0` suffix. If the
+// rounded width is at most P, emit `0.`, leading zeroes and the coefficient.
+// Otherwise write the coefficient one position to the right, move only its
+// integer prefix left, and replace the vacated byte with the radix point. The
+// existing digit and literal writers preserve native character width, comma
+// selection and EBCDIC encoding without an ASCII staging copy.
+template <bool comma, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *
+print_rsvflt_binary64_fixed_fractional_da_low_impl(
+	char_type *iter, ::std::uint_least64_t mantissa,
+	::std::uint_least32_t exponent,
+	::std::size_t fractional_precision) noexcept
+{
+	auto const binary_exponent{
+		static_cast<::std::int_least32_t>(exponent) - 1075};
+	auto const decimal_exponent{
+		::fast_io::details::da::compute_decimal_exponent_reduced(
+			binary_exponent)};
+	auto const range_probe{static_cast<::std::int_least64_t>(decimal_exponent) +
+		static_cast<::std::int_least64_t>(fractional_precision)};
+	if (range_probe < -16 || 0 < range_probe)
+	{
+		return nullptr;
+	}
+	constexpr ::std::uint_least64_t implicit_bit{
+		static_cast<::std::uint_least64_t>(1ULL) << 52u};
+	auto const converted{::fast_io::details::da::
+		compute_binary64_fixed_fractional_low_precision(
+			mantissa | implicit_bit, exponent, fractional_precision,
+			decimal_exponent)};
+	if (!converted.success)
+	{
+		return nullptr;
+	}
+	auto const decimal_digits{
+		static_cast<::std::size_t>(converted.decimal_digits)};
+	if (decimal_digits <= fractional_precision)
+	{
+		iter = ::fast_io::details::fill_zero_point_impl<comma>(iter);
+		iter = ::fast_io::details::fill_zeros_impl(
+			iter, fractional_precision - decimal_digits);
+		::fast_io::details::print_rsv_fp_digits_len<double>(iter,
+			converted.rounded_integer, converted.decimal_digits);
+		return iter + decimal_digits;
+	}
+	auto const integer_digits{decimal_digits - fractional_precision};
+	auto *const digits_begin{iter + 1u};
+	::fast_io::details::print_rsv_fp_digits_len<double>(digits_begin,
+		converted.rounded_integer, converted.decimal_digits);
+	::fast_io::details::my_copy_n(digits_begin, integer_digits, iter);
+	iter[integer_digits] =
+		::fast_io::char_literal_v<comma ? u8',' : u8'.', char_type>;
+	return iter + decimal_digits + 1u;
 }
 
 [[nodiscard]] inline constexpr exact_precision_window_division
@@ -4958,20 +5089,23 @@ exact_precision_wide_subnormal_window_from_binary(
 }
 #endif
 
-// The DA arithmetic below is target-independent.  This boolean is a closed
+// The DA arithmetic below is target-independent.  This boolean is a
 // code-generation and ABI policy, not a numerical capability test.
 // Paired AB/BA runs on an i9-14900HX showed GCC 15 retaining the one-compare
 // materializer miss shape while improving all four P18/P19 presentations by
-// 25--45%.  Clang 23 and GCC 13 showed link-order-sensitive miss layouts, so
+// 25--45%. GCC 14 is deliberately below this bound: two physical-core AB/BA
+// sweeps find no stable all-format win, while the candidate adds 1.5--1.7 KiB,
+// 357--392 instructions and four calls. Clang 23 and GCC 13 showed link-order-sensitive miss layouts, so
 // they retain byte-identical exact-materializer code until independently better
 // placement is proved.  Only Linux System V x86-64 LP64 was measured; x32,
 // MinGW, the Microsoft ABI and non-Linux x86-64 retain the exact path.
-// Unmeasured GNU majors, including GCC 14 and GCC 16, are not inferred from
-// GCC 15; revalidate frame size, calls, branch placement and both link orders
-// before extending this closed set.
+// GCC 15 is the continuous family lower bound: later GNU frontends inherit the
+// accepted materializer unless a complete hit/miss and link-order counterexample
+// is measured.  Revalidate frame size, calls, branch placement and both link
+// orders before narrowing that policy.
 inline constexpr bool binary64_p18_p19_materializer_enabled{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -4994,7 +5128,7 @@ inline constexpr bool binary64_p18_p19_materializer_enabled{
 // cache cursor and nineteen-byte scratch do not extend any miss-path live range.
 // The noinline attribute changes placement only.  A compiler without that
 // attribute may inline the identical arithmetic and write contract; it does
-// not enter the closed compiler/ISA policy above.
+// does not enter the compiler/ISA policy above.
 template <typename window_result_type>
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
@@ -5354,8 +5488,10 @@ inline constexpr bool exact_precision_window_materialize_mixed_binary(
 // selected AArch64 and Clang-x86 negative-exponent shapes keep block-stream state
 // in registers, whereas the disabled GCC-x86 shape carries stream state through
 // the stack.  Other AArch64 frontends inherit a conservative ISA-family
-// hypothesis; x86 ABIs and compiler majors outside the closed evidence set use
-// the compact exact window.  Positive and mixed streams have separate gates
+// hypothesis. On x86, GCC 13 is a continuous family lower bound. Clang 22 and
+// trunk Clang 24 direct-negative consumers expand from 16 calls to 28, so only
+// the measured Clang 23 direct shape is selected; other ABIs use the
+// compact exact window. Positive and mixed streams have separate gates
 // because their live ranges differ.  Every disabled branch derives the same
 // prefix, guard and sticky state.  Revalidate frame, spills, calls, block-loop
 // throughput and linked text before moving a gate.
@@ -5368,7 +5504,7 @@ inline constexpr bool exact_precision_window_direct_nonnegative_scientific{true}
 inline constexpr bool exact_precision_window_direct_negative_scientific{true};
 inline constexpr bool exact_precision_window_direct_nonnegative_scientific{false};
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_negative_scientific{false};
 inline constexpr bool exact_precision_window_direct_nonnegative_scientific{true};
@@ -5390,22 +5526,35 @@ inline constexpr bool exact_precision_window_direct_nonnegative_scientific{false
 //
 // This is an empirical object-layout and register-allocation policy, not an
 // AArch64 semantic or ISA-capability test.  Darwin LP64 Apple Clang 21,
-// upstream Clang 23 and GCC 15 have physical-M4 timing evidence.  Linux LP64
-// Clang 21/23 cross objects for Apple M1, Cortex A76/A78/X1 and Neoverse
-// N1/V1/N2 inline all five character-width copies without a new relocation or
-// callee-save register, and their exact packed block improves the corresponding
-// llvm-mca models.  Linux LP64 GCC 15 is deliberately excluded: its char and
-// char8_t functions add a 16-byte frame and its wide matrix adds 584--872 text
-// bytes with broader register-allocation movement.  Unlisted compiler versions
-// and ABIs must not inherit this decision; they use the equivalent scalar edge
-// until frame, spills, calls, text and AB/BA timing are audited independently.
+// upstream Clang 22/23 and GCC 15 have physical-M4 timing evidence.  Nine
+// independent Clang-22 P18/P32/P64/P128 runs over forty complete presentation
+// cells improved the geometric aggregate by 1.85%; the P64 and P128 aggregates
+// improved by 2.30% and 3.40%, respectively.  The linked text increase was
+// eight bytes, and 163,840 paired outputs were byte-identical.  AArch64 ELF
+// Clang 19, 20 and trunk produce the same complete consumer instructions,
+// frame, calls and text with the policy forced on or off, so excluding those
+// versions would change no generated code.  Clang 21/23 cross objects for Apple
+// M1, Cortex A76/A78/X1 and Neoverse N1/V1/N2 inline all five character-width
+// copies without a new relocation or callee-save register, and their exact
+// packed block improves the corresponding llvm-mca models.  The continuous
+// Clang-family policy therefore avoids both a hole between measured releases
+// and a speculative upper bound; a future measured counterexample must narrow
+// it.  Linux LP64 GCC 15 remains deliberately excluded: its char and char8_t
+// functions add a 16-byte frame and its wide matrix adds 584--872 text bytes
+// with broader register-allocation movement. Isolated scientific-preserve
+// target functions from Compiler Explorer prove that the x86 transformation is
+// not code-generation-neutral outside 23: Clang 22 changes 423 instructions to
+// 441, and trunk Clang 24 changes 422 to 440, with different normalized opcode
+// digests in both cases. Neither compiler has paired x86 latency admission for
+// that larger body, so the Linux x86 selection remains exact Clang 23. Admit
+// another major only after real paired measurement. Other compiler families and
+// ABIs use the equivalent scalar edge.
 #if (defined(__aarch64__) || defined(__arm64__)) && defined(__LP64__) && \
-	(defined(__APPLE__) || defined(__linux__)) && defined(__clang__) && \
-	(__clang_major__ == 21 || __clang_major__ == 23)
+	(defined(__APPLE__) || defined(__linux__)) && defined(__clang__)
 inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{true};
 #elif (defined(__aarch64__) || defined(__arm64__)) && defined(__LP64__) && \
 	defined(__APPLE__) && defined(__GNUC__) && !defined(__clang__) && \
-	__GNUC__ == 15
+	15 <= __GNUC__
 inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{true};
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
@@ -5416,11 +5565,12 @@ inline constexpr bool exact_precision_window_staged_negative_aligned_memcpy{fals
 #endif
 
 // GCC 13--16 Linux System V x86-64 LP64 keep the boundary-carrier and mixed-
-// stream state in the measured register allocation.  Other ABIs and GNU majors
+// stream state in the measured register allocation.  GCC 13 is the continuous
+// lower bound, so later GNU frontends inherit the GCC-16 placement.  Other ABIs
 // reuse their nonnegative-stream decision and compact exact fallback.  This
-// closed policy changes dispatch placement only, not arithmetic or rounding.
+// policy changes dispatch placement only, not arithmetic or rounding.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 inline constexpr bool exact_precision_window_direct_boundary_carrier{true};
 inline constexpr bool exact_precision_window_direct_mixed_scientific{true};
@@ -5435,9 +5585,10 @@ inline constexpr bool exact_precision_window_direct_mixed_scientific{
 // linked AB/BA binaries (20 balanced samples per cell) improved P35-P128 by
 // 11.7--12.4% on the common corpus and 6.0% on the broad-exponent corpus.  The
 // P34 control remained within 2.5%.  GCC 13 and GCC 15 instead regressed their
-// broad P65-P128 ranges by 3.2--5.6%, so this is a closed Clang-23 Linux System
-// V x86-64 LP64 policy; other ABIs and compiler versions retain the compact
-// exact window until remeasured.
+// broad P65-P128 ranges by 3.2--5.6%. Clang 22 and trunk Clang 24 increase the
+// isolated scientific-preserve consumer from 16 calls to 30 when this stream is
+// forced, so only measured Clang 23 selects it. Other majors and ABIs retain the
+// compact exact window until paired P35-P128 data admit them.
 // Both paths derive the same prefix, guard and sticky bits and share the same
 // rounding writer.  The gate therefore changes code generation, not semantics.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
@@ -5470,12 +5621,16 @@ inline constexpr bool exact_precision_window_direct_binary32_positive_scientific
 
 // Direct positive-integer emission is disabled on GCC x86-64 because the
 // measured inline block writer expands the caller's frame and dependency chain.
-// GCC 13 and GCC 15 instead use a terminal outlined writer: paired broad-corpus
-// runs improve fixed and decimal P15-P128 by 6.5--10.2%, while P1-P14 miss
-// controls remain within 0.72% and the public 96/112-byte frames do not grow.
-// Keep that profitable outline on the two measured Linux System V x86-64 LP64
-// majors only.  Other ABIs, GCC 14, GCC 16 and future majors retain the exact
-// fallback until the same hit, miss, frame and text-size audit is available.
+// GCC 13--15 instead use a terminal outlined writer. Paired broad-corpus runs
+// improve GCC 13/15 fixed and decimal P15-P128 by 6.5--10.2%; a separate
+// physical-core GCC 14 P15-P32 fractional-preserve audit improves the broad
+// corpus by 10.2--10.4% and the combined corpus by 5.1%, with common values
+// neutral. The GCC 14 boundary costs 524 linked-text bytes, 141 instructions
+// and one call, a bounded tradeoff for the measured latency win. P1-P14 miss
+// controls remain bounded and every output hash agrees. The measured GCC 16
+// negative transition keeps the exact fallback; GCC 17 and later inherit the
+// latest profitable GNU outline unless a whole-caller counterexample is
+// measured. Other ABIs retain the fallback.
 // Every choice emits the identical integer and zero suffix; this is compiler
 // scheduling policy, not a rounding rule.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__GNUC__) && !defined(__clang__) && !(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -5486,7 +5641,8 @@ inline constexpr bool exact_precision_window_direct_positive_fixed{true};
 
 inline constexpr bool exact_precision_window_outlined_positive_fixed{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15) && \
+	defined(__GNUC__) && !defined(__clang__) && \
+	13 <= __GNUC__ && __GNUC__ != 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -7709,12 +7865,16 @@ exact_precision_scientific_direct(
 // wchar_t, char8_t, char16_t and char32_t together cost 12,288 bytes, while no
 // non-char P34 pair cleared a two percent win.  The char-only policy reduced
 // that complete DSO delta to 5,120 bytes and held every non-char P34/P35/P38/P39
-// control within 0.75%.  This closed compiler/ABI policy controls placement
-// only; x32, MinGW, ARM64EC, Clang and other GCC majors must retain the shared
-// leaf until independently audited.
+// control within 0.75%. GCC 15 is therefore the continuous GNU lower bound:
+// later GNU majors inherit the placement instead of being rejected for novelty.
+// GCC 14 is a measured rejection rather than a version hole: its significant
+// result is neutral across two physical cores, while significant-preserve
+// regresses by 0.7--1.1% and adds 24--70 text bytes. This compiler/ABI policy
+// controls placement only; x32, MinGW, ARM64EC, Clang, GCC 13 and GCC 14 retain
+// the shared leaf.
 inline constexpr bool binary64_p34_decimal_direct_scientific{
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -8015,29 +8175,36 @@ render_binary64_common_significant_precision(
 			iter, decimal, significant, significant);
 }
 
-// Packing changes register lifetime rather than arithmetic.  The closed policy
-// below is derived from post-sign AB/BA measurements, matching the production
+// Packing changes register lifetime rather than arithmetic. The policy below is
+// derived from post-sign AB/BA measurements, matching the production
 // insertion point.  Apple Clang 23/M4 direct results improved scientific,
 // fixed, general and decimal by 2.04%, 2.72%, 1.00% and 3.22%.  On i9-14900HX,
-// GCC 13 direct won both common- and broad-exponent aggregates for all formats;
-// GCC 15 direct won fixed/decimal but regressed scientific/general by up to
-// 7.61%/12.38%; Clang 23 direct won fixed/general while decimal regressed about
-// 2.7%.  Only those measured compiler majors receive the direct form.  Future
-// majors and unmeasured targets keep the compact carrier until independently
-// re-audited for latency, spills, front-end pressure and text size.  The x86
-// arms are closed to Linux System V x86-64 LP64; x32, MinGW, the Microsoft ABI
-// and non-Linux x86-64 do not inherit those empirical schedules.
+// GCC 13 direct won both common- and broad-exponent aggregates for all formats.
+// Physical-core GCC 14 AB/BA runs over every P23--P33 common and broad cell also
+// select the all-format direct form: on cores 3 and 4, respectively, general
+// improves by 3.9%/4.6%, scientific by 3.9%/4.6%, fixed by 4.3%/4.9%, and
+// decimal by 2.6%/3.4%; every output hash agrees and linked text shrinks by
+// 121--298 bytes. GCC 15 direct instead wins fixed/decimal but regresses
+// scientific/general by up to 7.61%/12.38%; GCC 15 is therefore the continuous
+// lower bound for that narrower format policy, and later GNU frontends inherit
+// it. Clang 23 direct wins fixed/general while decimal regresses about 2.7%.
+// Clang 22 and trunk Clang 24 complete precision dispatchers are not
+// instruction-identical to 23 under the direct policy, so only measured Clang
+// 23 receives its format split. The x86 arms are restricted to Linux System V
+// x86-64 LP64; x32, MinGW, the Microsoft ABI and non-Linux x86-64 do not inherit
+// those empirical schedules.
 template <::fast_io::manipulators::floating_format format>
 inline constexpr bool binary64_common_significant_precision_direct{
-#if defined(__clang__) && __clang_major__ == 23 && defined(__APPLE__) && \
+#if defined(__clang__) && 23 <= __clang_major__ && defined(__APPLE__) && \
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13 && \
+	defined(__GNUC__) && !defined(__clang__) && \
+	(__GNUC__ == 13 || __GNUC__ == 14) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 15 && \
+	defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	format == ::fast_io::manipulators::floating_format::fixed ||
 		format == ::fast_io::manipulators::floating_format::decimal
@@ -8396,15 +8563,23 @@ print_rsvflt_binary64_common_precision_decimal_dispatch(
 // P23-P33 carrier policy and the other three presentations from inheriting the
 // extra live range.  Balanced, independently linked AB/BA binaries on an
 // i9-14900HX improved Clang 23 by 23.7--31.5%, GCC 13 by 42.0--46.3%, and GCC
-// 15 by 43.8--45.9% across common and broad-exponent corpora.  Apple Clang 23
+// 15 by 43.8--45.9% across common and broad-exponent corpora. Physical-core
+// GCC 14 AB/BA runs independently improve the combined P20--P22 corpus by
+// 41.7--41.8%, with broad values faster by 43.5--43.9% and common values by
+// 39.6--39.9%; every byte-differential output agrees. The specialized GCC 14
+// body adds 1,900 linked-text bytes, 467 instructions and three calls, a bounded
+// front-end cost accepted for the approximately 42% latency reduction. Apple
+// Clang 23
 // uses the already-direct common dispatcher in its public entry: widening that
 // dispatcher's one range test to P20-P33 adds neither a miss-path comparison nor
 // a second P23-P33 branch.  Three million finite-normal differential conversions
-// produced no mismatch; P23-P33 controls moved by at most 0.68%.  The x86 arms
-// are closed to Linux System V LP64; unmeasured ABIs and compiler majors retain
-// the exact fallback.
+// produced no mismatch; P23-P33 controls moved by at most 0.68%. GCC 13 is now
+// the continuous GNU lower bound, so later frontends inherit the direct carrier.
+// The forced P20 path adds one call on Clang 22 and two on trunk Clang
+// 24, so only measured Clang 23 selects this carrier. Other ABIs retain the exact
+// fallback.
 inline constexpr bool binary64_scientific_p20_p22_direct{
-#if defined(__clang__) && __clang_major__ == 23 && defined(__APPLE__) && \
+#if defined(__clang__) && 23 <= __clang_major__ && defined(__APPLE__) && \
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
@@ -8412,7 +8587,7 @@ inline constexpr bool binary64_scientific_p20_p22_direct{
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 13 || __GNUC__ == 15) && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -8594,12 +8769,12 @@ materialize_binary64_p16_p19_significant_decimal(
 // by 5.5% geometrically with the public branch.  The fast placement is therefore
 // the narrowest portable compile-time proxy for the measured Apple Clang 23/M4
 // artifact: it does not identify the runtime CPU, so other Apple AArch64
-// processors and OS revisions remain unmeasured.  Future Clang versions, GCC and
-// non-Apple AArch64 take the conservative slow placement until independently
-// measured.  Both placements call the identical proved carrier and exact
-// fallback.
+// processors and OS revisions remain an explicit family-level hypothesis.
+// Clang 23 is the lower bound and later Clang majors inherit the placement;
+// GCC and non-Apple AArch64 take the conservative slow placement. Both
+// placements call the identical proved carrier and exact fallback.
 inline constexpr bool binary64_common_significant_precision_public_dispatch{
-#if defined(__clang__) && __clang_major__ == 23 && defined(__APPLE__) && \
+#if defined(__clang__) && 23 <= __clang_major__ && defined(__APPLE__) && \
 	(defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64))
 	true
 #else
@@ -10258,23 +10433,23 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_with_
 	}
 }
 
-// GCC 13--16 Linux System V x86-64 LP64 use a compact regular-normal entry around
+// GCC 13 and later Linux System V x86-64 LP64 use a compact regular-normal entry around
 // the SSSE3/SSE4.1 ASCII writer.  This prevents normalization and generic-renderer
-// state from extending the predominant shortest path's live range.  GCC 14--16
+// state from extending the predominant shortest path's live range. GCC 14 and later
 // use the specialized subnormal and irregular entries below.  GCC 13 deliberately
 // sends both rare classes to the generic fallback: applying the later-major
 // placement to GCC 13 improved regular values but increased measured subnormal
-// latency by about thirty percent.  Other GNU majors and x86 ABIs retain the
-// portable entry; no empirical layout is inferred across either boundary.
+// latency by about thirty percent. Later GNU majors inherit the GCC 16 schedule
+// as a forward-family hypothesis; other x86 ABIs retain the portable entry.
 // All entries consume the same DA conversion_result and fall back before
 // committing an unsupported fixed layout.  Revalidate frame size, aggregate
-// spills, calls, constants, branches and linked text before extending this
-// closed set.  The `noinline` attributes below enforce the measured
+// spills, calls, constants, branches and linked text before moving the GCC 13
+// transition. The `noinline` attributes below enforce the measured
 // layout; a compiler that cannot express them still executes the same conversions
 // and fallback rules, but may merge their live ranges into the caller.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 // The subnormal entry owns normalization and a possible fixed-format retry.
 // Its separate boundary is measured for the selected GCC/x86 set, not inferred
@@ -10771,14 +10946,14 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			// GCC-specific shortest-emission boundaries.  Regular binary64 values
 			// keep conversion and the selected renderer close; irregular/subnormal
 			// values use a compiler-major-specific rare entry.  The portable branch
-			// below is semantically identical.  GCC 13--16 Linux System V x86-64 LP64
-			// are the closed recorded matrix; every other compiler/ABI uses the
-			// portable entry.
-			// These fences protect code shape only and require per-major assembly,
-			// benchmark and linked-text-size validation before extension.
+			// below is semantically identical. GCC 13--16 are the recorded Linux
+			// System V x86-64 LP64 matrix; the continuous GCC-13 lower bound lets later
+			// GNU majors inherit the GCC-16 schedule. Every other compiler/ABI uses the
+			// portable entry. This fence protects code shape only and requires assembly,
+			// benchmark and linked-text validation before moving the lower bound.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 16 && \
+	!defined(__clang__) && 13 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 			if constexpr (trait::mbits == 52u && trait::ebits == 11u)
 			{
@@ -10857,42 +11032,54 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			}
 			else
 			{
-				// Measured GCC 15 and 16 keep binary32 conversion in scalar fields,
-				// avoiding a conversion_result aggregate across the renderer boundary.
-				// Both now use the separately audited outlined renderer: GCC 15 improved
-				// by 2.9--4.9% after the sign-carrier fix, and GCC 16 retains its prior
-				// schedule.  The enclosing compiler/ABI predicate prevents future majors
-				// from inheriting this empirical policy.  Both paths consume the same four
-				// fields and emit identical bytes.
-#if __GNUC__ == 15 || __GNUC__ == 16
-				if (exponent != 0u && mantissa != 0u)
+				// GCC 15 and 16 keep binary32 conversion in scalar fields, avoiding a
+				// conversion_result aggregate across the renderer boundary. GCC 15
+				// improves all presentations by 2.9--4.9% after the sign-carrier fix,
+				// and later GNU majors inherit that all-format lower bound. GCC 14 has
+				// a narrower code-generation result: physical-core AB/BA runs improve
+				// decimal by 11.6--13.4%, but regress general by 14.4--15.2%, scientific
+				// by 2.5--4.9%, and fixed by 3.3--4.0%. It therefore instantiates the
+				// same outlined leaf only for decimal. Every corpus hash agrees; this is
+				// placement policy, not a different DA carrier or presentation rule.
+#if 14 <= __GNUC__
+				constexpr bool use_binary32_split{
+					15 <= __GNUC__ ||
+					mt == ::fast_io::manipulators::floating_format::decimal};
+				if constexpr (use_binary32_split)
 				{
-					::std::uint_least64_t significand;
-					::std::int_least32_t decimal_exponent;
-					::std::uint_least32_t last_digit;
-					bool has_last_digit;
-					auto const binary_significand{static_cast<::std::uint_least32_t>(mantissa) |
-						(static_cast<::std::uint_least32_t>(1u) << trait::mbits)};
-					::fast_io::details::da::compute_binary32_fields(binary_significand, exponent,
-						significand, decimal_exponent, last_digit, has_last_digit);
-					// The call boundary preserves the audited frame and live range on both
-					// admitted majors.  Recheck spills, calls, pshufb placement and linked
-					// text before admitting another compiler major.
-					auto const direct{::fast_io::details::da::print_ascii_shortest_split<
-						flt, direct_flags>(iter, significand, decimal_exponent, last_digit,
-							has_last_digit)};
-					if constexpr (mt != ::fast_io::manipulators::floating_format::fixed)
+					if (exponent != 0u && mantissa != 0u)
 					{
-						return direct;
-					}
-					else if (direct != nullptr)
-					{
-						return direct;
-					}
-					else
-					{
-						return ::fast_io::details::print_rsvflt_da_ascii_fallback<
-							flt, comma, uppercase_e, mt, json_float>(iter, mantissa, exponent);
+						::std::uint_least64_t significand;
+						::std::int_least32_t decimal_exponent;
+						::std::uint_least32_t last_digit;
+						bool has_last_digit;
+						auto const binary_significand{
+							static_cast<::std::uint_least32_t>(mantissa) |
+							(static_cast<::std::uint_least32_t>(1u) << trait::mbits)};
+						::fast_io::details::da::compute_binary32_fields(
+							binary_significand, exponent, significand, decimal_exponent,
+							last_digit, has_last_digit);
+						// This call boundary preserves the admitted major/format live
+						// ranges. Recheck spills, calls, pshufb placement and linked text
+						// if a future compiler requires another transition.
+						auto const direct{
+							::fast_io::details::da::print_ascii_shortest_split<
+								flt, direct_flags>(iter, significand, decimal_exponent,
+								last_digit, has_last_digit)};
+						if constexpr (mt != ::fast_io::manipulators::floating_format::fixed)
+						{
+							return direct;
+						}
+						else if (direct != nullptr)
+						{
+							return direct;
+						}
+						else
+						{
+							return ::fast_io::details::print_rsvflt_da_ascii_fallback<
+								flt, comma, uppercase_e, mt, json_float>(
+									iter, mantissa, exponent);
+						}
 					}
 				}
 #endif
@@ -10919,7 +11106,53 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			// This is the semantic reference for every GCC-specific branch above.
 			auto const converted{::fast_io::details::da::to_conversion_result<flt>(
 				mantissa, static_cast<::std::int_least32_t>(exponent))};
-			if (exponent != 0u)
+			/*
+			The binary64 ASCII leaf consumes a 15- or 16-digit provisional
+			coefficient.  Every normal carrier satisfies that invariant.  A high
+			subnormal satisfies it as well once compute_binary64 returns at least
+
+			  10^14,
+
+			so its raw binary exponent need not exclude the direct leaf.  Below
+			this threshold the fixed-width digit block would count leading zero
+			lanes as significant; finalize() is therefore still required.
+
+			The carrier proof is compiler-independent, while admission to this leaf
+			is an Apple-AArch64 code-generation policy.  Whole-call AB/BA measurements
+			on Apple M4 accepted Apple Clang 21 and upstream Clang 22 and 23:
+			high-subnormal latency fell by approximately 20--27%, the complete
+			exceptional corpus improved, and finite-normal aggregate controls remained
+			neutral.  For all four public shortest presentations, the normalized
+			Clang 22 instruction streams are identical to Clang 23 after this branch
+			is enabled; Compiler Explorer also compiles the complete four-writer probe
+			with Clang 16--22.  Consequently this policy names the Apple-AArch64
+			Clang family rather than a compiler-major whitelist.  GCC is excluded by
+			positive counter-evidence, not by an unmeasured-version assumption: GCC 15
+			improves the exceptional leaf but changes normal-path register allocation,
+			grows the instantiated general/decimal text by 136/124 bytes, and regresses
+			the repeated general normal control by 1.7--6.1%; AArch64 GCC 13 and 14 also
+			grow the general frame from 64 to 80 bytes.  A future counterexample must
+			narrow or widen this policy with output, normal-control, frame, call, and
+			linked-text evidence; absence of a version measurement is not itself an
+			exclusion criterion.  Other compiler, OS, and ISA families retain the former
+			exponent-only predicate because this evidence does not model their complete
+			instruction schedule.  Fixed format remains excluded because this exponent
+			is outside its direct-layout interval and would only pay for a guaranteed
+			null result.
+			*/
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__)
+			constexpr bool ascii_accepts_normalized_subnormal{
+				trait::mbits == 52u && trait::ebits == 11u &&
+				mt != ::fast_io::manipulators::floating_format::fixed};
+#else
+			constexpr bool ascii_accepts_normalized_subnormal{};
+#endif
+			constexpr ::std::uint_least64_t binary64_minimum_direct_coefficient{
+				static_cast<::std::uint_least64_t>(100000000000000)};
+			if (exponent != 0u ||
+				(ascii_accepts_normalized_subnormal &&
+				 converted.significand >= binary64_minimum_direct_coefficient))
 			{
 				auto const direct{::fast_io::details::da::print_ascii_shortest<flt, direct_flags>(iter, converted)};
 				if (direct != nullptr)
@@ -12653,6 +12886,65 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 					}
 				}
 			}
+			else if constexpr (::fast_io::details::
+				binary64_fixed_fractional_low_integrated_dispatch &&
+				::fast_io::details::floating_rounding_is_nearest<rounding>)
+			{
+				// The audited x86 Clang 23 placement reuses the failed P15/exact-
+				// window branch here.
+				// The enclosing condition proves P1--P14 and a noninteger normal
+				// value; P0 retains the generic JSON suffix owner. The generated
+				// exponent hull avoids materializing decimal-exponent state on misses.
+				constexpr auto exponent_union{::fast_io::details::da::
+					binary64_fixed_fractional_low_exponent_union};
+				if (precision &&
+					exponent - exponent_union.minimum <= exponent_union.span) [[unlikely]]
+				{
+					auto const low_result{::fast_io::details::
+						print_rsvflt_binary64_fixed_fractional_da_low_impl<
+							comma>(iter,
+								static_cast<::std::uint_least64_t>(mantissa),
+								exponent, precision)};
+					if (low_result)
+					{
+						return low_result;
+					}
+				}
+			}
+		}
+#endif
+		// Compilers below or outside the integrated-placement transition use a
+		// standalone precision-first probe. P15--P128 fail its first unsigned
+		// comparison before reading exponent state; this is the measured GCC13--16
+		// and Clang22 layout. The carrier uses a native u128 residual for its exact
+		// half comparison, so targets without that representation keep the fallback.
+#if defined(__SIZEOF_INT128__)
+		if constexpr (!::fast_io::details::
+			binary64_fixed_fractional_low_integrated_dispatch &&
+			::std::same_as<flt, double> &&
+			::fast_io::details::floating_rounding_is_nearest<rounding> &&
+			::fast_io::details::floating_precision_is_fractional<precision_mode> &&
+			::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode> &&
+			(mt == ::fast_io::manipulators::floating_format::fixed ||
+			 mt == ::fast_io::manipulators::floating_format::decimal))
+		{
+			if (precision - 1u < 14u && exponent)
+			{
+				constexpr auto exponent_union{::fast_io::details::da::
+					binary64_fixed_fractional_low_exponent_union};
+				if (exponent - exponent_union.minimum <= exponent_union.span) [[unlikely]]
+				{
+					auto const low_result{::fast_io::details::
+						print_rsvflt_binary64_fixed_fractional_da_low_impl<
+							comma>(iter,
+								static_cast<::std::uint_least64_t>(mantissa), exponent,
+								precision)};
+					if (low_result)
+					{
+						return low_result;
+					}
+				}
+			}
 		}
 #endif
 		// Non-preserving significant P23-P33 shares one normal-binary64 DA
@@ -12721,7 +13013,24 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 #endif
 		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
 		{
-			auto const [m10, e10]{::fast_io::details::dragonbox_impl<flt, rounding>(
+			/*
+			The nearest-even shortest carrier is an interval witness, not the final
+			precision result. If P cuts that carrier, the strict distance test below
+			requires the retained decimal to be more than one carrier unit away from
+			the halfway boundary. The exact binary value lies within one such unit,
+			so it is on the same open side of the boundary; all six nearest policies
+			therefore select the same P-digit coefficient. If the distance is at most
+			one, the exact prefix/guard/sticky path remains authoritative and applies
+			the requested tie policy. If P extends the carrier, the digits10
+			separation proof below is likewise independent of which endpoint is closed.
+
+			Consequently the five alternative nearest policies do not need five
+			distinct shortest-roundtrip corrections before this proof. Sharing DA's
+			nearest-even carrier removes work only; the final tie decision still uses
+			`rounding`, and no directed policy enters this branch.
+			*/
+			auto const [m10, e10]{::fast_io::details::dragonbox_impl<flt,
+				::fast_io::manipulators::floating_rounding::nearest_to_even>(
 				mantissa, static_cast<::std::int_least32_t>(exponent), sign)};
 			auto const length{static_cast<::std::size_t>(chars_len<10, true>(m10))};
 			::std::size_t requested{};

@@ -996,12 +996,15 @@ inline constexpr char_type *prsv_fp_dece0(char_type *iter) noexcept
 // code-generation evidence exists for its representation or conversion path.
 // Paired current/candidate runs on i9-14900HX improved GCC 14 binary64 by about
 // 4--5% and GCC 15/16 binary32/binary64 by 19--45%; GCC 13, Clang 23 and the
-// other ABIs did not show the same lowering defect and retain bool.  SSE4.1 and
-// SSSE3 close the policy to the audited DA backend rather than extending a
-// compiler-code-generation result to an unmeasured x86 baseline ISA.
+// other ABIs did not show the same lowering defect and retain bool.  GCC 14 is
+// therefore the measured lower bound, and later GNU frontends inherit the
+// latest proved aggregate layout unless a complete-caller counterexample is
+// found.  SSE4.1 and SSSE3 close the policy to the audited DA backend rather
+// than extending a compiler-code-generation result to an unmeasured x86
+// baseline ISA.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 14 <= __GNUC__ && __GNUC__ <= 16 && \
+	!defined(__clang__) && 14 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt>
 using punning_sign_type = ::std::conditional_t<

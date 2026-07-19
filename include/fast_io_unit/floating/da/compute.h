@@ -856,6 +856,152 @@ struct binary64_fixed_fractional_precision_result
 	bool success;
 };
 
+struct binary64_fixed_fractional_low_precision_result
+{
+	// rounded_integer is round(abs(value) * 10^P). decimal_digits is its
+	// post-carry decimal width, so the presentation layer can insert the radix
+	// point without recounting digits. A false result is an ambiguity rejection;
+	// the exact fixed-precision implementation remains authoritative.
+	::std::uint_least64_t rounded_integer;
+	::std::uint_least32_t decimal_digits;
+	bool success;
+};
+
+// A single unsigned interval is cheaper at the public call site than computing
+// a decimal exponent on every fixed value. Generate its conservative hull from
+// the same reduced exponent function used by the converter: P1--P14 can succeed
+// only where the cache exponent is in [-30,-1]. This is constexpr computation,
+// not a stored exponent table. The unsigned `exponent - minimum <= span` test
+// rejects values on either side, including raw exponent zero, with one compare.
+struct binary64_fixed_fractional_low_exponent_union_type
+{
+	::std::uint_least32_t minimum;
+	::std::uint_least32_t span;
+};
+
+[[nodiscard]] consteval binary64_fixed_fractional_low_exponent_union_type
+make_binary64_fixed_fractional_low_exponent_union() noexcept
+{
+	::std::uint_least32_t minimum{2047u};
+	::std::uint_least32_t maximum{};
+	for (::std::uint_least32_t exponent{1u}; exponent != 2047u; ++exponent)
+	{
+		auto const decimal_exponent{compute_decimal_exponent_reduced(
+			static_cast<::std::int_least32_t>(exponent) - 1075)};
+		if (-30 <= decimal_exponent && decimal_exponent <= -1)
+		{
+			if (minimum == 2047u)
+			{
+				minimum = exponent;
+			}
+			maximum = exponent;
+		}
+	}
+	return {minimum, maximum - minimum};
+}
+
+inline constexpr auto binary64_fixed_fractional_low_exponent_union{
+	make_binary64_fixed_fractional_low_exponent_union()};
+
+// Compute the nearest rounded integer for the low fixed-fractional window.
+// The public dispatcher supplies a positive normal binary64 significand and a
+// runtime precision P in [1,14]. Let e10 be decimal_exponent and let N be the
+// 15- or 16-digit provisional width selected below. The DA cache product gives
+// a lower fixed-point approximation
+//
+//   A = integral + fractional / 2^64
+//
+// to the exact normalized carrier C = abs(value) * 10^(-e10-1). The cache
+// proof bounds its one-sided error by
+//
+//   0 <= C - A < (2049 / 2048) / 2^64.
+//
+// The requested result is round(abs(value) * 10^P). Before a decimal carry it
+// has
+//
+//   K = e10 + N + 1 + P
+//
+// digits. For 1 <= K <= 15, define D = 10^(N-K). Then
+// abs(value) * 10^P = C / D. Dividing integral by D supplies the candidate
+// quotient; the exact half comparison, scaled by 2^64, is
+//
+//   ((integral mod D) * 2^64 + fractional) ? D * 2^63.
+//
+// Division by D cannot amplify the cache error. Since 2049/2048 is strictly
+// between one and two low-word units, only the two integer residuals half-1 and
+// half can conceal an exact half boundary. Rejecting that closed pair proves
+// every accepted comparison. Away from an exact tie all six nearest policies
+// choose the same endpoint, which is why their presentation paths may share
+// this carrier. The generated 10^0..10^19 data are reused; this specialization
+// adds no numeric table.
+template <::std::size_t minimum_precision = 1u,
+	::std::size_t maximum_precision = 14u>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+binary64_fixed_fractional_low_precision_result
+compute_binary64_fixed_fractional_low_precision(
+	::std::uint_least64_t binary_significand,
+	::std::uint_least32_t raw_exponent,
+	::std::size_t fractional_precision,
+	::std::int_least32_t decimal_exponent) noexcept
+{
+	if (fractional_precision - minimum_precision >
+		maximum_precision - minimum_precision || !raw_exponent ||
+		2046u < raw_exponent)
+	{
+		return {};
+	}
+	constexpr ::std::uint_least8_t extra_shift{
+		exponent_shift_cache::extra_shift};
+	auto const shift{cached_data.exponent_shifts.data[raw_exponent]};
+	auto const power{cached_data.powers[-decimal_exponent - 1]};
+	auto const product{::fast_io::details::da::umul64x128_high(
+		binary_significand << shift, power)};
+	auto const integral{product.hi >> extra_shift};
+	auto const fractional{static_cast<::std::uint_least64_t>(
+		(product.hi << (64u - extra_shift)) |
+		(product.lo >> extra_shift))};
+	constexpr ::std::uint_least64_t sixteen_digit_threshold{
+		static_cast<::std::uint_least64_t>(1000000000000000ULL)};
+	auto const provisional_digits{
+		static_cast<::std::size_t>(integral >= sixteen_digit_threshold ?
+			16u : 15u)};
+	auto const significant_signed{
+		static_cast<::std::int_least64_t>(decimal_exponent) +
+		static_cast<::std::int_least64_t>(provisional_digits) + 1 +
+		static_cast<::std::int_least64_t>(fractional_precision)};
+	if (significant_signed < 1 || 15 < significant_signed)
+	{
+		return {};
+	}
+	auto const significant{static_cast<::std::size_t>(significant_signed)};
+	auto const discarded{provisional_digits - significant};
+	auto const divisor{uint64_power10_table[discarded]};
+	auto rounded{static_cast<::std::uint_least64_t>(integral / divisor)};
+	auto const integral_remainder{static_cast<::std::uint_least64_t>(
+		integral - rounded * divisor)};
+	auto const remainder{(static_cast<__uint128_t>(integral_remainder) << 64u) |
+		fractional};
+	auto const half{static_cast<__uint128_t>(divisor) << 63u};
+	// `remainder` is the lower approximation. Exact values below half-1
+	// cannot reach half; values above half are already on the upper side.
+	// The two remaining residuals fall back so tie direction and endpoint
+	// inclusiveness are decided by exact arithmetic.
+	if (remainder - (half - 1u) <= 1u)
+	{
+		return {};
+	}
+	if (half < remainder)
+	{
+		++rounded;
+	}
+	auto decimal_digits{static_cast<::std::uint_least32_t>(significant)};
+	if (rounded == uint64_power10_table[significant])
+	{
+		++decimal_digits;
+	}
+	return {rounded, decimal_digits, true};
+}
+
 // Convert the profitable runtime fixed-fractional window without constructing
 // the complete exact binary expansion.  Write the positive normal input as
 //

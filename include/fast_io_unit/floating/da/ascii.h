@@ -38,18 +38,18 @@ inline constexpr ::std::uint_least64_t ascii_div10_multiplier{static_cast<::std:
 // the exact domain used by both SIMD backends below, not an approximation.
 
 // GCC 13--15 Linux System V x86-64 assembly audits select one aligned SIMD
-// divisor object; GCC 16 and Clang 23 keep the immediate/rematerialized spelling
-// without enlarging the surrounding live range.  This is a closed code-
-// generation policy, not arithmetic: both forms execute the same reciprocal
-// division identities.  x32, MinGW, the Microsoft ABI, non-Linux x86-64 and
-// unmeasured compiler majors use rematerialized constants.  Extending the set
-// requires whole-caller constant-load, spill, call, dependency-chain and linked-
-// text-size evidence.
+// divisor object; GCC 16 and later GNU frontends inherit the newer
+// immediate/rematerialized spelling, which does not enlarge the surrounding
+// live range.  This is a code-generation transition, not arithmetic: both
+// forms execute the same reciprocal division identities.  x32, MinGW, the
+// Microsoft ABI, non-Linux x86-64 and other compilers also use rematerialized
+// constants.  Moving the transition requires whole-caller constant-load, spill,
+// call, dependency-chain and linked-text-size evidence.
 inline constexpr bool ascii_x86_cached_bcd_constants_default{
 	// The unselected configuration does not instantiate the opaque cached-address
 	// dependency.  It computes the same quotients and emits the same bytes.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__ && __GNUC__ < 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	true
 #else
@@ -624,21 +624,26 @@ struct ascii_fixed_layout_cache
 #endif
 inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 
-// Clang 23 Linux System V x86-64 reads a dense projection of decimal_fixed_mask
-// before selecting a writer, including in scalar-feature builds.  This
-// deliberately duplicates 108 bytes so the decision does not scale the index
-// by a 32- or 64-byte entry
-// and does not materialize the full-layout address on the scientific branch.
+// Clang 23 Linux System V x86-64 reads a dense projection of
+// decimal_fixed_mask before selecting a writer, including in scalar-feature
+// builds. This deliberately duplicates 108 bytes so the decision neither scales
+// the index by a 32- or 64-byte entry nor materializes the full-layout address
+// on the scientific branch.
 // Baseline, SSE4.1 and native Clang assembly all preserve a branch-free mask
 // calculation before the unavoidable writer branch.  Replacing it with the
 // closed-form length predicate introduces an additional exponent-dependent
 // branch, while reading the canonical entry adds index/address work before
 // notation is known.  The consteval copy proves bit identity with
-// ascii_fixed_layouts.  Retain this compiler-specific space-for-latency tradeoff
-// only in the closed measured compiler/ABI set.  x32, MinGW, the Microsoft ABI,
-// non-Linux x86-64 and other Clang majors reuse the canonical layout instead of
-// owning this duplicate data.  Re-audit text/data size, loads and spills before
-// widening the predicate.
+// ascii_fixed_layouts. Compiler Explorer forced/base whole-consumer audits cover
+// Clang 16--22 and trunk; none emits an instruction-identical replacement. A
+// physical-core Clang 22 ABBA/BAAB run was statistically neutral (overall ratio
+// 0.999684) while the projection added 144 linked text bytes, so Clang 22 is a
+// tested rejection rather than an omitted release. Current trunk Clang 24 also
+// emits a different consumer sequence and adds the 108-byte projection without
+// reducing its 553-instruction whole-consumer count. Only Clang 23 retains the
+// measured tradeoff. x32, MinGW, the Microsoft ABI and non-Linux x86-64 reuse
+// the canonical layout. Change the exact transition only after whole-caller
+// latency, text/data size, loads and spills are re-audited.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -1129,10 +1134,13 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		if (ascii_fixed_layout_cache::minimum <= exponent &&
 			exponent <= ascii_fixed_layout_cache::maximum)
 		{
-			// The closed Clang-23 Linux x86 set uses the compact projection documented
+			// The audited Clang-23 Linux x86 artifact uses the compact projection documented
 			// above to avoid addressing the full 64-byte SIMD layout before the
-			// notation decision.  Every other configuration reads the authoritative
-			// mask from the full layout entry and emits the identical characters.
+			// notation decision.  Its definition-site audit found Clang 22 latency
+			// neutral with 144 additional text bytes, while trunk Clang 24 removed no
+			// whole-consumer instruction.  Every other configuration reads the
+			// authoritative mask from the full layout entry and emits identical
+			// characters.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__clang__) && __clang_major__ == 23 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -1226,18 +1234,20 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 			converted.exponent, converted.last_digit, converted.has_last_digit);
 }
 
-// GCC 13-15 Linux System V x86-64 binary64 fixed-direct entry.  Keeping the
+// GCC 13--15 Linux System V x86-64 binary64 fixed-direct entry.  Keeping the
 // selected fixed band out of the general layout decision shortens the live range
 // between DA conversion and pshufb emission.  It is semantically identical to
 // print_ascii_shortest.  GCC 13 uses this entry only for the regular-normal hot
 // leaf; its subnormal and irregular cases remain in the generic fallback because
 // outlining those cases with the GCC 14-16 policy increased measured subnormal
-// latency.  Other ABIs and compiler majors retain the compact generic entry;
-// extending this closed set requires frame, spill, call, constant-load, branch
-// and linked-text-size evidence.
+// latency.  GCC 16 introduced the unified layout schedule used by later GNU
+// frontends, so the upper transition selects a newer path rather than abandoning
+// future compilers.  Other ABIs retain the compact generic entry.  Move either
+// transition only with frame, spill, call, constant-load, branch and linked-text
+// evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ <= 15 && \
+	!defined(__clang__) && 13 <= __GNUC__ && __GNUC__ < 16 && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fixed_direct(
@@ -1271,14 +1281,19 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 // wrapper plus outlined callee also removed 75 text bytes.  GCC 16 retains its
 // previously audited split.  No binary64 caller reaches this template.
 //
-// The predicate is intentionally closed to the two measured GCC Linux System V
-// LP64 artifacts.  Other ABIs and compiler majors use the inline field writer;
-// both paths consume the same carrier and emit identical bytes.  Extending the
-// predicate requires call, frame, spill, pshufb placement, complete-call timing
-// and linked-text-size evidence.
+// GCC 14 has a narrower profitable domain: physical-core AB/BA measurements
+// improve decimal binary32 by 11.6--13.4%, while enabling the same split for all
+// presentations regresses general by 14.4--15.2%, scientific by 2.5--4.9%, and
+// fixed by 3.3--4.0%.  The caller therefore instantiates this leaf only for GCC
+// 14 decimal. GCC 15 is the measured all-format lower bound, and later GNU
+// frontends inherit that policy rather than falling back solely because their
+// version is newer. Other ABIs use the inline field writer; both paths consume
+// the same carrier and emit identical bytes. Narrowing the family policy
+// requires call, frame, spill, pshufb placement, complete-call timing and
+// linked-text evidence.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
 	defined(__SSE4_1__) && defined(__SSSE3__) && defined(__GNUC__) && \
-	!defined(__clang__) && 15 <= __GNUC__ && __GNUC__ <= 16 && \
+	!defined(__clang__) && 14 <= __GNUC__ && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename flt, ::fast_io::manipulators::scalar_flags flags>
 [[nodiscard]]
