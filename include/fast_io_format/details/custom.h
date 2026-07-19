@@ -1,0 +1,406 @@
+﻿#pragma once
+
+#include "program.h"
+
+#include <concepts>
+#include <cstddef>
+#include <type_traits>
+#include <utility>
+
+namespace fast_io::fmt
+{
+
+/**
+ * An immediate, non-owning view of the source consumed by a custom formatter.
+ *
+ * `format_literal` and `source` are non-type template arguments, so neither a
+ * pointer to the format string nor a parse cursor is stored in a runtime
+ * object.  All observers are `consteval` for the same reason: the context is a
+ * parser interface, not a runtime string view.  The caller chooses the slice;
+ * the brace frontend normally supplies the type-specific suffix which remains
+ * after its common field grammar.
+ *
+ * The interface deliberately exposes code units without interpreting them as
+ * ASCII.  A customization can consequently compare against
+ * `arithmetic_char_literal_v` (or its own execution-character mapping) and is
+ * usable by all five standard character domains, including EBCDIC execution
+ * character sets.
+ *
+ * A future C++26 reflection frontend may generate `format_parse_define`
+ * overloads from reflected members and return the same structural state used
+ * here.  Reflection therefore changes state construction, not the runtime ABI
+ * or the lowering contract.  No experimental reflection syntax appears in
+ * this C++20 header; such syntax must remain behind the implementation's
+ * feature-test boundary in a separate frontend.
+ */
+template <basic_fixed_string format_literal, auto source>
+struct basic_custom_format_parse_context
+{
+	using char_type = typename decltype(format_literal)::value_type;
+
+	static inline constexpr auto literal{format_literal};
+	static inline constexpr auto source_slice{source};
+
+	static_assert(source.offset <= format_literal.size(),
+				  "fast_io format: custom formatter source starts past the format literal");
+	static_assert(source.size <= format_literal.size() - source.offset,
+				  "fast_io format: custom formatter source extends past the format literal");
+
+	[[nodiscard]] inline static consteval ::std::size_t size() noexcept
+	{
+		return source.size;
+	}
+
+	[[nodiscard]] inline static consteval bool empty() noexcept
+	{
+		return source.size == 0u;
+	}
+
+	/// Maps a formatter-local index back to the original literal for diagnostics.
+	[[nodiscard]] inline static consteval ::std::size_t
+	source_position(::std::size_t index) noexcept
+	{
+		return source.offset + index;
+	}
+
+	/**
+	 * Returns one source code unit.  Bounds remain an immediate-function
+	 * precondition: an invalid access is diagnosed while the CPO is evaluated
+	 * and cannot become undefined behaviour in generated code.
+	 */
+	[[nodiscard]] inline consteval char_type operator[](::std::size_t index) const
+	{
+		if (index >= source.size)
+		{
+			// This immediate function has no runtime path.  The fail-fast call is
+			// deliberately non-constant-evaluable and therefore makes an invalid
+			// parser access ill-formed without introducing an exception model.
+			::fast_io::fast_terminate();
+		}
+		return format_literal[source.offset + index];
+	}
+
+	template <::std::size_t index>
+	[[nodiscard]] inline static consteval char_type get() noexcept
+	{
+		static_assert(index < source.size,
+			"fast_io format: custom formatter parser read past its source slice");
+		return format_literal[source.offset + index];
+	}
+};
+
+/**
+ * Empty runtime tag carrying a custom formatter's parsed state in its type.
+ *
+ * `parsed_state` has already passed the structural-NTTP proof before this tag
+ * is formed.  Consequently a call to `format_alias_define(tag, value)` receives
+ * no format pointer, cursor, virtual formatter, or type-erased argument.  The
+ * immediate accessor is an ergonomic spelling for `if constexpr` in the ADL
+ * CPO; it cannot be called as a runtime state lookup and adds no data member or
+ * static state object to the tag.
+ */
+template <format_character char_type_, auto parsed_state>
+struct basic_custom_format_state_t
+{
+	using char_type = char_type_;
+
+	[[nodiscard]] inline static consteval auto state() noexcept
+	{
+		return parsed_state;
+	}
+};
+
+} // namespace fast_io::fmt
+
+namespace fast_io::fmt::details
+{
+
+/**
+ * Delegates default-format admission to fast_io's public print concept.
+ * Keeping this proof beside the format customization CPOs gives top-level,
+ * nested range, and future grammar rules one definition of "identity"; none
+ * of them needs to enumerate reserve/scatter/semantic printable categories.
+ */
+template <typename char_type, typename value_type>
+concept format_backend_identity_printable =
+	::fast_io::fmt::format_character<char_type> &&
+	::fast_io::operations::defines::print_freestanding_params_okay<
+		char_type, value_type>;
+
+namespace custom_format_adl
+{
+
+// Poison pills suppress accidental ordinary-lookup fallbacks while retaining
+// argument-dependent lookup in the customization type's namespace.
+void format_parse_define() = delete;
+void format_alias_define() = delete;
+void format_as() = delete;
+
+template <auto format_literal, auto source, typename value_type>
+concept parse_expression = requires {
+	format_parse_define(
+		::fast_io::io_type_t<::std::remove_cvref_t<value_type>>{},
+		::fast_io::fmt::basic_custom_format_parse_context<format_literal, source>{});
+};
+
+template <auto parsed_state>
+struct structural_state_proof
+{};
+
+/**
+ * Forming this specialization is the relevant C++20 proof: the parser result
+ * must be a constant expression of a structural type.  Merely requiring a
+ * `constexpr` return type would be insufficient because it would still admit
+ * a runtime call or a state containing an ineligible pointer/reference.
+ */
+template <bool parser_is_available, auto format_literal, auto source,
+	typename value_type>
+struct structural_parse_probe : ::std::false_type
+{};
+
+/**
+ * Delays the NTTP proof until ordinary constraint substitution has established
+ * that ADL really found a parser.  This two-stage form is not merely a compiler
+ * workaround: it prevents the poison-pill declaration from becoming part of a
+ * dependent alias specialization.  Some compilers eagerly instantiate such an
+ * alias while normalizing a concept conjunction, even though the preceding
+ * availability constraint is false.  Selecting this specialization first
+ * gives the language's class-template partial-specialization rules an explicit
+ * substitution boundary and therefore keeps "no customization" a clean false
+ * concept on every supported frontend.
+ */
+template <auto format_literal, auto source, typename value_type>
+struct structural_parse_probe<true, format_literal, source, value_type>
+{
+	inline static constexpr bool value = requires {
+		typename structural_state_proof<format_parse_define(
+			::fast_io::io_type_t<::std::remove_cvref_t<value_type>>{},
+			::fast_io::fmt::basic_custom_format_parse_context<format_literal, source>{})>;
+	};
+};
+
+template <auto format_literal, auto source, typename value_type>
+concept structural_parse_expression =
+	structural_parse_probe<
+		parse_expression<format_literal, source, value_type>,
+		format_literal, source, value_type>::value;
+
+template <auto format_literal, auto source, typename value_type>
+	requires structural_parse_expression<format_literal, source, value_type>
+[[nodiscard]] consteval auto parse_state()
+{
+	return format_parse_define(
+		::fast_io::io_type_t<::std::remove_cvref_t<value_type>>{},
+		::fast_io::fmt::basic_custom_format_parse_context<format_literal, source>{});
+}
+
+template <typename state_tag, typename value_type>
+concept alias_expression = requires(value_type &&value) {
+	format_alias_define(state_tag{}, ::std::forward<value_type>(value));
+};
+
+template <typename state_tag, typename value_type>
+	requires alias_expression<state_tag, value_type>
+[[nodiscard]] inline constexpr decltype(auto) alias(
+	value_type &&value) noexcept(noexcept(format_alias_define(state_tag{}, ::std::forward<value_type>(value))))
+{
+	// Preserve the exact source category.  In particular, do not call
+	// io_print_alias/io_print_forward here: the selected print or concat backend
+	// owns the ABI-specific decay decision and must still see the semantic node.
+	return format_alias_define(state_tag{}, ::std::forward<value_type>(value));
+}
+
+template <typename value_type>
+concept format_as_expression = requires(value_type &&value) {
+	format_as(::std::forward<value_type>(value));
+};
+
+template <bool customization_is_available, typename value_type>
+struct format_as_probe
+{
+	inline static constexpr bool nonrecursive{};
+};
+
+/**
+ * As with the custom-parser probe above, result-type formation is intentionally
+ * isolated behind an availability specialization.  Besides making the
+ * negative concept cheap, this guarantees that a type with no `format_as` CPO
+ * never attempts to instantiate the deleted ordinary-lookup poison pill.
+ */
+template <typename value_type>
+struct format_as_probe<true, value_type>
+{
+	using result_type = decltype(format_as(::std::declval<value_type>()));
+
+	inline static constexpr bool nonrecursive =
+		!::std::same_as<::std::remove_cvref_t<value_type>,
+			::std::remove_cvref_t<result_type>>;
+};
+
+template <typename value_type>
+	requires format_as_expression<value_type>
+[[nodiscard]] inline constexpr decltype(auto) as(
+	value_type &&value) noexcept(noexcept(format_as(::std::forward<value_type>(value))))
+{
+	return format_as(::std::forward<value_type>(value));
+}
+
+} // namespace custom_format_adl
+
+/** True when ADL exposes a type-directed compile-time parser CPO. */
+template <auto format_literal, auto source, typename value_type>
+concept custom_format_parse_expression =
+	custom_format_adl::parse_expression<format_literal, source, value_type>;
+
+/**
+ * True only when the parser call can itself be encoded as an NTTP.
+ *
+ * C++ has no reflection facility which asks whether a function was declared
+ * with the `consteval` keyword.  Requiring the result as a template argument is
+ * the stronger behavioural property needed here: every accepted invocation is
+ * necessarily evaluated during translation and its complete state is carried
+ * by a type, irrespective of whether the user spelled the CPO `consteval` or a
+ * constant-evaluable `constexpr`.
+ */
+template <auto format_literal, auto source, typename value_type>
+concept structurally_compiled_custom_format =
+	custom_format_adl::structural_parse_expression<
+		format_literal, source, value_type>;
+
+template <auto format_literal, auto source, typename value_type>
+	requires structurally_compiled_custom_format<format_literal, source, value_type>
+inline constexpr auto custom_format_state{
+	custom_format_adl::parse_state<format_literal, source, value_type>()};
+
+template <auto format_literal, auto source, typename value_type>
+	requires structurally_compiled_custom_format<format_literal, source, value_type>
+using custom_format_state_tag = ::fast_io::fmt::basic_custom_format_state_t<
+	typename decltype(format_literal)::value_type,
+	custom_format_state<format_literal, source, value_type>>;
+
+template <auto format_literal, auto source, typename value_type>
+concept custom_format_alias_expression =
+	structurally_compiled_custom_format<format_literal, source, value_type> &&
+	custom_format_adl::alias_expression<
+		custom_format_state_tag<format_literal, source, value_type>, value_type>;
+
+/**
+ * Proves that the semantic result remains consumable by the selected
+ * character-domain backend after normal fast_io aliasing and ABI transport.
+ * This is an unevaluated proof only; `make_custom_format_value` intentionally
+ * returns the raw semantic node so decay still occurs exactly once at the
+ * print/concat entry point.
+ */
+template <auto format_literal, auto source, typename value_type>
+concept custom_format_printable =
+	custom_format_alias_expression<format_literal, source, value_type> &&
+	requires(value_type &&value) {
+		::fast_io::io_print_forward<typename decltype(format_literal)::value_type>(
+			::fast_io::io_print_alias(custom_format_adl::alias<
+									  custom_format_state_tag<format_literal, source, value_type>>(
+				::std::forward<value_type>(value))));
+	};
+
+/**
+ * Parses and lowers one user-defined field without preserving frontend state.
+ *
+ * A parser which exists but returns non-structural/non-constant state is a
+ * contract error, not permission to fall back to runtime formatting.  Likewise
+ * a missing semantic CPO is diagnosed here rather than erased behind a generic
+ * visitor.
+ */
+template <auto format_literal, auto source, typename value_type>
+[[nodiscard]] inline constexpr decltype(auto) make_custom_format_value(
+	value_type &&value)
+{
+	static_assert(custom_format_parse_expression<format_literal, source, value_type>,
+				  "fast_io format: custom type has no ADL format_parse_define(io_type_t<T>, parse_context) CPO");
+	static_assert(structurally_compiled_custom_format<format_literal, source, value_type>,
+				  "fast_io format: format_parse_define must produce constant structural state (prefer a consteval CPO)");
+
+	if constexpr (structurally_compiled_custom_format<format_literal, source, value_type>)
+	{
+		using state_tag = custom_format_state_tag<format_literal, source, value_type>;
+		static_assert(custom_format_adl::alias_expression<state_tag, value_type>,
+					  "fast_io format: custom type has no ADL format_alias_define(parsed_state_tag, value) CPO");
+		static_assert(custom_format_printable<format_literal, source, value_type>,
+					  "fast_io format: format_alias_define result is not printable in the format character domain");
+		if constexpr (custom_format_adl::alias_expression<state_tag, value_type>)
+		{
+			return custom_format_adl::alias<state_tag>(
+				::std::forward<value_type>(value));
+		}
+		else
+		{
+			return ::fast_io::io_null;
+		}
+	}
+	else
+	{
+		return ::fast_io::io_null;
+	}
+}
+
+/**
+ * The exact empty brace specification for which ADL `format_as(value)` is a
+ * valid shortcut.  Applying it after any width, precision, alignment,
+ * presentation, locale, or custom-tail token would silently discard syntax;
+ * keeping this predicate complete prevents that class of fallback bug.
+ */
+template <auto specification>
+inline constexpr bool zero_brace_format_specification_v =
+	!specification.has_fill && specification.fill_size == 0u &&
+	specification.alignment == decltype(specification.alignment){} &&
+	specification.sign == decltype(specification.sign){} &&
+	!specification.alternate_form && !specification.zero_padding &&
+	!specification.locale_specific &&
+	specification.width.kind == decltype(specification.width.kind){} &&
+	specification.precision.kind == decltype(specification.precision.kind){} &&
+	specification.presentation == decltype(specification.presentation){} &&
+	specification.raw_format_specification.size == 0u &&
+	specification.format_tail.size == 0u;
+
+template <typename value_type>
+concept adl_format_as_expression =
+	custom_format_adl::format_as_expression<value_type>;
+
+template <typename value_type>
+concept nonrecursive_adl_format_as =
+	custom_format_adl::format_as_probe<
+		adl_format_as_expression<value_type>, value_type>::nonrecursive;
+
+template <typename char_type, typename value_type>
+concept printable_adl_format_as =
+	::fast_io::fmt::format_character<char_type> &&
+	nonrecursive_adl_format_as<value_type> && requires(value_type &&value) {
+		::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(
+			custom_format_adl::as(::std::forward<value_type>(value))));
+	};
+
+/**
+ * Invokes the zero-specification `format_as` shortcut without pre-decaying its
+ * result.  The caller must gate this function with
+ * `zero_brace_format_specification_v`; keeping the specification as a separate
+ * compile-time decision avoids adding it to the runtime proxy's representation.
+ */
+template <::fast_io::fmt::format_character char_type, typename value_type>
+[[nodiscard]] inline constexpr decltype(auto) make_format_as_value(
+	value_type &&value)
+{
+	static_assert(adl_format_as_expression<value_type>,
+				  "fast_io format: no ADL format_as(value) customization was found");
+	static_assert(nonrecursive_adl_format_as<value_type>,
+				  "fast_io format: format_as(value) must not return the same semantic type");
+	static_assert(printable_adl_format_as<char_type, value_type>,
+				  "fast_io format: format_as(value) result is not printable in the format character domain");
+	if constexpr (nonrecursive_adl_format_as<value_type>)
+	{
+		return custom_format_adl::as(::std::forward<value_type>(value));
+	}
+	else
+	{
+		return ::fast_io::io_null;
+	}
+}
+
+} // namespace fast_io::fmt::details
