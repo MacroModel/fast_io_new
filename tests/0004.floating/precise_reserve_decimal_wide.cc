@@ -8,6 +8,14 @@
 namespace
 {
 
+#if defined(_MSC_VER)
+#define FAST_IO_FTOA_TEST_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define FAST_IO_FTOA_TEST_NOINLINE __attribute__((noinline))
+#else
+#define FAST_IO_FTOA_TEST_NOINLINE
+#endif
+
 template <::fast_io::manipulators::floating_format format,
 		  ::fast_io::manipulators::floating_precision precision,
 		  ::fast_io::manipulators::floating_rounding rounding>
@@ -27,7 +35,7 @@ inline constexpr auto decimal_flags = []() constexpr noexcept {
 }();
 
 template <::std::integral char_type, typename flt, auto flags>
-bool check_value(flt value, ::std::size_t precision) noexcept
+FAST_IO_FTOA_TEST_NOINLINE bool check_value(flt value, ::std::size_t precision) noexcept
 {
 	using runtime_type =
 		::fast_io::manipulators::scalar_manip_precision_t<flags, flt>;
@@ -248,6 +256,8 @@ bool check_binary128() noexcept
 	return true;
 }
 #endif
+
+#undef FAST_IO_FTOA_TEST_NOINLINE
 
 } // namespace
 
