@@ -569,7 +569,14 @@ inline constexpr ::std::int_least64_t year_month_to_seconds(::std::int_least64_t
 		fast_terminate();
 	}
 	::std::uint_least32_t t{secs_through_month[month]};
-	if ((month) | (year >= 0 && !year_is_leap_year))
+	// The truncated year divisions leave positive non-leap years one day short.
+	if (year >= 0 && !year_is_leap_year)
+	{
+		t += 0x15180;
+	}
+	// secs_through_month describes a common year, so the leap day only affects
+	// dates after February.
+	if (1u < month && year_is_leap_year)
 	{
 		t += 0x15180;
 	}
