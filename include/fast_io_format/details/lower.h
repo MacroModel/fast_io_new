@@ -19,6 +19,71 @@ struct compiled_replacement_t
 	static inline constexpr auto value{field};
 };
 
+/** Owns the fully decoded output of a format program containing only literal operations. */
+template <auto format_literal, typename grammar_tag>
+struct compiled_literal_program
+{
+	static inline constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>};
+	using char_type = typename decltype(format_literal)::value_type;
+
+	[[nodiscard]] static consteval bool contains_only_literals() noexcept
+	{
+		for (::std::size_t i{}; i != program.operation_count; ++i)
+		{
+			if (program.operations[i].kind != format_operation_kind::literal)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	[[nodiscard]] static consteval ::std::size_t decoded_size() noexcept
+	{
+		::std::size_t result{};
+		for (::std::size_t i{}; i != program.operation_count; ++i)
+		{
+			auto const operation{program.operations[i]};
+			if (operation.kind != format_operation_kind::literal)
+			{
+				return 0u;
+			}
+			result += program.literal_runs[operation.payload_index].size;
+		}
+		return result;
+	}
+
+	static inline constexpr bool literal_only{contains_only_literals()};
+	static inline constexpr ::std::size_t size{decoded_size()};
+
+	[[nodiscard]] static consteval auto make_storage() noexcept
+	{
+		::std::array<char_type, size> result{};
+		if constexpr (literal_only)
+		{
+			::std::size_t output_index{};
+			for (::std::size_t i{}; i != program.operation_count; ++i)
+			{
+				auto const operation{program.operations[i]};
+				auto const run{program.literal_runs[operation.payload_index]};
+				for (::std::size_t j{}; j != run.size; ++j)
+				{
+					result[output_index] = program.literal_storage[run.offset + j];
+					++output_index;
+				}
+			}
+		}
+		return result;
+	}
+
+	static inline constexpr auto storage
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
+		__attribute__((visibility("hidden")))
+#endif
+		{make_storage()};
+};
+
 template <auto format_literal, typename grammar_tag, ::std::size_t operation_index>
 struct compiled_literal_run
 {
@@ -230,12 +295,30 @@ template <auto format_literal, typename grammar_tag, typename callback_type, typ
 inline constexpr decltype(auto) lower_format_program(
 	callback_type &&callback, argument_types &...arguments)
 {
-	auto indexed_arguments{make_indexed_argument_pack(arguments...)};
-	constexpr auto operation_count{
-		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>.operation_count};
-	return lower_format_program_impl<format_literal, grammar_tag>(
-		::std::forward<callback_type>(callback), indexed_arguments,
-		::std::make_index_sequence<operation_count>{});
+	using literal_program = ::fast_io::fmt::details::compiled_literal_program<
+		format_literal, grammar_tag>;
+	if constexpr (literal_program::literal_only)
+	{
+		if constexpr (literal_program::size == 0u)
+		{
+			return ::std::forward<callback_type>(callback)();
+		}
+		else
+		{
+			return ::std::forward<callback_type>(callback)(
+				::fast_io::basic_io_scatter_t<typename literal_program::char_type>{
+					literal_program::storage.data(), literal_program::size});
+		}
+	}
+	else
+	{
+		auto indexed_arguments{make_indexed_argument_pack(arguments...)};
+		constexpr auto operation_count{
+			::fast_io::fmt::details::checked_program<format_literal, grammar_tag>.operation_count};
+		return lower_format_program_impl<format_literal, grammar_tag>(
+			::std::forward<callback_type>(callback), indexed_arguments,
+			::std::make_index_sequence<operation_count>{});
+	}
 }
 
 } // namespace fast_io::fmt::details

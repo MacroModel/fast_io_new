@@ -5,6 +5,15 @@
 namespace fast_io
 {
 
+namespace manipulators
+{
+template <typename T>
+struct chvw_t;
+
+template <::std::integral char_type, ::std::size_t extent>
+struct static_scatter_t;
+} // namespace manipulators
+
 namespace details::decay
 {
 
@@ -4173,6 +4182,190 @@ inline constexpr char_type *print_n_scatter_materialize(char_type *ptr,
 	}
 }
 
+/// @brief Identifies core reserve nodes whose emission reads no output state or user customization.
+template <typename T>
+struct print_buffered_passive_reserve_leaf : ::std::false_type
+{};
+
+template <::std::integral value_type>
+struct print_buffered_passive_reserve_leaf<::fast_io::manipulators::chvw_t<value_type>> : ::std::true_type
+{};
+
+template <::std::integral char_type, ::std::size_t extent>
+struct print_buffered_passive_reserve_leaf<
+	::fast_io::manipulators::static_scatter_t<char_type, extent>> : ::std::true_type
+{};
+
+/// @brief Proves that one normalized leaf may join a preflighted mixed put-area run.
+/// @details Static reserve leaves contribute a type-level capacity and must emit without throwing because the final
+///          cursor is published only after the complete run. Dynamic text is admitted only after ordinary alias/status
+///          forwarding has reduced it to `basic_io_scatter_t`; reading that value object adds no producer observation
+///          and its three source-side semantic proofs are supplied directly by the core descriptor type. Null output
+///          is the neutral member of the run.
+template <::std::integral char_type, typename T>
+inline consteval bool print_buffered_mixed_put_area_leaf() noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::std::same_as<value_type, ::fast_io::io_null_t> ||
+				  ::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>>)
+	{
+		return true;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_buffered_passive_reserve_leaf<value_type>::value &&
+		::fast_io::reserve_printable<char_type, value_type>)
+	{
+		return noexcept(print_reserve_define(
+			::fast_io::io_reserve_type<char_type, value_type>,
+			::std::declval<char_type *>(), ::std::declval<T &>()));
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Checks the leaf protocol for the first N positions of a normalized argument run.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+inline consteval bool print_buffered_mixed_put_area_run_available() noexcept
+{
+	if constexpr (n == 0u)
+	{
+		return true;
+	}
+	else if constexpr (!::fast_io::details::decay::print_buffered_mixed_put_area_leaf<char_type, T>())
+	{
+		return false;
+	}
+	else if constexpr (n == 1u)
+	{
+		return true;
+	}
+	else
+	{
+		static_assert(sizeof...(Args) != 0u);
+		return ::fast_io::details::decay::print_buffered_mixed_put_area_run_available<
+			n - 1u, char_type, Args...>();
+	}
+}
+
+/// @brief Tests whether N mixed reserve/scatter leaves fit in one already-measured put area.
+/// @details Capacity is consumed by subtraction instead of summed, so an adversarial scatter length cannot overflow
+///          an aggregate.  No output bytes or cursor publications occur on a miss.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_fits(
+	::std::size_t &remaining, T &t, Args &...args) noexcept
+{
+	static_assert(n != 0u);
+	using value_type = ::std::remove_cvref_t<T>;
+	::std::size_t current_size{};
+	if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+	{
+		current_size = print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>);
+	}
+	else if constexpr (::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>>)
+	{
+		current_size = t.len;
+	}
+	if (remaining < current_size)
+	{
+		return false;
+	}
+	remaining -= current_size;
+	if constexpr (n == 1u)
+	{
+		return true;
+	}
+	else
+	{
+		return ::fast_io::details::decay::print_buffered_mixed_put_area_fits<
+			n - 1u, char_type>(remaining, args...);
+	}
+}
+
+/// @brief Emits N preflighted mixed leaves into a put area whose cursor publication may be deferred.
+/// @details Dynamic scatters use the target-vectorizable put-area loop.  It has neither a fixed SIMD width nor the
+///          tiny-scatter length ladder: preflight has already removed every capacity branch, so the compiler may select
+///          SSE, AVX, or AVX-512 moves for the actual x86-64 target without cloning a 0..16 dispatch per string.
+template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_area_emit(
+	char_type *cursor, T &t, Args &...args)
+{
+	static_assert(n != 0u);
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+	{
+		cursor = print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, cursor, t);
+	}
+	else if constexpr (::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>>)
+	{
+		if (t.len != 0u)
+		{
+			cursor = ::fast_io::details::decay::put_area_scatter_copy_n(
+				t.base, t.len, cursor);
+		}
+	}
+	if constexpr (n == 1u)
+	{
+		return cursor;
+	}
+	else
+	{
+		return ::fast_io::details::decay::print_buffered_mixed_put_area_emit<
+			n - 1u, char_type>(cursor, args...);
+	}
+}
+
+/// @brief Proves the non-throwing cursor operations used by deferred put-area publication.
+template <typename outputstmtype, typename char_type>
+concept print_buffered_mixed_nothrow_put_area = ::std::integral<char_type> && requires(
+	outputstmtype &optstm, char_type *cursor) {
+	{ obuffer_curr(optstm) } noexcept -> ::std::same_as<char_type *>;
+	{ obuffer_end(optstm) } noexcept -> ::std::same_as<char_type *>;
+	{ obuffer_set_curr(optstm, cursor) } noexcept -> ::std::same_as<void>;
+};
+
+/// @brief Attempts one-capacity-check emission for a mixed static-reserve/retained-scatter prefix.
+template <bool line, ::std::size_t n, ::std::integral char_type, typename outputstmtype,
+		  typename T, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_try(
+	outputstmtype &optstm, T &t, Args &...args)
+{
+	static_assert(n != 0u);
+	static_assert(::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype>);
+	static_assert(::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+		outputstmtype, char_type>);
+	char_type *const initial{obuffer_curr(optstm)};
+	char_type *const end{obuffer_end(optstm)};
+	// A zero-capacity adapter may use null sentinels; even null-minus-null is not a valid pointer-domain proof.
+	if (initial == nullptr || end == nullptr)
+	{
+		return false;
+	}
+	::std::ptrdiff_t const difference{end - initial};
+	if (difference < static_cast<::std::ptrdiff_t>(line))
+	{
+		return false;
+	}
+	::std::size_t remaining{
+		static_cast<::std::size_t>(difference) - static_cast<::std::size_t>(line)};
+	if (!::fast_io::details::decay::print_buffered_mixed_put_area_fits<n, char_type>(
+			remaining, t, args...))
+	{
+		return false;
+	}
+	char_type *cursor{
+		::fast_io::details::decay::print_buffered_mixed_put_area_emit<
+			n, char_type>(initial, t, args...)};
+	if constexpr (line)
+	{
+		*cursor = ::fast_io::char_literal_v<u8'\n', char_type>;
+		++cursor;
+	}
+	obuffer_set_curr(optstm, cursor);
+	return true;
+}
+
 /// @brief Copies one run-time-proved large scatter behind a deliberate code-generation boundary.
 /// @details The hinted strategy admits only payloads of at least four KiB, so one ordinary call is negligible beside
 ///          the required memory transfer. Keeping the copy out of line is nevertheless material for large variadic
@@ -5637,6 +5830,30 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 		using char_type = typename outputstmtype::output_char_type;
 		static_assert(SIZE_MAX != sizeof...(Args));
 		constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
+		constexpr auto mixed_result{
+			::fast_io::details::decay::find_continuous_scatters_n<char_type, T, Args...>()};
+		constexpr bool mixed_put_area_run{
+			mixed_result.position > 1u && mixed_result.hasscatters && mixed_result.hasreserve &&
+			!mixed_result.hasdynamicreserve &&
+			::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype> &&
+			::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+				outputstmtype, char_type> &&
+			::fast_io::details::decay::print_buffered_mixed_put_area_run_available<
+				mixed_result.position, char_type, T, Args...>()};
+		if constexpr (mixed_put_area_run)
+		{
+			constexpr bool needprintlf{line && mixed_result.position == n};
+			if (::fast_io::details::decay::print_buffered_mixed_put_area_try<
+					needprintlf, mixed_result.position, char_type>(optstm, t, args...)) [[likely]]
+			{
+				if constexpr (mixed_result.position != n)
+				{
+					::fast_io::details::decay::print_controls_buffer_impl<
+						line, outputstmtype, mixed_result.position - 1u>(optstm, args...);
+				}
+				return;
+			}
+		}
 		if constexpr (
 			::fast_io::details::decay::print_retained_buffered_reserve_scatters_run_selected<
 				line, char_type, outputstmtype, T, Args...>())

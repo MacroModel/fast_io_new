@@ -8,6 +8,25 @@
 namespace fast_io::fmt::details
 {
 
+/** Named continuation that materializes a lowered component pack into the requested result string. */
+template <typename result_type, ::std::integral char_type>
+struct concat_lowered_components
+{
+	template <typename... component_types>
+	[[nodiscard]] inline constexpr result_type operator()(component_types &&...components) const
+	{
+		if constexpr (sizeof...(component_types) == 0u)
+		{
+			return {};
+		}
+		else
+		{
+			return ::fast_io::basic_general_concat_checked<false, char_type, result_type>(
+				::std::forward<component_types>(components)...);
+		}
+	}
+};
+
 /**
  * Materializes one compiled grammar into an explicitly selected string type.
  *
@@ -28,19 +47,7 @@ template <typename result_type, basic_fixed_string format_literal,
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
 	return ::fast_io::fmt::details::lower_format_program<
 		format_literal, rule_type>(
-		[]<typename... component_types>(component_types &&...components) constexpr
-			-> result_type {
-			if constexpr (sizeof...(component_types) == 0u)
-			{
-				return {};
-			}
-			else
-			{
-				return ::fast_io::basic_general_concat_checked<
-					false, char_type, result_type>(
-					::std::forward<component_types>(components)...);
-			}
-		},
+		::fast_io::fmt::details::concat_lowered_components<result_type, char_type>{},
 		arguments...);
 }
 

@@ -3,6 +3,15 @@
 namespace fast_io::details::decay
 {
 
+template <typename value_type, ::std::size_t... index>
+inline constexpr value_type *static_scatter_copy_indices(
+	value_type const *source, value_type *destination,
+	::std::index_sequence<index...>) noexcept
+{
+	((destination[index] = source[index]), ...);
+	return destination + sizeof...(index);
+}
+
 /// @brief Copies a type-level fixed scatter without losing its extent to a run-time function parameter.
 /// @details GCC recognizes a short loop whose count arrives as a function argument as an independent `memcpy`, even
 ///          after constant propagation. Adjacent literal fragments then remain separate stores and cannot be combined
@@ -31,17 +40,27 @@ inline constexpr value_type *static_scatter_copy_n(
 	{
 		// An index expansion, rather than a counted loop, prevents GCC from recreating a separate memcpy before the
 		// static-scatter source pointer itself has propagated to the literal object.
-		[]<::std::size_t... index>(value_type const *source, value_type *destination,
-			::std::index_sequence<index...>) constexpr noexcept {
-			((destination[index] = source[index]), ...);
-		}(first, result, ::std::make_index_sequence<count>{});
-		return result + count;
+		return ::fast_io::details::decay::static_scatter_copy_indices(
+			first, result, ::std::make_index_sequence<count>{});
 	}
 	else
 	{
 		return ::fast_io::details::non_overlapped_copy_n(first, count, result);
 	}
 }
+
+/// @brief Copies a run-time scatter after its complete destination extent has been proved to fit a stable put area.
+/// @details The SIMD-aware definition is provided after the core vector layer has been declared.  Keeping this
+///          declaration beside the print materializers avoids moving the complete SIMD implementation ahead of the
+///          operation concepts merely to make the put-area strategy target-aware.
+/// @tparam value_type the trivially addressable element type carried by the scatter
+/// @param first       first source element
+/// @param count       number of elements to copy
+/// @param result      first destination element
+/// @return value_type* one past the copied destination
+template <::std::integral value_type>
+inline constexpr value_type *put_area_scatter_copy_n(
+	value_type const *first, ::std::size_t count, value_type *result) noexcept;
 
 /// @brief Copies a run-time scatter payload into an already-proved contiguous destination.
 /// @details Repeated tiny descriptors, especially range separators, otherwise become out-of-line `memcpy` calls on

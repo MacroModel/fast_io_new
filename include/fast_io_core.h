@@ -85,6 +85,7 @@
 #endif
 
 #include "fast_io_core_impl/simd/impl.h"
+#include "fast_io_core_impl/operations/printimpl/scatter_copy_simd.h"
 #include "fast_io_core_impl/simd_find.h"
 #include "fast_io_core_impl/integers/sto/sto_contiguous.h"
 #include "fast_io_core_impl/charconv/impl.h"

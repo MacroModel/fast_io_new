@@ -30,6 +30,24 @@ concept format_output_for = format_output<output_type> &&
 											   ::std::declval<output_type &>()))>::output_char_type,
 										   char_type>;
 
+/** Named continuation that sends a lowered component pack to the ordinary print front door. */
+template <typename output_type>
+struct print_lowered_components
+{
+	output_type &&output;
+
+	template <typename... component_types>
+	inline constexpr void operator()(component_types &&...components) const
+	{
+		if constexpr (sizeof...(component_types) != 0u)
+		{
+			::fast_io::print(
+				::std::forward<output_type>(output),
+				::std::forward<component_types>(components)...);
+		}
+	}
+};
+
 /**
  * Emits a structural literal through one explicitly supplied grammar rule.
  *
@@ -54,14 +72,8 @@ inline constexpr void print_with_rule(
 {
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
 	::fast_io::fmt::details::lower_format_program<format_literal, rule_type>(
-		[&]<typename... component_types>(component_types &&...components) constexpr {
-			if constexpr (sizeof...(component_types) != 0u)
-			{
-				::fast_io::print(
-					::std::forward<output_type>(output),
-					::std::forward<component_types>(components)...);
-			}
-		},
+		::fast_io::fmt::details::print_lowered_components<output_type>{
+			::std::forward<output_type>(output)},
 		arguments...);
 }
 
