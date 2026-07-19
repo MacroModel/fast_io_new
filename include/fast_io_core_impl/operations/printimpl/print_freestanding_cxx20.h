@@ -2896,6 +2896,23 @@ inline constexpr bool print_one_pass_direct_streaming_available_v =
 	::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, output>() == 0u &&
 	::fast_io::details::decay::print_full_output_dynamic_coalesce_threshold<char_type, output>() == 0u;
 
+/// @brief Exposes the exact extent of a fixed scatter in the output character domain.
+/// @details The primary template deliberately rejects a scatter whose code-unit type differs from the destination.
+///          Besides keeping the direct path unit-correct, this mirrors the reserve CPO's exact character-type match.
+template <::std::integral output_char_type, typename T>
+struct print_static_scatter_traits
+{
+	inline static constexpr bool available{};
+};
+
+template <::std::integral char_type, ::std::size_t extent>
+struct print_static_scatter_traits<
+	char_type, ::fast_io::manipulators::static_scatter_t<char_type, extent>>
+{
+	inline static constexpr bool available{true};
+	inline static constexpr ::std::size_t size{extent};
+};
+
 /// @brief    Emits one already-forwarded printable control argument to an output stream.
 /// @details  The dispatcher selects the most specialized single-argument path available: scatter, static reserve,
 ///           dynamic reserve, reserve-scatters, context printing, or the ordinary print_define customization.
@@ -2909,9 +2926,28 @@ inline constexpr void print_control_single(output &outstm, T &t)
 {
 	using char_type = typename output::output_char_type;
 	using value_type = ::std::remove_cvref_t<T>;
+	using static_scatter_traits =
+		::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>;
 	constexpr bool asan_activated{::fast_io::details::asan_state::current == ::fast_io::details::asan_state::activate};
 	constexpr auto lfch{char_literal_v<u8'\n', char_type>};
-	if constexpr (::fast_io::scatter_printable_for<char_type, decltype((t))>)
+	if constexpr (
+		!line &&
+		!::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> &&
+		static_scatter_traits::available)
+	{
+		// A non-line, unbuffered sink can consume the immutable source range itself.  Keeping the fixed-scatter pointer
+		// intact avoids materializing the same bytes in a temporary before the primitive write.  Buffered destinations
+		// deliberately stay on the reserve path below, where the type-level extent exposes short copies as immediate
+		// stores; line output also stays there so payload and newline retain one materialized write boundary.
+		static_assert(static_scatter_traits::size < PTRDIFF_MAX);
+		if constexpr (static_scatter_traits::size != 0u)
+		{
+			auto const base{t.base};
+			::fast_io::operations::decay::write_all_decay(
+				outstm, base, base + static_scatter_traits::size);
+		}
+	}
+	else if constexpr (::fast_io::scatter_printable_for<char_type, decltype((t))>)
 	{
 		// The entry-owned control argument is a named lvalue here; only that exact CPO overload can justify this branch.
 #if 0
@@ -4284,10 +4320,11 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_fi
 }
 
 /// @brief Emits N preflighted mixed leaves into a put area whose cursor publication may be deferred.
-/// @details Dynamic scatters use the target-vectorizable put-area loop.  It has neither a fixed SIMD width nor the
-///          tiny-scatter length ladder: preflight has already removed every capacity branch, so the compiler may select
-///          SSE, AVX, or AVX-512 moves for the actual x86-64 target without cloning a 0..16 dispatch per string.
-template <::std::size_t n, ::std::integral char_type, typename T, typename... Args>
+/// @details Ordinary callers retain the target-aware short-scatter helper.  The compact mode instead presents each
+///          dynamic range as one builtin-copy-shaped operation; this prevents an architecture-specific length ladder
+///          from being cloned at every leaf of a large variadic run while still letting the backend choose its moves.
+template <::std::size_t n, ::std::integral char_type, bool compact_copy = false,
+		  typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_area_emit(
 	char_type *cursor, T &t, Args &...args)
 {
@@ -4301,8 +4338,16 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_a
 	{
 		if (t.len != 0u)
 		{
-			cursor = ::fast_io::details::decay::put_area_scatter_copy_n(
-				t.base, t.len, cursor);
+			if constexpr (compact_copy)
+			{
+				cursor = ::fast_io::details::non_overlapped_copy_n(
+					t.base, t.len, cursor);
+			}
+			else
+			{
+				cursor = ::fast_io::details::decay::put_area_scatter_copy_n(
+					t.base, t.len, cursor);
+			}
 		}
 	}
 	if constexpr (n == 1u)
@@ -4312,7 +4357,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_a
 	else
 	{
 		return ::fast_io::details::decay::print_buffered_mixed_put_area_emit<
-			n - 1u, char_type>(cursor, args...);
+			n - 1u, char_type, compact_copy>(cursor, args...);
 	}
 }
 
@@ -4326,13 +4371,13 @@ concept print_buffered_mixed_nothrow_put_area = ::std::integral<char_type> && re
 };
 
 /// @brief Attempts one-capacity-check emission for a mixed static-reserve/retained-scatter prefix.
-template <bool line, ::std::size_t n, ::std::integral char_type, typename outputstmtype,
+template <bool compact_copy, bool line, ::std::size_t n, ::std::integral char_type,
+		  typename outputstmtype,
 		  typename T, typename... Args>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_try(
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_try_impl(
 	outputstmtype &optstm, T &t, Args &...args)
 {
 	static_assert(n != 0u);
-	static_assert(::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype>);
 	static_assert(::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
 		outputstmtype, char_type>);
 	char_type *const initial{obuffer_curr(optstm)};
@@ -4356,7 +4401,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_tr
 	}
 	char_type *cursor{
 		::fast_io::details::decay::print_buffered_mixed_put_area_emit<
-			n, char_type>(initial, t, args...)};
+			n, char_type, compact_copy>(initial, t, args...)};
 	if constexpr (line)
 	{
 		*cursor = ::fast_io::char_literal_v<u8'\n', char_type>;
@@ -4365,6 +4410,25 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_tr
 	obuffer_set_curr(optstm, cursor);
 	return true;
 }
+
+/// @brief Attempts one-capacity-check emission for an output carrying the general deferred-commit proof.
+template <bool line, ::std::size_t n, ::std::integral char_type, typename outputstmtype,
+		  typename T, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_try(
+	outputstmtype &optstm, T &t, Args &...args)
+{
+	static_assert(::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype>);
+	return ::fast_io::details::decay::print_buffered_mixed_put_area_try_impl<
+		false, line, n, char_type>(optstm, t, args...);
+}
+
+/// @brief Preserves the established generic strategy when a fixed buffer view gains the deferred-commit CPO.
+/// @details `basic_obuffer_view_ref` is admitted by the dedicated complete-run entry, whose compact copy shape is part
+///          of its cost proof.  Its historical generic dispatcher instead selects the retained-scatter strategy.  This
+///          exact private exception prevents the new semantic CPO from changing that cost choice without constraining
+///          any external output type which independently provides deferred-commit and terminal-overflow customizations.
+template <typename outputstmtype>
+inline constexpr bool print_buffered_mixed_generic_endpoint = true;
 
 /// @brief Copies one run-time-proved large scatter behind a deliberate code-generation boundary.
 /// @details The hinted strategy admits only payloads of at least four KiB, so one ordinary call is negligible beside
@@ -5832,9 +5896,14 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 		constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
 		constexpr auto mixed_result{
 			::fast_io::details::decay::find_continuous_scatters_n<char_type, T, Args...>()};
+		// A fixed view keeps its established retained-scatter dispatch here. Dedicated complete-run callers may still
+		// select the compact entry after proving the whole pack, while every external endpoint retains its prior choice.
+		constexpr bool generic_mixed_put_area_endpoint{
+			::fast_io::details::decay::print_buffered_mixed_generic_endpoint<
+				::std::remove_cvref_t<outputstmtype>>};
 		constexpr bool mixed_put_area_run{
 			mixed_result.position > 1u && mixed_result.hasscatters && mixed_result.hasreserve &&
-			!mixed_result.hasdynamicreserve &&
+			!mixed_result.hasdynamicreserve && generic_mixed_put_area_endpoint &&
 			::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype> &&
 			::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
 				outputstmtype, char_type> &&
@@ -7676,7 +7745,7 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 			::std::size_t const left_padding{padding >> 1u};
 			::std::size_t const right_padding{padding - left_padding};
 			char_type *const child_pos{first + left_padding};
-			::fast_io::details::my_copy(first, last, child_pos);
+			::fast_io::details::my_copy_right_shift(first, last, left_padding);
 			::fast_io::details::my_fill_n(first, left_padding, fillch);
 			::fast_io::details::my_fill_n(child_pos + len, right_padding, fillch);
 			return first + width;
@@ -7690,13 +7759,13 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 			{
 				// A valid internal shift allows padding to be inserted inside the already-emitted child bytes.
 				char_type *const shift_pos{first + internal_len};
-				::fast_io::details::my_copy(shift_pos, last, shift_pos + padding);
+				::fast_io::details::my_copy_right_shift(shift_pos, last, padding);
 				::fast_io::details::my_fill_n(shift_pos, padding, fillch);
 				return first + width;
 			}
 		}
 		// Right placement, or internal placement without a shift point, moves the child behind leading padding.
-		::fast_io::details::my_copy(first, last, first + padding);
+		::fast_io::details::my_copy_right_shift(first, last, padding);
 		::fast_io::details::my_fill_n(first, padding, fillch);
 		return first + width;
 	}
@@ -8875,7 +8944,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 							// A run-time shift outside the emitted child cannot be an insertion point. Preserve width's
 							// minimum-field contract by applying the documented right-placement fallback, matching the
 							// unchecked semantic path instead of silently dropping all requested padding.
-							::fast_io::details::my_copy(first, last, first + padding);
+							::fast_io::details::my_copy_right_shift(first, last, padding);
 							::fast_io::details::my_fill_n(first, padding, fillch);
 							iter = first + width;
 						}
@@ -8883,7 +8952,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 						{
 							// The suffix is shifted right and the internal padding is filled in place.
 							char_type *const shift_pos{first + internal_len};
-							::fast_io::details::my_copy(shift_pos, last, shift_pos + padding);
+							::fast_io::details::my_copy_right_shift(shift_pos, last, padding);
 							::fast_io::details::my_fill_n(shift_pos, padding, fillch);
 							iter = first + width;
 						}
@@ -8974,7 +9043,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 						{
 							// An out-of-range insertion point degrades to right placement. The required-size check above
 							// proves that the overlapping shift and leading fill remain inside this stack buffer.
-							::fast_io::details::my_copy(first, last, first + padding);
+							::fast_io::details::my_copy_right_shift(first, last, padding);
 							::fast_io::details::my_fill_n(first, padding, fillch);
 							iter = first + width;
 						}
@@ -8982,7 +9051,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 						{
 							// The suffix is shifted right and the internal padding is filled in place.
 							char_type *const shift_pos{first + internal_len};
-							::fast_io::details::my_copy(shift_pos, last, shift_pos + padding);
+							::fast_io::details::my_copy_right_shift(shift_pos, last, padding);
 							::fast_io::details::my_fill_n(shift_pos, padding, fillch);
 							iter = first + width;
 						}
@@ -9221,7 +9290,8 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 				::std::size_t const left_padding{padding >> 1u};
 				::std::size_t const right_padding{padding - left_padding};
 				char_type *const child_pos{mutable_first + left_padding};
-				::fast_io::details::my_copy(mutable_first, mutable_last, child_pos);
+				::fast_io::details::my_copy_right_shift(
+					mutable_first, mutable_last, left_padding);
 				::fast_io::details::my_fill_n(mutable_first, left_padding, fillch);
 				::fast_io::details::my_fill_n(child_pos + len, right_padding, fillch);
 				field_last = mutable_first + width;
@@ -9234,7 +9304,8 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 				if (internal_len == 0u)
 				{
 					// A missing internal boundary has the documented right-placement fallback.
-					::fast_io::details::my_copy(mutable_first, mutable_last, mutable_first + padding);
+					::fast_io::details::my_copy_right_shift(
+						mutable_first, mutable_last, padding);
 					::fast_io::details::my_fill_n(mutable_first, padding, fillch);
 					field_last = mutable_first + width;
 				}
@@ -9243,14 +9314,16 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 					// The child emitted fewer characters than its claimed insertion point.  The metadata cannot safely
 					// partition the byte range, but width still promises a minimum field extent; use the same lossless
 					// right-placement fallback as the direct and unchecked strategies.
-					::fast_io::details::my_copy(mutable_first, mutable_last, mutable_first + padding);
+					::fast_io::details::my_copy_right_shift(
+						mutable_first, mutable_last, padding);
 					::fast_io::details::my_fill_n(mutable_first, padding, fillch);
 					field_last = mutable_first + width;
 				}
 				else
 				{
 					char_type *const shift_pos{mutable_first + internal_len};
-					::fast_io::details::my_copy(shift_pos, mutable_last, shift_pos + padding);
+					::fast_io::details::my_copy_right_shift(
+						shift_pos, mutable_last, padding);
 					::fast_io::details::my_fill_n(shift_pos, padding, fillch);
 					field_last = mutable_first + width;
 				}
@@ -9258,7 +9331,8 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 			else
 			{
 				// Right placement moves the child behind the leading fill using overlap-safe movement.
-				::fast_io::details::my_copy(mutable_first, mutable_last, mutable_first + padding);
+				::fast_io::details::my_copy_right_shift(
+					mutable_first, mutable_last, padding);
 				::fast_io::details::my_fill_n(mutable_first, padding, fillch);
 				field_last = mutable_first + width;
 			}
@@ -10099,6 +10173,94 @@ inline constexpr decltype(auto) print_freestanding_decay_cold_borrowed_output(
 	if (true) [[unlikely]]
 #endif
 		return ::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm, args...);
+}
+
+/// @brief Proves that the narrow passive-run entry may publish only its final put-area cursor.
+/// @details The deferred-commit CPO is the extensibility boundary: ordinary put-area operations and a terminating
+///          overflow policy do not prove that folding intermediate cursor publications preserves observable behavior.
+///          Keeping this proof local avoids changing the strategy selected by ordinary dispatch.
+template <::std::integral char_type, typename outputstmtype>
+inline constexpr bool print_passive_mixed_put_area_destination_safe =
+	::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype>;
+
+/// @brief Tests whether a complete normalized run can use the compact passive mixed put-area entry.
+template <bool line, typename outputstmtype, typename... Args>
+inline consteval bool print_passive_mixed_put_area_fast_entry_available() noexcept
+{
+	using output_type = ::std::remove_cvref_t<outputstmtype>;
+	if constexpr (sizeof...(Args) < 8u ||
+				  !requires { typename output_type::output_char_type; })
+	{
+		return false;
+	}
+	else
+	{
+		using char_type = typename output_type::output_char_type;
+		constexpr auto result{
+			::fast_io::details::decay::find_continuous_scatters_n<
+				char_type, ::std::remove_cvref_t<Args>...>()};
+		return result.position == sizeof...(Args) && result.hasscatters && result.hasreserve &&
+			   !result.hasdynamicreserve &&
+			   ::fast_io::operations::decay::defines::has_obuffer_basic_operations<output_type> &&
+			   ::fast_io::operations::decay::print_passive_mixed_put_area_destination_safe<
+				   char_type, output_type> &&
+			   ::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+				   output_type, char_type> &&
+			   !::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+				   output_type> &&
+			   !::fast_io::operations::decay::defines::has_status_print_define<
+				   line, output_type, ::std::remove_cvref_t<Args>...> &&
+			   ::fast_io::details::decay::print_buffered_mixed_put_area_run_available<
+				   sizeof...(Args), char_type, ::std::remove_cvref_t<Args>...>();
+	}
+}
+
+/// @brief Keeps the capacity-miss continuation outside an admitted passive mixed caller.
+template <bool line, typename outputstmtype, typename... Args>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+inline constexpr void print_passive_mixed_put_area_fallback(
+	outputstmtype &optstm, Args &...args)
+{
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm, args...);
+}
+
+/// @brief Emits one complete passive mixed run after a single capacity check and commits its cursor once.
+/// @details The compact copy shape prevents a target-specific short-copy ladder from being cloned for every dynamic
+///          scatter.  A capacity miss synchronously borrows the still-live normalized values in the historical
+///          dispatcher; no descriptor copy or second alias customization is performed.
+template <bool line, typename outputstmtype, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void print_passive_mixed_put_area_fast_entry(
+	outputstmtype &optstm, Args &&...args)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	static_assert(
+		::fast_io::operations::decay::print_passive_mixed_put_area_fast_entry_available<
+			line, outputstmtype, Args...>());
+	if (::fast_io::details::decay::print_buffered_mixed_put_area_try_impl<
+			true, line, sizeof...(Args), char_type>(optstm, args...)) [[likely]]
+	{
+		return;
+	}
+	if constexpr (
+		::fast_io::operations::decay::defines::has_obuffer_overflow_never_define<
+			::std::remove_cvref_t<outputstmtype>>)
+	{
+		// A no-overflow put area has no continuation.  Terminating here also avoids materializing the normalized
+		// variadic pack solely for an unreachable continuation at call sites whose capacity is visible to the optimizer.
+		::fast_io::fast_terminate();
+	}
+	else
+	{
+		::fast_io::operations::decay::print_passive_mixed_put_area_fallback<line>(
+			optstm, args...);
+	}
 }
 
 /// @brief Emits source arguments through an output reference that has already been normalized.

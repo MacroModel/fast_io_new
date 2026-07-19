@@ -10934,6 +10934,29 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 					flt, comma, uppercase_e, mt, json_float>(
 						iter, finalized.m10, finalized.e10);
 			}
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+			if (__builtin_is_constant_evaluated())
+#else
+			if (::std::is_constant_evaluated())
+#endif
+			{
+				// Architecture-specific ASCII leaves intentionally optimize run-time
+				// stores and are not required to be constexpr.  Constant evaluation
+				// keeps the identical DA carrier but finalizes it through the generic
+				// code-unit renderer, which is the semantic reference for every fast
+				// leaf below.  The condition is a compile-time false in ordinary code,
+				// so it adds no dynamic branch or alternate formatter type.
+				auto const converted{
+					::fast_io::details::da::to_conversion_result<flt>(
+						mantissa,
+						static_cast<::std::int_least32_t>(exponent))};
+				auto const finalized{
+					::fast_io::details::da::trim_trailing_zeros(
+						::fast_io::details::da::finalize<flt>(converted))};
+				return ::fast_io::details::print_rsvflt_decimal_define_impl<
+					flt, comma, uppercase_e, mt, json_float>(
+						iter, finalized.m10, finalized.e10);
+			}
 			constexpr auto direct_flags{[]() constexpr noexcept {
 				auto value{::fast_io::manipulators::floating_point_default_scalar_flags};
 				value.uppercase = uppercase;

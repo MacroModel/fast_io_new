@@ -526,9 +526,9 @@ template <format_specification specification, typename pointer_type>
 	}
 }
 
-template <format_specification specification>
-[[nodiscard]] inline consteval ::fast_io::manipulators::scalar_flags floating_scalar_flags(
-	bool with_precision) noexcept
+template <format_specification specification, bool with_precision>
+[[nodiscard]] inline consteval ::fast_io::manipulators::scalar_flags
+floating_scalar_flags() noexcept
 {
 	::fast_io::manipulators::scalar_flags flags{};
 	constexpr auto presentation{specification.presentation};
@@ -634,12 +634,12 @@ template <format_specification specification, typename value_type>
 			// fast_io reserve path; general_float_t normally writes only the likely
 			// candidate and retries solely at a rounding boundary.
 			constexpr auto fixed_flags = []() consteval {
-				auto result{floating_scalar_flags<specification>(true)};
+				auto result{floating_scalar_flags<specification, true>()};
 				result.floating = ::fast_io::manipulators::floating_format::fixed;
 				return result;
 			}();
 			constexpr auto scientific_flags = []() consteval {
-				auto result{floating_scalar_flags<specification>(true)};
+				auto result{floating_scalar_flags<specification, true>()};
 				result.floating = ::fast_io::manipulators::floating_format::scientific;
 				return result;
 			}();
@@ -660,7 +660,7 @@ template <format_specification specification, typename value_type>
 		}
 		else
 		{
-			constexpr auto flags{floating_scalar_flags<specification>(true)};
+			constexpr auto flags{floating_scalar_flags<specification, true>()};
 			auto scalar{::fast_io::manipulators::scalar_manip_precision_t<flags, alias_type>{
 				static_cast<alias_type>(value), count}};
 			constexpr ::std::size_t prefix_size{
@@ -683,7 +683,7 @@ template <format_specification specification, typename value_type>
 	}
 	else
 	{
-		constexpr auto flags{floating_scalar_flags<specification>(false)};
+		constexpr auto flags{floating_scalar_flags<specification, false>()};
 		auto scalar{::fast_io::manipulators::scalar_manip_t<flags, alias_type>{
 			static_cast<alias_type>(value)}};
 		constexpr ::std::size_t prefix_size{

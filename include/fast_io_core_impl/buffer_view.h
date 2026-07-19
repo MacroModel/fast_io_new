@@ -246,6 +246,16 @@ struct basic_obuffer_view_ref
 	native_handle_type ptr{};
 };
 
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_deferred_obuffer_commit_safe(
+	io_reserve_type_t<char_type, basic_obuffer_view_ref<char_type>>) noexcept
+{
+	// The view keeps a stable fixed allocation, and cursor publication is exactly one assignment to curr_ptr. Raw
+	// in-area copies followed by one final publication therefore have the same observable cursor state as publishing
+	// after every copy; capacity exhaustion remains the view's terminating overflow policy.
+	return {};
+}
+
 #if 0
 template<::std::integral ch_type,::std::contiguous_iterator Iter>
 requires ::std::same_as<::std::iter_value_t<Iter>,ch_type>
@@ -376,3 +386,12 @@ using u8obuffer_view = basic_obuffer_view<char8_t>;
 using u16obuffer_view = basic_obuffer_view<char16_t>;
 using u32obuffer_view = basic_obuffer_view<char32_t>;
 } // namespace fast_io
+
+namespace fast_io::details::decay
+{
+
+template <::std::integral char_type>
+inline constexpr bool print_buffered_mixed_generic_endpoint<
+	::fast_io::basic_obuffer_view_ref<char_type>> = false;
+
+} // namespace fast_io::details::decay

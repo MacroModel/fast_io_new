@@ -91,6 +91,36 @@ template <typename T>
 	}
 }
 
+template <auto value_literal>
+[[nodiscard]] inline constexpr decltype(auto) unwrap_static_named_argument(
+	::fast_io::fmt::static_format_arg<value_literal> &) noexcept
+{
+	return ::fast_io::fmt::static_format_arg<value_literal>::get();
+}
+
+template <auto value_literal>
+[[nodiscard]] inline constexpr decltype(auto) unwrap_static_named_argument(
+	::fast_io::fmt::static_format_arg<value_literal> const &) noexcept
+{
+	return ::fast_io::fmt::static_format_arg<value_literal>::get();
+}
+
+template <::fast_io::fmt::basic_fixed_string name_literal, auto value_literal>
+[[nodiscard]] inline constexpr decltype(auto) unwrap_static_named_argument(
+	::fast_io::fmt::static_named_arg<
+		name_literal, ::fast_io::fmt::static_format_arg<value_literal>> &) noexcept
+{
+	return ::fast_io::fmt::static_format_arg<value_literal>::get();
+}
+
+template <::fast_io::fmt::basic_fixed_string name_literal, auto value_literal>
+[[nodiscard]] inline constexpr decltype(auto) unwrap_static_named_argument(
+	::fast_io::fmt::static_named_arg<
+		name_literal, ::fast_io::fmt::static_format_arg<value_literal>> const &) noexcept
+{
+	return ::fast_io::fmt::static_format_arg<value_literal>::get();
+}
+
 enum class argument_resolution_error : unsigned char
 {
 	none,

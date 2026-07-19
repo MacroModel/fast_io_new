@@ -5,7 +5,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
+
+// The format umbrella is entered after fast_io_core restored the caller's
+// macros. Re-enter the internal capability-probe scope for this header.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
 
 namespace fast_io::fmt::details
 {
@@ -192,6 +197,61 @@ struct unicode_prefix_measurement
 	::std::size_t display_width{};
 };
 
+template <::fast_io::fmt::format_character char_type>
+[[nodiscard]] inline constexpr char_type const *find_ascii_run_end_scalar(
+	char_type const *first, char_type const *last) noexcept
+{
+	using unsigned_type = ::std::make_unsigned_t<char_type>;
+	while (first != last && static_cast<unsigned_type>(*first) < 0x80u)
+	{
+		++first;
+	}
+	return first;
+}
+
+/** Finds an ASCII run without imposing alignment or aliasing requirements. */
+template <::fast_io::fmt::format_character char_type>
+	requires(sizeof(char_type) == 1u)
+[[nodiscard]] inline constexpr char_type const *find_ascii_run_end(
+	char_type const *first, char_type const *last) noexcept
+{
+	using scan_word_type = ::std::uint_least64_t;
+	if constexpr (::std::is_volatile_v<char_type> ||
+				  ::std::numeric_limits<unsigned char>::digits != 8 ||
+				  sizeof(scan_word_type) != 8u ||
+				  ::std::numeric_limits<scan_word_type>::digits != 64)
+	{
+		// Volatile storage must retain one observable access per code unit.  The
+		// packed mask also requires an exact 8-bit-byte, 64-value-bit load; unusual
+		// character widths and integer representations retain the scalar contract.
+		return find_ascii_run_end_scalar(first, last);
+	}
+	else
+	{
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+		if (__builtin_is_constant_evaluated())
+#else
+		if (::std::is_constant_evaluated())
+#endif
+		{
+			return find_ascii_run_end_scalar(first, last);
+		}
+		constexpr scan_word_type high_bits{0x8080808080808080ull};
+		while (static_cast<::std::size_t>(last - first) >= sizeof(scan_word_type))
+		{
+			scan_word_type word{};
+			::fast_io::details::my_memcpy(
+				__builtin_addressof(word), first, sizeof(word));
+			if ((word & high_bits) != 0u)
+			{
+				break;
+			}
+			first += sizeof(word);
+		}
+		return find_ascii_run_end_scalar(first, last);
+	}
+}
+
 /** Finds the largest scalar-aligned prefix which fits the display-width limit. */
 template <::fast_io::fmt::format_character char_type>
 [[nodiscard]] inline constexpr unicode_prefix_measurement measure_unicode_prefix(
@@ -205,23 +265,81 @@ template <::fast_io::fmt::format_character char_type>
 	}
 	else
 	{
-		unicode_prefix_measurement result{};
-		while (result.storage_size != size)
+		if (size == 0u || maximum_display_width == 0u)
 		{
+			return {};
+		}
+		unicode_prefix_measurement result{};
+		auto const *const last{data + size};
+		if (maximum_display_width == SIZE_MAX)
+		{
+			while (data != last)
+			{
+				if constexpr (sizeof(char_type) == 1u)
+				{
+					using unsigned_type = ::std::make_unsigned_t<char_type>;
+					if (static_cast<unsigned_type>(*data) < 0x80u)
+					{
+						auto const *const ascii_last{
+							find_ascii_run_end(data, last)};
+						auto const count{
+							static_cast<::std::size_t>(ascii_last - data)};
+						result.storage_size += count;
+						result.display_width += count;
+						data = ascii_last;
+						continue;
+					}
+				}
+				auto const scalar{decode_unicode_scalar(
+					data, static_cast<::std::size_t>(last - data))};
+				result.storage_size += scalar.code_units;
+				result.display_width += scalar.valid
+					? estimated_unicode_display_width(scalar.code_point)
+					: 1u;
+				data += scalar.code_units;
+			}
+			return result;
+		}
+		while (data != last)
+		{
+			auto const remaining_width{
+				maximum_display_width - result.display_width};
+			if (remaining_width == 0u)
+			{
+				break;
+			}
+			if constexpr (sizeof(char_type) == 1u)
+			{
+				using unsigned_type = ::std::make_unsigned_t<char_type>;
+				if (static_cast<unsigned_type>(*data) < 0x80u)
+				{
+					auto const storage_left{
+						static_cast<::std::size_t>(last - data)};
+					auto const run_limit{remaining_width < storage_left
+						? remaining_width
+						: storage_left};
+					auto const *const ascii_last{
+						find_ascii_run_end(data, data + run_limit)};
+					auto const count{
+						static_cast<::std::size_t>(ascii_last - data)};
+					result.storage_size += count;
+					result.display_width += count;
+					data = ascii_last;
+					continue;
+				}
+			}
 			auto const scalar{decode_unicode_scalar(
-				data + result.storage_size, size - result.storage_size)};
+				data, static_cast<::std::size_t>(last - data))};
 			auto const scalar_width{scalar.valid
-										? estimated_unicode_display_width(scalar.code_point)
-										: 1u};
-			if (scalar_width > maximum_display_width -
-								   (result.display_width < maximum_display_width
-										? result.display_width
-										: maximum_display_width))
+				? estimated_unicode_display_width(scalar.code_point)
+				: 1u};
+			if (remaining_width < scalar_width)
 			{
 				break;
 			}
 			result.storage_size += scalar.code_units;
 			result.display_width += scalar_width;
+			data += scalar.code_units;
 		}
 		return result;
 	}
@@ -284,8 +402,19 @@ make_text_field_options(::std::size_t maximum_display_width,
 	result.maximum_display_width = maximum_display_width;
 	result.minimum_width = minimum_width;
 	result.placement = placement;
-	if (fill != nullptr && fill_size != 0u)
+	if (fill_size != 0u)
 	{
+		// Keep the nullable run-time API while avoiding GCC sanitizer pointer
+		// instrumentation in constant evaluation.  Every compiled format with a
+		// nonzero fill size supplies the embedded fill array.
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+		if (!__builtin_is_constant_evaluated() && fill == nullptr) [[unlikely]]
+#else
+		if (!::std::is_constant_evaluated() && fill == nullptr) [[unlikely]]
+#endif
+		{
+			return result;
+		}
 		result.fill_size = static_cast<::std::uint_least8_t>(fill_size <= 4u ? fill_size : 4u);
 		for (::std::size_t index{}; index != result.fill_size; ++index)
 		{
@@ -296,26 +425,89 @@ make_text_field_options(::std::size_t maximum_display_width,
 }
 
 template <::fast_io::fmt::format_character char_type>
-inline constexpr char_type *emit_format_fill(char_type *output,
-											 basic_text_field_options<char_type> const &options,
-											 ::std::size_t repetitions) noexcept
+inline constexpr char_type *emit_format_fill_impl(
+	char_type *output, char_type const *fill, ::std::size_t fill_size,
+	::std::size_t repetitions) noexcept
 {
-	for (::std::size_t repetition{}; repetition != repetitions; ++repetition)
+	if (repetitions == 0u || fill_size == 0u)
 	{
-		for (::std::size_t index{}; index != options.fill_size; ++index)
-		{
-			*output++ = options.fill[index];
-		}
+		return output;
 	}
-	return output;
+	if (4u < fill_size) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	if constexpr (::std::is_volatile_v<char_type>)
+	{
+		// Volatile output requires one observable assignment per destination
+		// element.  It is the sole character domain in which memset/memcpy would
+		// not preserve the original nested-loop semantics.
+		for (::std::size_t repetition{}; repetition != repetitions; ++repetition)
+		{
+			for (::std::size_t index{}; index != fill_size; ++index)
+			{
+				*output++ = fill[index];
+			}
+		}
+		return output;
+	}
+	else if (fill_size == 1u)
+	{
+		// The overwhelmingly common format fill is one code unit.  Route it
+		// through core's constexpr-aware fill primitive so one-byte character
+		// domains become __builtin_memset at run time instead of retaining a
+		// per-repetition loop for large dynamic widths.
+		return ::fast_io::details::my_fill_n(
+			output, repetitions, fill[0u]);
+	}
+	else
+	{
+		::std::size_t const total_size{
+			::fast_io::details::intrinsics::mul_or_overflow_die(
+				fill_size, repetitions)};
+		char_type *const first{output};
+		output = ::fast_io::details::non_overlapped_copy_n(
+			fill, fill_size, output);
+		::std::size_t produced{fill_size};
+		while (produced != total_size)
+		{
+			::std::size_t const remaining{total_size - produced};
+			::std::size_t const copy_size{
+				produced < remaining ? produced : remaining};
+			output = ::fast_io::details::non_overlapped_copy_n(
+				first, copy_size, output);
+			produced += copy_size;
+		}
+		return output;
+	}
 }
+
+template <::fast_io::fmt::format_character char_type>
+inline constexpr char_type *emit_format_fill(
+	char_type *output, basic_text_field_options<char_type> const &options,
+	::std::size_t repetitions) noexcept
+{
+	return emit_format_fill_impl(
+		output, options.fill, options.fill_size, repetitions);
+}
+
+template <::fast_io::fmt::format_character char_type>
+struct basic_prepared_text_field_options
+{
+	::std::size_t storage_size{};
+	::std::size_t padding_repetitions{};
+	char_type fill[4u]{};
+	::std::uint_least8_t fill_size{};
+	::fast_io::manipulators::scalar_placement placement{
+		::fast_io::manipulators::scalar_placement::left};
+};
 
 template <::fast_io::fmt::format_character char_type>
 struct basic_unicode_text_field
 {
 	using manip_tag = ::fast_io::manip_tag_t;
 	::fast_io::basic_io_scatter_t<char_type> source{};
-	basic_text_field_options<char_type> options{};
+	basic_prepared_text_field_options<char_type> options{};
 };
 
 template <::fast_io::fmt::format_character char_type>
@@ -323,41 +515,60 @@ template <::fast_io::fmt::format_character char_type>
 make_unicode_text_field(::fast_io::basic_io_scatter_t<char_type> source,
 						basic_text_field_options<char_type> options) noexcept
 {
-	return {source, options};
-}
-
-template <::fast_io::fmt::format_character char_type>
-struct unicode_text_field_measurement
-{
-	unicode_prefix_measurement content{};
-	format_padding_measurement padding{};
-	::std::size_t storage_size{};
-};
-
-template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] inline constexpr unicode_text_field_measurement<char_type>
-measure_unicode_text_field(basic_unicode_text_field<char_type> const &field) noexcept
-{
-	auto const content{measure_unicode_prefix(field.source.base, field.source.len,
-											  field.options.maximum_display_width)};
+	auto const content{measure_unicode_prefix(
+		source.base, source.len, options.maximum_display_width)};
 	auto const padding{measure_format_padding(content.display_width,
-											  field.options.minimum_width, field.options.placement)};
-	auto const repetitions{padding.left + padding.right};
-	return {content, padding,
-			content.storage_size + repetitions * field.options.fill_size};
+		options.minimum_width, options.placement)};
+	auto const repetitions{::fast_io::details::intrinsics::add_or_overflow_die(
+		padding.left, padding.right)};
+	::std::size_t padding_storage_size{};
+	if (options.fill_size != 0u)
+	{
+		padding_storage_size = ::fast_io::details::intrinsics::mul_or_overflow_die(
+			repetitions, static_cast<::std::size_t>(options.fill_size));
+	}
+	basic_prepared_text_field_options<char_type> prepared{
+		.storage_size = ::fast_io::details::intrinsics::add_or_overflow_die(
+			content.storage_size, padding_storage_size),
+		.padding_repetitions = repetitions,
+		.fill_size = options.fill_size,
+		.placement = options.placement};
+	for (::std::size_t index{}; index != 4u; ++index)
+	{
+		prepared.fill[index] = options.fill[index];
+	}
+	// This details-only value deliberately snapshots the scalar-aligned prefix
+	// and padding metadata.  Both the ordinary and precise reserve protocols can
+	// now emit it without rescanning the borrowed source.
+	return {{source.base, content.storage_size}, prepared};
 }
 
 template <::fast_io::fmt::format_character char_type>
 inline constexpr char_type *emit_unicode_text_field(char_type *output,
-													basic_unicode_text_field<char_type> const &field) noexcept
+												basic_unicode_text_field<char_type> const &field) noexcept
 {
-	auto const measurement{measure_unicode_text_field(field)};
-	output = emit_format_fill(output, field.options, measurement.padding.left);
-	for (::std::size_t index{}; index != measurement.content.storage_size; ++index)
+	auto const padding{measure_format_padding(
+		0u, field.options.padding_repetitions, field.options.placement)};
+	output = emit_format_fill_impl(
+		output, field.options.fill, field.options.fill_size, padding.left);
+	// The reserve protocol supplies distinct source and destination storage,
+	// matching every other scatter/string reserve definition in core.  Use the
+	// constexpr-aware bulk primitive so run time lowers to memcpy while constant
+	// evaluation retains the portable element-wise path.
+	if constexpr (::std::is_volatile_v<char_type>)
 	{
-		*output++ = field.source.base[index];
+		for (::std::size_t index{}; index != field.source.len; ++index)
+		{
+			*output++ = field.source.base[index];
+		}
 	}
-	return emit_format_fill(output, field.options, measurement.padding.right);
+	else
+	{
+		output = ::fast_io::details::non_overlapped_copy_n(
+			field.source.base, field.source.len, output);
+	}
+	return emit_format_fill_impl(
+		output, field.options.fill, field.options.fill_size, padding.right);
 }
 
 } // namespace fast_io::fmt::details
@@ -373,7 +584,7 @@ template <::std::integral output_char_type,
 								 ::fast_io::fmt::details::basic_unicode_text_field<source_char_type>>,
 	::fast_io::fmt::details::basic_unicode_text_field<source_char_type> field) noexcept
 {
-	return ::fast_io::fmt::details::measure_unicode_text_field(field).storage_size;
+	return field.options.storage_size;
 }
 
 template <::std::integral output_char_type,
@@ -413,10 +624,10 @@ inline constexpr output_char_type *print_reserve_precise_define(
 }
 
 /**
- * Exact sizing scans the source before emission, so value-initializing the
- * destination would add a third full-memory pass.  The endpoint-returning,
- * non-throwing define CPO proves that an overwrite-capable concat destination
- * may safely construct its final storage directly.
+ * Preparing the field already determines its exact size, and emission
+ * overwrites every destination element.  The endpoint-returning, non-throwing
+ * define CPO proves that an overwrite-capable concat destination need not
+ * value-initialize that storage first.
  */
 template <::std::integral output_char_type,
 		  ::fast_io::fmt::format_character source_char_type>
@@ -430,3 +641,5 @@ template <::std::integral output_char_type,
 }
 
 } // namespace fast_io
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

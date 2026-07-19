@@ -68,6 +68,75 @@ struct static_named_arg
 	storage_type value;
 };
 
+/**
+ * Carries a formatting value entirely in its type.
+ *
+ * An ordinary function argument such as `42u` remains a run-time argument in
+ * the C++ abstract machine even when the call expression spells a literal.
+ * This carrier is the explicit proof that the value may participate in format
+ * lowering as an NTTP.  It has no run-time state; lowering reads
+ * `stored_value` only while producing format-owned constant storage.
+ */
+template <typename T>
+struct is_basic_fixed_string : ::std::false_type
+{};
+
+template <format_character char_type, ::std::size_t extent>
+struct is_basic_fixed_string<basic_fixed_string<char_type, extent>>
+	: ::std::true_type
+{};
+
+template <typename T>
+inline constexpr bool is_format_character_pointer_v{
+	::std::is_pointer_v<T> &&
+	format_character<::std::remove_cv_t<::std::remove_pointer_t<T>>>};
+
+template <auto value_literal>
+struct static_format_arg
+{
+	static inline constexpr auto stored_value{value_literal};
+
+	[[nodiscard]] inline static constexpr decltype(auto) get() noexcept
+	{
+		if constexpr (is_basic_fixed_string<
+					  ::std::remove_cv_t<decltype(stored_value)>>::value)
+		{
+			// Preserve array extent so the ordinary string field rule, including
+			// bounded null discovery and code-unit checks, remains authoritative.
+			return (stored_value.elements);
+		}
+		else
+		{
+			return (stored_value);
+		}
+	}
+};
+
+template <typename T>
+struct is_static_format_arg : ::std::false_type
+{};
+
+template <auto value_literal>
+struct is_static_format_arg<static_format_arg<value_literal>> : ::std::true_type
+{};
+
+template <typename T>
+inline constexpr bool is_static_format_arg_v{
+	is_static_format_arg<::std::remove_cvref_t<T>>::value};
+
+template <typename T>
+struct is_static_format_argument_holder : is_static_format_arg<::std::remove_cvref_t<T>>
+{};
+
+template <basic_fixed_string name_literal, typename storage_type>
+struct is_static_format_argument_holder<static_named_arg<name_literal, storage_type>>
+	: is_static_format_arg<::std::remove_cvref_t<storage_type>>
+{};
+
+template <typename T>
+inline constexpr bool is_static_format_argument_holder_v{
+	is_static_format_argument_holder<::std::remove_cvref_t<T>>::value};
+
 template <typename T>
 struct is_static_named_arg : ::std::false_type
 {};
@@ -87,6 +156,40 @@ template <basic_fixed_string name_literal, typename T>
 	using storage_type = ::std::conditional_t<
 		::std::is_lvalue_reference_v<T &&>, T &&, ::std::remove_cvref_t<T>>;
 	return static_named_arg<name_literal, storage_type>{::std::forward<T>(value)};
+}
+
+/** Creates an unnamed NTTP-backed format argument. */
+template <auto value_literal>
+	requires (!is_basic_fixed_string<
+		::std::remove_cv_t<decltype(value_literal)>>::value &&
+		!is_format_character_pointer_v<decltype(value_literal)>)
+[[nodiscard]] inline consteval auto static_arg() noexcept
+{
+	return static_format_arg<value_literal>{};
+}
+
+/** Creates an unnamed fixed-string NTTP-backed format argument. */
+template <basic_fixed_string value_literal>
+[[nodiscard]] inline consteval auto static_arg() noexcept
+{
+	return static_format_arg<value_literal>{};
+}
+
+/** Creates a named NTTP-backed format argument without a run-time member value. */
+template <basic_fixed_string name_literal, auto value_literal>
+	requires (!is_basic_fixed_string<
+		::std::remove_cv_t<decltype(value_literal)>>::value &&
+		!is_format_character_pointer_v<decltype(value_literal)>)
+[[nodiscard]] inline consteval auto static_arg() noexcept
+{
+	return static_named_arg<name_literal, static_format_arg<value_literal>>{};
+}
+
+/** Creates a named fixed-string NTTP-backed format argument. */
+template <basic_fixed_string name_literal, basic_fixed_string value_literal>
+[[nodiscard]] inline consteval auto static_arg() noexcept
+{
+	return static_named_arg<name_literal, static_format_arg<value_literal>>{};
 }
 
 } // namespace fast_io::fmt

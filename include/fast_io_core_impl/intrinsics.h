@@ -20,9 +20,18 @@ inline
 	void typed_memcpy(T1 *dest, T2 const *src, ::std::size_t bytes) noexcept
 {
 #if __cpp_lib_bit_cast >= 201806L
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
 	if (__builtin_is_constant_evaluated())
+#else
+	if (::std::is_constant_evaluated())
+#endif
 	{
-		if (dest == nullptr || src == nullptr || sizeof(T1) != sizeof(T2) || bytes % sizeof(T1) != 0) [[unlikely]]
+		// GCC's sanitizer instrumentation does not preserve constant evaluation
+		// for comparisons between a constexpr object pointer and nullptr.  A
+		// nonzero copy necessarily dereferences both ranges below, so constant
+		// evaluation itself still rejects an invalid pointer without that
+		// redundant comparison.  The run-time path remains the original memcpy.
+		if (sizeof(T1) != sizeof(T2) || bytes % sizeof(T1) != 0) [[unlikely]]
 		{
 			fast_terminate();
 		}

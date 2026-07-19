@@ -624,6 +624,30 @@ inline constexpr output_iter my_copy_backward(input_iter first, input_iter last,
 	}
 }
 
+/// Moves one already-materialized range to a higher address without corrupting
+/// the unread suffix during constant evaluation. The run-time arm deliberately
+/// retains my_copy's memmove-shaped destination-begin API and code generation;
+/// only the constexpr arm needs an explicit backward traversal.
+template <::std::random_access_iterator iterator>
+inline constexpr void my_copy_right_shift(
+	iterator first, iterator last, ::std::size_t shift)
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+	if (__builtin_is_constant_evaluated())
+#else
+	if (::std::is_constant_evaluated())
+#endif
+	{
+		::fast_io::freestanding::my_copy_backward(
+			first, last, last + shift);
+	}
+	else
+	{
+		::fast_io::freestanding::my_copy(
+			first, last, first + shift);
+	}
+}
+
 template <::std::random_access_iterator input_iter, ::std::random_access_iterator output_iter>
 inline constexpr bool my_compare_iter_n(input_iter first, ::std::size_t n, output_iter outier) noexcept
 {
@@ -1069,6 +1093,7 @@ namespace fast_io::details
 {
 using ::fast_io::freestanding::my_copy;
 using ::fast_io::freestanding::my_copy_backward;
+using ::fast_io::freestanding::my_copy_right_shift;
 using ::fast_io::freestanding::my_copy_n;
 using ::fast_io::freestanding::my_memcpy;
 using ::fast_io::freestanding::my_memmove;
