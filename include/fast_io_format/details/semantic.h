@@ -43,6 +43,26 @@ struct format_scalar_t
 namespace fast_io
 {
 
+#if defined(__clang__)
+/// Opts the library-owned run-time precision floating wrapper into bounded local materialization.
+///
+/// The core print entry uses this marker only when a fixed static prefix precedes exactly one such scalar and the
+/// destination already exposes a writable put area. Formatting into the local frame is observationally safe here:
+/// both sizing and emission are fast_io's non-throwing scalar operations, rather than arbitrary user customization.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+inline constexpr bool print_format_scalar_local_buffer_eligible(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>,
+			base_prefix_size, space_sign>>) noexcept
+{
+	return true;
+}
+#endif
+
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 	requires requires {
 		print_reserve_size(::fast_io::io_reserve_type<char_type, scalar_type>);
@@ -183,6 +203,67 @@ inline constexpr decltype(auto) print_reserve_precise_define(
 
 namespace fmt::details
 {
+
+/**
+ * Emits repetitions of one encoded format fill scalar.
+ *
+ * A fill scalar occupies one to four destination code units.  The common
+ * one-unit case deliberately reaches core's constexpr-aware fill primitive;
+ * at run time that has the memset shape expected by GCC and Clang.  Wider
+ * encodings seed one scalar and then double the initialized prefix with
+ * non-overlapping copies, avoiding a branch and store for every repetition.
+ */
+template <::std::integral char_type>
+inline constexpr char_type *emit_repeated_code_unit_pattern(
+	char_type *output, char_type const *pattern,
+	::std::size_t pattern_size, ::std::size_t repetitions) noexcept
+{
+	if (repetitions == 0u || pattern_size == 0u)
+	{
+		return output;
+	}
+	if (4u < pattern_size) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	if constexpr (::std::is_volatile_v<char_type>)
+	{
+		for (::std::size_t repetition{}; repetition != repetitions;
+			 ++repetition)
+		{
+			for (::std::size_t index{}; index != pattern_size; ++index)
+			{
+				*output++ = pattern[index];
+			}
+		}
+		return output;
+	}
+	else if (pattern_size == 1u)
+	{
+		return ::fast_io::details::my_fill_n(
+			output, repetitions, pattern[0u]);
+	}
+	else
+	{
+		auto const total_size{
+			::fast_io::details::intrinsics::mul_or_overflow_die(
+				pattern_size, repetitions)};
+		auto *const first{output};
+		output = ::fast_io::details::non_overlapped_copy_n(
+			pattern, pattern_size, output);
+		::std::size_t produced{pattern_size};
+		while (produced != total_size)
+		{
+			auto const remaining{total_size - produced};
+			auto const copy_size{
+				produced < remaining ? produced : remaining};
+			output = ::fast_io::details::non_overlapped_copy_n(
+				first, copy_size, output);
+			produced += copy_size;
+		}
+		return output;
+	}
+}
 
 template <typename value_type>
 [[nodiscard]] inline constexpr bool scalar_negative(value_type value) noexcept

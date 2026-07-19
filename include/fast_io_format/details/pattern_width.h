@@ -3,7 +3,6 @@
 #include "semantic.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <type_traits>
 #include <utility>
 
@@ -21,16 +20,18 @@ namespace fast_io::fmt::details
  * Their product is used only for storage and never fed back into the field-width
  * decision.
  */
-template <::fast_io::fmt::format_character char_type, typename value_type>
+template <::fast_io::fmt::format_character char_type,
+	::std::size_t fill_size, typename value_type>
 struct basic_pattern_width
 {
 	using manip_tag = ::fast_io::manip_tag_t;
+	static_assert(fill_size != 0u && fill_size <= 4u);
+	static inline constexpr ::std::size_t pattern_size{fill_size};
 
 	value_type value;
 	::std::size_t width{};
 	::fast_io::manipulators::scalar_placement placement{};
-	char_type fill[4u]{};
-	::std::uint_least8_t fill_size{};
+	char_type fill[fill_size]{};
 };
 
 template <typename child_type, ::fast_io::fmt::format_character char_type>
@@ -93,25 +94,41 @@ template <typename child_type, ::fast_io::fmt::format_character char_type>
 	}
 }
 
-template <::fast_io::fmt::format_character char_type, typename value_type>
+template <::fast_io::fmt::format_character char_type,
+	::std::size_t fill_size, typename value_type>
 inline constexpr char_type *emit_pattern_fill(
-	char_type *output, basic_pattern_width<char_type, value_type> const &field,
+	char_type *output,
+	basic_pattern_width<char_type, fill_size, value_type> const &field,
 	::std::size_t repetitions) noexcept
 {
-	for (::std::size_t repetition{}; repetition != repetitions; ++repetition)
+	if constexpr (fill_size == 1u)
 	{
-		for (::std::size_t unit{}; unit != field.fill_size; ++unit)
-		{
-			*output++ = field.fill[unit];
-		}
+		// A scalar fill is a true fill operation: the shared primitive keeps
+		// constant evaluation valid and lowers one-byte run-time domains to
+		// memset instead of retaining a per-repetition store loop.
+		return ::fast_io::details::my_fill_n(
+			output, repetitions, field.fill[0u]);
 	}
-	return output;
+	else
+	{
+		// For a two-to-four-code-unit scalar, the type-known copy wins over
+		// generic prefix doubling on current GCC and Clang. Keep the fixed
+		// extent visible at every repetition so vector stores remain available.
+		for (::std::size_t repetition{}; repetition != repetitions;
+			 ++repetition)
+		{
+			output = ::fast_io::details::decay::static_scatter_copy_n<fill_size>(
+				field.fill, output);
+		}
+		return output;
+	}
 }
 
-template <::fast_io::fmt::format_character char_type, typename value_type,
-	typename child_type>
+template <::fast_io::fmt::format_character char_type,
+	::std::size_t fill_size, typename value_type, typename child_type>
 inline constexpr char_type *emit_pattern_width_impl(
-	char_type *output, basic_pattern_width<char_type, value_type> const &field,
+	char_type *output,
+	basic_pattern_width<char_type, fill_size, value_type> const &field,
 	child_type &child) noexcept
 {
 	auto const child_end{emit_pattern_width_child<child_type, char_type>(output, child)};
@@ -139,12 +156,9 @@ inline constexpr char_type *emit_pattern_width_impl(
 		auto const shift{pattern_width_internal_shift<child_type, char_type>(child)};
 		if (shift <= child_size && shift != 0u)
 		{
-			auto const inserted_units{repetitions * field.fill_size};
-			for (auto source{child_end}; source != output + shift;)
-			{
-				--source;
-				source[inserted_units] = *source;
-			}
+			auto const inserted_units{repetitions * fill_size};
+			::fast_io::details::my_copy_right_shift(
+				output + shift, child_end, inserted_units);
 			(void)emit_pattern_fill(output + shift, field, repetitions);
 			return child_end + inserted_units;
 		}
@@ -157,32 +171,31 @@ inline constexpr char_type *emit_pattern_width_impl(
 		left_repetitions = repetitions;
 	}
 
-	auto const left_units{left_repetitions * field.fill_size};
+	auto const left_units{left_repetitions * fill_size};
 	if (left_units != 0u)
 	{
-		for (auto source{child_end}; source != output;)
-		{
-			--source;
-			source[left_units] = *source;
-		}
+		::fast_io::details::my_copy_right_shift(
+			output, child_end, left_units);
 	}
 	(void)emit_pattern_fill(output, field, left_repetitions);
 	auto end{child_end + left_units};
 	return emit_pattern_fill(end, field, right_repetitions);
 }
 
-template <::fast_io::fmt::format_character char_type, typename T>
+template <::std::size_t fill_size,
+	::fast_io::fmt::format_character char_type, typename T>
 	requires ::fast_io::details::width_storable<T>
 [[nodiscard]] inline constexpr auto make_pattern_width(
 	T &&value, ::std::size_t width,
 	::fast_io::manipulators::scalar_placement placement,
-	char_type const *fill, ::std::size_t fill_size)
+	char_type const *fill)
 	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
 {
+	static_assert(fill_size != 0u && fill_size <= 4u);
 	using storage_type = ::fast_io::details::width_storage_type<T>;
-	basic_pattern_width<char_type, storage_type> result{
+	basic_pattern_width<char_type, fill_size, storage_type> result{
 		::fast_io::details::width_store(::std::forward<T>(value)), width,
-		placement, {}, static_cast<::std::uint_least8_t>(fill_size)};
+		placement, {}};
 	for (::std::size_t index{}; index != fill_size; ++index)
 	{
 		result.fill[index] = fill[index];
@@ -195,15 +208,18 @@ template <::fast_io::fmt::format_character char_type, typename T>
 namespace fast_io
 {
 
-template <::fast_io::fmt::format_character char_type, typename value_type>
+template <::fast_io::fmt::format_character char_type,
+	::std::size_t fill_size, typename value_type>
 	requires(
 		::fast_io::reserve_printable<char_type, ::std::remove_cvref_t<value_type>> ||
 		::fast_io::dynamic_reserve_printable<char_type, ::std::remove_cvref_t<value_type>> ||
 		::fast_io::scatter_printable<char_type, ::std::remove_cvref_t<value_type>>)
 [[nodiscard]] inline constexpr ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char_type,
-		::fast_io::fmt::details::basic_pattern_width<char_type, value_type>>,
-	::fast_io::fmt::details::basic_pattern_width<char_type, value_type> field) noexcept
+		::fast_io::fmt::details::basic_pattern_width<
+			char_type, fill_size, value_type>>,
+	::fast_io::fmt::details::basic_pattern_width<
+		char_type, fill_size, value_type> field) noexcept
 {
 	if constexpr (::std::is_reference_v<value_type>)
 	{
@@ -214,7 +230,7 @@ template <::fast_io::fmt::format_character char_type, typename value_type>
 		return ::fast_io::details::intrinsics::add_or_overflow_die(
 			child_size,
 			::fast_io::details::intrinsics::mul_or_overflow_die(
-				field.width, field.fill_size));
+				field.width, fill_size));
 	}
 	else
 	{
@@ -224,20 +240,23 @@ template <::fast_io::fmt::format_character char_type, typename value_type>
 		return ::fast_io::details::intrinsics::add_or_overflow_die(
 			child_size,
 			::fast_io::details::intrinsics::mul_or_overflow_die(
-				field.width, field.fill_size));
+				field.width, fill_size));
 	}
 }
 
-template <::fast_io::fmt::format_character char_type, typename value_type>
+template <::fast_io::fmt::format_character char_type,
+	::std::size_t fill_size, typename value_type>
 	requires(
 		::fast_io::reserve_printable<char_type, ::std::remove_cvref_t<value_type>> ||
 		::fast_io::dynamic_reserve_printable<char_type, ::std::remove_cvref_t<value_type>> ||
 		::fast_io::scatter_printable<char_type, ::std::remove_cvref_t<value_type>>)
 inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
-		::fast_io::fmt::details::basic_pattern_width<char_type, value_type>>,
+		::fast_io::fmt::details::basic_pattern_width<
+			char_type, fill_size, value_type>>,
 	char_type *output,
-	::fast_io::fmt::details::basic_pattern_width<char_type, value_type> field) noexcept
+	::fast_io::fmt::details::basic_pattern_width<
+		char_type, fill_size, value_type> field) noexcept
 {
 	if constexpr (::std::is_reference_v<value_type>)
 	{

@@ -84,7 +84,7 @@ struct basic_custom_format_parse_context
 	[[nodiscard]] inline static consteval char_type get() noexcept
 	{
 		static_assert(index < source.size,
-			"fast_io format: custom formatter parser read past its source slice");
+					  "fast_io format: custom formatter parser read past its source slice");
 		return format_literal[source.offset + index];
 	}
 };
@@ -110,10 +110,146 @@ struct basic_custom_format_state_t
 	}
 };
 
+/**
+ * Terminal tag for a format_as customization which explicitly opts in to
+ * compile-time rendering.
+ *
+ * The tag has no state.  In particular, it does not invoke format_as by
+ * itself: the customization receives the original constant value and remains
+ * responsible for producing exactly the final output code units.
+ */
+template <format_character char_type_>
+struct basic_static_format_as_t
+{
+	using char_type = char_type_;
+};
+
+/** The checked value of one literal or argument-supplied format parameter. */
+struct static_format_parameter_value
+{
+	::std::size_t value{};
+	bool present{};
+	bool negative{};
+
+	constexpr bool operator==(
+		static_format_parameter_value const &) const noexcept = default;
+};
+
+/**
+ * Complete compile-time context for a terminal static-output customization.
+ *
+ * `specification` preserves the parsed common grammar verbatim, including
+ * presentation, fill, alignment, sign, locale and source slices.  `width` and
+ * `precision` are the already resolved parameter values; a customization
+ * never has to inspect the argument pack.  `depth` is part of the type so a
+ * recursive customization cannot accidentally restart its recursion budget.
+ * The context is intentionally an aggregate and carries no runtime state.
+ */
+template <auto specification_, ::std::size_t depth_>
+struct basic_static_format_context_t
+{
+	static inline constexpr auto specification{specification_};
+	static inline constexpr ::std::size_t depth{depth_};
+
+	using char_type = ::std::remove_cv_t<::std::remove_reference_t<
+		decltype(specification.fill[0u])>>;
+
+	static_format_parameter_value width{};
+	static_format_parameter_value precision{};
+};
+
 } // namespace fast_io::fmt
 
 namespace fast_io::fmt::details
 {
+
+/** Static custom output uses the same bounded nesting policy as aggregates. */
+inline constexpr ::std::size_t static_format_recursion_limit{8u};
+
+namespace static_format_output_adl
+{
+
+// Poison pills retain ADL while preventing an unrelated declaration found by
+// ordinary lookup from becoming an implicit static-rendering opt-in.
+void format_static_reserve_size() = delete;
+void format_static_reserve_define() = delete;
+
+template <typename formatter_type, typename = void>
+struct formatter_character_probe
+{
+	inline static constexpr bool valid{};
+};
+
+template <typename formatter_type>
+struct formatter_character_probe<formatter_type,
+								 ::std::void_t<typename ::std::remove_cvref_t<formatter_type>::char_type>>
+{
+	using type = typename ::std::remove_cvref_t<formatter_type>::char_type;
+	inline static constexpr bool valid{
+		::fast_io::fmt::format_character<type>};
+};
+
+template <typename formatter_type>
+concept formatter_tag = formatter_character_probe<formatter_type>::valid;
+
+template <typename formatter_type>
+	requires formatter_tag<formatter_type>
+using formatter_char_type =
+	typename formatter_character_probe<formatter_type>::type;
+
+/**
+ * Strict terminal-output protocol admission.
+ *
+ * Both CPOs must be found by ADL, use the formatter's exact character domain,
+ * return exactly size_t / Char*, and be noexcept.  Constant evaluability is
+ * deliberately not tested here: finding the correctly shaped protocol is an
+ * explicit opt-in.  The consteval wrappers below then turn a non-constant CPO
+ * body into a contract diagnostic instead of silently selecting a dynamic
+ * formatter.
+ */
+template <typename context_type, typename formatter_type, typename value_type>
+concept expression =
+	formatter_tag<formatter_type> &&
+	requires {
+		typename ::std::remove_cvref_t<context_type>::char_type;
+	} &&
+	::std::same_as<
+		typename ::std::remove_cvref_t<context_type>::char_type,
+		formatter_char_type<formatter_type>> &&
+	(context_type::depth < static_format_recursion_limit) &&
+	requires(value_type value,
+			 formatter_char_type<formatter_type> *output) {
+		{ format_static_reserve_size(context_type{}, formatter_type{}, value) }
+		-> ::std::same_as<::std::size_t>;
+		{ format_static_reserve_define(
+			context_type{}, formatter_type{}, output, value) }
+		-> ::std::same_as<formatter_char_type<formatter_type> *>;
+		requires noexcept(format_static_reserve_size(
+			context_type{}, formatter_type{}, value));
+		requires noexcept(format_static_reserve_define(
+			context_type{}, formatter_type{}, output, value));
+	};
+
+template <typename context_type, typename formatter_type, typename value_type>
+	requires expression<context_type, formatter_type, value_type &>
+[[nodiscard]] inline consteval ::std::size_t size(
+	context_type context, value_type &value) noexcept
+{
+	return format_static_reserve_size(context, formatter_type{}, value);
+}
+
+template <typename context_type, typename formatter_type, typename char_type,
+		  typename value_type>
+	requires expression<context_type, formatter_type, value_type &> &&
+			 ::std::same_as<char_type, formatter_char_type<formatter_type>>
+[[nodiscard]] inline consteval char_type *define(
+	context_type context, char_type *output, value_type &value) noexcept
+{
+	return format_static_reserve_define(
+		context, formatter_type{}, output, value);
+}
+
+} // namespace static_format_output_adl
 
 /**
  * Delegates default-format admission to fast_io's public print concept.
@@ -154,7 +290,7 @@ struct structural_state_proof
  * a runtime call or a state containing an ineligible pointer/reference.
  */
 template <bool parser_is_available, auto format_literal, auto source,
-	typename value_type>
+		  typename value_type>
 struct structural_parse_probe : ::std::false_type
 {};
 
@@ -234,7 +370,7 @@ struct format_as_probe<true, value_type>
 
 	inline static constexpr bool nonrecursive =
 		!::std::same_as<::std::remove_cvref_t<value_type>,
-			::std::remove_cvref_t<result_type>>;
+						::std::remove_cvref_t<result_type>>;
 };
 
 template <typename value_type>

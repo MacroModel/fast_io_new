@@ -91,6 +91,53 @@ inline constexpr bool is_format_character_pointer_v{
 	::std::is_pointer_v<T> &&
 	format_character<::std::remove_cv_t<::std::remove_pointer_t<T>>>};
 
+template <typename value_type>
+inline constexpr void copy_static_c_array_element(
+	value_type &destination, value_type const &source) noexcept
+{
+	if constexpr (::std::is_array_v<value_type>)
+	{
+		for (::std::size_t index{};
+			 index != ::std::extent_v<value_type>; ++index)
+		{
+			copy_static_c_array_element(destination[index], source[index]);
+		}
+	}
+	else
+	{
+		destination = source;
+	}
+}
+
+/** Structural by-value copy used to prove that a C array is constant-readable. */
+template <typename element_type, ::std::size_t extent>
+struct basic_static_c_array_value
+{
+	element_type elements[extent]{};
+
+	consteval basic_static_c_array_value(
+		element_type const (&source)[extent]) noexcept
+	{
+		for (::std::size_t index{}; index != extent; ++index)
+		{
+			copy_static_c_array_element(elements[index], source[index]);
+		}
+	}
+};
+
+template <typename element_type, ::std::size_t extent>
+basic_static_c_array_value(element_type const (&)[extent])
+	-> basic_static_c_array_value<element_type, extent>;
+
+template <typename T>
+struct is_basic_static_c_array_value : ::std::false_type
+{};
+
+template <typename element_type, ::std::size_t extent>
+struct is_basic_static_c_array_value<
+	basic_static_c_array_value<element_type, extent>> : ::std::true_type
+{};
+
 template <auto value_literal>
 struct static_format_arg
 {
@@ -99,10 +146,15 @@ struct static_format_arg
 	[[nodiscard]] inline static constexpr decltype(auto) get() noexcept
 	{
 		if constexpr (is_basic_fixed_string<
-					  ::std::remove_cv_t<decltype(stored_value)>>::value)
+						  ::std::remove_cv_t<decltype(stored_value)>>::value)
 		{
 			// Preserve array extent so the ordinary string field rule, including
 			// bounded null discovery and code-unit checks, remains authoritative.
+			return (stored_value.elements);
+		}
+		else if constexpr (is_basic_static_c_array_value<
+							   ::std::remove_cv_t<decltype(stored_value)>>::value)
+		{
 			return (stored_value.elements);
 		}
 		else
@@ -112,12 +164,86 @@ struct static_format_arg
 	}
 };
 
+template <::std::size_t index, auto value_literal>
+struct static_tuple_value_slot
+{
+	static inline constexpr auto stored_value{value_literal};
+};
+
+template <typename index_sequence, auto... value_literals>
+struct static_tuple_value_impl;
+
+template <::std::size_t... index, auto... value_literals>
+struct static_tuple_value_impl<::std::index_sequence<index...>,
+							   value_literals...> : static_tuple_value_slot<index, value_literals>...
+{};
+
+template <::std::size_t index, auto value_literal>
+[[nodiscard]] inline constexpr decltype(auto) static_tuple_value_slot_get(
+	static_tuple_value_slot<index, value_literal> const &) noexcept
+{
+	if constexpr (is_basic_fixed_string<
+					  ::std::remove_cv_t<decltype(static_tuple_value_slot<index,
+																		  value_literal>::stored_value)>>::value)
+	{
+		return (static_tuple_value_slot<index,
+										value_literal>::stored_value.elements);
+	}
+	else
+	{
+		return (static_tuple_value_slot<index,
+										value_literal>::stored_value);
+	}
+}
+
+/** A tuple-like view whose heterogeneous elements are individual NTTPs. */
+template <auto... value_literals>
+struct static_tuple_value
+	: static_tuple_value_impl<
+		  ::std::index_sequence_for<decltype(value_literals)...>,
+		  value_literals...>
+{};
+
+template <::std::size_t index, auto... value_literals>
+	requires(index < sizeof...(value_literals))
+[[nodiscard]] inline constexpr decltype(auto) get(
+	static_tuple_value<value_literals...> const &value) noexcept
+{
+	return ::fast_io::fmt::static_tuple_value_slot_get<index>(value);
+}
+
+template <::std::size_t index, auto... value_literals>
+	requires(index < sizeof...(value_literals))
+[[nodiscard]] inline constexpr decltype(auto) get(
+	static_tuple_value<value_literals...> &value) noexcept
+{
+	return ::fast_io::fmt::get<index>(
+		static_cast<static_tuple_value<value_literals...> const &>(value));
+}
+
+/** Carries a heterogeneous tuple as an NTTP pack without run-time state. */
+template <auto... value_literals>
+struct static_tuple_format_arg
+{
+	static inline constexpr static_tuple_value<value_literals...> stored_value{};
+
+	[[nodiscard]] inline static constexpr auto const &get() noexcept
+	{
+		return stored_value;
+	}
+};
+
 template <typename T>
 struct is_static_format_arg : ::std::false_type
 {};
 
 template <auto value_literal>
 struct is_static_format_arg<static_format_arg<value_literal>> : ::std::true_type
+{};
+
+template <auto... value_literals>
+struct is_static_format_arg<static_tuple_format_arg<value_literals...>>
+	: ::std::true_type
 {};
 
 template <typename T>
@@ -192,4 +318,66 @@ template <basic_fixed_string name_literal, basic_fixed_string value_literal>
 	return static_named_arg<name_literal, static_format_arg<value_literal>>{};
 }
 
+/** Creates an NTTP-reference carrier for a fixed non-character C array. */
+template <auto &array_literal,
+		  auto copied_literal = basic_static_c_array_value{array_literal}>
+	requires(::std::is_array_v<
+				 ::std::remove_reference_t<decltype(array_literal)>> &&
+			 ::std::is_const_v<::std::remove_extent_t<
+				 ::std::remove_reference_t<decltype(array_literal)>>> &&
+			 !format_character<::std::remove_cv_t<::std::remove_extent_t<
+				 ::std::remove_reference_t<decltype(array_literal)>>>>)
+[[nodiscard]] inline consteval auto static_array_arg() noexcept
+{
+	return static_format_arg<copied_literal>{};
+}
+
+/** Creates a named NTTP-reference carrier for a fixed non-character C array. */
+template <basic_fixed_string name_literal, auto &array_literal,
+		  auto copied_literal = basic_static_c_array_value{array_literal}>
+	requires(::std::is_array_v<
+				 ::std::remove_reference_t<decltype(array_literal)>> &&
+			 ::std::is_const_v<::std::remove_extent_t<
+				 ::std::remove_reference_t<decltype(array_literal)>>> &&
+			 !format_character<::std::remove_cv_t<::std::remove_extent_t<
+				 ::std::remove_reference_t<decltype(array_literal)>>>>)
+[[nodiscard]] inline consteval auto static_named_array_arg() noexcept
+{
+	return static_named_arg<
+		name_literal, static_format_arg<copied_literal>>{};
+}
+
+/** Creates a tuple-like argument whose elements are heterogeneous NTTPs. */
+template <auto... value_literals>
+[[nodiscard]] inline consteval auto static_tuple_arg() noexcept
+{
+	return static_tuple_format_arg<value_literals...>{};
+}
+
+/** Creates a named tuple-like argument from a heterogeneous NTTP pack. */
+template <basic_fixed_string name_literal, auto... value_literals>
+[[nodiscard]] inline consteval auto static_named_tuple_arg() noexcept
+{
+	return static_named_arg<
+		name_literal, static_tuple_format_arg<value_literals...>>{};
+}
+
 } // namespace fast_io::fmt
+
+namespace std
+{
+
+template <auto... value_literals>
+struct tuple_size<::fast_io::fmt::static_tuple_value<value_literals...>>
+	: ::std::integral_constant<::std::size_t, sizeof...(value_literals)>
+{};
+
+template <::std::size_t index, auto... value_literals>
+struct tuple_element<
+	index, ::fast_io::fmt::static_tuple_value<value_literals...>>
+{
+	using type = ::std::remove_reference_t<decltype(::fast_io::fmt::get<index>(::std::declval<
+																			   ::fast_io::fmt::static_tuple_value<value_literals...> const &>()))>;
+};
+
+} // namespace std

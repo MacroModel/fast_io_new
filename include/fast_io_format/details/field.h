@@ -295,9 +295,9 @@ template <format_specification specification, bool numeric, bool printf_dialect,
 			}
 			using fill_char_type =
 				::std::remove_cvref_t<decltype(specification.fill[0])>;
-			return make_pattern_width<fill_char_type>(
+			return make_pattern_width<specification.fill_size, fill_char_type>(
 				::std::forward<value_type>(value), width.value, base_placement,
-				specification.fill, specification.fill_size);
+				specification.fill);
 		}
 		else
 		{

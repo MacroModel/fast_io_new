@@ -30,6 +30,24 @@ template <::std::integral char_type, typename T = char_type>
 inline constexpr basic_io_scatter_t<T> line_scatter_common{__builtin_addressof(char_literal_v<u8'\n', char_type>),
 														   ::std::same_as<T, void> ? sizeof(char_type) : 1};
 
+/// @brief Exposes the exact extent of a fixed scatter in the output character domain.
+/// @details The primary template deliberately rejects a scatter whose code-unit type differs from the destination.
+///          The trait is available before the run scanner so an unbuffered endpoint can retain a fixed scatter's
+///          original storage, while buffered and concat paths continue to use its exact reserve protocol.
+template <::std::integral output_char_type, typename T>
+struct print_static_scatter_traits
+{
+	inline static constexpr bool available{};
+};
+
+template <::std::integral char_type, ::std::size_t extent>
+struct print_static_scatter_traits<
+	char_type, ::fast_io::manipulators::static_scatter_t<char_type, extent>>
+{
+	inline static constexpr bool available{true};
+	inline static constexpr ::std::size_t size{extent};
+};
+
 /// @brief    Describes the first contiguous print run that can be represented by scatters and reserve buffers.
 struct contiguous_scatter_result
 {
@@ -72,17 +90,22 @@ inline constexpr bool retained_reserve_scatters_printable_v =
 /// @tparam   Arg       the current argument type
 /// @tparam   Args      the remaining argument types
 /// @return   contiguous_scatter_result the compile-time description of the leading run
-template <::std::integral char_type, typename Arg, typename... Args>
-inline constexpr contiguous_scatter_result find_continuous_scatters_n()
+template <bool retain_static_scatter, ::std::integral char_type, typename Arg, typename... Args>
+inline constexpr contiguous_scatter_result find_continuous_scatters_n_impl()
 {
 	contiguous_scatter_result ret{};
-	if constexpr (::fast_io::details::decay::retained_scatter_printable_v<char_type, Arg &>)
+	using value_type = ::std::remove_cvref_t<Arg>;
+	constexpr bool static_scatter{
+		::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available};
+	if constexpr (
+		::fast_io::details::decay::retained_scatter_printable_v<char_type, Arg &> ||
+		(retain_static_scatter && static_scatter))
 	{
 		// A scatter-printable argument contributes one existing output range to the contiguous run.
 		if constexpr (sizeof...(Args) != 0)
 		{
 			// Remaining arguments are scanned first so the current argument can extend the leading run.
-			ret = find_continuous_scatters_n<char_type, Args...>();
+			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
 		}
 		constexpr ::std::size_t one{1u};
 		::std::size_t const neededscatters{
@@ -103,7 +126,7 @@ inline constexpr contiguous_scatter_result find_continuous_scatters_n()
 		if constexpr (sizeof...(Args) != 0)
 		{
 			// Remaining arguments are scanned first to preserve the aggregate run accounting.
-			ret = find_continuous_scatters_n<char_type, Args...>();
+			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
 		}
 		constexpr ::std::size_t sz{print_reserve_size(::fast_io::io_reserve_type<char_type, Arg>)};
 		static_assert(sz != 0);
@@ -134,7 +157,7 @@ inline constexpr contiguous_scatter_result find_continuous_scatters_n()
 		if constexpr (sizeof...(Args) != 0)
 		{
 			// Remaining arguments are scanned first so this dynamic reserve extends the same leading run.
-			ret = find_continuous_scatters_n<char_type, Args...>();
+			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
 		}
 		constexpr ::std::size_t one{1u};
 		::std::size_t const neededscatters{
@@ -160,7 +183,7 @@ inline constexpr contiguous_scatter_result find_continuous_scatters_n()
 		if constexpr (sizeof...(Args) != 0)
 		{
 			// Remaining arguments are scanned first to accumulate the complete leading run.
-			ret = find_continuous_scatters_n<char_type, Args...>();
+			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
 		}
 		constexpr auto scatszres{print_reserve_scatters_size(::fast_io::io_reserve_type<char_type, Arg>)};
 		static_assert(scatszres.scatters_size != 0);
@@ -187,7 +210,7 @@ inline constexpr contiguous_scatter_result find_continuous_scatters_n()
 		if constexpr (sizeof...(Args) != 0)
 		{
 			// Remaining arguments are scanned first before adding this null position to the run.
-			ret = find_continuous_scatters_n<char_type, Args...>();
+			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
 		}
 		::std::size_t const null_count{
 			::fast_io::details::decay::print_strategy_saturating_add(ret.null, static_cast<::std::size_t>(1u))};
@@ -203,6 +226,20 @@ inline constexpr contiguous_scatter_result find_continuous_scatters_n()
 		// A generic printable argument stops the scatter/reserve run because it needs the normal emit path.
 	}
 	return ret;
+}
+
+/// @brief Scans a run with the historical reserve preference for fixed scatters.
+template <::std::integral char_type, typename Arg, typename... Args>
+inline constexpr contiguous_scatter_result find_continuous_scatters_n()
+{
+	return ::fast_io::details::decay::find_continuous_scatters_n_impl<false, char_type, Arg, Args...>();
+}
+
+/// @brief Scans a native-scatter run while retaining fixed scatters in their original static storage.
+template <::std::integral char_type, typename Arg, typename... Args>
+inline constexpr contiguous_scatter_result find_continuous_native_scatters_n()
+{
+	return ::fast_io::details::decay::find_continuous_scatters_n_impl<true, char_type, Arg, Args...>();
 }
 
 /// @brief    Describes a contiguous reserve-only or scatter-only prefix inside a print run.
@@ -2192,6 +2229,34 @@ inline constexpr void print_runtime_scatter_plan_fast_entry_impl(
 	with_reserve_storage(scatters.ptr);
 }
 
+/// @brief Projects a fixed scatter into the existing borrowed-scatter protocol for a native run-time plan.
+/// @details The ordinary run-time planner remains unchanged for every dynamic-only and scalar-write run. A native
+///          scatter endpoint reaches this adapter only when its argument pack actually contains fixed storage; that
+///          argument becomes a standard scatter descriptor while all other argument transports retain their exact
+///          reference categories. The mature planner consequently computes zero scratch for the fixed fragment and
+///          materializes its original pointer without a second destination-policy implementation.
+template <::std::integral char_type, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+print_runtime_scatter_plan_retain_static_arg(T &&t) noexcept
+{
+	using value_type =
+		::fast_io::details::decay::print_runtime_scatter_plan_unwrapped_t<T>;
+	using static_scatter_traits =
+		::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>;
+	if constexpr (static_scatter_traits::available)
+	{
+		decltype(auto) value{
+			::fast_io::details::decay::print_runtime_scatter_plan_unwrap(
+				::std::forward<T>(t))};
+		return ::fast_io::basic_io_scatter_t<char_type>{
+			value.base, static_scatter_traits::size};
+	}
+	else
+	{
+		return ::std::forward<T>(t);
+	}
+}
+
 /// @brief Owns the per-component capacity proof and emits one run-time scatter plan.
 /// @details The table must survive from object-dependent sizing through final materialization, so recomputing dynamic
 ///          sizes is not a sound substitute for storage: a size CPO may inspect mutable state or a multipass range.
@@ -2206,8 +2271,15 @@ template <bool line, typename outputstmtype, typename... Args>
 inline constexpr void print_runtime_scatter_plan_fast_entry(outputstmtype &outstm, Args &&...args)
 {
 	using capacity_type = ::fast_io::reserve_scatters_size_result;
+	using char_type = typename outputstmtype::output_char_type;
 	constexpr ::std::size_t component_count{sizeof...(Args)};
 	static_assert(component_count != 0u);
+	constexpr bool retain_static_scatter{
+		::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype> &&
+		(false || ... ||
+		 ::fast_io::details::decay::print_static_scatter_traits<
+			 char_type,
+			 ::fast_io::details::decay::print_runtime_scatter_plan_unwrapped_t<Args>>::available)};
 	constexpr ::std::size_t requested_stack_capacity{(4u * 1024u) / sizeof(capacity_type)};
 	constexpr ::std::size_t policy_stack_capacity{
 		::fast_io::details::decay::print_stack_buffer_max_element_count<capacity_type>()};
@@ -2216,14 +2288,34 @@ inline constexpr void print_runtime_scatter_plan_fast_entry(outputstmtype &outst
 	if constexpr (component_count <= stack_capacity)
 	{
 		capacity_type component_capacities[component_count];
-		::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
-			outstm, component_capacities, ::std::forward<Args>(args)...);
+		if constexpr (retain_static_scatter)
+		{
+			::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
+				outstm, component_capacities,
+				::fast_io::details::decay::print_runtime_scatter_plan_retain_static_arg<
+					char_type>(::std::forward<Args>(args))...);
+		}
+		else
+		{
+			::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
+				outstm, component_capacities, ::std::forward<Args>(args)...);
+		}
 	}
 	else
 	{
 		::fast_io::details::local_operator_new_array_ptr<capacity_type> component_capacities(component_count);
-		::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
-			outstm, component_capacities.ptr, ::std::forward<Args>(args)...);
+		if constexpr (retain_static_scatter)
+		{
+			::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
+				outstm, component_capacities.ptr,
+				::fast_io::details::decay::print_runtime_scatter_plan_retain_static_arg<
+					char_type>(::std::forward<Args>(args))...);
+		}
+		else
+		{
+			::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
+				outstm, component_capacities.ptr, ::std::forward<Args>(args)...);
+		}
 	}
 }
 
@@ -2895,23 +2987,6 @@ inline constexpr bool print_one_pass_direct_streaming_available_v =
 	::fast_io::direct_streaming_preferred_stream<char_type, output> &&
 	::fast_io::details::decay::print_full_output_coalesce_threshold<char_type, output>() == 0u &&
 	::fast_io::details::decay::print_full_output_dynamic_coalesce_threshold<char_type, output>() == 0u;
-
-/// @brief Exposes the exact extent of a fixed scatter in the output character domain.
-/// @details The primary template deliberately rejects a scatter whose code-unit type differs from the destination.
-///          Besides keeping the direct path unit-correct, this mirrors the reserve CPO's exact character-type match.
-template <::std::integral output_char_type, typename T>
-struct print_static_scatter_traits
-{
-	inline static constexpr bool available{};
-};
-
-template <::std::integral char_type, ::std::size_t extent>
-struct print_static_scatter_traits<
-	char_type, ::fast_io::manipulators::static_scatter_t<char_type, extent>>
-{
-	inline static constexpr bool available{true};
-	inline static constexpr ::std::size_t size{extent};
-};
 
 /// @brief    Emits one already-forwarded printable control argument to an output stream.
 /// @details  The dispatcher selects the most specialized single-argument path available: scatter, static reserve,
@@ -3944,6 +4019,32 @@ inline constexpr char_type *print_n_reserve(char_type *ptr, T &t, Args &...args)
 	}
 }
 
+/// @brief Projects a retained scatter leaf into its native character descriptor.
+/// @details Fixed scatters are core pointer/extent values, so a native-scatter endpoint can retain their original
+///          storage without first copying through the reserve protocol. Every other leaf follows the established
+///          scatter CPO unchanged. The helper is internal and is reached for fixed scatters only after the
+///          destination-aware scanner has selected native scatter output.
+template <::std::integral char_type, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::basic_io_scatter_t<char_type>
+print_native_scatter_define(T &t)
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	using static_scatter_traits =
+		::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>;
+	if constexpr (static_scatter_traits::available)
+	{
+		return {t.base, static_scatter_traits::size};
+	}
+	else if constexpr (::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>>)
+	{
+		return t;
+	}
+	else
+	{
+		return print_scatter_define(::fast_io::io_reserve_type<char_type, value_type>, t);
+	}
+}
+
 /// @brief    Builds N scatter descriptors from scatter-printable arguments.
 /// @details  Null arguments are skipped, byte scatter descriptors convert character counts to byte counts, and typed
 ///           scatter descriptors preserve character counts for character-oriented output. The controller performs the
@@ -3988,6 +4089,24 @@ inline constexpr void print_n_scatters(basic_io_scatter_t<scattertype> *pscatter
 				return print_n_scatters<n - 1, char_type>(pscatters, args...);
 			}
 		}
+		else if constexpr (
+			::fast_io::details::decay::print_static_scatter_traits<
+				char_type, ::std::remove_cvref_t<T>>::available)
+		{
+			// A fixed scatter already names stable storage; retain that pointer instead of copying its reserve spelling.
+			auto const sct{
+				::fast_io::details::decay::print_native_scatter_define<char_type>(t)};
+			if constexpr (::std::same_as<scattertype, void>)
+			{
+				*pscatters = io_scatter_t{
+					sct.base,
+					::fast_io::details::intrinsics::mul_or_overflow_die(sct.len, sizeof(char_type))};
+			}
+			else
+			{
+				*pscatters = sct;
+			}
+		}
 		else if constexpr (::std::same_as<::std::remove_cvref_t<T>, basic_io_scatter_t<scattertype>>)
 		{
 			// Existing scatter descriptors can be copied or byte-length-adjusted without calling customization.
@@ -4007,8 +4126,8 @@ inline constexpr void print_n_scatters(basic_io_scatter_t<scattertype> *pscatter
 		else
 		{
 			// Scatter-printable output is queried for its single contiguous output range.
-			basic_io_scatter_t<char_type> sct{print_scatter_define(
-				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t)};
+			basic_io_scatter_t<char_type> sct{
+				::fast_io::details::decay::print_native_scatter_define<char_type>(t)};
 			if constexpr (::std::same_as<scattertype, void>)
 			{
 				// Byte scatter output stores the produced scatter extent in bytes.
@@ -4068,7 +4187,7 @@ inline constexpr ::std::size_t print_n_scatter_total_size(
 		if constexpr (!::std::same_as<nocvreft, ::fast_io::io_null_t>)
 		{
 			// Non-null scatter-printable arguments expose their character length through print_scatter_define.
-			current = print_scatter_define(::fast_io::io_reserve_type<char_type, nocvreft>, t).len;
+			current = ::fast_io::details::decay::print_native_scatter_define<char_type>(t).len;
 		}
 		if constexpr (n == 1)
 		{
@@ -4202,7 +4321,7 @@ inline constexpr char_type *print_n_scatter_materialize(char_type *ptr,
 		if constexpr (!::std::same_as<nocvreft, ::fast_io::io_null_t>)
 		{
 			// Scatter-printable arguments expose a contiguous range that can be copied into the output buffer.
-			auto scatter{print_scatter_define(::fast_io::io_reserve_type<char_type, nocvreft>, t)};
+			auto scatter{::fast_io::details::decay::print_native_scatter_define<char_type>(t)};
 			ptr = ::fast_io::details::decay::small_scatter_copy_n(scatter.base, scatter.len, ptr);
 		}
 		if constexpr (n == 1)
@@ -4319,10 +4438,23 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool print_buffered_mixed_put_area_fi
 	}
 }
 
+/// @brief Copies one scatter in the compact complete-run path without hiding a propagated tiny extent.
+/// @details Unknown ranges remain builtin-copy-shaped operations. An inlined constant extent instead reuses the shared
+///          short-scatter policy so its typed stores and adjacent format literals remain eligible for backend merging.
+template <::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_area_compact_copy_n(
+	char_type const *source, ::std::size_t count, char_type *destination)
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	if (__builtin_constant_p(count))
+	{
+		return ::fast_io::details::decay::small_scatter_copy_n(source, count, destination);
+	}
+#endif
+	return ::fast_io::details::non_overlapped_copy_n(source, count, destination);
+}
+
 /// @brief Emits N preflighted mixed leaves into a put area whose cursor publication may be deferred.
-/// @details Ordinary callers retain the target-aware short-scatter helper.  The compact mode instead presents each
-///          dynamic range as one builtin-copy-shaped operation; this prevents an architecture-specific length ladder
-///          from being cloned at every leaf of a large variadic run while still letting the backend choose its moves.
 template <::std::size_t n, ::std::integral char_type, bool compact_copy = false,
 		  typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_area_emit(
@@ -4340,7 +4472,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_buffered_mixed_put_a
 		{
 			if constexpr (compact_copy)
 			{
-				cursor = ::fast_io::details::non_overlapped_copy_n(
+				cursor = ::fast_io::details::decay::print_buffered_mixed_put_area_compact_copy_n(
 					t.base, t.len, cursor);
 			}
 			else
@@ -4862,7 +4994,8 @@ inline constexpr bool ndynamic_print_reserve_has_static_stack_size()
 /// @param    t           the current argument
 /// @param    args        the remaining arguments
 /// @return   one past the final scatter descriptor written
-template <bool needprintlf, ::std::size_t n, ::std::integral char_type, typename scattertype, typename T,
+template <bool needprintlf, ::std::size_t n, ::std::integral char_type, bool retain_static_scatter,
+		  typename scattertype, typename T,
 		  typename... Args>
 // Force-inline rationale: the forward declaration carries the same attribute as the definitions so compilers that
 // bind force-inline on the first declaration do not outline the reserve/scatter cursor state machine.
@@ -4879,12 +5012,15 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 /// @tparam   T         the next argument type
 /// @tparam   Args      ignored remaining argument types
 /// @return   bool true when the next argument can continue a reserve coalescing run
-template <::std::integral char_type, typename T, typename... Args>
+template <bool retain_static_scatter, ::std::integral char_type, typename T, typename... Args>
 inline constexpr bool print_next_is_reserve() noexcept
 {
 	using nocvreft = ::std::remove_cvref_t<T>;
-	if constexpr (::fast_io::reserve_printable<char_type, nocvreft> ||
-				  ::fast_io::dynamic_reserve_printable<char_type, nocvreft>)
+	if constexpr (
+		(!retain_static_scatter ||
+		 !::fast_io::details::decay::print_static_scatter_traits<char_type, nocvreft>::available) &&
+		(::fast_io::reserve_printable<char_type, nocvreft> ||
+		 ::fast_io::dynamic_reserve_printable<char_type, nocvreft>))
 	{
 		// Static and dynamic reserve-printable arguments can extend the current reserve scatter.
 		return true;
@@ -4899,7 +5035,7 @@ inline constexpr bool print_next_is_reserve() noexcept
 /// @brief    Empty-pack overload for reserve-lookahead checks.
 /// @tparam   char_type the print character type
 /// @return   bool false because no next argument exists
-template <::std::integral char_type>
+template <bool retain_static_scatter, ::std::integral char_type>
 inline constexpr bool print_next_is_reserve() noexcept
 {
 	return false;
@@ -4922,7 +5058,8 @@ inline constexpr bool print_next_is_reserve() noexcept
 /// @param    t           the current argument
 /// @param    args        the remaining arguments
 /// @return   one past the final scatter descriptor written
-template <bool needprintlf, ::std::size_t n, ::std::integral char_type, typename scattertype, typename T,
+template <bool needprintlf, ::std::size_t n, ::std::integral char_type, bool retain_static_scatter = false,
+		  typename scattertype, typename T,
 		  typename... Args>
 // Force-inline rationale: this continuation coalesces adjacent reserve fragments into one scatter entry; inlining
 // keeps the base pointer, current pointer, and next-argument classification in one foldable cursor pipeline.
@@ -4938,14 +5075,19 @@ inline constexpr auto print_n_scatters_reserve_cont(basic_io_scatter_t<scatterty
 	{
 		// A non-empty continuation consumes the current position in the active reserve run.
 		using nocvreft = ::std::remove_cvref_t<T>;
-		if constexpr (reserve_printable<char_type, nocvreft> || dynamic_reserve_printable<char_type, nocvreft>)
+		if constexpr (
+			(!retain_static_scatter ||
+			 !::fast_io::details::decay::print_static_scatter_traits<char_type, nocvreft>::available) &&
+			(reserve_printable<char_type, nocvreft> || dynamic_reserve_printable<char_type, nocvreft>))
 		{
 			// Reserve-like output extends the active contiguous reserve buffer range.
 			ptr = print_reserve_define(::fast_io::io_reserve_type<char_type, nocvreft>, ptr, t);
-			if constexpr (::fast_io::details::decay::print_next_is_reserve<char_type, Args...>())
+			if constexpr (::fast_io::details::decay::print_next_is_reserve<
+				retain_static_scatter, char_type, Args...>())
 			{
 				// The next output is also reserve-like, so keep coalescing into the same scatter descriptor.
-				return ::fast_io::details::decay::print_n_scatters_reserve_cont<needprintlf, n - 1, char_type>(
+				return ::fast_io::details::decay::print_n_scatters_reserve_cont<
+					needprintlf, n - 1, char_type, retain_static_scatter>(
 					pscatters, base, ptr, args...);
 			}
 			else
@@ -4974,7 +5116,8 @@ inline constexpr auto print_n_scatters_reserve_cont(basic_io_scatter_t<scatterty
 				if constexpr (1 < n)
 				{
 					// More output remains after the reserve run, so resume the mixed materializer.
-					return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(
+					return ::fast_io::details::decay::print_n_scatters_reserve<
+						needprintlf, n - 1, char_type, retain_static_scatter>(
 						pscatters, ptr, args...);
 				}
 			}
@@ -4999,7 +5142,8 @@ inline constexpr auto print_n_scatters_reserve_cont(basic_io_scatter_t<scatterty
 			if constexpr (1 < n)
 			{
 				// The terminating argument still belongs to the overall run and is processed next.
-				return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(
+				return ::fast_io::details::decay::print_n_scatters_reserve<
+					needprintlf, n - 1, char_type, retain_static_scatter>(
 					pscatters, ptr, t, args...);
 			}
 		}
@@ -5025,7 +5169,8 @@ inline constexpr auto print_n_scatters_reserve_cont(basic_io_scatter_t<scatterty
 /// @param    t           the current argument
 /// @param    args        the remaining arguments
 /// @return   one past the final scatter descriptor written
-template <bool needprintlf, ::std::size_t n, ::std::integral char_type, typename scattertype, typename T,
+template <bool needprintlf, ::std::size_t n, ::std::integral char_type, bool retain_static_scatter = false,
+		  typename scattertype, typename T,
 		  typename... Args>
 // Force-inline rationale: the mixed reserve/scatter materializer is the boundary where compile-time argument classes
 // become descriptor writes; inlining avoids outlining the recursive state that determines the final scatter count.
@@ -5041,16 +5186,48 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 	{
 		// A non-empty mixed run consumes the current argument position.
 		using nocvreft = ::std::remove_cvref_t<T>;
-		if constexpr (::fast_io::reserve_printable<char_type, nocvreft> ||
+		using static_scatter_traits =
+			::fast_io::details::decay::print_static_scatter_traits<char_type, nocvreft>;
+		if constexpr (retain_static_scatter && static_scatter_traits::available)
+		{
+			// Native-scatter endpoints retain a fixed scatter's original storage and exact type-level extent.
+			auto const sct{
+				::fast_io::details::decay::print_native_scatter_define<char_type>(t)};
+			if constexpr (::std::same_as<scattertype, void>)
+			{
+				*pscatters = io_scatter_t{
+					sct.base,
+					::fast_io::details::intrinsics::mul_or_overflow_die(sct.len, sizeof(char_type))};
+			}
+			else
+			{
+				*pscatters = sct;
+			}
+			++pscatters;
+			if constexpr (n == 1 && needprintlf)
+			{
+				*pscatters = ::fast_io::details::decay::line_scatter_common<char_type, scattertype>;
+				++pscatters;
+			}
+			if constexpr (1 < n)
+			{
+				return ::fast_io::details::decay::print_n_scatters_reserve<
+					needprintlf, n - 1, char_type, retain_static_scatter>(
+					pscatters, ptr, args...);
+			}
+		}
+		else if constexpr (::fast_io::reserve_printable<char_type, nocvreft> ||
 					  ::fast_io::dynamic_reserve_printable<char_type, nocvreft>)
 		{
 			// Reserve-like output is materialized into reserve storage before becoming a scatter descriptor.
 			auto ptred{print_reserve_define(::fast_io::io_reserve_type<char_type, nocvreft>, ptr, t)};
 			if constexpr (sizeof...(Args) != 0 &&
-						  ::fast_io::details::decay::print_next_is_reserve<char_type, Args...>())
+						  ::fast_io::details::decay::print_next_is_reserve<
+							  retain_static_scatter, char_type, Args...>())
 			{
 				// Adjacent reserve-like output is coalesced into the same scatter descriptor.
-				return ::fast_io::details::decay::print_n_scatters_reserve_cont<needprintlf, n - 1, char_type>(
+				return ::fast_io::details::decay::print_n_scatters_reserve_cont<
+					needprintlf, n - 1, char_type, retain_static_scatter>(
 					pscatters, ptr, ptred, args...);
 			}
 			else
@@ -5079,7 +5256,8 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 				if constexpr (1 < n)
 				{
 					// Remaining positions continue after the committed reserve range.
-					return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(
+					return ::fast_io::details::decay::print_n_scatters_reserve<
+						needprintlf, n - 1, char_type, retain_static_scatter>(
 						pscatters, ptred, args...);
 				}
 			}
@@ -5131,8 +5309,8 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 			if constexpr (1 < n)
 			{
 				// Remaining positions continue with the same reserve-buffer cursor.
-				return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(pscatters,
-																										  ptr, args...);
+				return ::fast_io::details::decay::print_n_scatters_reserve<
+					needprintlf, n - 1, char_type, retain_static_scatter>(pscatters, ptr, args...);
 			}
 		}
 		else if constexpr (::fast_io::reserve_scatters_printable<char_type, nocvreft>)
@@ -5145,7 +5323,8 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 				if constexpr (1 < n)
 				{
 					// Remaining positions continue from the adapter's updated cursors.
-					return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(
+					return ::fast_io::details::decay::print_n_scatters_reserve<
+						needprintlf, n - 1, char_type, retain_static_scatter>(
 						pit.scatters_pos_ptr, pit.reserve_pos_ptr, args...);
 				}
 				else if constexpr (n == 1 && needprintlf)
@@ -5179,7 +5358,8 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 				if constexpr (1 < n)
 				{
 					// Remaining positions continue from the customization's updated cursors.
-					return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(
+					return ::fast_io::details::decay::print_n_scatters_reserve<
+						needprintlf, n - 1, char_type, retain_static_scatter>(
 						pit.scatters_pos_ptr, pit.reserve_pos_ptr, args...);
 				}
 				else if constexpr (n == 1 && needprintlf)
@@ -5205,8 +5385,8 @@ inline constexpr auto print_n_scatters_reserve(basic_io_scatter_t<scattertype> *
 			if constexpr (1 < n)
 			{
 				// Continue with the next argument while preserving the current cursors.
-				return ::fast_io::details::decay::print_n_scatters_reserve<needprintlf, n - 1, char_type>(pscatters,
-																										  ptr, args...);
+				return ::fast_io::details::decay::print_n_scatters_reserve<
+					needprintlf, n - 1, char_type, retain_static_scatter>(pscatters, ptr, args...);
 			}
 		}
 	}
@@ -5272,7 +5452,8 @@ inline constexpr void print_controls_scatters(outputstmtype &optstm, T &t, Args 
 /// @param    t             the current argument
 /// @param    args          the remaining arguments
 template <bool needprintlf, ::std::size_t position, ::std::size_t mxsize, ::std::integral char_type,
-		  typename outputstmtype, typename scatter_type, typename T, typename... Args>
+		  bool retain_static_scatter = false, typename outputstmtype, typename scatter_type, typename T,
+		  typename... Args>
 inline constexpr void print_controls_scatters_reserve_with_scatter(
 	outputstmtype &optstm, scatter_type *scatters, T &t, Args &...args)
 {
@@ -5281,9 +5462,9 @@ inline constexpr void print_controls_scatters_reserve_with_scatter(
 	{
 		// Small reserve storage is materialized on the stack before scatter output is written.
 		char_type buffer[buffer_size];
-		auto ptr{::fast_io::details::decay::print_n_scatters_reserve<needprintlf, position, char_type>(scatters,
-																									   buffer, t,
-																									   args...)};
+		auto ptr{::fast_io::details::decay::print_n_scatters_reserve<
+			needprintlf, position, char_type, retain_static_scatter>(
+			scatters, buffer, t, args...)};
 		::fast_io::details::decay::print_scatter_write_all_dispatch(
 			optstm, scatters, static_cast<::std::size_t>(ptr - scatters));
 	}
@@ -5291,9 +5472,9 @@ inline constexpr void print_controls_scatters_reserve_with_scatter(
 	{
 		// Large reserve storage is allocated before scatter descriptors are materialized and written.
 		::fast_io::details::local_operator_new_array_ptr<char_type> buffer(buffer_size);
-		auto ptr{::fast_io::details::decay::print_n_scatters_reserve<needprintlf, position, char_type>(scatters,
-																									   buffer.ptr, t,
-																									   args...)};
+		auto ptr{::fast_io::details::decay::print_n_scatters_reserve<
+			needprintlf, position, char_type, retain_static_scatter>(
+			scatters, buffer.ptr, t, args...)};
 		::fast_io::details::decay::print_scatter_write_all_dispatch(
 			optstm, scatters, static_cast<::std::size_t>(ptr - scatters));
 	}
@@ -5312,7 +5493,8 @@ inline constexpr void print_controls_scatters_reserve_with_scatter(
 /// @param    t             the current argument
 /// @param    args          the remaining arguments
 template <bool needprintlf, ::std::size_t position, ::std::size_t scatterscount, ::std::size_t mxsize,
-		  ::std::integral char_type, typename outputstmtype, typename T, typename... Args>
+		  ::std::integral char_type, bool retain_static_scatter = false, typename outputstmtype, typename T,
+		  typename... Args>
 inline constexpr void print_controls_scatters_reserve(outputstmtype &optstm, T &t, Args &...args)
 {
 	using scatter_type = ::std::conditional_t<
@@ -5322,16 +5504,16 @@ inline constexpr void print_controls_scatters_reserve(outputstmtype &optstm, T &
 	{
 		// Small scatter descriptor storage is kept on the stack for the mixed reserve/scatter run.
 		scatter_type scatters[scatterscount];
-		::fast_io::details::decay::print_controls_scatters_reserve_with_scatter<needprintlf, position, mxsize,
-																				char_type>(optstm, scatters, t, args...);
+		::fast_io::details::decay::print_controls_scatters_reserve_with_scatter<
+			needprintlf, position, mxsize, char_type, retain_static_scatter>(optstm, scatters, t, args...);
 	}
 	else
 	{
 		// Large scatter descriptor storage is allocated before the mixed run is materialized.
 		::fast_io::details::local_operator_new_array_ptr<scatter_type> scatters(scatterscount);
-		::fast_io::details::decay::print_controls_scatters_reserve_with_scatter<needprintlf, position, mxsize,
-																				char_type>(optstm, scatters.ptr, t,
-																						   args...);
+		::fast_io::details::decay::print_controls_scatters_reserve_with_scatter<
+			needprintlf, position, mxsize, char_type, retain_static_scatter>(
+			optstm, scatters.ptr, t, args...);
 	}
 }
 
@@ -5353,7 +5535,8 @@ inline constexpr void print_controls_scatters_reserve(outputstmtype &optstm, T &
 /// @param    t                     the current argument
 /// @param    args                  the remaining arguments
 template <bool needprintlf, ::std::size_t position, ::std::size_t stack_buffer_size, bool has_static_stack_size,
-		  ::std::integral char_type, typename outputstmtype, typename scatter_type, typename T, typename... Args>
+		  ::std::integral char_type, bool retain_static_scatter = false, typename outputstmtype,
+		  typename scatter_type, typename T, typename... Args>
 // Force-inline rationale: the dynamic reserve writer has a hot stack-buffer fast path; inlining lets the caller's
 // known stack budget and total-size branch select stack storage or heap storage without an extra outlined frame.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -5372,9 +5555,9 @@ inline constexpr void print_controls_dynamic_scatters_reserve_with_scatter(outpu
 		{
 			// The measured dynamic reserve output fits in the bounded stack buffer and writes once.
 			char_type buffer[stack_buffer_size];
-			auto ptr{::fast_io::details::decay::print_n_scatters_reserve<needprintlf, position, char_type>(scatters,
-																										   buffer, t,
-																										   args...)};
+			auto ptr{::fast_io::details::decay::print_n_scatters_reserve<
+				needprintlf, position, char_type, retain_static_scatter>(
+				scatters, buffer, t, args...)};
 			::fast_io::details::decay::print_scatter_write_all_dispatch(
 				optstm, scatters, static_cast<::std::size_t>(ptr - scatters));
 			return;
@@ -5382,8 +5565,9 @@ inline constexpr void print_controls_dynamic_scatters_reserve_with_scatter(outpu
 	}
 	// The measured reserve output needs heap storage before descriptors can be written.
 	::fast_io::details::local_operator_new_array_ptr<char_type> buffer(totalsz == 0 ? 1u : totalsz);
-	auto ptr{::fast_io::details::decay::print_n_scatters_reserve<needprintlf, position, char_type>(scatters, buffer.ptr,
-																								   t, args...)};
+	auto ptr{::fast_io::details::decay::print_n_scatters_reserve<
+		needprintlf, position, char_type, retain_static_scatter>(
+		scatters, buffer.ptr, t, args...)};
 	::fast_io::details::decay::print_scatter_write_all_dispatch(
 		optstm, scatters, static_cast<::std::size_t>(ptr - scatters));
 }
@@ -5403,7 +5587,8 @@ inline constexpr void print_controls_dynamic_scatters_reserve_with_scatter(outpu
 /// @param    t                     the current argument
 /// @param    args                  the remaining arguments
 template <bool needprintlf, ::std::size_t position, ::std::size_t scatterscount, ::std::size_t stack_buffer_size,
-		  bool has_static_stack_size, ::std::integral char_type, typename outputstmtype, typename T, typename... Args>
+		  bool has_static_stack_size, ::std::integral char_type, bool retain_static_scatter = false,
+		  typename outputstmtype, typename T, typename... Args>
 // Force-inline rationale: this wrapper chooses stack versus heap scatter storage from template constants; inlining
 // keeps that storage decision adjacent to the dynamic reserve writer and prevents a redundant allocator-shaped call.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -5422,16 +5607,16 @@ inline constexpr void print_controls_dynamic_scatters_reserve(
 		// Small scatter descriptor storage is kept on the stack for the dynamic mixed run.
 		scatter_type scatters[scatterscount];
 		::fast_io::details::decay::print_controls_dynamic_scatters_reserve_with_scatter<
-			needprintlf, position, stack_buffer_size, has_static_stack_size, char_type>(optstm, scatters, totalsz, t,
-																						args...);
+			needprintlf, position, stack_buffer_size, has_static_stack_size, char_type, retain_static_scatter>(
+			optstm, scatters, totalsz, t, args...);
 	}
 	else
 	{
 		// Large scatter descriptor storage is allocated before the dynamic mixed run is materialized.
 		::fast_io::details::local_operator_new_array_ptr<scatter_type> scatters(scatterscount);
 		::fast_io::details::decay::print_controls_dynamic_scatters_reserve_with_scatter<
-			needprintlf, position, stack_buffer_size, has_static_stack_size, char_type>(optstm, scatters.ptr, totalsz, t,
-																						args...);
+			needprintlf, position, stack_buffer_size, has_static_stack_size, char_type, retain_static_scatter>(
+			optstm, scatters.ptr, totalsz, t, args...);
 	}
 }
 
@@ -5446,6 +5631,39 @@ inline constexpr void print_controls_dynamic_scatters_reserve(
 /// @param    args          the remaining arguments
 template <bool line, typename outputstmtype, ::std::size_t skippings, typename T, typename... Args>
 inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...args);
+
+/// @brief Selects the retained-run scanner for the concrete unbuffered destination.
+/// @details A native scatter endpoint can consume a fixed scatter's original pointer/extent descriptor directly.
+///          Endpoints which must emulate scatter through scalar writes retain the historical reserve spelling, as do
+///          all buffered callers (which do not enter this output-specific helper).
+template <typename outputstmtype>
+inline constexpr bool print_output_retains_static_scatter =
+	(::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype> &&
+	 ::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>) ||
+	(!::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype> &&
+	 ::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>);
+
+/// @brief Tests whether native scatter retention changes at least one leaf in this exact run.
+template <typename outputstmtype, typename... Args>
+inline constexpr bool print_output_run_retains_static_scatter =
+	::fast_io::details::decay::print_output_retains_static_scatter<outputstmtype> &&
+	(false || ... ||
+	 ::fast_io::details::decay::print_static_scatter_traits<
+		 typename outputstmtype::output_char_type, ::std::remove_cvref_t<Args>>::available);
+
+template <typename outputstmtype, typename T, typename... Args>
+inline consteval contiguous_scatter_result find_output_continuous_scatters_n() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if constexpr (::fast_io::details::decay::print_output_retains_static_scatter<outputstmtype>)
+	{
+		return ::fast_io::details::decay::find_continuous_native_scatters_n<char_type, T, Args...>();
+	}
+	else
+	{
+		return ::fast_io::details::decay::find_continuous_scatters_n<char_type, T, Args...>();
+	}
+}
 
 /// @brief    Emits the remaining ordinary controls without attempting another grouped materialization.
 /// @details  This is the conservative continuation for a run whose optional aggregate size is unavailable. Dynamic
@@ -5597,7 +5815,9 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 		::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>,
 		io_scatter_t, basic_io_scatter_t<char_type>>;
 	constexpr contiguous_scatter_result res{
-		::fast_io::details::decay::find_continuous_scatters_n<char_type, T, Args...>()};
+		::fast_io::details::decay::find_output_continuous_scatters_n<outputstmtype, T, Args...>()};
+	constexpr bool retain_static_scatter{
+		::fast_io::details::decay::print_output_retains_static_scatter<outputstmtype>};
 	constexpr context_capture_run_result context_capture_res{
 		::fast_io::details::decay::find_context_capture_run_n<char_type, T, Args...>()};
 	if constexpr (skippings != 0)
@@ -5823,8 +6043,9 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 				// Mixed scatter/static-reserve prefixes are emitted through prebuilt scatter descriptors.
 				constexpr ::std::size_t scatterscount{res.neededscatters +
 													  static_cast<::std::size_t>(line && res.position == n)};
-				::fast_io::details::decay::print_controls_scatters_reserve<needprintlf, res.position, scatterscount,
-																		   mxsize, char_type>(optstm, t, args...);
+				::fast_io::details::decay::print_controls_scatters_reserve<
+					needprintlf, res.position, scatterscount, mxsize, char_type, retain_static_scatter>(
+					optstm, t, args...);
 			}
 			else if constexpr (res.hasdynamicreserve)
 			{
@@ -5852,8 +6073,8 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 					return ::fast_io::details::decay::print_controls_sequential<line>(optstm, t, args...);
 				}
 				::fast_io::details::decay::print_controls_dynamic_scatters_reserve<
-					needprintlf, res.position, scatterscount, stack_buffer_size, has_static_stack_size, char_type>(
-					optstm, totalsz, t, args...);
+					needprintlf, res.position, scatterscount, stack_buffer_size, has_static_stack_size, char_type,
+					retain_static_scatter>(optstm, totalsz, t, args...);
 			}
 			if constexpr (res.position != n)
 			{
@@ -9540,7 +9761,9 @@ struct print_semantic_emit_freestanding_continuation
 	inline constexpr void operator()(Prefix &&...prefix) const
 	{
 		using char_type = typename outputstmtype::output_char_type;
-		if constexpr (::fast_io::details::decay::print_controls_dynamic_scatters_reserve_fast_entry_available<
+		if constexpr (
+			!::fast_io::details::decay::print_output_run_retains_static_scatter<outputstmtype, Prefix...> &&
+			::fast_io::details::decay::print_controls_dynamic_scatters_reserve_fast_entry_available<
 						  char_type, ::std::remove_cvref_t<Prefix>...>())
 		{
 			// The fast dynamic reserve-scatters entry handles the prefix when every argument supports it.
@@ -10063,6 +10286,7 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 		else if constexpr (
 			!::fast_io::details::decay::print_run_has_put_area_preferred_direct_leaf_v<
 				char_type, outputstmtype, Args...> &&
+			!::fast_io::details::decay::print_output_run_retains_static_scatter<outputstmtype, Args...> &&
 			::fast_io::details::decay::print_controls_dynamic_scatters_reserve_fast_entry_available<
 				char_type, ::std::remove_cvref_t<Args>...>())
 		{
@@ -10103,6 +10327,88 @@ inline constexpr decltype(auto) print_freestanding_decay(outputstmtype optstm, A
 ///          normalization boundary, but sends the observer itself directly to the stable-reference dispatcher. The
 ///          separate `print_freestanding_decay` overload above remains the explicit by-value compatibility boundary
 ///          used when a low-level caller supplies a normalized observer expression directly.
+///
+/// A leading fixed scatter followed by one format-owned precision float has a cheaper put-area representation than the
+/// generic dynamic-reserve dispatcher. Its global reserve bound can exceed a short put area even when the actual value
+/// is tiny. This constrained overload formats that library-owned scalar once in a bounded local frame, copies a fitting
+/// result directly into the established put area, and lets every unavailable frame or short destination rejoin the
+/// complete dispatcher unchanged. Mutex and whole-run status customizations remain exclusively owned by the generic
+/// entry.
+#if defined(__clang__)
+template <bool line, typename outputstmtype, ::std::integral char_type, ::std::size_t extent,
+		  typename formatted_scalar_type>
+	requires(
+		::std::same_as<typename outputstmtype::output_char_type, char_type> &&
+		::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype,
+			::fast_io::manipulators::static_scatter_t<char_type, extent>,
+			formatted_scalar_type> &&
+		::fast_io::dynamic_reserve_printable<char_type, formatted_scalar_type> &&
+		requires {
+			{
+				print_format_scalar_local_buffer_eligible(
+					::fast_io::io_reserve_type<char_type, formatted_scalar_type>)
+			} -> ::std::same_as<bool>;
+			requires print_format_scalar_local_buffer_eligible(
+				::fast_io::io_reserve_type<char_type, formatted_scalar_type>);
+		})
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm,
+	::fast_io::manipulators::static_scatter_t<char_type, extent> static_prefix,
+	formatted_scalar_type formatted_scalar)
+{
+	using static_prefix_type = ::fast_io::manipulators::static_scatter_t<char_type, extent>;
+	constexpr ::std::size_t fixed_size{
+		::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+			extent, static_cast<::std::size_t>(line))};
+	constexpr ::std::size_t preferred_buffer_bytes{384u};
+	constexpr ::std::size_t preferred_buffer_size{
+		preferred_buffer_bytes / sizeof(char_type)};
+	constexpr ::std::size_t policy_buffer_size{
+		::fast_io::details::decay::print_stack_buffer_max_size<char_type>()};
+	constexpr ::std::size_t buffer_size{
+		policy_buffer_size < preferred_buffer_size ? policy_buffer_size : preferred_buffer_size};
+	if constexpr (fixed_size != SIZE_MAX && buffer_size != 0u)
+	{
+		::std::size_t const scalar_bound{print_reserve_size(
+			::fast_io::io_reserve_type<char_type, formatted_scalar_type>, formatted_scalar)};
+		if (scalar_bound <= buffer_size) [[likely]]
+		{
+			char_type scalar_buffer[buffer_size];
+			char_type *const scalar_end{print_reserve_define(
+				::fast_io::io_reserve_type<char_type, formatted_scalar_type>,
+				scalar_buffer, formatted_scalar)};
+			::std::size_t const scalar_size{
+				static_cast<::std::size_t>(scalar_end - scalar_buffer)};
+			::std::size_t const required{
+				::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+					fixed_size, scalar_size)};
+			char_type *const curr{obuffer_curr(optstm)};
+			char_type *const end{obuffer_end(optstm)};
+			if (required != SIZE_MAX &&
+				static_cast<::std::size_t>(end - curr) >= required) [[likely]]
+			{
+				char_type *iter{print_reserve_define(
+					::fast_io::io_reserve_type<char_type, static_prefix_type>, curr, static_prefix)};
+				iter = ::fast_io::details::non_overlapped_copy_n(
+					scalar_buffer, scalar_size, iter);
+				if constexpr (line)
+				{
+					*iter = ::fast_io::char_literal_v<u8'\n', char_type>;
+					++iter;
+				}
+				obuffer_set_curr(optstm, iter);
+				return;
+			}
+		}
+	}
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+		optstm, static_prefix, formatted_scalar);
+}
+#endif
+
 template <bool line, typename outputstmtype, typename... Args>
 #if __has_cpp_attribute(__gnu__::__flatten__)
 [[__gnu__::__flatten__]]

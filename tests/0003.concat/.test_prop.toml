@@ -3,3 +3,6 @@ ignore = true
 
 ["constexpr.cc"] # compiler in CI is old
 ignore = true
+
+["static_aggregate_output_limit_fail.cc"]
+will_fail = "compiletime"

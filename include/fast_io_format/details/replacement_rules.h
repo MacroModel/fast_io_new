@@ -95,16 +95,6 @@ concept brace_invalid_tail_replacement_rule =
 	(!brace_range_replacement_rule<format_literal, field, value_type>) &&
 	(field.specification.format_tail.size != 0u);
 
-template <auto format_literal, auto field, typename value_type>
-concept brace_unclaimed_identity_replacement_rule =
-	(!brace_direct_identity_rule<format_literal, field, value_type>) &&
-	(!brace_custom_replacement_rule<format_literal, field, value_type>) &&
-	(!brace_format_as_replacement_rule<format_literal, field, value_type>) &&
-	(!brace_chrono_replacement_rule<format_literal, field, value_type>) &&
-	(!brace_range_replacement_rule<format_literal, field, value_type>) &&
-	(!brace_invalid_tail_replacement_rule<format_literal, field, value_type>) &&
-	identity_brace_specification_v<field.specification>;
-
 /** Positive capability set implemented by the scalar/text field backend. */
 template <auto format_literal, typename value_type>
 concept brace_builtin_value =
@@ -123,6 +113,17 @@ concept brace_builtin_value =
 	::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
 	format_backend_identity_printable<
 		typename decltype(format_literal)::value_type, value_type>;
+
+template <auto format_literal, auto field, typename value_type>
+concept brace_unclaimed_identity_replacement_rule =
+	(!brace_direct_identity_rule<format_literal, field, value_type>) &&
+	(!brace_custom_replacement_rule<format_literal, field, value_type>) &&
+	(!brace_format_as_replacement_rule<format_literal, field, value_type>) &&
+	(!brace_chrono_replacement_rule<format_literal, field, value_type>) &&
+	(!brace_range_replacement_rule<format_literal, field, value_type>) &&
+	(!brace_invalid_tail_replacement_rule<format_literal, field, value_type>) &&
+	(!brace_builtin_value<format_literal, value_type>) &&
+	identity_brace_specification_v<field.specification>;
 
 template <auto format_literal, auto field, typename value_type>
 concept brace_builtin_replacement_rule =

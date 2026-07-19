@@ -56,15 +56,15 @@ template <::fast_io::fmt::format_character char_type, ::std::size_t extent>
 inline constexpr char_type *write_chrono_ascii(
 	char_type *output, char8_t const (&text)[extent]) noexcept;
 
-[[nodiscard]] inline ::std::int_least64_t chrono_tm_year(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_month(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_month_day(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_weekday(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_year_day(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_hour(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_minute(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline unsigned chrono_tm_second(chrono_calendar_fields const &value) noexcept;
-[[nodiscard]] inline chrono_iso_week_fields chrono_make_iso_week_fields(
+[[nodiscard]] inline constexpr ::std::int_least64_t chrono_tm_year(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_month(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_month_day(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_weekday(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_year_day(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_hour(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_minute(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr unsigned chrono_tm_second(chrono_calendar_fields const &value) noexcept;
+[[nodiscard]] inline constexpr chrono_iso_week_fields chrono_make_iso_week_fields(
 	chrono_calendar_fields const &value) noexcept;
 [[nodiscard]] inline constexpr ::std::int64_t chrono_floor_divide(
 	::std::int64_t numerator, ::std::int64_t denominator) noexcept;
@@ -598,13 +598,43 @@ inline constexpr auto checked_chrono_program{
 	make_checked_chrono_program<format_literal, specification,
 								has_utc_offset, has_time_zone_name>()};
 
+/**
+ * Reports whether a compiled native-time program is independent of locale.
+ *
+ * Scan the exact checked program used by the emitter so capability diagnostics
+ * and compile-time classification share one parser specialization.  Escaped
+ * text such as %%c is consequently a literal and remains eligible for static
+ * rendering.
+ */
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  source_slice specification, bool has_utc_offset,
+		  bool has_time_zone_name>
+[[nodiscard]] consteval bool
+chrono_static_program_is_locale_free() noexcept
+{
+	constexpr auto const &program{
+		checked_chrono_program<format_literal, specification,
+						   has_utc_offset, has_time_zone_name>};
+	for (::std::size_t index{}; index != program.operation_count; ++index)
+	{
+		auto const opcode{program.operations[index].opcode};
+		if (opcode == chrono_opcode::date_time ||
+			opcode == chrono_opcode::locale_date ||
+			opcode == chrono_opcode::locale_time)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 } // namespace fast_io::fmt::details
 
 namespace fast_io::fmt::details
 {
 
 template <::fast_io::fmt::format_character char_type>
-inline char_type *write_chrono_weekday_name(
+inline constexpr char_type *write_chrono_weekday_name(
 	char_type *output, unsigned weekday, bool full)
 {
 	if (weekday > 6u)
@@ -677,7 +707,7 @@ inline char_type *write_chrono_weekday_name(
 }
 
 template <::fast_io::fmt::format_character char_type>
-inline char_type *write_chrono_month_name(
+inline constexpr char_type *write_chrono_month_name(
 	char_type *output, unsigned month, bool full)
 {
 	if (month < 1u || month > 12u)
@@ -799,7 +829,7 @@ inline constexpr char_type *write_chrono_separator(char_type *output, char8_t se
 }
 
 template <::fast_io::fmt::format_character char_type, typename state_type>
-inline char_type *write_chrono_calendar_second(
+inline constexpr char_type *write_chrono_calendar_second(
 	char_type *output, state_type const &state, chrono_padding padding)
 {
 	auto const second{chrono_tm_second(state.value)};
@@ -828,7 +858,7 @@ inline char_type *write_chrono_calendar_second(
 }
 
 template <typename state_type>
-[[nodiscard]] inline ::std::size_t chrono_calendar_second_capacity(
+[[nodiscard]] inline constexpr ::std::size_t chrono_calendar_second_capacity(
 	state_type const &state, chrono_padding padding) noexcept
 {
 	auto const second{chrono_tm_second(state.value)};
@@ -848,7 +878,7 @@ template <typename state_type>
 
 template <chrono_opcode opcode, chrono_padding padding,
 		  ::fast_io::fmt::format_character char_type, typename state_type>
-inline char_type *emit_chrono_calendar_operation(
+inline constexpr char_type *emit_chrono_calendar_operation(
 	char_type *output, state_type const &state)
 {
 	auto const &time{state.value};
@@ -1102,7 +1132,7 @@ inline char_type *emit_chrono_calendar_operation(
  * validate unrelated tuple members.
  */
 template <chrono_opcode opcode>
-inline void validate_chrono_calendar_operation_fields(
+inline constexpr void validate_chrono_calendar_operation_fields(
 	chrono_calendar_fields const &time) noexcept
 {
 	if constexpr (opcode == chrono_opcode::abbreviated_weekday ||
@@ -1202,7 +1232,7 @@ inline void validate_chrono_calendar_operation_fields(
 }
 
 template <chrono_opcode opcode, chrono_padding padding, typename state_type>
-[[nodiscard]] inline ::std::size_t chrono_calendar_operation_capacity(
+[[nodiscard]] inline constexpr ::std::size_t chrono_calendar_operation_capacity(
 	state_type const &state)
 {
 	validate_chrono_calendar_operation_fields<opcode>(state.value);
@@ -1523,13 +1553,13 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
  * than a performance detail: it lets a deliberately partial `tm` format `%j`
  * or `%H` without requiring an unrelated, normalized civil date.
  */
-[[nodiscard]] inline ::std::int_least64_t chrono_tm_year(
+[[nodiscard]] inline constexpr ::std::int_least64_t chrono_tm_year(
 	chrono_calendar_fields const &value) noexcept
 {
 	return value.year;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_month(
+[[nodiscard]] inline constexpr unsigned chrono_tm_month(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.month < 1u || value.month > 12u)
@@ -1539,7 +1569,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.month;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_month_day(
+[[nodiscard]] inline constexpr unsigned chrono_tm_month_day(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.month_day < 1u || value.month_day > 31u)
@@ -1549,7 +1579,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.month_day;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_weekday(
+[[nodiscard]] inline constexpr unsigned chrono_tm_weekday(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.weekday > 6u)
@@ -1559,7 +1589,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.weekday;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_year_day(
+[[nodiscard]] inline constexpr unsigned chrono_tm_year_day(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.year_day > 365u)
@@ -1569,7 +1599,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.year_day;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_hour(
+[[nodiscard]] inline constexpr unsigned chrono_tm_hour(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.hour > 23u)
@@ -1579,7 +1609,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.hour;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_minute(
+[[nodiscard]] inline constexpr unsigned chrono_tm_minute(
 	chrono_calendar_fields const &value) noexcept
 {
 	if (value.minute > 59u)
@@ -1589,7 +1619,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 	return value.minute;
 }
 
-[[nodiscard]] inline unsigned chrono_tm_second(
+[[nodiscard]] inline constexpr unsigned chrono_tm_second(
 	chrono_calendar_fields const &value) noexcept
 {
 	// C and POSIX reserve 60 for a positive leap second.
@@ -1618,7 +1648,7 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 			   : 52u;
 }
 
-[[nodiscard]] inline chrono_iso_week_fields chrono_make_iso_week_fields(
+[[nodiscard]] inline constexpr chrono_iso_week_fields chrono_make_iso_week_fields(
 	chrono_calendar_fields const &value) noexcept
 {
 	auto const year{chrono_tm_year(value)};
@@ -1643,10 +1673,11 @@ inline constexpr ::std::size_t chrono_ascii_size(char8_t const (&)[extent]) noex
 		chrono_iso_weeks_in_year(year, january_first_iso_weekday)};
 
 	// For a zero-based ordinal day d and ISO weekday w, ISO 8601's Thursday
-	// rule reduces to floor((d + 10 - w) / 7).  The result can only cross the
+	// rule reduces to floor((d + 11 - w) / 7).  (The customary `+ 10`
+	// formula uses a one-based ordinal day.)  The result can only cross the
 	// adjacent ISO year at the two branches below.
 	auto const candidate_week{static_cast<unsigned>(
-		(static_cast<int>(year_day) + 10 - static_cast<int>(iso_weekday)) / 7)};
+		(static_cast<int>(year_day) + 11 - static_cast<int>(iso_weekday)) / 7)};
 	if (candidate_week == 0u)
 	{
 		if (year == (::std::numeric_limits<::std::int_least64_t>::min)())
@@ -1863,7 +1894,7 @@ inline constexpr bool chrono_has_time_zone_name_v{
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  source_slice specification, typename storage_type,
 		  ::std::size_t operation_index, ::fast_io::fmt::format_character char_type>
-[[nodiscard]] inline ::std::size_t chrono_operation_capacity(
+[[nodiscard]] inline constexpr ::std::size_t chrono_operation_capacity(
 	::fast_io::manipulators::basic_chrono_field_t<
 		format_literal, specification, storage_type> const &,
 	chrono_runtime_state_t<storage_type> &state)
@@ -1893,7 +1924,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  source_slice specification, typename storage_type,
 		  ::std::size_t operation_index, ::fast_io::fmt::format_character char_type>
-inline char_type *emit_chrono_operation(
+inline constexpr char_type *emit_chrono_operation(
 	char_type *output,
 	::fast_io::manipulators::basic_chrono_field_t<
 		format_literal, specification, storage_type> const &,
@@ -1937,7 +1968,7 @@ inline char_type *emit_chrono_operation(
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  source_slice specification, typename storage_type,
 		  ::fast_io::fmt::format_character char_type, ::std::size_t... operation_index>
-[[nodiscard]] inline ::std::size_t chrono_program_capacity_impl(
+[[nodiscard]] inline constexpr ::std::size_t chrono_program_capacity_impl(
 	::fast_io::manipulators::basic_chrono_field_t<
 		format_literal, specification, storage_type> const &field,
 	::std::index_sequence<operation_index...>)
@@ -1953,7 +1984,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  source_slice specification, typename storage_type,
 		  ::fast_io::fmt::format_character char_type, ::std::size_t... operation_index>
-inline char_type *emit_chrono_program_impl(
+inline constexpr char_type *emit_chrono_program_impl(
 	char_type *output,
 	::fast_io::manipulators::basic_chrono_field_t<
 		format_literal, specification, storage_type> const &field,
@@ -1977,7 +2008,7 @@ template <::std::integral char_type,
 		  typename storage_type>
 	requires ::std::same_as<char_type,
 							typename decltype(format_literal)::value_type>
-[[nodiscard]] inline ::std::size_t print_reserve_size(
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::basic_chrono_field_t<
 									 format_literal, specification, storage_type>>,
@@ -2001,7 +2032,7 @@ template <::std::integral char_type,
 		  typename storage_type>
 	requires ::std::same_as<char_type,
 							typename decltype(format_literal)::value_type>
-inline char_type *print_reserve_define(
+inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::basic_chrono_field_t<
 									 format_literal, specification, storage_type>>,

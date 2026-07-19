@@ -16,6 +16,19 @@
 #include <string>
 #include <string_view>
 
+enum class static_printf_enum : unsigned
+{
+	value = 42u
+};
+
+using static_printf_enum_argument = decltype(
+	::fast_io::fmt::static_arg<static_printf_enum::value>());
+inline constexpr ::fast_io::fmt::basic_fixed_string
+	static_printf_enum_format{"%u"};
+static_assert(::fast_io::fmt::details::static_format_groups<
+	static_printf_enum_format, ::fast_io::fmt::printf_fmt_t,
+	static_printf_enum_argument>.has_static_replacement);
+
 template <::fast_io::fmt::basic_fixed_string format_literal, auto value>
 [[nodiscard]] bool brace_matches_dynamic()
 {
@@ -294,6 +307,7 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && brace_matches_dynamic<"{:*^12d}", -42>();
 	result = result && brace_parameter_matches_dynamic<"{:0{}x}", 42u, 12u>();
 	result = result && brace_matches_dynamic<"{:c}", 65u>();
+	result = result && brace_matches_dynamic<"{}", 'X'>();
 	result = result && brace_matches_dynamic<"{:?}", '\n'>();
 	result = result && brace_matches_dynamic<"{}", true>();
 	result = result && brace_matches_dynamic<"{:d}", ::std::byte{255u}>();
@@ -304,6 +318,8 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && printf_matches_dynamic<"%#o", 0u>();
 	result = result && printf_matches_dynamic<"%.0d", 0>();
 	result = result && printf_matches_dynamic<"%.8x", 42u>();
+	result = result && printf_matches_dynamic<
+		"%u", static_printf_enum::value>();
 	result = result && printf_parameter_matches_dynamic<"%.*d", 42, 8>();
 	result = result && printf_parameter_matches_dynamic<"%*d", 42, -12>();
 	result = result && printf_matches_dynamic<"%p", nullptr>();

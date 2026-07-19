@@ -28,6 +28,17 @@ static_assert(direct_format_fill_test<char8_t, 8u, 4u>(
 							  0xf0u, 0x9fu, 0x98u, 0x80u},
 	::std::array<char8_t, 4u>{0xf0u, 0x9fu, 0x98u, 0x80u}, 2u));
 
+inline constexpr ::fast_io::fmt::basic_fixed_string pattern_width_format{
+	u8"{:😀>5}"};
+using pattern_width_argument =
+	decltype(::fast_io::fmt::static_arg<42u>());
+using static_pattern_width =
+	::fast_io::fmt::details::compiled_static_format_program<
+		pattern_width_format, ::fast_io::fmt::brace_fmt_t,
+		pattern_width_argument>;
+static_assert(::std::u8string_view{static_pattern_width::storage.data(),
+								   static_pattern_width::size} == u8"😀😀😀42");
+
 constexpr auto ascii_precision{
 	::fast_io::fmt::details::measure_unicode_prefix(u8"aa", 2u, 1u)};
 static_assert(ascii_precision.storage_size == 1u &&
@@ -48,6 +59,14 @@ int main()
 	if (utf8_fill != ::std::u8string_view{u8"[😀😀😀xy]"})
 	{
 		return 2;
+	}
+
+	auto const scalar_utf8_fill{
+		::fast_io::fmt::u8concat_std<pattern_width_format>(42u)};
+	if (scalar_utf8_fill != ::std::u8string_view{
+			static_pattern_width::storage.data(), static_pattern_width::size})
+	{
+		return 8;
 	}
 
 	auto const truncated{::fast_io::fmt::u8concat_std<u8"{:.2}">(

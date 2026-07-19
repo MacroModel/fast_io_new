@@ -429,57 +429,8 @@ inline constexpr char_type *emit_format_fill_impl(
 	char_type *output, char_type const *fill, ::std::size_t fill_size,
 	::std::size_t repetitions) noexcept
 {
-	if (repetitions == 0u || fill_size == 0u)
-	{
-		return output;
-	}
-	if (4u < fill_size) [[unlikely]]
-	{
-		::fast_io::fast_terminate();
-	}
-	if constexpr (::std::is_volatile_v<char_type>)
-	{
-		// Volatile output requires one observable assignment per destination
-		// element.  It is the sole character domain in which memset/memcpy would
-		// not preserve the original nested-loop semantics.
-		for (::std::size_t repetition{}; repetition != repetitions; ++repetition)
-		{
-			for (::std::size_t index{}; index != fill_size; ++index)
-			{
-				*output++ = fill[index];
-			}
-		}
-		return output;
-	}
-	else if (fill_size == 1u)
-	{
-		// The overwhelmingly common format fill is one code unit.  Route it
-		// through core's constexpr-aware fill primitive so one-byte character
-		// domains become __builtin_memset at run time instead of retaining a
-		// per-repetition loop for large dynamic widths.
-		return ::fast_io::details::my_fill_n(
-			output, repetitions, fill[0u]);
-	}
-	else
-	{
-		::std::size_t const total_size{
-			::fast_io::details::intrinsics::mul_or_overflow_die(
-				fill_size, repetitions)};
-		char_type *const first{output};
-		output = ::fast_io::details::non_overlapped_copy_n(
-			fill, fill_size, output);
-		::std::size_t produced{fill_size};
-		while (produced != total_size)
-		{
-			::std::size_t const remaining{total_size - produced};
-			::std::size_t const copy_size{
-				produced < remaining ? produced : remaining};
-			output = ::fast_io::details::non_overlapped_copy_n(
-				first, copy_size, output);
-			produced += copy_size;
-		}
-		return output;
-	}
+	return emit_repeated_code_unit_pattern(
+		output, fill, fill_size, repetitions);
 }
 
 template <::fast_io::fmt::format_character char_type>
