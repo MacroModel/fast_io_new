@@ -77,6 +77,52 @@ struct printf_force_radix_t
 namespace fast_io
 {
 
+/// @brief Propagates a one-pass concat bound through printf's conditional radix-point insertion.
+template <::std::integral char_type, typename value_type>
+	requires requires {
+		{
+			concat_single_pass_bounded_materialization_preferred(
+				::fast_io::io_reserve_type<char_type, value_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::printf_force_radix_t<value_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Adds the active radix code unit using the caller's non-fatal remaining budget.
+template <::std::integral char_type, typename value_type>
+	requires requires(value_type &value, ::std::size_t maximum_size) {
+		{
+			concat_single_pass_bounded_materialization_size(
+				::fast_io::io_reserve_type<char_type, value_type>, value,
+				maximum_size)
+		} noexcept -> ::std::same_as<::std::size_t>;
+	}
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::printf_force_radix_t<value_type>>,
+	::fast_io::manipulators::printf_force_radix_t<value_type> &value,
+	::std::size_t maximum_size) noexcept
+{
+	auto const extra_size{static_cast<::std::size_t>(value.active)};
+	if (maximum_size < extra_size)
+	{
+		return SIZE_MAX;
+	}
+	auto const remaining{maximum_size - extra_size};
+	auto const child_size{concat_single_pass_bounded_materialization_size(
+		::fast_io::io_reserve_type<char_type, value_type>, value.value,
+		remaining)};
+	if (child_size == SIZE_MAX || remaining < child_size)
+	{
+		return SIZE_MAX;
+	}
+	return child_size + extra_size;
+}
+
 template <::std::integral char_type, typename value_type>
 	requires requires {
 		print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>);

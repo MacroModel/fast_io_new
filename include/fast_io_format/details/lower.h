@@ -13,6 +13,42 @@
 namespace fast_io::fmt::details
 {
 
+/** Proves that the compiled grammar leaves one line feed in its final literal operation. */
+template <auto format_literal, typename grammar_tag>
+[[nodiscard]] inline consteval bool
+format_program_has_terminal_literal_line_feed() noexcept
+{
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>};
+	if constexpr (program.operation_count == 0u)
+	{
+		return false;
+	}
+	else
+	{
+		constexpr auto operation{
+			program.operations[program.operation_count - 1u]};
+		if constexpr (operation.kind != format_operation_kind::literal)
+		{
+			return false;
+		}
+		else
+		{
+			constexpr auto run{program.literal_runs[operation.payload_index]};
+			if constexpr (run.size == 0u)
+			{
+				return false;
+			}
+			else
+			{
+				using char_type = typename decltype(format_literal)::value_type;
+				return program.literal_storage[run.offset + run.size - 1u] ==
+					   ::fast_io::char_literal_v<u8'\n', char_type>;
+			}
+		}
+	}
+}
+
 /** Carries one structural replacement descriptor to a grammar-lowering CPO. */
 template <auto field>
 struct compiled_replacement_t
@@ -124,13 +160,28 @@ template <typename literal_type, ::std::size_t... index>
 		::fast_io::manipulators::chvw(literal_type::storage[index])...);
 }
 
-template <auto format_literal, typename grammar_tag, ::std::size_t operation_index>
+template <auto format_literal, typename grammar_tag,
+		  ::std::size_t operation_index,
+		  bool trim_terminal_literal_line_feed = false>
 [[nodiscard]] inline constexpr auto make_literal_operation() noexcept
 {
 	using literal_type = compiled_literal_run<format_literal, grammar_tag, operation_index>;
 	static_assert(literal_type::run.size != 0u,
 				  "fast_io format: a literal operation must not be empty");
-	if constexpr (literal_type::run.size == 1u)
+	static_assert(!trim_terminal_literal_line_feed ||
+					  literal_type::storage[literal_type::run.size - 1u] ==
+						  ::fast_io::char_literal_v<u8'\n', typename literal_type::char_type>,
+				  "fast_io format: only a proved terminal literal line feed may be trimmed");
+	constexpr ::std::size_t exposed_size{
+		literal_type::run.size -
+		static_cast<::std::size_t>(trim_terminal_literal_line_feed)};
+	if constexpr (exposed_size == 0u)
+	{
+		// io_null lets concat's ordinary normalization erase the empty tail before
+		// strategy selection; the continuation owns the separately proved LF.
+		return ::fast_io::io_null;
+	}
+	else if constexpr (exposed_size == 1u)
 	{
 		// This is the same canonicalization performed by fast_io's array alias:
 		// a one-code-unit literal is a character semantic node, not a scatter
@@ -142,7 +193,7 @@ template <auto format_literal, typename grammar_tag, ::std::size_t operation_ind
 		// the user had written mnp::chvw in the original print call.
 		return ::fast_io::manipulators::chvw(literal_type::storage[0u]);
 	}
-	else if constexpr (literal_type::run.size <= 16u)
+	else if constexpr (exposed_size <= 16u)
 	{
 		// fast_io's semantic pack is the pointer-free canonical form for a short
 		// format-owned literal.  Its print/concat front doors flatten the pack
@@ -154,12 +205,12 @@ template <auto format_literal, typename grammar_tag, ::std::size_t operation_ind
 		// would inflate template state and function ABI instead of improving the
 		// memcpy-shaped backend path.
 		return make_small_literal_pack<literal_type>(
-			::std::make_index_sequence<literal_type::run.size>{});
+			::std::make_index_sequence<exposed_size>{});
 	}
-	else if constexpr (literal_type::run.size < 64u)
+	else if constexpr (exposed_size < 64u)
 	{
 		return ::fast_io::manipulators::static_scatter_t<
-			typename literal_type::char_type, literal_type::run.size>{
+			typename literal_type::char_type, exposed_size>{
 			literal_type::storage.data()};
 	}
 	else
@@ -170,7 +221,7 @@ template <auto format_literal, typename grammar_tag, ::std::size_t operation_ind
 		// buffer.  Shorter literals retain the fixed-extent reserve node because
 		// it lets buffered destinations merge their stores with adjacent leaves.
 		return ::fast_io::basic_io_scatter_t<typename literal_type::char_type>{
-			literal_type::storage.data(), literal_type::run.size};
+			literal_type::storage.data(), exposed_size};
 	}
 }
 
@@ -2113,7 +2164,9 @@ concept compilable_format_replacement =
 	grammar_lower_adl::expression<
 		format_literal, field, grammar_type, argument_pack>;
 
-template <auto format_literal, typename grammar_tag, ::std::size_t operation_index,
+template <auto format_literal, typename grammar_tag,
+		  ::std::size_t operation_index,
+		  bool trim_terminal_literal_line_feed = false,
 		  ::std::size_t... index, typename... argument_types>
 [[nodiscard]] inline constexpr decltype(auto) make_format_operation(
 	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments)
@@ -2123,7 +2176,9 @@ template <auto format_literal, typename grammar_tag, ::std::size_t operation_ind
 	constexpr auto operation{program.operations[operation_index]};
 	if constexpr (operation.kind == format_operation_kind::literal)
 	{
-		return make_literal_operation<format_literal, grammar_tag, operation_index>();
+		return make_literal_operation<
+			format_literal, grammar_tag, operation_index,
+			trim_terminal_literal_line_feed>();
 	}
 	else
 	{
@@ -2180,16 +2235,25 @@ template <auto format_literal, typename grammar_tag,
 	}
 }
 
-template <auto format_literal, typename grammar_tag, typename callback_type,
-		  typename argument_pack, ::std::size_t... operation_index>
+template <auto format_literal, typename grammar_tag,
+		  bool trim_terminal_literal_line_feed = false,
+		  typename callback_type, typename argument_pack,
+		  ::std::size_t... operation_index>
 inline constexpr decltype(auto) lower_format_program_impl(
 	callback_type &&callback, argument_pack &arguments,
 	::std::index_sequence<operation_index...>)
 {
+	static_assert(!trim_terminal_literal_line_feed ||
+					  format_program_has_terminal_literal_line_feed<
+						  format_literal, grammar_tag>(),
+				  "fast_io format: terminal LF trimming requires a compiled-program proof");
 	// This is the only type expansion in the emitter.  There is no recursive AST walk,
 	// token-kind switch, parser cursor, or type-erased argument visit in generated code.
 	return ::std::forward<callback_type>(callback)(
-		make_format_operation<format_literal, grammar_tag, operation_index>(arguments)...);
+		make_format_operation<
+			format_literal, grammar_tag, operation_index,
+			(trim_terminal_literal_line_feed &&
+			 operation_index + 1u == sizeof...(operation_index))>(arguments)...);
 }
 
 template <auto format_literal, typename grammar_tag, typename callback_type,
@@ -2484,7 +2548,9 @@ struct compiled_static_format_run
 };
 
 template <auto format_literal, typename grammar_tag,
-		  ::std::size_t group_index, ::std::size_t... argument_index,
+		  ::std::size_t group_index,
+		  bool trim_terminal_literal_line_feed = false,
+		  ::std::size_t... argument_index,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr decltype(auto) make_format_group(
 	indexed_argument_pack<::std::index_sequence<argument_index...>,
@@ -2499,33 +2565,54 @@ template <auto format_literal, typename grammar_tag,
 		using run_type = compiled_static_format_run<
 			format_literal, grammar_tag, run_begin, run_count,
 			argument_types...>;
-		if constexpr (run_type::size == 0u)
+		static_assert(!trim_terminal_literal_line_feed ||
+						  (run_type::size != 0u &&
+						   run_type::storage[run_type::size - 1u] ==
+							   ::fast_io::char_literal_v<
+								   u8'\n', typename run_type::char_type>),
+					  "fast_io format: only a proved static-run terminal LF may be trimmed");
+		constexpr ::std::size_t exposed_size{
+			run_type::size -
+			static_cast<::std::size_t>(trim_terminal_literal_line_feed)};
+		if constexpr (exposed_size == 0u)
 		{
+			// Preserve the explicit static-field event while exposing no bytes.
 			return ::fast_io::io_null;
 		}
 		else
 		{
 			return ::fast_io::manipulators::static_scatter_t<
-				typename run_type::char_type, run_type::size>{
+				typename run_type::char_type, exposed_size>{
 				run_type::storage.data()};
 		}
 	}
 	else
 	{
+		static_assert(!trim_terminal_literal_line_feed,
+					  "fast_io format: a trimmed terminal group must be static");
 		static_assert(run_count == 1u);
 		return make_format_operation<
 			format_literal, grammar_tag, run_begin>(arguments);
 	}
 }
 
-template <auto format_literal, typename grammar_tag, typename callback_type,
-		  typename argument_pack, ::std::size_t... group_index>
+template <auto format_literal, typename grammar_tag,
+		  bool trim_terminal_literal_line_feed = false,
+		  typename callback_type, typename argument_pack,
+		  ::std::size_t... group_index>
 inline constexpr decltype(auto) lower_format_program_grouped_impl(
 	callback_type &&callback, argument_pack &arguments,
 	::std::index_sequence<group_index...>)
 {
+	static_assert(!trim_terminal_literal_line_feed ||
+					  format_program_has_terminal_literal_line_feed<
+						  format_literal, grammar_tag>(),
+				  "fast_io format: terminal LF trimming requires a compiled-program proof");
 	return ::std::forward<callback_type>(callback)(
-		make_format_group<format_literal, grammar_tag, group_index>(arguments)...);
+		make_format_group<
+			format_literal, grammar_tag, group_index,
+			(trim_terminal_literal_line_feed &&
+			 group_index + 1u == sizeof...(group_index))>(arguments)...);
 }
 
 /** Owns a completely static format program as one final code-unit sequence. */
@@ -2597,23 +2684,55 @@ struct compiled_static_format_program
 		{make_storage()};
 };
 
-template <auto format_literal, typename grammar_tag, typename callback_type, typename... argument_types>
-inline constexpr decltype(auto) lower_format_program(
+template <auto format_literal, typename grammar_tag,
+		  bool trim_terminal_literal_line_feed,
+		  typename callback_type, typename... argument_types>
+inline constexpr decltype(auto) lower_format_program_with_trim_policy(
 	callback_type &&callback, argument_types &...arguments)
 {
+	static_assert(!trim_terminal_literal_line_feed ||
+					  format_program_has_terminal_literal_line_feed<
+						  format_literal, grammar_tag>(),
+				  "fast_io format: terminal LF trimming requires a compiled-program proof");
 	using literal_program = ::fast_io::fmt::details::compiled_literal_program<
 		format_literal, grammar_tag>;
 	if constexpr (literal_program::literal_only)
 	{
-		if constexpr (literal_program::size == 0u)
+		static_assert(!trim_terminal_literal_line_feed ||
+						  (literal_program::size != 0u &&
+						   literal_program::storage[literal_program::size - 1u] ==
+							   ::fast_io::char_literal_v<
+								   u8'\n', typename literal_program::char_type>),
+					  "fast_io format: only a proved literal-program terminal LF may be trimmed");
+		constexpr ::std::size_t exposed_size{
+			literal_program::size -
+			static_cast<::std::size_t>(trim_terminal_literal_line_feed)};
+		if constexpr (exposed_size == 0u)
 		{
 			return ::std::forward<callback_type>(callback)();
+		}
+		else if constexpr (exposed_size == 1u)
+		{
+			// Keep tiny literal-only programs in the same pointer-free form used by
+			// an individual literal operation. This lets owning concat construct its
+			// SSO result from the code-unit value instead of retaining a storage address.
+			return ::std::forward<callback_type>(callback)(
+				::fast_io::manipulators::chvw(literal_program::storage[0u]));
+		}
+		else if constexpr (exposed_size == 2u)
+		{
+			// Two code units are still small enough to transport as one semantic pack.
+			// GCC can consequently form the final SSO bytes with an immediate store;
+			// longer literal-only programs retain the compact scatter representation.
+			return ::std::forward<callback_type>(callback)(
+				::fast_io::fmt::details::make_small_literal_pack<literal_program>(
+					::std::make_index_sequence<exposed_size>{}));
 		}
 		else
 		{
 			return ::std::forward<callback_type>(callback)(
 				::fast_io::basic_io_scatter_t<typename literal_program::char_type>{
-					literal_program::storage.data(), literal_program::size});
+					literal_program::storage.data(), exposed_size});
 		}
 	}
 	else if constexpr (!(::fast_io::fmt::
@@ -2628,7 +2747,9 @@ inline constexpr decltype(auto) lower_format_program(
 			::fast_io::fmt::details::checked_program<format_literal,
 													 grammar_tag>
 				.operation_count};
-		return lower_format_program_impl<format_literal, grammar_tag>(
+		return lower_format_program_impl<
+			format_literal, grammar_tag,
+			trim_terminal_literal_line_feed>(
 			::std::forward<callback_type>(callback), indexed_arguments,
 			::std::make_index_sequence<operation_count>{});
 	}
@@ -2660,7 +2781,16 @@ inline constexpr decltype(auto) lower_format_program(
 	{
 		using static_program = compiled_static_format_program<
 			format_literal, grammar_tag, argument_types...>;
-		if constexpr (static_program::size == 0u)
+		static_assert(!trim_terminal_literal_line_feed ||
+						  (static_program::size != 0u &&
+						   static_program::storage[static_program::size - 1u] ==
+							   ::fast_io::char_literal_v<
+								   u8'\n', typename static_program::char_type>),
+					  "fast_io format: only a proved static-program terminal LF may be trimmed");
+		constexpr ::std::size_t exposed_size{
+			static_program::size -
+			static_cast<::std::size_t>(trim_terminal_literal_line_feed)};
+		if constexpr (exposed_size == 0u)
 		{
 			// Do not erase an explicitly supplied static field merely because its
 			// final spelling is empty. io_null carries the print event through
@@ -2671,7 +2801,7 @@ inline constexpr decltype(auto) lower_format_program(
 		{
 			return ::std::forward<callback_type>(callback)(
 				::fast_io::manipulators::static_scatter_t<
-					typename static_program::char_type, static_program::size>{
+					typename static_program::char_type, exposed_size>{
 					static_program::storage.data()});
 		}
 	}
@@ -2686,17 +2816,42 @@ inline constexpr decltype(auto) lower_format_program(
 		if constexpr (group_plan.has_static_replacement)
 		{
 			return lower_format_program_grouped_impl<
-				format_literal, grammar_tag>(
+				format_literal, grammar_tag,
+				trim_terminal_literal_line_feed>(
 				::std::forward<callback_type>(callback), indexed_arguments,
 				::std::make_index_sequence<group_plan.group_count>{});
 		}
 		else
 		{
-			return lower_format_program_impl<format_literal, grammar_tag>(
+			return lower_format_program_impl<
+				format_literal, grammar_tag,
+				trim_terminal_literal_line_feed>(
 				::std::forward<callback_type>(callback), indexed_arguments,
 				::std::make_index_sequence<operation_count>{});
 		}
 	}
+}
+
+/** Preserves the original public lowering entry and its explicit template-argument order. */
+template <auto format_literal, typename grammar_tag, typename callback_type,
+		  typename... argument_types>
+inline constexpr decltype(auto) lower_format_program(
+	callback_type &&callback, argument_types &...arguments)
+{
+	return ::fast_io::fmt::details::lower_format_program_with_trim_policy<
+		format_literal, grammar_tag, false>(
+		::std::forward<callback_type>(callback), arguments...);
+}
+
+/** Lowers a proved terminal literal LF as concat's separate line flag. */
+template <auto format_literal, typename grammar_tag, typename callback_type,
+		  typename... argument_types>
+inline constexpr decltype(auto) lower_format_program_trim_terminal_line_feed(
+	callback_type &&callback, argument_types &...arguments)
+{
+	return ::fast_io::fmt::details::lower_format_program_with_trim_policy<
+		format_literal, grammar_tag, true>(
+		::std::forward<callback_type>(callback), arguments...);
 }
 
 } // namespace fast_io::fmt::details

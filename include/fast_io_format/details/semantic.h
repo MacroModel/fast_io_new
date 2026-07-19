@@ -43,6 +43,53 @@ struct format_scalar_t
 namespace fast_io
 {
 
+/// @brief Propagates concat's one-pass bounded cost marker through the format-specific scalar wrapper.
+/// @details The wrapper changes sign/prefix spelling but delegates conversion and its dynamic reserve bound to the
+///          wrapped scalar. Only a child with the exact fast_io source opt-in can select concat's bounded stack path.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			concat_single_pass_bounded_materialization_preferred(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Forwards concat's non-fatal candidate bound through the format scalar wrapper.
+/// @details Prefix placement and space-sign spelling do not add code units; they only reinterpret bytes already
+///          covered by the child scalar's reserve bound. Preserving the caller's limit lets an extreme dynamic
+///          precision reject speculative materialization before the ordinary fatal-overflow reserve protocol runs.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+		requires requires(scalar_type value, ::std::size_t maximum_size) {
+			{
+				concat_single_pass_bounded_materialization_size(
+					::fast_io::io_reserve_type<char_type, scalar_type>, value,
+					maximum_size)
+			} noexcept -> ::std::same_as<::std::size_t>;
+		}
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> value,
+	::std::size_t maximum_size) noexcept
+{
+	return concat_single_pass_bounded_materialization_size(
+		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar,
+		maximum_size);
+}
+
 #if defined(__clang__)
 /// Opts the library-owned run-time precision floating wrapper into bounded local materialization.
 ///

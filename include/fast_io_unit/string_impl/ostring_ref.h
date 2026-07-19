@@ -63,6 +63,42 @@ inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
 	return {};
 }
 
+/// @brief Opts a fresh default standard string into one-pass bounded concat construction.
+/// @details The strategy formats into a fixed, checked local range and invokes this string's ordinary range constructor
+///          only after emission succeeds. Standard traits and the default allocator are the audited cost model; custom
+///          specializations retain their existing direct/precise/staging behavior.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Constructs a fresh default standard string from one borrowed descriptor and a trailing line feed.
+/// @details Returning a new object is the aliasing proof: its allocation cannot own the source descriptor, so one exact
+///          reserve may safely precede append. A general scatter-write CPO cannot make that promise because its source
+///          may point into the destination being extended. Custom traits and allocators keep their established path;
+///          neither their allocation policy nor their associated ADL is covered by this opt-in.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+[[nodiscard]] inline constexpr ::std::basic_string<char_type, traits_type, allocator_type>
+strlike_construct_scatter_with_line_feed_define(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::fast_io::basic_io_scatter_t<char_type> scatter, ::std::size_t total_size)
+{
+	::std::basic_string<char_type, traits_type, allocator_type> result;
+	result.reserve(total_size);
+	if (scatter.len != 0u)
+	{
+		result.append(scatter.base, scatter.len);
+	}
+	result.push_back(::fast_io::char_literal_v<u8'\n', char_type>);
+	return result;
+}
+
 #if defined(_GLIBCXX_STRING_VIEW) || defined(_LIBCPP_STRING_VIEW) || defined(_STRING_VIEW_)
 /// @brief Opts standard string views into retained-scatter composition when stored as range lvalue elements.
 /// @details Their alias points directly at the view's `[data(), data()+size())` range. The source-side marker is kept

@@ -225,6 +225,151 @@ inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
 	return {};
 }
 
+namespace details
+{
+
+/// @brief Recognizes a child whose cheap non-fatal concat bound can pass through width layout.
+template <typename char_type, typename T>
+concept concat_single_pass_bounded_width_child = ::std::integral<char_type> && requires(
+	T &value, ::std::size_t maximum_size) {
+	{
+		concat_single_pass_bounded_materialization_preferred(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+	{
+		concat_single_pass_bounded_materialization_size(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+			value, maximum_size)
+	} noexcept -> ::std::same_as<::std::size_t>;
+};
+
+/// @brief Computes `max(child bound, width)` without observing the child after width already rejects the frame.
+template <::std::integral char_type, typename T>
+	requires concat_single_pass_bounded_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::size_t
+concat_single_pass_bounded_width_size(
+	T &child, ::std::size_t width, ::std::size_t maximum_size) noexcept
+{
+	if (maximum_size < width)
+	{
+		return SIZE_MAX;
+	}
+	auto const child_size{concat_single_pass_bounded_materialization_size(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		child, maximum_size)};
+	if (child_size == SIZE_MAX || maximum_size < child_size)
+	{
+		return SIZE_MAX;
+	}
+	return child_size < width ? width : child_size;
+}
+
+} // namespace details
+
+/// @brief Propagates an audited one-pass concat bound through fixed-placement width layout.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+		char_type, T>
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+		char_type, T>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>,
+	::fast_io::manipulators::width_t<placement, T> &value,
+	::std::size_t maximum_size) noexcept
+{
+	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+		value.reference, value.width, maximum_size);
+}
+
+/// @brief Propagates the same bound when width uses one explicit output code unit as fill.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
+	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> &value,
+	::std::size_t maximum_size) noexcept
+{
+	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+		value.reference, value.width, maximum_size);
+}
+
+/// @brief Propagates the bound through a run-time placement selector.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+		char_type, T>
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+		char_type, T>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>,
+	::fast_io::manipulators::width_runtime_t<T> &value,
+	::std::size_t maximum_size) noexcept
+{
+	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+		value.reference, value.width, maximum_size);
+}
+
+/// @brief Propagates the bound through run-time placement with one explicit fill code unit.
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
+	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> &value,
+	::std::size_t maximum_size) noexcept
+{
+	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+		value.reference, value.width, maximum_size);
+}
+
 #if 0
 namespace details
 {

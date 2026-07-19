@@ -593,6 +593,161 @@ inline constexpr char_type *print_reserve_define(
 			iter, mantissa, exponent, sign);
 }
 
+namespace details
+{
+
+/// @brief Returns the representation-specific base of a runtime-precision floating reserve bound.
+/// @details The requested precision and the grammar's final fixed allowance are deliberately excluded. Keeping this
+///          constant separate lets ordinary reserve sizing retain its exact historical `(base + precision) + suffix`
+///          overflow sequence while speculative concat sizing can perform the same additions non-fatally.
+template <::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+		requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
+				 ::fast_io::details::print_floating_precision_valid<flags.precision>)
+inline constexpr ::std::size_t print_floating_precision_reserve_base_size() noexcept
+{
+	using no_cvref_t = ::std::remove_cvref_t<flt>;
+	::std::size_t base_size{};
+	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::hexfloat)
+	{
+		static_assert(
+			::fast_io::details::floating_precision_is_significant<flags.precision> ||
+			::fast_io::details::floating_precision_is_fractional<flags.precision>,
+			"fast_io hexfloat precision supports significant and fractional hexadecimal digit precision");
+		using trait = ::fast_io::details::iec559_traits<flt>;
+		if constexpr (::std::same_as<no_cvref_t, long double>
+#if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
+					  || ::std::same_as<no_cvref_t, __float128>
+#endif
+		)
+		{
+			if constexpr (::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)
+			{
+				base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+					::fast_io::details::print_rsvhexfloat_size_cache<
+						flags.showbase,
+						typename ::fast_io::details::iec559_traits<no_cvref_t>::mantissa_type>,
+					flags.nan_show_type>;
+			}
+			else
+#if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
+				if constexpr (sizeof(flt) > sizeof(double))
+			{
+				base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+					::fast_io::details::print_rsvhexfloat_size_cache<flags.showbase, __uint128_t>,
+					flags.nan_show_type>;
+			}
+			else
+#endif
+				base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+					::fast_io::details::print_rsvhexfloat_size_cache<
+						flags.showbase,
+						typename ::fast_io::details::iec559_traits<double>::mantissa_type>,
+					flags.nan_show_type>;
+		}
+		else
+		{
+			base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+				::fast_io::details::print_rsvhexfloat_size_cache<
+					flags.showbase, typename trait::mantissa_type>,
+				flags.nan_show_type>;
+		}
+		return base_size;
+	}
+	else
+	{
+		static_assert(
+			::fast_io::manipulators::floating_format::general == flags.floating ||
+			::fast_io::manipulators::floating_format::scientific == flags.floating ||
+			::fast_io::manipulators::floating_format::fixed == flags.floating ||
+			::fast_io::manipulators::floating_format::decimal == flags.floating);
+		/*
+		Fractional general formatting can retain the complete integral part before
+		rounding on the 10^-P grid. At P=0 a max-finite binary80 value, for example,
+		is a 4933-digit integer even though ordinary general formatting would choose
+		scientific notation. Therefore both general and decimal fractional modes use
+		the fixed reserve bound. Significant general/decimal use their native cache.
+		*/
+		constexpr auto reserve_floating{
+			(::fast_io::details::floating_precision_is_fractional<flags.precision> &&
+			 (flags.floating == ::fast_io::manipulators::floating_format::decimal ||
+			  flags.floating == ::fast_io::manipulators::floating_format::general))
+				? ::fast_io::manipulators::floating_format::fixed
+				: flags.floating};
+		if constexpr (::std::same_as<no_cvref_t, long double> &&
+					  sizeof(flt) == sizeof(double))
+		{
+			base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+				::fast_io::details::print_rsv_cache<double, reserve_floating>,
+				flags.nan_show_type>;
+		}
+		else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
+		{
+			base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+				::fast_io::details::print_rsv_cache<float, reserve_floating>,
+				flags.nan_show_type>;
+		}
+		else if constexpr (::fast_io::details::print_floating_decimal_exact_supported<flt>)
+		{
+			base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+				::fast_io::details::print_rsv_cache<no_cvref_t, reserve_floating>,
+				flags.nan_show_type>;
+		}
+		else
+		{
+			static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
+				"currently only support iec559 float32 and float64 decimal output; narrower IEC559 "
+				"formats are printed through float");
+			base_size = ::fast_io::details::print_rsv_fp_size_with_special_cache<
+				::fast_io::details::print_rsv_cache<no_cvref_t, reserve_floating>,
+				flags.nan_show_type>;
+		}
+		return base_size;
+	}
+}
+
+template <::fast_io::manipulators::scalar_flags flags>
+inline consteval ::std::size_t print_floating_precision_reserve_suffix_size() noexcept
+{
+	if constexpr (flags.floating == ::fast_io::manipulators::floating_format::hexfloat &&
+				  ::fast_io::details::floating_precision_is_fractional<flags.precision>)
+	{
+		return 9u;
+	}
+	else
+	{
+		return 8u;
+	}
+}
+
+} // namespace details
+
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>,
+	::fast_io::manipulators::scalar_manip_precision_t<flags, value_type> value,
+	::std::size_t maximum_size) noexcept
+{
+	(void)sizeof(char_type);
+	auto const base_size{
+		::fast_io::details::print_floating_precision_reserve_base_size<flags, value_type>()};
+	if (maximum_size < base_size || maximum_size - base_size < value.precision)
+	{
+		return SIZE_MAX;
+	}
+	auto const precision_size{base_size + value.precision};
+	constexpr auto suffix_size{
+		::fast_io::details::print_floating_precision_reserve_suffix_size<flags>()};
+	if (maximum_size - precision_size < suffix_size)
+	{
+		return SIZE_MAX;
+	}
+	return precision_size + suffix_size;
+}
+
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(::fast_io::details::print_floating_precision_supported<flags, flt> &&
@@ -602,47 +757,11 @@ inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
 {
-	static_assert(::fast_io::details::floating_precision_is_significant<flags.precision> ||
-					  ::fast_io::details::floating_precision_is_fractional<flags.precision>,
-				  "fast_io hexfloat precision supports significant and fractional hexadecimal digit precision");
-	using trait = ::fast_io::details::iec559_traits<flt>;
-	::std::size_t base_size{};
-	if constexpr (::std::same_as<::std::remove_cvref_t<flt>, long double>
-#if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
-				  || ::std::same_as<::std::remove_cvref_t<flt>, __float128>
-#endif
-	)
-	{
-		if constexpr (::fast_io::details::fp_floating_point_is_float80<::std::remove_cvref_t<flt>>)
-		{
-			base_size = details::print_rsv_fp_size_with_special_cache<
-				details::print_rsvhexfloat_size_cache<
-					flags.showbase, typename details::iec559_traits<::std::remove_cvref_t<flt>>::mantissa_type>,
-				flags.nan_show_type>;
-		}
-		else
-#if (defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)) && defined(__SIZEOF_INT128__)
-			if constexpr (sizeof(flt) > sizeof(double))
-		{
-			base_size = details::print_rsv_fp_size_with_special_cache<
-				details::print_rsvhexfloat_size_cache<flags.showbase, __uint128_t>, flags.nan_show_type>;
-		}
-		else
-#endif
-			base_size = details::print_rsv_fp_size_with_special_cache<
-				details::print_rsvhexfloat_size_cache<flags.showbase,
-													  typename details::iec559_traits<double>::mantissa_type>,
-				flags.nan_show_type>;
-	}
-	else
-	{
-		base_size = details::print_rsv_fp_size_with_special_cache<
-			details::print_rsvhexfloat_size_cache<flags.showbase, typename trait::mantissa_type>,
-			flags.nan_show_type>;
-	}
+	auto const base_size{
+		::fast_io::details::print_floating_precision_reserve_base_size<flags, flt>()};
 	return ::fast_io::details::intrinsics::add_or_overflow_die(
 		::fast_io::details::intrinsics::add_or_overflow_die(base_size, f.precision),
-		::fast_io::details::floating_precision_is_fractional<flags.precision> ? 9u : 8u);
+		::fast_io::details::print_floating_precision_reserve_suffix_size<flags>());
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
@@ -702,60 +821,11 @@ inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
 				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
 {
-	static_assert(manipulators::floating_format::general == flags.floating ||
-				  manipulators::floating_format::scientific == flags.floating ||
-				  manipulators::floating_format::fixed == flags.floating ||
-				  manipulators::floating_format::decimal == flags.floating);
-	using no_cvref_t = ::std::remove_cvref_t<flt>;
-	/*
-	Fractional general formatting can retain the complete integral part before
-	rounding on the 10^-P grid.  At P=0 a max-finite binary80 value, for example,
-	is a 4933-digit integer even though ordinary general formatting would choose
-	scientific notation.  Therefore both general and decimal fractional modes
-	use the fixed reserve bound.  print_rsv_cache<fixed> is
-
-	  sign + "0." + e10max + m10digits,
-
-	which covers every integral prefix and every exact carrier digit.  Adding P
-	then covers a forced/requested fractional suffix; the checked additions below
-	preserve the established terminate-on-size_t-overflow contract.  Significant
-	general/decimal choose either a coefficient of at most P digits or the shorter
-	scientific spelling, so their native cache plus P remains sufficient.
-	*/
-	constexpr auto reserve_floating{
-		(::fast_io::details::floating_precision_is_fractional<flags.precision> &&
-		 (flags.floating == manipulators::floating_format::decimal ||
-		  flags.floating == manipulators::floating_format::general))
-			? manipulators::floating_format::fixed
-			: flags.floating};
-	::std::size_t base_size{};
-	if constexpr (::std::same_as<no_cvref_t, long double> &&
-				  sizeof(flt) == sizeof(double))
-	{
-		base_size = details::print_rsv_fp_size_with_special_cache<details::print_rsv_cache<double, reserve_floating>,
-																  flags.nan_show_type>;
-	}
-	else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
-	{
-		base_size = details::print_rsv_fp_size_with_special_cache<details::print_rsv_cache<float, reserve_floating>,
-																  flags.nan_show_type>;
-	}
-	else if constexpr (::fast_io::details::print_floating_decimal_exact_supported<flt>)
-	{
-		base_size = details::print_rsv_fp_size_with_special_cache<
-			details::print_rsv_cache<no_cvref_t, reserve_floating>,
-			flags.nan_show_type>;
-	}
-	else
-	{
-		static_assert(::fast_io::details::print_floating_decimal_direct_supported<flt>,
-					  "currently only support iec559 float32 and float64 decimal output; narrower IEC559 "
-					  "formats are printed through float");
-		base_size = details::print_rsv_fp_size_with_special_cache<
-			details::print_rsv_cache<no_cvref_t, reserve_floating>, flags.nan_show_type>;
-	}
+	auto const base_size{
+		::fast_io::details::print_floating_precision_reserve_base_size<flags, flt>()};
 	return ::fast_io::details::intrinsics::add_or_overflow_die(
-		::fast_io::details::intrinsics::add_or_overflow_die(base_size, f.precision), 8u);
+		::fast_io::details::intrinsics::add_or_overflow_die(base_size, f.precision),
+		::fast_io::details::print_floating_precision_reserve_suffix_size<flags>());
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>

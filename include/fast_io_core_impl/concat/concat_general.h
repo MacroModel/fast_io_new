@@ -2,6 +2,39 @@
 
 #include "../operations/printimpl/scatter_copy.h"
 
+namespace fast_io
+{
+
+/// @brief Marks fast_io's run-time precision floating scalar as profitable for one-pass bounded concat construction.
+/// @details Computing this scalar's exact size performs the floating conversion which emission would otherwise repeat.
+///          This marker promises that its dynamic reserve bound is a cheap, repeatable upper-bound query. Concat still
+///          requires an independently opted-in fresh destination, proves every other component statically or from an
+///          already materialized descriptor, and checks the bound against its fixed stack budget before selecting it.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Returns the scalar's non-fatal upper bound when it fits `maximum_size`, or `SIZE_MAX` otherwise.
+/// @details The definition lives with the floating formatter, where the representation-specific fixed overhead is
+///          available. This declaration is intentionally part of the source opt-in contract: speculative concat
+///          selection must never reuse the ordinary reserve-size CPO, whose overflow policy is termination.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>,
+	::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>,
+	::std::size_t maximum_size) noexcept;
+
+} // namespace fast_io
+
 namespace fast_io::details::decay
 {
 
@@ -1283,6 +1316,215 @@ concept basic_general_concat_context_staging_preferred_destination =
 		} -> ::std::same_as<::std::true_type>;
 	};
 
+/// @brief Recognizes an expensive leaf whose exact-size protocol would repeat substantial formatting work.
+/// @details This is an explicit source cost policy, not an inference from `dynamic_reserve_printable`: arbitrary dynamic
+///          producers may be cheap, stateful, or deliberately optimized for exact sizing. A width semantic node is the
+///          one non-dynamic representation admitted here because it supplies its own exact marker/bound pair and the
+///          semantic emitter writes it directly. Exact `true_type` matching keeps an unrelated same-named customization
+///          from silently changing concat's allocation strategy.
+template <typename ch_type, typename T>
+concept basic_general_concat_single_pass_bounded_source =
+	::std::integral<ch_type> &&
+	(::fast_io::dynamic_reserve_printable<ch_type, ::std::remove_cvref_t<T>> ||
+	 ::fast_io::details::decay::print_semantic_width_v<
+		 ::std::remove_cvref_t<T>>) && requires(T &value) {
+	{
+		concat_single_pass_bounded_materialization_preferred(
+			::fast_io::io_reserve_type<ch_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+	{
+		concat_single_pass_bounded_materialization_size(
+			::fast_io::io_reserve_type<ch_type, ::std::remove_cvref_t<T>>,
+			value, ::std::size_t{})
+	} noexcept -> ::std::same_as<::std::size_t>;
+};
+
+/// @brief Recognizes a fresh construct-only result whose cost policy prefers one bounded staging pass.
+/// @details A writable-buffer destination already owns a direct reserve strategy and is excluded. The destination CPO
+///          additionally limits this optimization to string implementations whose construction and allocation model
+///          has been audited; range construction alone is not a profitability proof.
+template <typename ch_type, typename T>
+concept basic_general_concat_single_pass_bounded_destination =
+	::std::integral<ch_type> && !::fast_io::buffer_strlike<ch_type, T> &&
+	::fast_io::range_constructible_strlike<ch_type, T> && requires {
+		{
+			concat_single_pass_bounded_materialization_preferred(
+				::fast_io::io_strlike_type<ch_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Caps one-pass concat output staging independently of the library-wide maximum stack policy.
+/// @details One KiB matches the semantic emitter's existing inline-frame ceiling and covers both compact records and
+///          measured 600-digit precision without turning a source marker into an unbounded caller-frame request. Wider
+///          character domains receive the corresponding whole-element count, while a stricter configured print budget
+///          remains authoritative.
+template <::std::integral ch_type>
+inline consteval ::std::size_t basic_general_concat_single_pass_bounded_stack_size() noexcept
+{
+	constexpr ::std::size_t preferred_bytes{1024u};
+	constexpr ::std::size_t preferred_size{preferred_bytes / sizeof(ch_type)};
+	constexpr ::std::size_t configured_size{
+		::fast_io::details::decay::print_stack_buffer_max_size<ch_type>()};
+	return configured_size < preferred_size ? configured_size : preferred_size;
+}
+
+/// @brief Selects the bounded frame from the normalized run shape.
+/// @details A single expensive leaf may use the full one-KiB ceiling, which covers measured large-precision scalar
+///          formatting without duplicating its conversion. Multi-leaf records use 512 bytes: their common result is
+///          compact, and this smaller frame remains inside GCC's profitable inline threshold.
+template <::std::integral ch_type, typename... Args>
+inline consteval ::std::size_t basic_general_concat_single_pass_bounded_run_stack_size() noexcept
+{
+	constexpr ::std::size_t maximum_size{
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_stack_size<ch_type>()};
+	if constexpr (sizeof...(Args) == 1u)
+	{
+		return maximum_size;
+	}
+	else
+	{
+		constexpr ::std::size_t preferred_size{512u / sizeof(ch_type)};
+		return maximum_size < preferred_size ? maximum_size : preferred_size;
+	}
+}
+
+/// @brief Proves that one component can participate without tentatively consuming a stateful object query.
+/// @details An explicitly marked source promises a repeatable cheap dynamic bound. Every other admitted component has a
+///          compile-time reserve extent or is the final normalized scatter descriptor itself. In particular, borrowed
+///          scatter producers and unrelated dynamic-reserve CPOs are not admitted merely because another leaf is marked:
+///          a rejected stack attempt must never replay their object-dependent observation in the fallback strategy.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_bounded_component_v =
+	::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T> ||
+	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> ||
+	::std::same_as<::std::remove_cvref_t<T>, ::fast_io::basic_io_scatter_t<ch_type>>;
+
+/// @brief Selects the narrow one-pass bounded construction strategy after concat normalization.
+/// @details The 32-leaf ceiling bounds template expansion and covers the measured 21-leaf formatted mixed record. At
+///          least one explicitly expensive leaf supplies the reason to replace exact sizing or incremental destination
+///          growth, and every companion must pass the no-tentative-object-query proof above. Ordinary integer/string
+///          runs therefore retain their existing strategy and code generation.
+template <::std::integral ch_type, typename T, typename... Args>
+inline consteval bool basic_general_concat_single_pass_bounded_run() noexcept
+{
+	if constexpr (
+		sizeof...(Args) == 0u || 32u < sizeof...(Args) ||
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+			ch_type, Args...>() == 0u ||
+		!::fast_io::details::decay::basic_general_concat_single_pass_bounded_destination<ch_type, T>)
+	{
+		return false;
+	}
+	else
+	{
+		return
+			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, Args> || ...) &&
+			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<ch_type, Args> && ...);
+	}
+}
+
+template <::std::integral ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_single_pass_bounded_run_v =
+	::fast_io::details::decay::basic_general_concat_single_pass_bounded_run<
+		ch_type, T, Args...>();
+
+/// @brief Returns one component's cheap upper bound under the strategy's repeatability proof.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<
+		ch_type, T>
+inline constexpr ::std::size_t basic_general_concat_single_pass_bounded_component_size(
+	T &value, ::std::size_t maximum_size)
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T>)
+	{
+		return concat_single_pass_bounded_materialization_size(
+			::fast_io::io_reserve_type<ch_type, value_type>, value, maximum_size);
+	}
+	else if constexpr (::fast_io::reserve_printable<ch_type, value_type>)
+	{
+		return print_reserve_size(::fast_io::io_reserve_type<ch_type, value_type>);
+	}
+	else
+	{
+		return value.len;
+	}
+}
+
+/// @brief Adds one component to a still-viable bounded run.
+/// @details `total` includes every preceding leaf (and the optional line feed), so a marked source receives exactly the
+///          remaining budget. Once a predecessor rejects the plan, later candidate CPOs are not observed at all. This
+///          keeps optional strategy probing narrower than fallback emission and makes the limit contract compositional.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<
+		ch_type, T>
+inline constexpr void basic_general_concat_single_pass_bounded_add_component(
+	::std::size_t &total, ::std::size_t maximum_size, T &value)
+{
+	if (total == SIZE_MAX || maximum_size < total)
+	{
+		total = SIZE_MAX;
+		return;
+	}
+	auto const remaining{maximum_size - total};
+	auto const component_size{
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_size<ch_type>(
+			value, remaining)};
+	if (component_size == SIZE_MAX || remaining < component_size)
+	{
+		total = SIZE_MAX;
+		return;
+	}
+	total += component_size;
+}
+
+/// @brief Computes the complete cheap bound without invoking an unmarked object-dependent CPO.
+template <bool line, ::std::integral ch_type, typename... Args>
+	requires(
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<
+			ch_type, Args> && ...)
+inline constexpr ::std::size_t basic_general_concat_single_pass_bounded_total_size(Args &...args)
+{
+	constexpr ::std::size_t maximum_size{
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+			ch_type, Args...>()};
+	::std::size_t total{line ? 1u : 0u};
+	(::fast_io::details::decay::basic_general_concat_single_pass_bounded_add_component<ch_type>(
+		total, maximum_size, args),
+	 ...);
+	return total;
+}
+
+/// @brief Emits one already-bounded normalized run once, then constructs the final result from its actual prefix.
+/// @details Formatting occurs outside any destination callback, so a throwing CPO unwinds normally and cannot cross a
+///          `resize_and_overwrite` boundary. The caller has checked `bounded_size <= stack_size`; validating the returned
+///          cursor before construction prevents an invalid endpoint from becoming an observable range. As with every
+///          reserve protocol, the declared bound is the producer's proof that writes themselves stay inside the slice.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<
+		ch_type, T, Args...>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr T basic_general_concat_single_pass_bounded_construct(
+	::std::size_t bounded_size, Args &...args)
+{
+	constexpr ::std::size_t stack_size{
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+			ch_type, Args...>()};
+	ch_type buffer[stack_size];
+	ch_type *const first{buffer};
+	ch_type *const last{first + bounded_size};
+	ch_type *const actual_end{
+		::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, ch_type, true>(
+			first, args...)};
+	if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+			first, last, actual_end)) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	return strlike_construct_define(
+		::fast_io::io_strlike_type<ch_type, T>, first, actual_end);
+}
+
 template <typename T>
 inline constexpr bool basic_general_concat_top_level_condition_v =
 	::fast_io::details::decay::print_semantic_node<T> &&
@@ -1680,6 +1922,22 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 	}
 	else
 	{
+		if constexpr (
+			::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<
+				ch_type, T, Args...>)
+		{
+			constexpr ::std::size_t stack_size{
+				::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+					ch_type, Args...>()};
+			::std::size_t const bounded_size{
+				::fast_io::details::decay::basic_general_concat_single_pass_bounded_total_size<
+					line, ch_type>(args...)};
+			if (bounded_size <= stack_size) [[likely]]
+			{
+				return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct<
+					line, ch_type, T>(bounded_size, args...);
+			}
+		}
 		if constexpr (basic_general_concat_has_top_level_condition_v<Args...>)
 		{
 			return ::fast_io::details::decay::basic_general_concat_select_condition<ch_type>(
@@ -1742,6 +2000,26 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 			T str;
 			basic_general_concat_decay_ref_impl<line, ch_type>(str, args...);
 			return str;
+		}
+		else if constexpr (
+			line && sizeof...(Args) == 1u &&
+			(::fast_io::details::decay::direct_scatter_view_printable<ch_type, Args> && ...) &&
+			requires(::fast_io::basic_io_scatter_t<ch_type> scatter) {
+				{
+					strlike_construct_scatter_with_line_feed_define(
+						::fast_io::io_strlike_type<ch_type, T>, scatter,
+						::std::size_t{})
+				} -> ::std::same_as<T>;
+			})
+		{
+			// The result is freshly constructed, so its allocation cannot own the borrowed source
+			// descriptor. Reserve the complete text-plus-LF extent before either append and avoid the
+			// exact-capacity first append followed by a second allocation for the line feed.
+			::fast_io::basic_io_scatter_t<ch_type> const scatter{args...};
+			::std::size_t const total_size{
+				::fast_io::details::decay::concat_precise_size_with_line<true>(scatter.len)};
+			return strlike_construct_scatter_with_line_feed_define(
+				::fast_io::io_strlike_type<ch_type, T>, scatter, total_size);
 		}
 		else if constexpr (
 			sizeof...(Args) == 1u &&

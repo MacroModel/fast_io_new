@@ -27,6 +27,18 @@ struct concat_lowered_components
 	}
 };
 
+/** Named continuation which appends one separately proved terminal line feed. */
+template <typename result_type, ::std::integral char_type>
+struct concat_line_lowered_components
+{
+	template <typename... component_types>
+	[[nodiscard]] inline constexpr result_type operator()(component_types &&...components) const
+	{
+		return ::fast_io::basic_general_concat_checked<true, char_type, result_type>(
+			::std::forward<component_types>(components)...);
+	}
+};
+
 /**
  * Materializes one compiled grammar into an explicitly selected string type.
  *
@@ -45,10 +57,25 @@ template <typename result_type, basic_fixed_string format_literal,
 {
 	using char_type = typename decltype(format_literal)::value_type;
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
-	return ::fast_io::fmt::details::lower_format_program<
-		format_literal, rule_type>(
-		::fast_io::fmt::details::concat_lowered_components<result_type, char_type>{},
-		arguments...);
+	constexpr bool program_has_terminal_literal_line_feed{
+		::fast_io::fmt::details::format_program_has_terminal_literal_line_feed<
+			format_literal, rule_type>()};
+	if constexpr (program_has_terminal_literal_line_feed)
+	{
+		return ::fast_io::fmt::details::lower_format_program_trim_terminal_line_feed<
+			format_literal, rule_type>(
+			::fast_io::fmt::details::concat_line_lowered_components<
+				result_type, char_type>{},
+			arguments...);
+	}
+	else
+	{
+		return ::fast_io::fmt::details::lower_format_program<
+			format_literal, rule_type>(
+			::fast_io::fmt::details::concat_lowered_components<
+				result_type, char_type>{},
+			arguments...);
+	}
 }
 
 /** Applies one named character-domain facade to the common concat kernel. */
