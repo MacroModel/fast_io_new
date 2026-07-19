@@ -5,7 +5,14 @@
 // concat front doors and for non-ASCII execution character sets.
 #include "../../fast_io_freestanding.h"
 
+// Format details are parsed after the freestanding umbrella has restored the
+// caller's macros. Re-enter fast_io's internal macro scope for capability probes.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
+#if !FAST_IO_HAS_BUILTIN(__builtin_signbit) || \
+	!FAST_IO_HAS_BUILTIN(__builtin_isfinite)
 #include <cmath>
+#endif
 #include <concepts>
 #include <cstddef>
 #include <type_traits>
@@ -183,7 +190,11 @@ template <typename value_type>
 	using clean_type = ::std::remove_cvref_t<value_type>;
 	if constexpr (::fast_io::details::my_floating_point<clean_type>)
 	{
+#if FAST_IO_HAS_BUILTIN(__builtin_signbit)
+		return __builtin_signbit(value);
+#else
 		return ::std::signbit(value);
+#endif
 	}
 	else if constexpr (::fast_io::details::my_signed_integral<clean_type>)
 	{
@@ -201,7 +212,11 @@ template <typename value_type>
 	using clean_type = ::std::remove_cvref_t<value_type>;
 	if constexpr (::fast_io::details::my_floating_point<clean_type>)
 	{
+#if FAST_IO_HAS_BUILTIN(__builtin_isfinite)
+		return __builtin_isfinite(value);
+#else
 		return ::std::isfinite(value);
+#endif
 	}
 	else
 	{
@@ -255,3 +270,5 @@ inline constexpr ::std::size_t print_define_internal_shift(
 }
 
 } // namespace fast_io
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"
