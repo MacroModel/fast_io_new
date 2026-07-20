@@ -129,6 +129,18 @@ inline constexpr byte_scatter_sink output_stream_ref_define(
 	return sink;
 }
 
+inline constexpr ::std::true_type print_synchronous_direct_scatter_output(
+	::fast_io::io_reserve_type_t<char, scatter_sink>) noexcept
+{
+	return {};
+}
+
+inline constexpr ::std::true_type print_synchronous_direct_scatter_output(
+	::fast_io::io_reserve_type_t<char, byte_scatter_sink>) noexcept
+{
+	return {};
+}
+
 inline void write_all_overflow_define(
 	write_sink sink, char const *first, char const *last) noexcept
 {
@@ -455,8 +467,8 @@ inline void write_all_overflow_define(
 }
 
 inline constexpr ::fast_io::fmt::basic_fixed_string format_literal{"a{1}c{0}"};
-using first_static_type = decltype(::fast_io::fmt::static_arg<"d">());
-using second_static_type = decltype(::fast_io::fmt::static_arg<"b">());
+using first_static_type = decltype(::fast_io::fmt::static_arg<"d">);
+using second_static_type = decltype(::fast_io::fmt::static_arg<"b">);
 using static_program = ::fast_io::fmt::details::compiled_static_format_program<
 	format_literal, ::fast_io::fmt::brace_fmt_t,
 	first_static_type, second_static_type>;
@@ -464,7 +476,7 @@ static_assert(static_program::size == 4u);
 
 inline constexpr ::fast_io::fmt::basic_fixed_string partial_format_literal{
 	"A{}B{}C"};
-using partial_static_type = decltype(::fast_io::fmt::static_arg<42u>());
+using partial_static_type = decltype(::fast_io::fmt::static_arg<42u>);
 using partial_prefix = ::fast_io::fmt::details::compiled_static_format_run<
 	partial_format_literal, ::fast_io::fmt::brace_fmt_t, 0u, 3u,
 	partial_static_type, ::std::string_view>;
@@ -489,7 +501,7 @@ inline constexpr ::std::array aggregate_values{1u, 15u, 255u};
 inline constexpr ::fast_io::fmt::basic_fixed_string aggregate_format{
 	"values={}"};
 using aggregate_static_type =
-	decltype(::fast_io::fmt::static_arg<aggregate_values>());
+	decltype(::fast_io::fmt::static_arg<aggregate_values>);
 using aggregate_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		aggregate_format, ::fast_io::fmt::brace_fmt_t,
@@ -508,20 +520,20 @@ int main()
 	char output[32u]{};
 	::fast_io::obuffer_view buffer{output, output + 32u};
 	::fast_io::fmt::print<format_literal>(
-		buffer, ::fast_io::fmt::static_arg<"d">(),
-		::fast_io::fmt::static_arg<"b">());
+		buffer, ::fast_io::fmt::static_arg<"d">,
+		::fast_io::fmt::static_arg<"b">);
 	if (::std::string_view{output, buffer.size()} != "abcd")
 	{
 		return 1;
 	}
 
 	auto const concatenated{::fast_io::fmt::concat_std<format_literal>(
-		::fast_io::fmt::static_arg<"d">(),
-		::fast_io::fmt::static_arg<"b">())};
+		::fast_io::fmt::static_arg<"d">,
+		::fast_io::fmt::static_arg<"b">)};
 	auto const concatenated_fast_io{
 		::fast_io::fmt::concat_fast_io<format_literal>(
-			::fast_io::fmt::static_arg<"d">(),
-			::fast_io::fmt::static_arg<"b">())};
+			::fast_io::fmt::static_arg<"d">,
+			::fast_io::fmt::static_arg<"b">)};
 	if (concatenated != "abcd" ||
 		::std::string_view{concatenated_fast_io.data(),
 						   concatenated_fast_io.size()} != "abcd")
@@ -532,8 +544,8 @@ int main()
 	write_state fmt_write{};
 	::fast_io::fmt::print<format_literal>(
 		write_sink{__builtin_addressof(fmt_write)},
-		::fast_io::fmt::static_arg<"d">(),
-		::fast_io::fmt::static_arg<"b">());
+		::fast_io::fmt::static_arg<"d">,
+		::fast_io::fmt::static_arg<"b">);
 	if (fmt_write.calls != 1u || fmt_write.source != expected_source ||
 		::std::string_view{fmt_write.bytes.data(), fmt_write.size} != "abcd")
 	{
@@ -543,15 +555,15 @@ int main()
 	status_state status{};
 	::fast_io::fmt::print<format_literal>(
 		status_sink{__builtin_addressof(status)},
-		::fast_io::fmt::static_arg<"d">(),
-		::fast_io::fmt::static_arg<"b">());
+		::fast_io::fmt::static_arg<"d">,
+		::fast_io::fmt::static_arg<"b">);
 	if (status.calls != 1u)
 	{
 		return 4;
 	}
 	::fast_io::fmt::print<"{}">(
 		status_sink{__builtin_addressof(status)},
-		::fast_io::fmt::static_arg<"">());
+		::fast_io::fmt::static_arg<"">);
 	if (status.calls != 2u)
 	{
 		return 5;
@@ -560,7 +572,7 @@ int main()
 	write_state empty_write{};
 	::fast_io::fmt::print<"{}">(
 		write_sink{__builtin_addressof(empty_write)},
-		::fast_io::fmt::static_arg<"">());
+		::fast_io::fmt::static_arg<"">);
 	if (empty_write.calls != 0u || empty_write.size != 0u)
 	{
 		return 6;
@@ -569,7 +581,7 @@ int main()
 	locked_state empty_locked{};
 	::fast_io::fmt::print<"{}">(
 		locked_sink{__builtin_addressof(empty_locked)},
-		::fast_io::fmt::static_arg<"">());
+		::fast_io::fmt::static_arg<"">);
 	if (empty_locked.locks != 1u || empty_locked.unlocks != 1u ||
 		empty_locked.locked || empty_locked.write.calls != 0u)
 	{
@@ -579,8 +591,8 @@ int main()
 	locked_state locked{};
 	::fast_io::fmt::print<format_literal>(
 		locked_sink{__builtin_addressof(locked)},
-		::fast_io::fmt::static_arg<"d">(),
-		::fast_io::fmt::static_arg<"b">());
+		::fast_io::fmt::static_arg<"d">,
+		::fast_io::fmt::static_arg<"b">);
 	if (locked.locks != 1u || locked.unlocks != 1u || locked.locked ||
 		locked.outer_status_calls != 0u || locked.write.calls != 1u ||
 		locked.write.source != expected_source ||
@@ -613,7 +625,7 @@ int main()
 	write_state aggregate_write{};
 	::fast_io::fmt::print<aggregate_format>(
 		write_sink{__builtin_addressof(aggregate_write)},
-		::fast_io::fmt::static_arg<aggregate_values>());
+		::fast_io::fmt::static_arg<aggregate_values>);
 	if (aggregate_write.calls != 1u ||
 		aggregate_write.source != aggregate_static_program::storage.data() ||
 		::std::string_view{
@@ -627,7 +639,7 @@ int main()
 	write_state partial_write{};
 	::fast_io::fmt::print<partial_format_literal>(
 		write_sink{__builtin_addressof(partial_write)},
-		::fast_io::fmt::static_arg<42u>(),
+		::fast_io::fmt::static_arg<42u>,
 		::std::string_view{partial_dynamic});
 	if (partial_write.calls != 3u ||
 		::std::string_view{partial_write.bytes.data(), partial_write.size} !=
@@ -639,7 +651,7 @@ int main()
 	partial_status_state partial_status{};
 	::fast_io::fmt::print<partial_format_literal>(
 		partial_status_sink{__builtin_addressof(partial_status)},
-		::fast_io::fmt::static_arg<42u>(),
+		::fast_io::fmt::static_arg<42u>,
 		::std::string_view{partial_dynamic});
 	if (partial_status.calls != 1u ||
 		partial_status.prefix != partial_prefix::storage.data() ||
@@ -653,7 +665,7 @@ int main()
 	scatter_state partial_scatter{};
 	::fast_io::fmt::print<partial_format_literal>(
 		scatter_sink{__builtin_addressof(partial_scatter)},
-		::fast_io::fmt::static_arg<42u>(),
+		::fast_io::fmt::static_arg<42u>,
 		::std::string_view{partial_dynamic});
 	if (partial_scatter.calls != 1u || partial_scatter.count != 3u ||
 		partial_scatter.sources[0] != partial_prefix::storage.data() ||
@@ -671,7 +683,7 @@ int main()
 	locked_state partial_locked{};
 	::fast_io::fmt::print<partial_format_literal>(
 		locked_sink{__builtin_addressof(partial_locked)},
-		::fast_io::fmt::static_arg<42u>(),
+		::fast_io::fmt::static_arg<42u>,
 		::std::string_view{partial_dynamic});
 	if (partial_locked.locks != 1u || partial_locked.unlocks != 1u ||
 		partial_locked.locked || partial_locked.write.calls != 3u ||
@@ -808,8 +820,8 @@ int main()
 	precision_status_state precision_status{};
 	::fast_io::fmt::print<precision_format_literal>(
 		precision_status_sink{__builtin_addressof(precision_status)},
-		::fast_io::fmt::static_arg<"xxx">(),
-		::fast_io::fmt::static_arg<42u>(), 3.14);
+		::fast_io::fmt::static_arg<"xxx">,
+		::fast_io::fmt::static_arg<42u>, 3.14);
 	if (precision_status.calls != 1u ||
 		precision_status.current != precision_status.put_area.data())
 	{
@@ -820,10 +832,18 @@ int main()
 	short_precision_sink short_precision_output{
 		__builtin_addressof(short_precision)};
 	::fast_io::fmt::print<precision_format_literal>(
-		short_precision_output, ::fast_io::fmt::static_arg<"xxx">(),
-		::fast_io::fmt::static_arg<42u>(), 3.14);
+		short_precision_output, ::fast_io::fmt::static_arg<"xxx">,
+		::fast_io::fmt::static_arg<42u>, 3.14);
+	// The complete record does not fit the eight-byte put area.  The whole-record
+	// overflow strategy writes it once and leaves no buffered prefix behind;
+	// two historical overflow calls are not part of the sink's semantics.
+	if (short_precision.current != short_precision.put_area.data())
+	{
+		return 25;
+	}
 	flush_short_precision(short_precision_output);
-	if (short_precision.write.calls != 2u ||
+	if (short_precision.write.calls != 1u ||
+		short_precision.current != short_precision.put_area.data() ||
 		short_precision.write.size != precision_expected.size() ||
 		::std::string_view{short_precision.write.bytes.data(),
 						  short_precision.write.size} != precision_expected)
@@ -834,8 +854,8 @@ int main()
 	locked_state precision_locked{};
 	::fast_io::fmt::print<precision_format_literal>(
 		locked_sink{__builtin_addressof(precision_locked)},
-		::fast_io::fmt::static_arg<"xxx">(),
-		::fast_io::fmt::static_arg<42u>(), 3.14);
+		::fast_io::fmt::static_arg<"xxx">,
+		::fast_io::fmt::static_arg<42u>, 3.14);
 	if (precision_locked.locks != 1u || precision_locked.unlocks != 1u ||
 		precision_locked.locked || precision_locked.outer_status_calls != 0u ||
 		::std::string_view{precision_locked.write.bytes.data(),

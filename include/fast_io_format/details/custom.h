@@ -268,9 +268,12 @@ namespace custom_format_adl
 
 // Poison pills suppress accidental ordinary-lookup fallbacks while retaining
 // argument-dependent lookup in the customization type's namespace.
-void format_parse_define() = delete;
-void format_alias_define() = delete;
-void format_as() = delete;
+template <typename... argument_types>
+void format_parse_define(argument_types &&...) = delete;
+template <typename... argument_types>
+void format_alias_define(argument_types &&...) = delete;
+template <typename... argument_types>
+void format_as(argument_types &&...) = delete;
 
 template <auto format_literal, auto source, typename value_type>
 concept parse_expression = requires {

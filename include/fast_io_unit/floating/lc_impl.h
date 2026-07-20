@@ -159,10 +159,25 @@ inline constexpr char_type *print_reserve_define(basic_lc_all<char_type> const *
 		}
 		else if constexpr (::fast_io::details::print_floating_decimal_via_float<flt>)
 		{
+			using floating_type = ::std::remove_cvref_t<flt>;
+			using trait = ::fast_io::details::iec559_traits<floating_type>;
+			auto const [mantissa, exponent, sign]{
+				::fast_io::details::get_punned_result(f.reference)};
+			constexpr auto exponent_mask{
+				(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
+			if (exponent == static_cast<::std::uint_least32_t>(exponent_mask))
+			{
+				return ::fast_io::details::prsv_fp_nan_impl<
+					flags.showpos, flags.uppercase, flags.nan_show_sign,
+					flags.nan_show_type, trait::mbits>(iter, mantissa, sign);
+			}
+			auto const widened{
+				::fast_io::details::dragonbox_narrow_float_from_fields<floating_type>(
+					mantissa, exponent, sign)};
 			return ::fast_io::details::lc_print_rsvflt_define_impl<flags.showpos, flags.uppercase, flags.uppercase_e,
 																   flags.floating, flags.nan_show_sign,
 																   flags.nan_show_type>(
-				all, iter, static_cast<float>(f.reference));
+				all, iter, widened);
 		}
 		else
 		{

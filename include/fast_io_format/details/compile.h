@@ -94,6 +94,43 @@ template <auto format_literal, typename grammar_tag>
 inline constexpr auto checked_program{
 	make_checked_program<format_literal, ::std::remove_cvref_t<grammar_tag>>()};
 
+namespace format_argument_list_validation_adl
+{
+
+template <typename... argument_types>
+struct argument_type_list
+{};
+
+// An argument-list contract is grammar-owned.  The generic lowering path only
+// invokes this optional CPO.  The type-only carrier preserves arrays,
+// cv-qualification, named-argument metadata, and every other fact required to
+// resolve structural references without transporting run-time state.
+template <auto>
+void validate_format_argument_list() = delete;
+
+template <auto format_literal, typename grammar_type,
+		  typename... argument_types>
+concept expression = requires {
+	validate_format_argument_list<format_literal>(
+		::std::remove_cvref_t<grammar_type>{},
+		argument_type_list<argument_types...>{});
+};
+
+template <auto format_literal, typename grammar_type,
+		  typename... argument_types>
+	requires expression<format_literal, grammar_type, argument_types...>
+inline consteval void invoke() noexcept(noexcept(
+	validate_format_argument_list<format_literal>(
+		::std::remove_cvref_t<grammar_type>{},
+		argument_type_list<argument_types...>{})))
+{
+	validate_format_argument_list<format_literal>(
+		::std::remove_cvref_t<grammar_type>{},
+		argument_type_list<argument_types...>{});
+}
+
+} // namespace format_argument_list_validation_adl
+
 } // namespace fast_io::fmt::details
 
 namespace fast_io::fmt

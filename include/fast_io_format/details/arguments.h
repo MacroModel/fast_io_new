@@ -184,6 +184,62 @@ template <auto format_literal, argument_reference reference, typename... argumen
 	}
 }
 
+/** Resolves a consteval reference value when a grammar-wide pass cannot name it as an NTTP. */
+template <auto format_literal, typename... argument_types>
+[[nodiscard]] inline consteval argument_resolution
+resolve_argument_reference_value(argument_reference reference) noexcept
+{
+	if (reference.kind != argument_reference_kind::name)
+	{
+		if (reference.index < sizeof...(argument_types))
+		{
+			return {reference.index, argument_resolution_error::none};
+		}
+		return {reference.index,
+				argument_resolution_error::index_out_of_range};
+	}
+
+	[[maybe_unused]] ::std::size_t current_index{};
+	::std::size_t selected_index{};
+	::std::size_t match_count{};
+	([&]<typename argument_type>() consteval {
+		using clean_type = ::std::remove_cvref_t<argument_type>;
+		if constexpr (::fast_io::fmt::is_static_named_arg_v<clean_type>)
+		{
+			constexpr auto candidate_name{clean_type::name};
+			using format_char_type = typename decltype(format_literal)::value_type;
+			using candidate_char_type = typename decltype(candidate_name)::value_type;
+			if constexpr (::std::same_as<format_char_type,
+										 candidate_char_type>)
+			{
+				bool equal{reference.name.size == candidate_name.size()};
+				for (::std::size_t i{}; equal && i != reference.name.size; ++i)
+				{
+					equal = format_literal[reference.name.offset + i] ==
+							candidate_name[i];
+				}
+				if (equal)
+				{
+					selected_index = current_index;
+					++match_count;
+				}
+			}
+		}
+		++current_index;
+	}.template operator()<argument_types>(),
+	 ...);
+
+	if (match_count == 1u)
+	{
+		return {selected_index, argument_resolution_error::none};
+	}
+	if (match_count == 0u)
+	{
+		return {0u, argument_resolution_error::name_not_found};
+	}
+	return {selected_index, argument_resolution_error::duplicate_name};
+}
+
 template <argument_resolution_error error, ::std::size_t source_position>
 inline consteval void diagnose_argument_resolution()
 {

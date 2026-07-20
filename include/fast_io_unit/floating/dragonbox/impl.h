@@ -277,10 +277,26 @@ template <typename flt>
 inline constexpr ::std::int_least32_t dragonbox_kappa{
 	::fast_io::details::dragonbox_uses_binary32_core<flt> ? 1 : 2};
 
+/*
+The decimal carrier is sized for decimal digits, not merely for the source
+format's stored binary fraction.  Binary80 has a 64-bit significand but its
+shortest round-trip coefficient can contain 21 decimal digits, which cannot
+fit in uint64_t.  Native uint128 therefore owns every admitted coefficient
+wider than 19 digits.  The binary32/64 Dragonbox kernels retain their original
+uint32/uint64 carriers and generated-table ABI.
+*/
 template <typename flt>
 using dragonbox_decimal_mantissa_type =
-	::std::conditional_t<::fast_io::details::dragonbox_uses_binary32_core<flt>, ::std::uint_least32_t,
-						 typename iec559_traits<flt>::mantissa_type>;
+	::std::conditional_t<::fast_io::details::dragonbox_uses_binary32_core<flt>,
+		::std::uint_least32_t,
+#if defined(__SIZEOF_INT128__)
+		::std::conditional_t<
+			(19u < ::fast_io::details::iec559_traits<flt>::m10digits),
+			__uint128_t, typename iec559_traits<flt>::mantissa_type>
+#else
+		typename iec559_traits<flt>::mantissa_type
+#endif
+	>;
 
 // Let X_i be the historical 128-bit normalized cache word for
 // 10^(-342+i).  Multiplication by ten moves to the next decimal exponent.
@@ -1933,6 +1949,58 @@ template <typename flt>
 	// permitted to flush the intermediate binary32 subnormal before a later
 	// widening could recover the original value.
 	return ::fast_io::bit_cast<float>(raw);
+}
+
+/**
+ * @brief Maps one already-classified finite IEEE binary32 value to the exactly
+ *        equal IEEE binary64 value without executing a floating conversion.
+ *
+ * The caller must reject raw exponent 255 before entering this function.  That
+ * ordering is part of the contract: an sNaN is formatted from its original
+ * binary32 fields and can never be quieted, raise FE_INVALID, or lose payload
+ * bits in an FCVT.  Integer construction also keeps binary32 subnormals exact
+ * when a target's DAZ/FTZ state would make `static_cast<double>(float)` unsafe.
+ *
+ * For a normal source, the binary32 value is
+ *
+ *   (2^23 + M) * 2^(E - 150).
+ *
+ * The constructed binary64 significand is `(2^23 + M) * 2^29` and its biased
+ * exponent is `E + 896`, which denotes the same product exactly.  For a
+ * subnormal, let H=floor(log2(M)).  The constructed significand is
+ * `M * 2^(52-H)` and biased exponent `H+874`, hence its value is exactly
+ * `M * 2^-149`.  Zero retains only the original sign bit.  These three cases
+ * exhaust every finite binary32 encoding.
+ *
+ * The returned floating scalar remains by value so the established binary64
+ * low-level ABI continues to use a floating register where the target ABI does.
+ */
+[[nodiscard]] inline constexpr double
+dragonbox_binary32_finite_fields_to_binary64(
+	::std::uint_least32_t mantissa, ::std::uint_least32_t exponent,
+	bool negative) noexcept
+{
+	static_assert(::fast_io::details::iec559_traits<float>::mbits == 23u &&
+		::fast_io::details::iec559_traits<float>::ebits == 8u);
+	static_assert(::fast_io::details::iec559_traits<double>::mbits == 52u &&
+		::fast_io::details::iec559_traits<double>::ebits == 11u);
+	::std::uint_least64_t raw{
+		static_cast<::std::uint_least64_t>(negative) << 63u};
+	if (exponent)
+	{
+		raw |= static_cast<::std::uint_least64_t>(exponent + 896u) << 52u;
+		raw |= static_cast<::std::uint_least64_t>(mantissa) << 29u;
+	}
+	else if (mantissa)
+	{
+		auto const leading_bit{static_cast<::std::uint_least32_t>(
+			::std::bit_width(mantissa) - 1u)};
+		raw |= static_cast<::std::uint_least64_t>(leading_bit + 874u) << 52u;
+		raw |= static_cast<::std::uint_least64_t>(
+			mantissa ^ (static_cast<::std::uint_least32_t>(1u) << leading_bit))
+			<< (52u - leading_bit);
+	}
+	return ::fast_io::bit_cast<double>(raw);
 }
 
 // The hybrid narrow path calls this widening-and-shortening repair only after a
@@ -4468,15 +4536,16 @@ print_rsvflt_binary64_fixed_fractional_da_low_impl(
 exact_precision_window_divide_128_by_decimal_limb(
 	::std::uint_least64_t high, ::std::uint_least64_t low) noexcept
 {
-	// GNU-driver Clang and GCC express the proved high<divisor precondition as one
-	// divq and avoid an out-of-line __udivti3 helper in the audited Linux System V
-	// x86-64 LP64 artifact.  Native MSVC, clang-cl, x32, MinGW, non-Linux x86-64
-	// and other targets use the exact reciprocal implementation below; constexpr
-	// evaluation uses language division.  All three return the same quotient and
-	// remainder pair.
+	// GCC expresses the proved high<divisor precondition as one divq and avoids an
+	// out-of-line __udivti3 helper in the audited Linux System V x86-64 LP64
+	// artifact. Clang intentionally uses the exact reciprocal implementation
+	// below: Clang 23's CodeGen StringLiteralParser crashes while instantiating
+	// this extended-asm operand in large precision matrices, even in the default
+	// AT&T dialect. Native MSVC, clang-cl, x32, MinGW, non-Linux x86-64 and other
+	// targets use that same reciprocal path; constexpr evaluation uses language
+	// division. All three implementations return the same quotient/remainder pair.
 #if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	!defined(_MSC_VER) && \
-	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__))) && \
+	!defined(_MSC_VER) && defined(__GNUC__) && !defined(__clang__) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if (!__builtin_is_constant_evaluated())
 	{
@@ -4626,9 +4695,11 @@ inline constexpr exact_precision_window_result exact_precision_window_materializ
 Binary80 and binary128 can require more than eleven thousand exact coefficient
 digits even when the caller requests only a short scientific field.  The
 bounded window below encloses positive 5^s by two normalized 512-bit dyadic
-endpoints.  The integration gate currently admits only subnormals, for which
-s is proved positive; the reciprocal construction is documented separately
-but deliberately does not add a second runtime table here.  The code accepts a
+endpoints.  Its arithmetic admits every field for which s is proved positive;
+the established runtime precision gate currently calls the subnormal wrapper,
+while compiler-constant precision may also supply an explicit normal binary
+exponent.  The reciprocal construction is documented separately but
+deliberately does not add a second runtime table here.  The code accepts a
 prefix only when shifting both endpoints produces the same integer.
 Consequently approximation affects only
 the acceptance rate: an accepted prefix is the exact floor.
@@ -4991,8 +5062,9 @@ exact_precision_wide_window_log10_pow2_seed(
 [[__gnu__::__noinline__]]
 #endif
 [[nodiscard]] inline constexpr exact_precision_window_result
-exact_precision_wide_subnormal_window_from_binary(
+exact_precision_wide_window_from_significand(
 	__uint128_t mantissa, unsigned mantissa_bits,
+	::std::int_least32_t binary_exponent,
 	::std::size_t requested_digits) noexcept
 {
 	exact_precision_window_result failure{};
@@ -5002,9 +5074,6 @@ exact_precision_wide_subnormal_window_from_binary(
 	{
 		return failure;
 	}
-	constexpr ::std::int_least32_t bias{16383};
-	auto const binary_exponent{1 - bias -
-		static_cast<::std::int_least32_t>(mantissa_bits)};
 	auto const binary_floor{binary_exponent + static_cast<::std::int_least32_t>(
 		::fast_io::details::exact_precision_wide_window_mantissa_bit_width(mantissa) - 1u)};
 	auto real_exponent{
@@ -5013,8 +5082,8 @@ exact_precision_wide_subnormal_window_from_binary(
 	{
 		auto const decimal_shift64{
 			static_cast<::std::int_least64_t>(requested_digits) - 1 - real_exponent};
-		// Every binary80/binary128 subnormal is below 2^-16382.  With at
-		// most 130 requested digits, s=r-1-k is therefore strictly positive.
+		// This power table represents positive 5^s only.  Callers outside that
+		// domain retain their exact-expansion fallback.
 		if (decimal_shift64 <= 0 || 8191 < decimal_shift64)
 		{
 			return failure;
@@ -5027,8 +5096,8 @@ exact_precision_wide_subnormal_window_from_binary(
 				::fast_io::details::exact_precision_wide_window_mantissa_countr_zero(
 					mantissa)) >= required_binary_factors)
 		{
-			// An exact grid point is left to the complete fallback.  In the admitted
-			// subnormal domain this is only a defensive representation check.
+			// An exact grid point is left to the complete fallback: after all binary
+			// factors cancel, no positive-5 interval is needed or authoritative.
 			return failure;
 		}
 		auto const power{::fast_io::details::exact_precision_wide_window_power5(
@@ -5086,6 +5155,23 @@ exact_precision_wide_subnormal_window_from_binary(
 		return generated;
 	}
 	return failure;
+}
+
+/// @brief Retains the original binary80/binary128 subnormal-window entry.
+/// @details Subnormal and minimum-normal values share this binary exponent;
+///          callers with an explicit normal significand may therefore reuse
+///          the same proved 512-bit interval without constructing the complete
+///          eleven-thousand-digit exact coefficient.
+[[nodiscard]] inline constexpr exact_precision_window_result
+exact_precision_wide_subnormal_window_from_binary(
+	__uint128_t mantissa, unsigned mantissa_bits,
+	::std::size_t requested_digits) noexcept
+{
+	constexpr ::std::int_least32_t bias{16383};
+	return ::fast_io::details::exact_precision_wide_window_from_significand(
+		mantissa, mantissa_bits,
+		1 - bias - static_cast<::std::int_least32_t>(mantissa_bits),
+		requested_digits);
 }
 #endif
 
@@ -9812,24 +9898,18 @@ inline constexpr char_type *print_rsvflt_exact_precision_window_dispatch_impl(
 }
 #endif
 
-// This entry is the full decimal-expansion fallback after compact/direct
-// precision attempts have declined the value.  `cold` follows that control-flow
-// domain and is not a measured frequency assertion for every input corpus;
-// `noinline` prevents the expansion object and rounding state from enlarging the
-// common caller.  Both attributes are optional: omission changes only placement,
-// while the exact digits, rounding policy and presentation remain identical.
+// Arithmetic/presentation body shared by the ordinary outlined fallback and
+// print/concat's optimizer-proven constant proxy.  Keeping placement attributes
+// on the wrapper below lets the ordinary dynamic path retain its established
+// frame while the selected constant arm can expose every integer operation to
+// constant propagation.  Both callers therefore use one rounding algorithm.
 template <typename flt, bool comma, bool uppercase_e,
 		  ::fast_io::manipulators::floating_format format,
 		  ::fast_io::manipulators::floating_precision precision_mode,
 		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
 		  ::std::integral char_type>
-#if __has_cpp_attribute(__gnu__::__cold__)
-[[__gnu__::__cold__]]
-#endif
-#if __has_cpp_attribute(__gnu__::__noinline__)
-[[__gnu__::__noinline__]]
-#endif
-inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+print_rsvflt_exact_precision_body_impl(
 	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
 	::std::uint_least32_t exponent, ::std::size_t precision, bool negative) noexcept
 {
@@ -9884,6 +9964,33 @@ inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
 	return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
 		flt, comma, uppercase_e, format, precision_mode, json_float>(
 		iter, decimal, precision, significant);
+}
+
+// This entry is the full decimal-expansion fallback after compact/direct
+// precision attempts have declined the value.  `cold` follows that control-flow
+// domain and is not a measured frequency assertion for every input corpus;
+// `noinline` prevents the expansion object and rounding state from enlarging the
+// common dynamic caller.  The shared body above owns every numeric decision.
+template <typename flt, bool comma, bool uppercase_e,
+		  ::fast_io::manipulators::floating_format format,
+		  ::fast_io::manipulators::floating_precision precision_mode,
+		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
+		  ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr char_type *print_rsvflt_exact_precision_define_impl(
+	char_type *iter,
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, ::std::size_t precision,
+	bool negative) noexcept
+{
+	return ::fast_io::details::print_rsvflt_exact_precision_body_impl<
+		flt, comma, uppercase_e, format, precision_mode, rounding, json_float>(
+			iter, mantissa, exponent, precision, negative);
 }
 
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding, bool preserve_trailing_zero = false>
@@ -12645,9 +12752,12 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 		}
 		if constexpr (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float))
 		{
+			auto const widened{
+				::fast_io::details::dragonbox_narrow_float_from_fields<flt>(
+					mantissa, exponent, sign)};
 			return ::fast_io::details::print_rsvflt_precision_define_impl<
 				showpos, uppercase, uppercase_e, comma, mt, precision_mode, rounding,
-				nan_show_sign, nan_show_type, json_float>(iter, static_cast<float>(f), precision);
+				nan_show_sign, nan_show_type, json_float>(iter, widened, precision);
 		}
 		iter = print_rsv_fp_sign_impl<showpos>(iter, sign);
 		if (!mantissa && !exponent)

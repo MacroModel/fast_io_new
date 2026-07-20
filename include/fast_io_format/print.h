@@ -185,13 +185,20 @@ struct print_lowered_components
 	output_type &&output;
 
 	template <typename... component_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+	[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+	[[msvc::forceinline]]
+#endif
 	inline constexpr void operator()(component_types &&...components) const
 	{
 		if constexpr (sizeof...(component_types) != 0u)
 		{
-			::fast_io::print(
-				::std::forward<output_type>(output),
-				::std::forward<component_types>(components)...);
+			decltype(auto) outref{
+				::fast_io::operations::output_stream_ref(output)};
+			::fast_io::operations::decay::
+				print_freestanding_compiler_constant_pre_normalization<false>(
+					outref, components...);
 		}
 	}
 };
@@ -214,12 +221,9 @@ struct print_passive_mixed_lowered_components
 			output_type, component_types...>());
 		decltype(auto) outref{
 			::fast_io::operations::output_stream_ref(output)};
-		using output_reference = ::std::remove_cvref_t<decltype(outref)>;
-		using char_type = typename output_reference::output_char_type;
-		::fast_io::operations::decay::print_passive_mixed_put_area_fast_entry<false>(
-			outref,
-			::fast_io::io_print_forward<char_type>(
-				::fast_io::io_print_alias(components))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization_passive_mixed<false>(
+			outref, components...);
 	}
 };
 
@@ -239,9 +243,14 @@ struct print_passive_mixed_lowered_components
  * must make that choice explicitly as well.
  */
 template <basic_fixed_string format_literal, format_grammar grammar_type,
-		  typename output_type, typename... argument_types>
+	  typename output_type, typename... argument_types>
 	requires format_output_for<output_type,
-							   typename decltype(format_literal)::value_type>
+								   typename decltype(format_literal)::value_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print_with_rule(
 	grammar_type, output_type &&output, argument_types &&...arguments)
 {
@@ -280,6 +289,13 @@ inline constexpr void print_passive_mixed_with_rule(
 	grammar_type, output_type &&output, argument_types &&...arguments)
 {
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
+	if constexpr (::fast_io::fmt::details::format_argument_list_validation_adl::
+					  expression<format_literal, rule_type,
+								 argument_types...>)
+	{
+		::fast_io::fmt::details::format_argument_list_validation_adl::invoke<
+			format_literal, rule_type, argument_types...>();
+	}
 	auto indexed_arguments{make_indexed_argument_pack(arguments...)};
 	constexpr auto operation_count{
 		checked_program<format_literal, rule_type>.operation_count};
@@ -324,6 +340,11 @@ template <typename char_type>
 template <typename expected_char_type, basic_fixed_string format_literal,
 		  format_grammar grammar_type, typename first_type,
 		  typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print_builtin_with_rule(
 	grammar_type grammar, first_type &&first,
 	argument_types &&...arguments)
@@ -357,6 +378,11 @@ inline constexpr void print_builtin_with_rule(
 
 template <typename expected_char_type, basic_fixed_string format_literal,
 		  format_grammar grammar_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print_builtin_with_rule(grammar_type grammar)
 {
 	using literal_char_type = typename decltype(format_literal)::value_type;
@@ -377,6 +403,11 @@ inline constexpr void print_builtin_with_rule(grammar_type grammar)
  */
 template <basic_fixed_string format_literal, format_grammar grammar_type,
 		  typename first_type, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print_primary_with_rule(
 	grammar_type grammar, first_type &&first,
 	argument_types &&...arguments)
@@ -411,6 +442,11 @@ inline constexpr void print_primary_with_rule(
 }
 
 template <basic_fixed_string format_literal, format_grammar grammar_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print_primary_with_rule(grammar_type grammar)
 {
 	using char_type = typename decltype(format_literal)::value_type;
@@ -451,6 +487,11 @@ inline constexpr void print(argument_types &&...arguments)
 template <basic_fixed_string format_literal, typename... argument_types>
 	requires (!::fast_io::fmt::details::print_primary_passive_mixed_put_area_available<
 		format_literal, brace_fmt_t, argument_types...>::value)
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void print(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_primary_with_rule<format_literal>(
@@ -458,6 +499,11 @@ inline constexpr void print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void wprint(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<wchar_t, format_literal>(
@@ -465,6 +511,11 @@ inline constexpr void wprint(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u8print(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char8_t, format_literal>(
@@ -472,6 +523,11 @@ inline constexpr void u8print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u16print(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char16_t, format_literal>(
@@ -479,6 +535,11 @@ inline constexpr void u16print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u32print(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char32_t, format_literal>(
@@ -488,6 +549,11 @@ inline constexpr void u32print(argument_types &&...arguments)
 // Percent grammar. The `f` suffix authorizes percent conversions; it is not a
 // runtime-formatting mode.
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void printf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_primary_with_rule<format_literal>(
@@ -495,6 +561,11 @@ inline constexpr void printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void wprintf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<wchar_t, format_literal>(
@@ -502,6 +573,11 @@ inline constexpr void wprintf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u8printf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char8_t, format_literal>(
@@ -509,6 +585,11 @@ inline constexpr void u8printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u16printf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char16_t, format_literal>(
@@ -516,6 +597,11 @@ inline constexpr void u16printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void u32printf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char32_t, format_literal>(

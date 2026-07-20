@@ -63,6 +63,24 @@ inline constexpr ::std::true_type concat_single_pass_bounded_materialization_pre
 	return {};
 }
 
+/// @brief Propagates print's independent direct-put-area authorization through the format scalar wrapper.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			print_single_pass_bounded_direct_put_area_safe(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
 /// @brief Forwards concat's non-fatal candidate bound through the format scalar wrapper.
 /// @details Prefix placement and space-sign spelling do not add code units; they only reinterpret bytes already
 ///          covered by the child scalar's reserve bound. Preserving the caller's limit lets an extreme dynamic
@@ -172,6 +190,267 @@ inline constexpr char_type *print_reserve_define(
 	return end;
 }
 
+/// Keeps the optional compiler-constant floating proxy visible through format's
+/// spelling wrapper.
+///
+/// The generic wrapper above intentionally retains its established inlining
+/// policy.  A constant hexadecimal float has a larger independent formatter,
+/// however, and Clang otherwise outlines this one forwarding frame even though
+/// the value is already proven constant.  Restricting the force-inline overload
+/// to the replacement proxy exposes that value to its dedicated writer without
+/// changing the code shape of any ordinary run-time format leaf.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::size_t base_prefix_size, bool space_sign>
+		requires requires(
+			::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+				char_type, flags, floating_type> scalar,
+		char_type *iter) {
+		print_reserve_define(
+			::fast_io::io_reserve_type<
+				char_type,
+				::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+					char_type, flags, floating_type>>,
+			iter, scalar);
+	}
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+				char_type, flags, floating_type>,
+			base_prefix_size, space_sign>>,
+	char_type *iter,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, floating_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	auto const begin{iter};
+	auto const end{print_reserve_define(
+		::fast_io::io_reserve_type<
+			char_type,
+			::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+				char_type, flags, floating_type>>,
+		iter, value.scalar)};
+	if constexpr (space_sign)
+	{
+		if (begin != end && *begin == ::fast_io::char_literal_v<u8'+', char_type>)
+		{
+			*begin = ::fast_io::char_literal_v<u8' ', char_type>;
+		}
+	}
+	return end;
+}
+
+/// Keeps the integer-fields hexadecimal precision proxy visible through the
+/// same format spelling wrapper.  This is the precision counterpart of the
+/// scalar overload above; format continues to translate syntax only, while
+/// print/concat owns constant recognition and materialization.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::size_t base_prefix_size, bool space_sign>
+		 requires requires(
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				char_type, flags, floating_type> scalar,
+			char_type *iter) {
+		print_reserve_define(
+			::fast_io::io_reserve_type<
+				char_type,
+				::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+					char_type, flags, floating_type>>,
+			iter, scalar);
+	}
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				char_type, flags, floating_type>,
+			base_prefix_size, space_sign>>,
+	char_type *iter,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			char_type, flags, floating_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	auto const begin{iter};
+	auto const end{print_reserve_define(
+		::fast_io::io_reserve_type<
+			char_type,
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				char_type, flags, floating_type>>,
+		iter, value.scalar)};
+	if constexpr (space_sign)
+	{
+		if (begin != end && *begin == ::fast_io::char_literal_v<u8'+', char_type>)
+		{
+			*begin = ::fast_io::char_literal_v<u8' ', char_type>;
+		}
+	}
+	return end;
+}
+
+/// Propagates the core compiler-constant protocol through format's sign/prefix spelling wrapper.
+///
+/// Format lowering only translates the parsed field to this semantic scalar.  The value-level decision and the
+/// replacement formatter remain owned by the shared print/concat protocol below it.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_query_inline_safe<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// Format lowering contributes only the spelling wrapper. The wrapped scalar's core opt-in is the proof that the
+/// complete lowered leaf may cross print's pre-normalization replacement boundary.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_pre_normalization_safe<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Forwards the child's proof that a successful eligibility query already enforces the compact byte budget.
+/// @details Width consumes this type-only fact to avoid materializing and exactly sizing an expensive precision float a
+///          second time merely to repeat the same bound. Format itself makes no value-level decision here.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			print_compiler_constant_eligible_implies_compact_size(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_eligible_implies_compact_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	 requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+[[nodiscard]] inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> const &value) noexcept
+{
+	return print_compiler_constant_materialization_eligible(
+		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar);
+}
+
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	 requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> const &value) noexcept
+{
+	using materialized_scalar =
+		::fast_io::details::compiler_constant_materialized_t<char_type, scalar_type>;
+	return ::fast_io::manipulators::format_scalar_t<
+		materialized_scalar, base_prefix_size, space_sign>{
+		print_compiler_constant_materialize(
+			::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)};
+}
+
+/// Propagates the immutable-fragment representation through format's spelling-only scalar wrapper.
+/// Format contributes no character buffer here: the core scalar owns every digit/punctuation table and the print
+/// destination decides whether descriptors or ordinary reserve output are appropriate.  The sole spelling adjustment
+/// made by this wrapper is printf/brace's space-sign rule, which substitutes a static space descriptor for a leading
+/// plus without modifying any payload storage.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_static_fragment_printable<
+		char_type, scalar_type>
+inline constexpr ::std::size_t print_compiler_constant_static_fragments_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return print_compiler_constant_static_fragments_size(
+		::fast_io::io_reserve_type<char_type, scalar_type>);
+}
+
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_static_fragment_printable<
+		char_type, scalar_type>
+inline constexpr ::fast_io::basic_io_scatter_t<char_type> *
+print_compiler_constant_static_fragments_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::basic_io_scatter_t<char_type> *first,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> const &value) noexcept
+{
+	auto const last{print_compiler_constant_static_fragments_define(
+		::fast_io::io_reserve_type<char_type, scalar_type>, first,
+		value.scalar)};
+	if constexpr (space_sign)
+	{
+		if (first != last && first->len != 0u &&
+			*first->base == ::fast_io::char_literal_v<u8'+', char_type>)
+		{
+			first->base = __builtin_addressof(
+				::fast_io::char_literal_v<u8' ', char_type>);
+			first->len = 1u;
+		}
+	}
+	return last;
+}
+
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 	requires requires {
 		print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, scalar_type>);
@@ -246,6 +525,124 @@ inline constexpr decltype(auto) print_reserve_precise_define(
 		}
 		return result;
 	}
+}
+
+/// @brief Keeps a compiler-constant precision-float proxy visible across format's final precise-define forwarding leaf.
+/// @details Clang 23 otherwise outlined only this spelling wrapper for `fmt::print<"v={:.3a}">(out(), 1.25)`, leaving
+///          a 120-byte frame and a call after the core proxy had already become fully constant.  The overload is
+///          intentionally limited to that replacement type; ordinary run-time scalar and format lowering paths keep
+///          the generic compiler-selected inlining policy above.
+template <::std::integral char_type, ::std::random_access_iterator iterator,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires ::std::same_as<char_type, proxy_char_type> &&
+		requires(
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				proxy_char_type, flags, floating_type> scalar,
+			iterator iter, ::std::size_t size) {
+			print_reserve_precise_define(
+				::fast_io::io_reserve_type<
+					char_type,
+					::fast_io::manipulators::
+						compiler_constant_floating_precision_manip_t<
+							proxy_char_type, flags, floating_type>>,
+				iter, size, scalar);
+		}
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				proxy_char_type, flags, floating_type>,
+			base_prefix_size, space_sign>>,
+	iterator iter, ::std::size_t size,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	using scalar_type =
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>;
+	using define_result = decltype(print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, scalar_type>, iter, size,
+		value.scalar));
+	if constexpr (::std::same_as<define_result, void>)
+	{
+		print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, scalar_type>, iter, size,
+			value.scalar);
+		if constexpr (space_sign)
+		{
+			if (size != 0u &&
+				*iter == ::fast_io::char_literal_v<u8'+', char_type>)
+			{
+				*iter = ::fast_io::char_literal_v<u8' ', char_type>;
+			}
+		}
+	}
+	else
+	{
+		auto result{print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, scalar_type>, iter, size,
+			value.scalar)};
+		if constexpr (space_sign)
+		{
+			if (iter != result &&
+				*iter == ::fast_io::char_literal_v<u8'+', char_type>)
+			{
+				*iter = ::fast_io::char_literal_v<u8' ', char_type>;
+			}
+		}
+		return result;
+	}
+}
+
+/// Propagates print's compact-before-fragments profitability marker through format's spelling-only wrapper.
+/// Format contributes no strategy decision here: it merely preserves a type-level promise made by the lowered
+/// scalar.  The print layer remains responsible for its output-device and size thresholds.
+template <::std::integral char_type, typename scalar_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			print_compiler_constant_prefer_precise_compact(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_precise_compact(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// Propagates a provider-owned single immutable spelling through format's scalar wrapper.
+template <::std::integral char_type, typename scalar_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires requires(scalar_type const &value) {
+		{
+			print_compiler_constant_single_static_fragment(
+				::fast_io::io_reserve_type<char_type, scalar_type>, value)
+		} noexcept -> ::std::same_as<
+			::fast_io::basic_io_scatter_t<char_type>>;
+	}
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+	::fast_io::basic_io_scatter_t<char_type>
+print_compiler_constant_single_static_fragment(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> const &value) noexcept
+{
+	return print_compiler_constant_single_static_fragment(
+		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar);
 }
 
 namespace fmt::details
@@ -395,6 +792,83 @@ inline constexpr ::std::size_t print_define_internal_shift(
 {
 	return ::fast_io::fmt::details::formatted_scalar_internal_shift<flags>(
 		value.scalar.reference, base_prefix_size);
+}
+
+/// @brief Preserves format-internal padding after an integer scalar is replaced by its compiler-constant proxy.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  typename value_type, ::std::size_t base_prefix_size, bool space_sign>
+inline constexpr ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_scalar_manip_t<
+				flags, value_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_scalar_manip_t<
+			flags, value_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	return ::fast_io::fmt::details::formatted_scalar_internal_shift<flags>(
+		value.scalar.reference, base_prefix_size);
+}
+
+/// @brief Preserves sign/prefix placement for an optimizer-proven default/scalar floating replacement.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename value_type,
+	::std::size_t base_prefix_size, bool space_sign>
+inline constexpr ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+				proxy_char_type, flags, value_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, value_type>,
+		base_prefix_size, space_sign> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<value_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u)};
+	auto const sign_size{static_cast<::std::size_t>(
+		flags.showpos || value.scalar.negative)};
+	auto const prefix_size{value.scalar.binary_exponent == exponent_mask
+		? 0u
+		: base_prefix_size};
+	return sign_size + prefix_size;
+}
+
+/// @brief Preserves sign/prefix placement for a compiler-constant explicit-precision floating replacement.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename value_type,
+	::std::size_t base_prefix_size, bool space_sign>
+inline constexpr ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				proxy_char_type, flags, value_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, value_type>,
+		base_prefix_size, space_sign> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<value_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u)};
+	auto const sign_size{static_cast<::std::size_t>(
+		flags.showpos || static_cast<bool>(value.scalar.fields.sign))};
+	auto const prefix_size{value.scalar.fields.exponent == exponent_mask
+		? 0u
+		: base_prefix_size};
+	return sign_size + prefix_size;
 }
 
 } // namespace fast_io

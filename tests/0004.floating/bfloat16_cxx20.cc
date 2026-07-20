@@ -41,17 +41,29 @@ int main()
 #endif
 
 	/*
-	Clang x86 can lower a by-value __bf16 aggregate copy through
-	VCVTNEPS2BF16.  For raw bit pattern one, that instruction may produce zero
-	before a callee can recover the IEC 60559 fields.  The precise CPO therefore
-	borrows this one compiler/type domain while every other floating type keeps
-	the established by-value ABI.  Exercise the scalar boundary, not merely the
-	runtime-precision backend: the latter was already field-normalized in the
-	original regression and did not expose the entry-copy loss.
+	Clang x86 can rematerialize a nested __bf16 scalar copy through a narrowing
+	operation.  For raw bit pattern one, that may produce zero before a lower
+	formatter can recover the IEC 60559 fields.  The upper CPO therefore extracts
+	integer fields from its owning object.  Without AVX512-BF16 that CPO borrows
+	the manipulator; with AVX512-BF16 the owning aggregate uses its ordinary
+	by-value ABI and the field extraction occurs from the local copy.  Exercise
+	the scalar boundary, not merely the runtime-precision backend.
 	*/
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
 	(defined(__x86_64__) || defined(_M_X64))
 	static_assert(sizeof(__bf16) == sizeof(::std::uint_least16_t));
+	static_assert(
+		::fast_io::details::print_floating_requires_object_field_capture<
+			__bf16>);
+#if defined(__AVX512BF16__)
+	static_assert(
+		!::fast_io::details::print_floating_decimal_requires_integer_transport<
+			__bf16>);
+#else
+	static_assert(
+		::fast_io::details::print_floating_decimal_requires_integer_transport<
+			__bf16>);
+#endif
 	auto const subnormal{::std::bit_cast<__bf16>(::std::uint_least16_t{1u})};
 	constexpr auto scalar_flags{[]() constexpr noexcept {
 		auto flags{::fast_io::manipulators::floating_point_default_scalar_flags};

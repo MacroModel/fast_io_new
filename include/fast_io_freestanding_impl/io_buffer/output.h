@@ -306,6 +306,16 @@ inline constexpr void obuffer_set_curr(basic_io_buffer_ref<io_buffer_type> iobre
 
 template <::std::integral char_type, typename io_buffer_type>
 	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
+inline constexpr ::std::true_type print_compiler_constant_obuffer_materialization_safe(
+	::fast_io::io_reserve_type_t<char_type, basic_io_buffer_ref<io_buffer_type>>) noexcept
+{
+	// basic_io_buffer_ref exposes one stable put area and cursor publication is a plain pointer assignment. Limit this
+	// promise to compiler-constant materialization so unrelated deferred-commit strategies remain independently gated.
+	return {};
+}
+
+template <::std::integral char_type, typename io_buffer_type>
+	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
 inline constexpr ::std::size_t
 	obuffer_minimum_size_define(::fast_io::io_reserve_type_t<char_type, basic_io_buffer_ref<io_buffer_type>>)
 {

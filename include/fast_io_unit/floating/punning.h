@@ -1061,6 +1061,9 @@ struct
 };
 #endif
 
+/// @brief Decomposes a native floating scalar through its ordinary by-value ABI.
+/// @details Keeping the parameter by value lets ordinary callers retain the floating-point register class.  An upper
+/// CPO extracts fields from the owning object for representation-sensitive exceptional ABIs before reaching this API.
 template <typename flt>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]

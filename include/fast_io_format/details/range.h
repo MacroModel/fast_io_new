@@ -502,6 +502,64 @@ inline constexpr void emit_range_components(
 		output, ::std::forward<argument_types>(arguments)...);
 }
 
+template <::fast_io::fmt::format_character char_type>
+[[nodiscard]] inline constexpr bool emit_default_debug_string_to_obuffer(
+	::fast_io::basic_obuffer_view_ref<char_type> output,
+	::fast_io::fmt::details::basic_debug_string_field<char_type> const &field) noexcept
+{
+	if (field.options.maximum_display_width != SIZE_MAX ||
+		field.options.minimum_width != 0u)
+	{
+		return false;
+	}
+	auto current{::fast_io::obuffer_curr(output)};
+	auto const end{::fast_io::obuffer_end(output)};
+	if (current == nullptr || end == nullptr || end < current)
+	{
+		return false;
+	}
+	auto const remaining{static_cast<::std::size_t>(end - current)};
+	// One input code unit can expand to at most `\U0010ffff` (ten output
+	// units), plus the two quotes.  Proving that bound before the first store
+	// preserves the fixed-view overflow contract while the common case formats
+	// the field in one classification pass.
+	if (remaining < 2u || field.source.len > (remaining - 2u) / 10u)
+	{
+		return false;
+	}
+	current = ::fast_io::fmt::details::emit_debug_text_payload<
+		::fast_io::fmt::details::debug_text_kind::string>(
+		current, field.source.base, field.source.len, SIZE_MAX);
+	::fast_io::obuffer_set_curr(output, current);
+	return true;
+}
+
+#if defined(__clang__)
+template <::fast_io::fmt::format_character char_type>
+inline constexpr void emit_range_components(
+	::fast_io::basic_obuffer_view_ref<char_type> &output,
+	::fast_io::fmt::details::basic_debug_string_field<char_type> &&field)
+{
+	if (!emit_default_debug_string_to_obuffer(output, field))
+	{
+		::fast_io::operations::decay::print_freestanding_decay_unforwarded<false>(
+			output, field);
+	}
+}
+
+template <::fast_io::fmt::format_character char_type>
+inline constexpr void emit_range_components(
+	::fast_io::basic_obuffer_view_ref<char_type> &output,
+	::fast_io::fmt::details::basic_debug_string_field<char_type> const &field)
+{
+	if (!emit_default_debug_string_to_obuffer(output, field))
+	{
+		::fast_io::operations::decay::print_freestanding_decay_unforwarded<false>(
+			output, field);
+	}
+}
+#endif
+
 template <::fast_io::fmt::format_character char_type, auto specification,
 		  typename source_type, typename argument_pack_type>
 [[nodiscard]] inline constexpr auto make_brace_range_element(
@@ -530,8 +588,10 @@ template <::fast_io::fmt::format_character char_type, typename source_type,
 	else if constexpr (format_string_like<char_type, source_type>)
 	{
 		auto &&named_source{source};
+		auto const source_scatter{static_cast<::fast_io::basic_io_scatter_t<char_type>>(
+			make_string_scatter<char_type>(named_source))};
 		return make_debug_string_field(
-			make_string_scatter<char_type>(named_source), {});
+			source_scatter, {});
 	}
 	else if constexpr (::std::ranges::input_range<clean_type &> ||
 					   tuple_format_source<clean_type>)
@@ -718,9 +778,27 @@ inline constexpr void emit_brace_map(
 		decltype(auto) mapped{brace_tuple_get<1u>(entry)};
 		decltype(auto) formatted_key{
 			make_default_brace_range_element<char_type>(key, arguments)};
-		emit_range_components(output,
-							  ::std::forward<decltype(formatted_key)>(formatted_key),
-							  range_ascii_scatter<char_type, u8':', u8' '>());
+#if defined(__clang__)
+		if constexpr (::std::same_as<
+					  ::std::remove_cvref_t<decltype(formatted_key)>,
+					  basic_debug_string_field<char_type>>)
+		{
+			emit_range_components(output,
+				::std::forward<decltype(formatted_key)>(formatted_key));
+			emit_range_components(output,
+				range_ascii_scatter<char_type, u8':', u8' '>());
+		}
+		else
+		{
+			emit_range_components(
+				output, ::std::forward<decltype(formatted_key)>(formatted_key),
+				range_ascii_scatter<char_type, u8':', u8' '>());
+		}
+#else
+		emit_range_components(
+			output, ::std::forward<decltype(formatted_key)>(formatted_key),
+			range_ascii_scatter<char_type, u8':', u8' '>());
+#endif
 		decltype(auto) formatted_mapped{
 			make_default_brace_range_element<char_type>(mapped, arguments)};
 		emit_range_components(output,
@@ -867,7 +945,7 @@ inline constexpr void print_define(
 																				 specification, source_type, argument_pack_type>>,
 	output_type &output,
 	::fast_io::fmt::details::basic_brace_range_view<source_char_type,
-													specification, source_type, argument_pack_type>
+												specification, source_type, argument_pack_type>
 		value)
 {
 	if constexpr (::fast_io::fmt::details::tuple_format_source<source_type>)

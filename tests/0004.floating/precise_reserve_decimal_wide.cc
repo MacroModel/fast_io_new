@@ -41,7 +41,7 @@ FAST_IO_FTOA_TEST_NOINLINE bool check_value(flt value, ::std::size_t precision) 
 		::fast_io::manipulators::scalar_manip_precision_t<flags, flt>;
 	using scalar_type = ::fast_io::manipulators::scalar_manip_t<flags, flt>;
 	static_assert(::fast_io::precise_reserve_printable<char_type, runtime_type>);
-	static_assert(!::fast_io::precise_reserve_printable<char_type, scalar_type>);
+	static_assert(::fast_io::precise_reserve_printable<char_type, scalar_type>);
 	// The admitted wide domains have e10max <= 4966 and at most 37 carrier
 	// digits.  P<=256 plus sign, point, exponent and JSON decoration therefore
 	// remains strictly below this test buffer even for fixed max-finite output.

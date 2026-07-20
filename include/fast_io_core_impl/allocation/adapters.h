@@ -142,7 +142,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto p{
@@ -515,7 +515,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto newptr{::operator new(n)};
@@ -758,7 +758,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto p{
@@ -864,7 +864,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return
@@ -897,7 +897,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return
@@ -933,7 +933,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return {
@@ -966,7 +966,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return {
@@ -999,7 +999,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto p{::operator new(n)};
@@ -1145,7 +1145,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return generic_allocator_adapter::allocate_aligned_conditional_zero_at_least(alignment, n, false);
@@ -1172,7 +1172,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return generic_allocator_adapter::allocate_aligned_conditional_zero_at_least(alignment, n, true);
@@ -1198,7 +1198,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto p{::operator new(n)};
@@ -1408,7 +1408,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto newptr{::operator new(n)};
@@ -1989,7 +1989,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			auto p{::operator new(n)};
@@ -2104,7 +2104,7 @@ public:
 #elif __cpp_lib_is_constant_evaluated >= 201811L && __cpp_constexpr_dynamic_alloc >= 201907L
 		if (__builtin_is_constant_evaluated())
 #else
-		if (false)
+		if constexpr (false)
 #endif
 		{
 			return static_cast<void *>(::fast_io::freestanding::allocator<::std::byte>{}.allocate(n));

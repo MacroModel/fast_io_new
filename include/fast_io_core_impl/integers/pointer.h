@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <utility>
+
 namespace fast_io
 {
 
@@ -50,6 +52,31 @@ struct small_scatter_t
 		{
 			::fast_io::fast_terminate();
 		}
+	}
+};
+
+/// @brief A finite C-string view which stays scatter-based until print/concat proves it a short compiler constant.
+/// @details `len` preserves C-string/precision semantics while `extent` proves the maximum readable source range.
+///          Ordinary printing projects this object directly to a scatter.  Its separate compiler-constant CPO below
+///          may rebind a fully known short value to `small_scatter_t` for contiguous field merging. Producers must
+///          supply `len <= extent`, like the pointer/length invariant of `basic_io_scatter_t`; the format frontend's
+///          bounded C-string search establishes that fact without adding a redundant run-time branch to printing.
+template <::std::integral ch_type, ::std::size_t extent>
+struct bounded_cstr_scatter_t
+{
+	using manip_tag = manip_tag_t;
+	ch_type const *base{};
+	::std::size_t len{};
+
+	inline constexpr bounded_cstr_scatter_t(
+		ch_type const *scatter_base, ::std::size_t scatter_len) noexcept
+		: base(scatter_base), len(scatter_len)
+	{}
+
+	[[nodiscard]] inline constexpr operator
+		::fast_io::basic_io_scatter_t<ch_type>() const noexcept
+	{
+		return {base, len};
 	}
 };
 
@@ -217,6 +244,47 @@ print_scatter_define(io_reserve_type_t<char_type, basic_io_scatter_t<char_type>>
 					 basic_io_scatter_t<char_type> iosc) noexcept
 {
 	return iosc;
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+inline constexpr basic_io_scatter_t<char_type> print_scatter_define(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>,
+	manipulators::bounded_cstr_scatter_t<char_type, extent> value) noexcept
+{
+	return {value.base, value.len};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+inline constexpr ::std::true_type print_borrowed_scatter_source(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+inline constexpr ::std::true_type print_copy_stable_borrowed_source(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
 }
 
 /// @brief Projects a provenance-carrying descriptor onto the existing scatter-print protocol.
@@ -475,6 +543,163 @@ print_reserve_precise_define(io_reserve_type_t<char_type, ::fast_io::manipulator
 {
 	scatter.validate();
 	return ::fast_io::details::small_scatter_print_reserve_define_impl(iter, scatter.base, scatter.len);
+}
+
+// Fixed reserve leaves are identity members of compiler-constant runs.  Their ordinary CPOs already use the compact
+// copy shape needed by the materialized scalar proxy, so no second representation or formatter is introduced.
+template <::std::integral char_type, ::std::integral pchar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::integral pchar_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>,
+	manipulators::chvw_t<pchar_type> const &) noexcept
+{
+	return true;
+}
+
+template <::std::integral char_type, ::std::integral pchar_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>,
+	manipulators::chvw_t<pchar_type> const &value) noexcept
+{
+	return value;
+}
+
+namespace details
+{
+
+template <::std::integral char_type, ::std::size_t extent,
+		  ::std::size_t... index>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+bounded_cstr_compiler_constant_eligible_impl(
+	manipulators::bounded_cstr_scatter_t<char_type, extent> const &value,
+	::std::index_sequence<index...>) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.len) && value.len <= extent &&
+		   ((index >= value.len || __builtin_constant_p(value.base[index])) && ...);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+} // namespace details
+
+template <::std::integral char_type, ::std::size_t extent>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+/// @brief Lets a proved bounded C-string literal cross print's source-normalization boundary.
+/// @details The replacement preserves exactly the already-measured `[base, base + len)` spelling and merely changes
+///          its transport from a borrowed scatter to bounded reserve storage.  Unknown arrays fail the inline
+///          compiler-constant query and therefore retain the historical scatter path without materialization work.
+template <::std::integral char_type, ::std::size_t extent>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>,
+	manipulators::bounded_cstr_scatter_t<char_type, extent> const &value) noexcept
+{
+	if constexpr (
+		extent > ::fast_io::details::compiler_constant_materialization_max_bytes /
+					 sizeof(char_type))
+	{
+		(void)value;
+		return false;
+	}
+	else
+	{
+		return ::fast_io::details::bounded_cstr_compiler_constant_eligible_impl(
+			value, ::std::make_index_sequence<extent>{});
+	}
+}
+
+template <::std::integral char_type, ::std::size_t extent>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>,
+	manipulators::bounded_cstr_scatter_t<char_type, extent> const &value) noexcept
+{
+	return manipulators::small_scatter_t<char_type, extent>{
+		value.base, value.len};
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<
+		char_type, manipulators::static_scatter_t<char_type, N>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<char_type, manipulators::static_scatter_t<char_type, N>>,
+	manipulators::static_scatter_t<char_type, N> const &) noexcept
+{
+	return true;
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<char_type, manipulators::static_scatter_t<char_type, N>>,
+	manipulators::static_scatter_t<char_type, N> const &value) noexcept
+{
+	return value;
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<
+		char_type, manipulators::small_scatter_t<char_type, N>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<char_type, manipulators::small_scatter_t<char_type, N>>,
+	manipulators::small_scatter_t<char_type, N> const &) noexcept
+{
+	return true;
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<char_type, manipulators::small_scatter_t<char_type, N>>,
+	manipulators::small_scatter_t<char_type, N> const &value) noexcept
+{
+	return value;
 }
 
 } // namespace fast_io

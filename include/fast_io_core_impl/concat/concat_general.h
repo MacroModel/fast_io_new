@@ -20,6 +20,20 @@ inline constexpr ::std::true_type concat_single_pass_bounded_materialization_pre
 	return {};
 }
 
+/// @brief Authorizes direct put-area emission for fast_io's run-time precision floating scalar.
+/// @details This is intentionally separate from concat's cost marker: a cheap bounded-size query alone says nothing
+///          about exceptions or observable output state. The print strategy requires this exact source opt-in in
+///          addition to its structural noexcept proof and the destination's deferred-cursor promise.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>) noexcept
+{
+	return {};
+}
+
 /// @brief Returns the scalar's non-fatal upper bound when it fits `maximum_size`, or `SIZE_MAX` otherwise.
 /// @details The definition lives with the floating formatter, where the representation-specific fixed overhead is
 ///          available. This declaration is intentionally part of the source opt-in contract: speculative concat
@@ -1052,6 +1066,55 @@ inline constexpr T basic_general_concat_exact_overwrite_run(Arg &arg)
 	return result;
 }
 
+template <::std::integral char_type, typename Arg>
+inline constexpr void
+basic_general_concat_precise_resize_measure_one(
+	::std::size_t *component_sizes, ::std::size_t &payload_size,
+	::std::size_t &component_index, Arg &arg)
+{
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	::std::size_t const component_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, arg_type>, arg)};
+	component_sizes[component_index++] = component_size;
+	payload_size = ::fast_io::details::intrinsics::add_or_overflow_die(
+		payload_size, component_size);
+}
+
+template <::std::integral char_type, typename Arg>
+inline constexpr void
+basic_general_concat_precise_resize_emit_one(
+	::std::size_t const *component_sizes, ::std::size_t &component_index,
+	char_type *&current, Arg &arg)
+{
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	::std::size_t const component_size{component_sizes[component_index++]};
+	char_type *expected_end{current};
+	if (component_size != 0u)
+	{
+		expected_end += component_size;
+	}
+	using define_result = decltype(print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, arg_type>, current,
+		component_size, arg));
+	if constexpr (::std::same_as<define_result, char_type *>)
+	{
+		char_type *const actual_end{print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, current,
+			component_size, arg)};
+		if (actual_end != expected_end) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	}
+	else
+	{
+		print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, current,
+			component_size, arg);
+	}
+	current = expected_end;
+}
+
 /// @brief Constructs a non-buffer string-like result directly in one exactly resized logical range.
 /// @details Exact source sizing and destination storage are orthogonal proofs: every
 ///          `precise_reserve_printable` supplies one component extent, while `precise_resize_writable_strlike` creates
@@ -1074,21 +1137,16 @@ inline constexpr T basic_general_concat_exact_overwrite_run(Arg &arg)
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires ::fast_io::details::decay::basic_general_concat_precise_resize_destination_run_v<
 		char_type, T, Args...>
-inline constexpr T basic_general_concat_precise_resize_run(Args &...args)
+inline constexpr T
+basic_general_concat_precise_resize_run(Args &...args)
 {
 	T result;
 	::std::size_t component_sizes[sizeof...(Args)]{};
 	::std::size_t payload_size{};
 	::std::size_t component_index{};
-	auto measure_one = [&component_sizes, &payload_size, &component_index](auto &arg) constexpr {
-		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
-		::std::size_t const component_size{print_reserve_precise_size(
-			::fast_io::io_reserve_type<char_type, arg_type>, arg)};
-		component_sizes[component_index++] = component_size;
-		payload_size = ::fast_io::details::intrinsics::add_or_overflow_die(
-			payload_size, component_size);
-	};
-	(measure_one(args), ...);
+	(::fast_io::details::decay::basic_general_concat_precise_resize_measure_one<
+		 char_type>(component_sizes, payload_size, component_index, args),
+	 ...);
 	::std::size_t const total_size{
 		::fast_io::details::decay::concat_precise_size_with_line<line>(payload_size)};
 	char_type *const first{strlike_precise_resize_and_get_begin(
@@ -1096,33 +1154,9 @@ inline constexpr T basic_general_concat_precise_resize_run(Args &...args)
 
 	component_index = 0u;
 	char_type *current{first};
-	auto emit_one = [&component_sizes, &component_index, &current](auto &arg) constexpr {
-		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
-		::std::size_t const component_size{component_sizes[component_index++]};
-		char_type *expected_end{current};
-		if (component_size != 0u)
-		{
-			expected_end += component_size;
-		}
-		using define_result = decltype(print_reserve_precise_define(
-			::fast_io::io_reserve_type<char_type, arg_type>, current, component_size, arg));
-		if constexpr (::std::same_as<define_result, char_type *>)
-		{
-			char_type *const actual_end{print_reserve_precise_define(
-				::fast_io::io_reserve_type<char_type, arg_type>, current, component_size, arg)};
-			if (actual_end != expected_end) [[unlikely]]
-			{
-				::fast_io::fast_terminate();
-			}
-		}
-		else
-		{
-			print_reserve_precise_define(
-				::fast_io::io_reserve_type<char_type, arg_type>, current, component_size, arg);
-		}
-		current = expected_end;
-	};
-	(emit_one(args), ...);
+	(::fast_io::details::decay::basic_general_concat_precise_resize_emit_one<
+		 char_type>(component_sizes, component_index, current, args),
+	 ...);
 	if constexpr (line)
 	{
 		*current = ::fast_io::char_literal_v<u8'\n', char_type>;
@@ -2154,16 +2188,354 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 	}
 }
 
+/// @brief Tests whether concat's active normalized leaf run has a useful compiler-constant replacement.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline consteval bool basic_general_concat_compiler_constant_materialization_available() noexcept
+{
+	if constexpr (!(::fast_io::compiler_constant_printable<ch_type, Args> && ...))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t reserve_size{
+			::fast_io::operations::decay::
+				print_compiler_constant_materialization_reserve_size<
+					line, ch_type, Args...>()};
+		constexpr ::std::size_t proxy_bytes{
+			::fast_io::operations::decay::
+				print_compiler_constant_materialization_proxy_bytes<
+					ch_type, Args...>()};
+		constexpr bool compact_reserve_plan{
+			reserve_size != SIZE_MAX &&
+			reserve_size <=
+				::fast_io::details::compiler_constant_materialization_max_bytes /
+					sizeof(ch_type)};
+		constexpr ::std::size_t retained_reserve_size{[]() consteval {
+			constexpr ::std::size_t maximum{
+				::fast_io::details::compiler_constant_materialization_max_bytes /
+					sizeof(ch_type)};
+			::std::size_t total{};
+			((total = [](::std::size_t current) consteval {
+				using source_type = ::std::remove_cvref_t<Args>;
+				using replacement_type =
+					::fast_io::details::compiler_constant_materialized_t<
+						ch_type, Args>;
+				if constexpr (::std::same_as<source_type, replacement_type>)
+				{
+					constexpr ::std::size_t extent{print_reserve_size(
+						::fast_io::io_reserve_type<ch_type, replacement_type>)};
+					return current > maximum || extent > maximum - current
+						? SIZE_MAX
+						: current + extent;
+				}
+				else
+				{
+					return current;
+				}
+			}(total)),
+			 ...);
+			return total;
+		}()};
+		constexpr bool exact_destination_plan{
+			::fast_io::details::decay::
+				basic_general_concat_precise_resize_destination_run_v<
+					ch_type, T,
+					::fast_io::details::compiler_constant_materialized_t<
+						ch_type, Args>...>};
+		return proxy_bytes != SIZE_MAX &&
+			   proxy_bytes <=
+				   ::fast_io::details::compiler_constant_materialization_max_bytes &&
+			   (compact_reserve_plan ||
+				(exact_destination_plan && retained_reserve_size != SIZE_MAX)) &&
+			   (false || ... ||
+			!::std::same_as<
+				::std::remove_cvref_t<Args>,
+				::fast_io::details::compiler_constant_materialized_t<ch_type, Args>>);
+	}
+}
+
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr T
+basic_general_concat_compiler_constant_materialized(Args... args)
+{
+	constexpr ::std::size_t reserve_size{
+		::fast_io::details::decay::
+			calculate_concat_scatter_reserve_size_or_unavailable<
+				ch_type, Args...>()};
+	constexpr ::std::size_t reserve_size_with_line{
+		::fast_io::details::decay::
+			print_contiguous_char_extent_add_or_unavailable<ch_type>(
+				reserve_size, static_cast<::std::size_t>(line))};
+	constexpr bool compact_reserve_plan{
+		reserve_size_with_line != SIZE_MAX &&
+		reserve_size_with_line <=
+			::fast_io::details::compiler_constant_materialization_max_bytes /
+				sizeof(ch_type)};
+	if constexpr (
+		!compact_reserve_plan &&
+		::fast_io::details::decay::
+			basic_general_concat_precise_resize_destination_run_v<
+				ch_type, T, Args...>)
+	{
+		// Compiler-constant replacement is an allocation strategy, not a scatter-output strategy.  When the replacement
+		// run exposes exact sizes and the destination can establish one writable logical extent, write every proxy
+		// directly into that extent.  This is also the bounded escape hatch for compact float proxy state whose mature
+		// reserve capacity is intentionally much larger than the constant-materialization byte budget.
+		return ::fast_io::details::decay::basic_general_concat_precise_resize_run<
+			line, ch_type, T>(args...);
+	}
+	else if constexpr (compact_reserve_plan &&
+					 ::fast_io::buffer_strlike<ch_type, T>)
+	{
+		// Keep the selected proxy run contiguous.  Re-entering the complete phase-1 dispatcher here is both unnecessary
+		// (the gate has already proved an all-reserve run) and can make a large caller outline the value-sensitive writer.
+		// A writable string result instead establishes its one destination capacity and receives every replacement in
+		// order.  No static-fragment/scatter output protocol participates in concat.
+		T result;
+		if constexpr (::fast_io::sso_buffer_strlike<ch_type, T>)
+		{
+			constexpr ::std::size_t local_capacity{
+				strlike_sso_size(::fast_io::io_strlike_type<ch_type, T>)};
+			if constexpr (local_capacity < reserve_size_with_line)
+			{
+				strlike_reserve(
+					::fast_io::io_strlike_type<ch_type, T>, result,
+					reserve_size_with_line);
+			}
+		}
+		else if constexpr (reserve_size_with_line != 0u)
+		{
+			strlike_reserve(
+				::fast_io::io_strlike_type<ch_type, T>, result,
+				reserve_size_with_line);
+		}
+		ch_type *const end{print_reserve_define_chain_impl<line>(
+			strlike_begin(::fast_io::io_strlike_type<ch_type, T>, result),
+			args...)};
+		strlike_set_curr(
+			::fast_io::io_strlike_type<ch_type, T>, result, end);
+		return result;
+	}
+	else if constexpr (
+		compact_reserve_plan &&
+		::fast_io::range_constructible_strlike<ch_type, T>)
+	{
+		// Construct-only strings cannot expose their final storage in C++20.  The bounded local range is nevertheless a
+		// single contiguous materialization, and the range constructor owns the sole destination allocation/copy.  Short
+		// standard-string results are normally scalar-replaced into direct SSO stores by both supported compilers.
+		ch_type buffer[reserve_size_with_line == 0u ? 1u : reserve_size_with_line];
+		ch_type *const end{print_reserve_define_chain_impl<line>(buffer, args...)};
+		return strlike_construct_define(
+			::fast_io::io_strlike_type<ch_type, T>, buffer, end);
+	}
+	else
+	{
+		// Uncommon construct-only adapters retain the mature phase-1 continuation.  This branch is never selected solely
+		// from a large compiler-constant reserve bound: that case requires the exact-resize destination proof above.
+		return ::fast_io::details::decay::
+			basic_general_concat_phase1_decay_ref_impl<line, ch_type, T>(args...);
+	}
+}
+
+/// @brief Keeps concat's original phase-1 body as the sole unknown-value continuation.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr T
+basic_general_concat_compiler_constant_dispatch(Args &...args)
+{
+	if constexpr (
+		::fast_io::details::decay::
+			basic_general_concat_compiler_constant_materialization_available<
+				line, ch_type, T, Args...>())
+	{
+		if (::fast_io::operations::decay::
+				print_compiler_constant_materialization_gate<ch_type>(args...))
+		{
+			return ::fast_io::details::decay::
+				basic_general_concat_compiler_constant_materialized<
+					line, ch_type, T>(
+						print_compiler_constant_materialize(
+							::fast_io::io_reserve_type<ch_type,
+							::std::remove_cvref_t<Args>>, args)...);
+		}
+	}
+	return ::fast_io::details::decay::
+		basic_general_concat_phase1_decay_ref_impl<line, ch_type, T>(args...);
+}
+
 /// @brief Owns a structurally flat normalized run exactly once before all strategy helpers borrow it.
 /// @details The direct public path supplies prvalue normalization results, so this boundary materializes their compact
 ///          decayed types and then exposes only named lvalues. Pack expansion and condition selection already own any
 ///          value-producing customization in their synchronous continuation frames and therefore bypass this boundary;
 ///          copying those selected lvalues here would be a second decay and would reject valid move-only transports.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
-inline constexpr T basic_general_concat_phase1_decay_impl(Args... args)
+inline constexpr T
+basic_general_concat_phase1_decay_impl(Args... args)
 {
-	return ::fast_io::details::decay::basic_general_concat_phase1_decay_ref_impl<line, ch_type, T>(
+	return ::fast_io::details::decay::basic_general_concat_compiler_constant_dispatch<line, ch_type, T>(
 		args...);
+}
+
+/// @brief Models one source argument after the optional pre-normalization replacement and concat's ordinary flat
+///        alias/status forwarding.
+template <::std::integral ch_type, typename T>
+using basic_general_concat_compiler_constant_source_replacement_t =
+	::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_replacement_t<ch_type, T>;
+
+template <::std::integral ch_type, typename T>
+using basic_general_concat_compiler_constant_source_alias_t = decltype(
+	::fast_io::io_print_alias(::std::declval<
+		::fast_io::details::decay::
+			basic_general_concat_compiler_constant_source_replacement_t<
+				ch_type, T>>()));
+
+template <::std::integral ch_type, typename T>
+using basic_general_concat_compiler_constant_source_forward_t = decltype(
+	::fast_io::io_print_forward<ch_type>(::std::declval<
+		::fast_io::details::decay::
+			basic_general_concat_compiler_constant_source_alias_t<
+				ch_type, T>>()));
+
+template <::std::integral ch_type, typename T>
+using basic_general_concat_compiler_constant_source_normalized_t =
+	::std::remove_cvref_t<::fast_io::details::decay::
+		basic_general_concat_compiler_constant_source_forward_t<ch_type, T>>;
+
+/// @brief Proves that concat may select a compiler-constant source replacement before alias normalization.
+/// @details This is intentionally a flat-run gate. Semantic packs, conditions, and value-owning transports retain the
+///          established normalization graph and may still use the normalized phase-1 gate. For a flat run, every
+///          replacement is normalized exactly as the true-arm expression below, every resulting leaf must have a
+///          contiguous reserve protocol, and the compact proxy state remains independently bounded. A floating proxy's
+///          mature 5006-character reserve capacity is admitted only when all leaves expose exact sizes and the result
+///          can establish the corresponding live destination range.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline consteval bool
+basic_general_concat_compiler_constant_source_available() noexcept
+{
+	constexpr bool has_candidate{
+		(false || ... ||
+		 ::fast_io::operations::decay::
+			 print_compiler_constant_pre_normalization_candidate_v<
+				 ch_type, Args>)};
+	constexpr bool source_semantic_run{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 ch_type, Args>)};
+	constexpr bool replacement_semantic_run{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 ch_type,
+			 ::fast_io::details::decay::
+				 basic_general_concat_compiler_constant_source_replacement_t<
+					 ch_type, Args>>)};
+	if constexpr (!has_candidate || source_semantic_run || replacement_semantic_run)
+	{
+		return false;
+	}
+	else if constexpr (!(::fast_io::reserve_printable<
+		ch_type,
+		::fast_io::details::decay::
+			basic_general_concat_compiler_constant_source_normalized_t<
+				ch_type, Args>> && ...))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t maximum_bytes{
+			::fast_io::details::compiler_constant_materialization_max_bytes};
+		constexpr ::std::size_t proxy_bytes{[]() consteval {
+			constexpr ::std::size_t maximum{
+				::fast_io::details::compiler_constant_materialization_max_bytes};
+			::std::size_t total{};
+			((total = total > maximum || sizeof(::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_normalized_t<
+							ch_type, Args>) > maximum - total
+					  ? SIZE_MAX
+					  : total + sizeof(::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_normalized_t<
+							ch_type, Args>)),
+			 ...);
+			return total;
+		}()};
+		constexpr ::std::size_t reserve_size{
+			::fast_io::details::decay::
+				calculate_concat_scatter_reserve_size_or_unavailable<
+					ch_type,
+					::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_normalized_t<
+							ch_type, Args>...>()};
+		constexpr ::std::size_t reserve_size_with_line{
+			::fast_io::details::decay::
+				print_contiguous_char_extent_add_or_unavailable<ch_type>(
+					reserve_size, static_cast<::std::size_t>(line))};
+		constexpr bool compact_reserve_plan{
+			reserve_size_with_line != SIZE_MAX &&
+			reserve_size_with_line <= maximum_bytes / sizeof(ch_type)};
+		constexpr ::std::size_t retained_reserve_size{[]() consteval {
+			constexpr ::std::size_t maximum{
+				::fast_io::details::compiler_constant_materialization_max_bytes /
+					sizeof(ch_type)};
+			::std::size_t total{};
+			((total = [](::std::size_t current) consteval {
+				if constexpr (!::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_candidate_v<
+						ch_type, Args>)
+				{
+					using normalized_type =
+						::fast_io::details::decay::
+							basic_general_concat_compiler_constant_source_normalized_t<
+								ch_type, Args>;
+					constexpr ::std::size_t extent{print_reserve_size(
+						::fast_io::io_reserve_type<ch_type, normalized_type>)};
+					return current > maximum || extent > maximum - current
+						? SIZE_MAX
+						: current + extent;
+				}
+				else
+				{
+					return current;
+				}
+			}(total)),
+			 ...);
+			return total;
+		}()};
+		constexpr bool exact_destination_plan{
+			::fast_io::details::decay::
+				basic_general_concat_precise_resize_destination_run_v<
+					ch_type, T,
+					::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_normalized_t<
+							ch_type, Args>...>};
+		return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum_bytes &&
+			(compact_reserve_plan ||
+			 (exact_destination_plan && retained_reserve_size != SIZE_MAX));
+	}
+}
+
+template <bool line, ::std::integral ch_type, typename T,
+		  typename... ReplacedArgs>
+inline constexpr T
+basic_general_concat_compiler_constant_source_normalized(
+	ReplacedArgs &&...args)
+{
+	return ::fast_io::details::decay::
+		basic_general_concat_compiler_constant_materialized<line, ch_type, T>(
+			::fast_io::io_print_forward<ch_type>(::fast_io::io_print_alias(
+				::std::forward<ReplacedArgs>(args)))...);
+}
+
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr T
+basic_general_concat_compiler_constant_source_materialized(Args &&...args)
+{
+	return ::fast_io::details::decay::
+		basic_general_concat_compiler_constant_source_normalized<
+			line, ch_type, T>(
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_materialize_one<
+					ch_type>(::std::forward<Args>(args))...);
 }
 
 /// @brief Enters concat sizing only after semantic structure has been normalized.
@@ -2180,7 +2552,7 @@ struct basic_general_concat_normalized_phase1_continuation
 	{
 		// Every argument is now a named object owned by an enclosing normalization/selection frame. The complete phase-1
 		// call is nested synchronously inside that frame, so borrowing preserves lifetime while avoiding a second copy.
-		return ::fast_io::details::decay::basic_general_concat_phase1_decay_ref_impl<line, ch_type, T>(
+		return ::fast_io::details::decay::basic_general_concat_compiler_constant_dispatch<line, ch_type, T>(
 			args...);
 	}
 };
@@ -2268,7 +2640,7 @@ inline constexpr T basic_general_concat(Args &&...args)
 /// @tparam Args      public concat argument types
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires strlike<char_type, T>
-inline constexpr T basic_general_concat_checked(Args &&...args)
+inline consteval bool basic_general_concat_checked_available() noexcept
 {
 	constexpr bool printable_to_result{
 		::fast_io::details::decay::basic_general_concat_direct_destination_ok<
@@ -2285,6 +2657,17 @@ inline constexpr T basic_general_concat_checked(Args &&...args)
 	// destination-correct strategies: direct append when supported, otherwise internal staging followed by construction.
 	constexpr bool printable_to_selected_destination{
 		printable_to_result || (!buffer_strlike<char_type, T> && printable_to_staging)};
+	return printable_to_selected_destination;
+}
+
+/// @brief Historical checked concat continuation used verbatim by the false arm of the source constant gate.
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires strlike<char_type, T>
+inline constexpr T basic_general_concat_checked(Args &&...args)
+{
+	constexpr bool printable_to_selected_destination{
+		::fast_io::basic_general_concat_checked_available<
+			line, char_type, T, Args...>()};
 	if constexpr (printable_to_selected_destination)
 	{
 		return ::fast_io::basic_general_concat<line, char_type, T>(::std::forward<Args>(args)...);
@@ -2295,6 +2678,39 @@ inline constexpr T basic_general_concat_checked(Args &&...args)
 					  "one or more arguments are not printable to any destination selected by concat");
 		return {};
 	}
+}
+
+/// @brief Keeps the optimizer-visible constant query at concat's public source boundary.
+/// @details Only an explicitly pre-normalization-safe flat source run can enter the replacement arm. The false arm is
+///          the ordinary checked implementation above, so an unknown integer/floating value performs no proxy
+///          construction, size query, or branch at run time. Format lowering reaches this same entry with literals and
+///          fields already translated to print/concat leaves; it owns no independent materialization policy.
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires strlike<char_type, T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr T
+basic_general_concat_compiler_constant_checked_entry(Args &&...args)
+{
+	if constexpr (
+		::fast_io::basic_general_concat_checked_available<
+			line, char_type, T, Args...>())
+	{
+		if constexpr (
+			::fast_io::details::decay::
+				basic_general_concat_compiler_constant_source_available<
+					line, char_type, T, Args &&...>())
+		{
+			if (::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_gate<char_type>(
+						args...))
+			{
+				return ::fast_io::details::decay::
+					basic_general_concat_compiler_constant_source_materialized<
+						line, char_type, T>(::std::forward<Args>(args)...);
+			}
+		}
+	}
+	return ::fast_io::basic_general_concat_checked<line, char_type, T>(
+		::std::forward<Args>(args)...);
 }
 
 } // namespace fast_io

@@ -7,6 +7,106 @@
 #include "replacement_rules.h"
 #include "lower.h"
 
+namespace fast_io::fmt::details
+{
+
+enum class printf_argument_list_error : unsigned char
+{
+	none,
+	index_out_of_range,
+	unreferenced_argument
+};
+
+struct printf_argument_list_validation
+{
+	printf_argument_list_error error{printf_argument_list_error::none};
+	::std::size_t argument_index{};
+	::std::size_t source_position{};
+};
+
+/** Proves that printf's complete value/width/precision argument domain is exact. */
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::std::size_t argument_count>
+[[nodiscard]] inline consteval printf_argument_list_validation
+validate_printf_argument_list() noexcept
+{
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<
+			format_literal, ::fast_io::fmt::printf_fmt_t>};
+	bool referenced[argument_count == 0u ? 1u : argument_count]{};
+	printf_argument_list_validation result{};
+	auto mark_reference = [&](argument_reference reference,
+							  ::std::size_t source_position) consteval {
+		if (reference.index >= argument_count)
+		{
+			result.error = printf_argument_list_error::index_out_of_range;
+			result.argument_index = reference.index;
+			result.source_position = source_position;
+			return false;
+		}
+		referenced[reference.index] = true;
+		return true;
+	};
+
+	for (::std::size_t field_index{};
+		 field_index != program.field_count; ++field_index)
+	{
+		auto const &field{program.fields[field_index]};
+		if (field.specification.width.kind == format_parameter_kind::argument &&
+			!mark_reference(field.specification.width.argument,
+							field.source.offset))
+		{
+			return result;
+		}
+		if (field.specification.precision.kind == format_parameter_kind::argument &&
+			!mark_reference(field.specification.precision.argument,
+							field.source.offset))
+		{
+			return result;
+		}
+		if (!mark_reference(field.argument, field.source.offset))
+		{
+			return result;
+		}
+	}
+
+	for (::std::size_t argument_index{};
+		 argument_index != argument_count; ++argument_index)
+	{
+		if (!referenced[argument_index])
+		{
+			result.error = printf_argument_list_error::unreferenced_argument;
+			result.argument_index = argument_index;
+			return result;
+		}
+	}
+	return result;
+}
+
+template <auto format_literal, printf_argument_list_error error,
+		  ::std::size_t argument_index, ::std::size_t source_position>
+inline consteval void diagnose_printf_argument_list()
+{
+	if constexpr (error == printf_argument_list_error::index_out_of_range)
+	{
+		static_assert(error == printf_argument_list_error::none,
+					  "fast_io format: printf argument index is out of range");
+	}
+	else if constexpr (error == printf_argument_list_error::unreferenced_argument)
+	{
+		static_assert(error == printf_argument_list_error::none,
+					  "fast_io format: printf format does not reference every supplied argument");
+	}
+	else
+	{
+		static_assert(error == printf_argument_list_error::none);
+	}
+	(void)argument_index;
+	(void)source_position;
+}
+
+} // namespace fast_io::fmt::details
+
 namespace fast_io::fmt
 {
 
@@ -34,6 +134,30 @@ template <basic_fixed_string format_literal>
 /** Public proof that the percent rule owns a compile-time program for a literal. */
 template <basic_fixed_string format_literal>
 concept percent_format_rule = format_rule_for<format_literal, printf_fmt_t>;
+
+/** Enforces printf's exact argument domain before syntax-neutral lowering. */
+template <basic_fixed_string format_literal, typename... argument_types>
+inline consteval void validate_format_argument_list(
+	printf_fmt_t,
+	::fast_io::fmt::details::format_argument_list_validation_adl::
+		argument_type_list<argument_types...>) noexcept
+{
+	constexpr auto validation{
+		::fast_io::fmt::details::validate_printf_argument_list<
+			format_literal, sizeof...(argument_types)>()};
+	// Indexed replacement lowering already owns the missing-argument
+	// diagnostic.  This rule-level contract supplies the complementary check
+	// which ordinary per-reference resolution cannot observe: an argument that
+	// was supplied but never referenced at all.
+	if constexpr (validation.error ==
+				  ::fast_io::fmt::details::printf_argument_list_error::
+					  unreferenced_argument)
+	{
+		::fast_io::fmt::details::diagnose_printf_argument_list<
+			format_literal, validation.error, validation.argument_index,
+			validation.source_position>();
+	}
+}
 
 /** Registers percent argument selection and value-rule lowering through ADL. */
 template <auto format_literal, auto field, typename argument_pack>

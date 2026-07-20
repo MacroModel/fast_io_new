@@ -238,6 +238,176 @@ concept dynamic_reserve_printable = ::std::integral<char_type> && requires(T t, 
 	} -> ::std::same_as<char_type *>;
 };
 
+namespace details
+{
+
+/// @brief Maximum representation size admitted by the optional compiler-constant merge strategy.
+/// @details This is intentionally much smaller than the general print stack budget. The strategy exists to fuse short
+///          fields; turning a large scatter into a reserve proxy would replace a zero-copy write with materialization.
+inline constexpr ::std::size_t compiler_constant_materialization_max_bytes{256u};
+
+/// @brief Extracts the reserve proxy produced by compiler-constant materialization.
+/// @details The proxy is a print/concat strategy object.  Its ordinary reserve CPOs are deliberately separate from the
+///          source type's mature run-time formatter, so selecting the optional strategy cannot perturb that formatter's
+///          inlining, code layout, or algorithm choice.
+template <::std::integral char_type, typename T>
+using compiler_constant_materialized_t = ::std::remove_cvref_t<decltype(
+	print_compiler_constant_materialize(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		::std::declval<T const &>()))>;
+
+} // namespace details
+
+/// @brief Opts one normalized leaf into print/concat's compiler-constant materialization strategy.
+/// @details `print_compiler_constant_materialization_eligible` is an optimizer query, not a language constant-expression
+///          promise: a GCC/Clang implementation may use `__builtin_constant_p` on the current object.  It must return
+///          false whenever the companion materializer would not be a semantics-preserving replacement for this value.
+///          The materializer returns a reserve-printable proxy whose formatter is intended only for the proven constant
+///          arm.  Public print and concat require the complete active leaf run to satisfy this protocol and enter that
+///          arm only when every query is true; the false arm invokes the pre-existing dispatcher unchanged.
+///
+///          Both customization functions are observational strategy queries: they must be side-effect free, must not
+///          read volatile state, and must not rely on their evaluation order. The materializer must return its decayed
+///          proxy as an exact prvalue. Its reserve extent is a type-level constant and the proxy must be nothrow
+///          destructible, so merely forming the discarded constant arm cannot make an ordinary run-time call ill-formed.
+/// @fn print_compiler_constant_materialization_eligible
+/// @fn print_compiler_constant_materialize
+template <typename char_type, typename T>
+concept compiler_constant_printable =
+	::std::integral<char_type> && requires(T const &value) {
+		{
+			print_compiler_constant_materialization_eligible(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
+		} noexcept -> ::std::same_as<bool>;
+		{
+			print_compiler_constant_materialize(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
+		} noexcept -> ::std::same_as<
+			::fast_io::details::compiler_constant_materialized_t<char_type, T>>;
+	} && reserve_printable<char_type,
+							 ::fast_io::details::compiler_constant_materialized_t<char_type, T>> &&
+	::std::is_nothrow_destructible_v<
+		::fast_io::details::compiler_constant_materialized_t<char_type, T>> &&
+	requires(
+		::fast_io::details::compiler_constant_materialized_t<char_type, T> materialized,
+		char_type *iter) {
+		sizeof(::fast_io::details::compiler_constant_materialized_t<char_type, T>);
+		typename ::std::integral_constant<
+			::std::size_t,
+			print_reserve_size(
+				::fast_io::io_reserve_type<
+					char_type,
+					::fast_io::details::compiler_constant_materialized_t<char_type, T>>) >;
+		{
+			print_reserve_define(
+				::fast_io::io_reserve_type<
+					char_type,
+					::fast_io::details::compiler_constant_materialized_t<char_type, T>>,
+				iter, materialized)
+		} noexcept -> ::std::same_as<char_type *>;
+	};
+
+/// @brief Marks an eligibility query as safe for direct optimizer evaluation.
+/// @details `__builtin_constant_p` does not generally look through an arbitrary
+///          function-call expression.  This optional type-only CPO is therefore
+///          a strong contract: the query must be forced inline, and every unknown
+///          source field must make the complete query fold to false with no
+///          surviving work.  Marked queries may consequently be evaluated
+///          directly; unmarked extensions remain supported through the
+///          conservative builtin-on-call-expression gate.
+/// @fn print_compiler_constant_materialization_query_inline_safe
+template <typename char_type, typename T>
+concept compiler_constant_query_inline_safe =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_materialization_query_inline_safe(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Opts a public source leaf into compiler-constant materialization before print aliasing.
+/// @details The ordinary compiler-constant protocol is phrased on a printable leaf. Public print, however, receives
+///          the source object before `io_print_alias` and status forwarding. This stronger marker states that replacing
+///          that exact source with its companion materialized proxy before those customizations is observationally
+///          equivalent. It is intentionally type-only and exact-`true_type`: arbitrary alias/status extensions must
+///          keep the historical normalization boundary unless they explicitly establish this stronger contract.
+///
+///          The marker also promises that the source's eligibility query is a pure, forced-inline optimizer query.
+///          Every unknown payload field must therefore fold the query to false without leaving run-time work. This is
+///          what permits the false arm of the public early gate to be the unchanged print entry.
+/// @fn print_compiler_constant_pre_normalization_safe
+template <typename char_type, typename T>
+concept compiler_constant_pre_normalization_safe =
+	::std::integral<char_type> &&
+	::fast_io::compiler_constant_printable<char_type, T> &&
+	::fast_io::compiler_constant_query_inline_safe<char_type, T> && requires {
+		{
+			print_compiler_constant_pre_normalization_safe(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Describes the rodata/static fragments of one compiler-constant replacement proxy.
+/// @details This protocol is deliberately independent from reserve printing.  A reserve formatter writes characters
+///          into caller-owned storage; the fragment formatter instead fills only scatter descriptors whose payloads
+///          already reside in immutable storage with lifetime covering the complete synchronous write.  It is used by
+///          unbuffered print destinations so constant digits, boolean spellings, and punctuation need not be copied to
+///          a character array merely to issue one write/writev operation.
+///
+///          `print_compiler_constant_static_fragments_size` is a type-only maximum descriptor count.  The define CPO
+///          may return any cursor in the closed range `[first, first + maximum]`, omitting empty fragments.  It must not
+///          write character payload, retain `first`, or return descriptors naming the proxy object itself.  The proxy
+///          may be destroyed immediately after the synchronous output operation; every descriptor payload must remain
+///          valid independently of that destruction.  These requirements are stronger than ordinary scatter
+///          printability and intentionally keep short-lived/local scratch pointers out of the static-fragment path.
+/// @fn print_compiler_constant_static_fragments_size
+/// @fn print_compiler_constant_static_fragments_define
+template <typename char_type, typename T>
+concept compiler_constant_static_fragment_printable =
+	::std::integral<char_type> && requires(
+		::fast_io::basic_io_scatter_t<char_type> *first,
+		::std::remove_cvref_t<T> const &value) {
+		typename ::std::integral_constant<
+			::std::size_t,
+			print_compiler_constant_static_fragments_size(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>) >;
+		{
+			print_compiler_constant_static_fragments_define(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>,
+				first, value)
+		} noexcept -> ::std::same_as<
+			::fast_io::basic_io_scatter_t<char_type> *>;
+	} &&
+	(print_compiler_constant_static_fragments_size(
+		 ::fast_io::io_reserve_type<char_type,
+			 ::std::remove_cvref_t<T>>) != 0u);
+
+/// @brief Opts an output into synchronous, direct consumption of immutable scatter payloads.
+/// @details A scatter-write customization proves only that an output accepts a descriptor array.  It does not prove
+///          that the output is unbuffered, that it consumes every payload before returning, or that it forwards the
+///          descriptor pointers unchanged to the underlying device.  Buffered streams, put-area streams, converting
+///          decorators, deferred/asynchronous adapters, and type-erased wrappers therefore remain outside this concept
+///          unless the concrete normalized output explicitly supplies this stronger marker.
+///
+///          An opt-in promises that the matching native typed- or byte-scatter operation consumes the referenced
+///          character storage synchronously during the call and does not retain a pointer after it returns.  It also
+///          promises that bypassing an intermediate character copy is observationally equivalent to the ordinary
+///          print path.  A transparent wrapper may forward the marker only when it preserves all of those properties;
+///          merely forwarding `scatter_write_*` is insufficient.
+/// @fn print_synchronous_direct_scatter_output
+/// @return std::true_type
+template <typename char_type, typename output>
+concept synchronous_direct_scatter_output =
+	::std::integral<char_type> && requires {
+		{
+			print_synchronous_direct_scatter_output(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<output>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Supplies the conservative staged-fallback placement when a type does not customize it.
 /// @details This platform-neutral default preserves the original cold fallback for every existing staged formatter.
 ///          A type may provide a more specialized overload in an associated namespace when measurements prove that
@@ -791,6 +961,54 @@ concept nothrow_precise_reserve_printable =
 		} noexcept -> ::std::same_as<char_type *>;
 	};
 
+/// @brief Marks a compiler-constant proxy whose exact reserve spelling should be tried before immutable fragments.
+/// @details Some proxies have a deliberately conservative static-fragment count even though their selected spelling
+///          is short.  On synchronous direct outputs, building that worst-case descriptor array can cost much more
+///          stack than writing the exact spelling contiguously.  This type-only opt-in is therefore a strong contract:
+///          the exact-size query is non-throwing and stable for the lifetime of the proxy, and the exact writer writes
+///          only `[ptr, ptr + n)`, returns `ptr + n`, and is semantically identical to both ordinary reserve output and
+///          immutable-fragment output.  A consumer may query one proxy once, retain that result, and use it with the
+///          same proxy after preparing sibling leaves; it must not substitute the ordinary reserve writer because that
+///          writer may legally use the complete reserve bound.
+/// @fn print_compiler_constant_prefer_precise_compact
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_precise_compact_preferred =
+	::std::integral<char_type> &&
+	::fast_io::nothrow_precise_reserve_printable<char_type, T> &&
+	requires(T &value) {
+		{
+			print_compiler_constant_prefer_precise_compact(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+		{
+			print_reserve_precise_size(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>,
+				value)
+		} noexcept -> ::std::same_as<::std::size_t>;
+	};
+
+/// @brief Exposes a complete compiler-constant spelling when it is one provider-owned immutable fragment.
+/// @details This optional probe runs on the already-materialized proxy before exact compact output.  A nonzero
+///          scatter is the complete spelling and remains valid for the synchronous direct write; a zero length means
+///          that the spelling is empty or requires another strategy.  The probe must not materialize characters,
+///          mutate the proxy, or invoke its ordinary reserve/static-fragment emitters.  It exists specifically to
+///          retain a true rodata pointer for one-slice values without first allocating a conservative descriptor array.
+/// @fn print_compiler_constant_single_static_fragment
+template <typename char_type, typename T>
+concept compiler_constant_single_static_fragment_printable =
+	::std::integral<char_type> && requires(T const &value) {
+		{
+			print_compiler_constant_single_static_fragment(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>,
+				value)
+		} noexcept -> ::std::same_as<
+			::fast_io::basic_io_scatter_t<char_type>>;
+	};
+
 /// @brief Marks an exact-size producer for which preinitializing the destination is a material cost.
 /// @details This is a profitability refinement, not another formatting capability. The precise reserve protocol still
 ///          proves the exact extent and complete overwrite. The marker says that an ordinary concat strategy should
@@ -1220,6 +1438,23 @@ concept deferred_obuffer_commit_safe = ::std::integral<char_type> && requires {
 			io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
 	} -> ::std::same_as<::std::true_type>;
 };
+
+/// @brief Marks an output whose put area is safe for the compiler-constant materialization strategy.
+/// @details The general deferred-commit marker remains the default proof. An output may instead opt in only to this
+///          narrower strategy when writing a fully materialized, statically bounded run into its current put area and
+///          publishing the cursor once is equivalent to its ordinary buffered path. This narrower opt-in deliberately
+///          does not authorize other deferred-cursor strategies.
+/// @fn       print_compiler_constant_obuffer_materialization_safe
+/// @return   std::true_type
+template <typename char_type, typename output>
+concept compiler_constant_obuffer_materialization_safe =
+	::std::integral<char_type> &&
+	(::fast_io::deferred_obuffer_commit_safe<char_type, output> || requires {
+		{
+			print_compiler_constant_obuffer_materialization_safe(
+				io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
+		} -> ::std::same_as<::std::true_type>;
+	});
 
 template <::std::integral char_type>
 inline constexpr ::std::true_type print_copy_stable_borrowed_source(

@@ -1,9 +1,141 @@
 # Print concept-composition benchmark
 
-This harness isolates formatting and output-concept composition. It intentionally contains no integer/floating-point
-formatting and no numeric parsing. The printable leaves are strings plus a fixed five-byte custom reserve-printable
-token, so width, condition, pack, range-view, concat, buffering, scatter, and file-reference policies can be compared
-without attributing a conversion algorithm's cost to the concept layer.
+The main composition harness isolates formatting and output-concept composition. It intentionally contains no
+integer/floating-point formatting and no numeric parsing. The printable leaves are strings plus a fixed five-byte
+custom reserve-printable token, so width, condition, pack, range-view, concat, buffering, scatter, and file-reference
+policies can be compared without attributing a conversion algorithm's cost to the concept layer.
+
+## Runtime floating scatter crossover
+
+`runtime_float_scatter_bench.cc` is the separate numeric transport calibration. Every iteration formats an optimizer-
+opaque `double` as shortest general, fixed, or fixed with a run-time precision, places that result among 2/3/5/9
+nonempty descriptors, and sends the complete record to a real unbuffered `/dev/null` descriptor. Before timing, the
+copy-plus-write and native-writev spellings are materialized independently and compared byte for byte. The
+`print_policy` cases then exercise the library's
+`scatter_direct_full_output_coalesce_threshold` selection on the same records.
+
+Google Benchmark medians on the fixed i9-14900HX P-core CPU 4 are summarized below as
+`(copy + write) / writev`; values below one favor contiguous materialization. Each cell is the range across all three
+floating modes and all four descriptor counts. The crossover run used seven repetitions per case; GCC's median CV was
+0.72% (90th percentile 1.74%), while Clang's median CV was 1.26% (90th percentile 3.57%). A few isolated Clang samples
+were noisier, but the complete 4-KiB band remained on the same side of the crossover.
+
+| Compiler | 2 KiB | 4 KiB | 8 KiB |
+|---|---:|---:|---:|
+| Clang 23 | 0.626--0.774 | 0.754--0.926 | 0.880--1.153 |
+| GCC 15 | 0.645--0.826 | 0.730--0.919 | 0.910--1.153 |
+
+At 4 KiB, copying was 7.4%--27.0% faster in every measured case. At 8 KiB, 2/3/5-descriptor records had crossed to
+writev for every floating mode; only the nine-descriptor cases still repaid copying. Because the stream policy has one
+payload threshold rather than a descriptor-count-dependent table, 4 KiB is the largest uniformly profitable measured
+Linux default. The benchmark therefore confirms the existing 4-KiB concept value and tests the missing strategy
+application instead of replacing it with a guessed constant. Small records now complete through one direct scalar
+write; a record above the policy threshold retains native scatter output, and a destination with a put area bypasses
+the unbuffered policy entirely.
+
+One reproducible build and run is:
+
+```sh
+make -C benchmark/0021.print_concepts runtime-float-scatter \
+  CXX=clang++ GOOGLE_BENCHMARK_ROOT=/path/to/google-benchmark \
+  GOOGLE_BENCHMARK_BUILD=/path/to/google-benchmark-build
+taskset -c 4 benchmark/0021.print_concepts/runtime_float_scatter_bench \
+  --benchmark_out=/tmp/runtime-float-scatter.json --benchmark_out_format=json
+```
+
+## Static precision floating width on a put area
+
+`static_precision_float_width_bench.cc` isolates the runtime-unknown `float`/`double` case whose width and precision
+are encoded in the compiled format program, including `{:+020.6f}`.  It uses a reusable 2-KiB `obuffer_view`, reads
+every timed value from a volatile source, and keeps the written storage observable with an inline-assembly memory
+operand.  Before timing, each spelling is compared byte for byte with the corresponding `concat_std` result.  The
+matrix includes internal/right/left/center placement, insufficient width, a signed prefixed hex field, no width, and
+both right/internal dynamic-width-and-precision controls.
+
+The optimized internal-placement path is deliberately narrower than an ordinary `reserve_printable` test.  A field
+must already carry the explicit bounded-materialization and direct-put-area markers, its non-fatal candidate bound and
+actual reserve define must be non-throwing, and the independently forwarded plain leaf must provide a non-throwing
+internal-shift CPO.  Conditions, packs, nested widths, and an unmarked or potentially throwing custom leaf retain the
+measured fallback.  `tests/0003.concat/static_precision_float_width_put_area.cc` exercises that negative gate, counts
+one bound/define/shift call on each admitted internal field, and compares finite, subnormal, extreme, infinity, NaN,
+negative-zero, prefix, and placement cases.
+
+Build and pin the focused benchmark with:
+
+```sh
+make -C benchmark/0021.print_concepts static-precision-float-width \
+  CXX=clang++ GOOGLE_BENCHMARK_ROOT=/path/to/google-benchmark \
+  GOOGLE_BENCHMARK_BUILD=/path/to/google-benchmark-build
+taskset -c 4 benchmark/0021.print_concepts/static_precision_float_width_bench \
+  --benchmark_out=/tmp/static-precision-float-width.json \
+  --benchmark_out_format=json
+```
+
+`static_precision_float_width_asm.cc` supplies non-null 2-KiB wrappers for code-shape inspection.  In the ample-put-area
+branch, an admitted static internal field must call its floating reserve define once, then move/fill padding after the
+reported sign/prefix.  `floating_precise_precision_size` and the measured width continuation may remain in the same
+object, but only behind the null/short-capacity fallback; counting calls in the complete object without following the
+branch would therefore be misleading.  The dynamic width/precision wrapper is the control for the same one-pass
+property.
+
+```sh
+make -C benchmark/0021.print_concepts static-precision-float-width-asm CXX=clang++
+objdump -drC benchmark/0021.print_concepts/static_precision_float_width_asm.o
+```
+
+## Run-time source-bridge inlining tradeoff
+
+`compiler_constant_bridge_outline_bench.cc` compares the ordinary-inline
+source-normalization bridge with an otherwise identical header copy in which
+only `print_freestanding_decay_unforwarded` regains its former forced-inline
+attribute.  It measures an optimizer-unknown integer, an optimizer-unknown
+fixed `double`, and random indirect calls across 128 distinct compiled format
+strings, all writing to a reusable `obuffer_view`.
+
+Ten alternating GCC 15 runs pinned to the i9-14900HX P-core CPU 4 used 0.10 s
+per case.  The paired median `forced / ordinary` CPU-time ratios were 0.988 for
+the integer, 0.902 for the floating field, and 1.043 for the 128-format working
+set.  Thus forced inlining bought about 9.8% in the isolated floating call, but
+lost about 4.3% under the larger instruction working set; the integer result
+was within about 1.2%.  More importantly, the 128 generated wrappers occupied
+196,352 bytes with forced inlining versus 14,976 bytes with ordinary inlining
+(13.1x), while total executable text grew by 20.43%.  The bridge therefore
+remains ordinary inline: the compiler may still inline a small isolated use,
+without cloning the complete dynamic formatter into every format program.
+
+Build the current side with:
+
+```sh
+make -C benchmark/0021.print_concepts compiler-constant-bridge-outline \
+  CXX=g++-15 GOOGLE_BENCHMARK_ROOT=/path/to/google-benchmark \
+  GOOGLE_BENCHMARK_BUILD=/path/to/google-benchmark-build
+taskset -c 4 \
+  benchmark/0021.print_concepts/compiler_constant_bridge_outline_bench
+```
+
+For an A/B run, compile this same source and flags against a copied header tree
+whose only difference is the one bridge attribute, and alternate process order
+on the same pinned core.
+
+## Static floating arguments with width and precision
+
+`static_argument_fixed_width_asm.cc` verifies the variable-template spelling
+`fmt::static_arg<12.44>` through both brace and printf programs.  The matrix
+contains zero-filled internal placement and center placement, plus an ordinary
+run-time `double` control.  Every static wrapper must pass one complete 24-byte
+record from `compiled_static_format_program::storage` in `.rodata` to exactly
+one direct syscall, with no stack allocation, formatter call, or scatter path.
+The run-time control must not acquire either the compiled-static-program or
+compiler-constant machinery.
+
+The gate checks every available GCC 13--16 and Clang 17--23 executable, compares
+the complete output bytes, and inspects the linked code and symbol table:
+
+```sh
+TASKSET_CPU=16 \
+CLANG23_CXX=/path/to/clang++-23 \
+make -C benchmark/0021.print_concepts static-argument-fixed-width-asm-gate
+```
 
 The fast_io-only protocol workloads extend that matrix with pure-text dynamic-reserve (`dynamic9`), retained static
 reserve-scatters (`reserve-scatter9`), incremental context (`context3`), and staged prepare/emit (`staged9`) producers.
@@ -51,6 +183,37 @@ objdump -drC /tmp/static-literal-asm | \
           /<fast_io_static_literal_whole_probe>/,/^$/p; \
           /<fast_io_static_literal_line_probe>/,/^$/p; \
           /<fast_io_static_literal_embedded_line_probe>/,/^$/p'
+```
+
+`compiler_constant_float_posix_asm.cc` is the GCC 15 gate for a complete short constant record on an unbuffered
+POSIX observer.  The print layer joins `"i="` and `3.2` in its eight-byte scratch tier and enters the direct scalar
+write CPO in the normal path.  After disabling toolchain-default stack/control-flow hardening to expose only library
+cost, `main` must contain the merged dword/byte payload stores and one inline `write` syscall retry loop: it must not
+adjust the stack, call a cold write helper, or use scatter/writev.  GCC may partition the syscall-error `ud2`; the gate
+allows that block only when it has no call, syscall, or normal return.  Run the executable assembly check with:
+
+```sh
+make -C benchmark/0021.print_concepts compiler-constant-float-asm-gate
+```
+
+## Static-fragment first-attempt placement
+
+`static_fragment_direct_write_bench.cc` compares the established outlined
+two-iovec completion, a caller-local first `writev`, a six-byte stack copy plus
+`write`, and an explicit `fmt::static_arg<32>` whose complete spelling is one
+provider-owned DSAL array.  On CPU 4, 25 alternating `/dev/null` process pairs
+gave the public hot-first path median changes of -5.44% on GCC 15 and -4.31% on
+GCC 13.  Clang 23 was neutral at the median and +2.26% slower by paired mean.
+The placement policy is therefore intentionally GCC-only; the synchronous
+direct-output protocol and provider-lifetime gate remain compiler-independent.
+
+`check_static_fragment_hot_policy_asm.sh` locks that division down: available
+GCC 13--16 builds must place the first syscall in the probe and leave only
+partial/error completion cold, while available Clang 17--23 builds must retain
+the outlined cold helper.  Run it with:
+
+```sh
+make -C benchmark/0021.print_concepts static-fragment-hot-policy-asm-gate
 ```
 
 This is deliberately an ordinary constexpr copy policy, not consteval string concatenation. The public function's

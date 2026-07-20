@@ -86,6 +86,23 @@ inline constexpr ::fast_io::details::width_storage_type<T> width_store(T &&t)
 namespace manipulators
 {
 
+/// @brief Bounded width replacement owned by print/concat's compiler-constant strategy.
+/// @details `placement == scalar_placement::none` denotes the run-time-placement source family; every other
+///          instantiation fixes placement in the type. The child has already been replaced by its independent
+///          compiler-constant proxy and `child_size` is that exact proxy spelling. Width is admitted only within the
+///          common compiler-constant byte budget, so the replacement exposes one honest type-level reserve extent
+///          without changing the ordinary width node or its run-time formatting algorithm.
+template <scalar_placement placement, typename T, ::std::integral char_type>
+struct compiler_constant_width_t
+{
+	using manip_tag = manip_tag_t;
+	T reference;
+	::std::size_t child_size{};
+	::std::uint_least16_t width{};
+	char_type fill{};
+	scalar_placement runtime_placement{scalar_placement::right};
+};
+
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n)
@@ -243,6 +260,16 @@ concept concat_single_pass_bounded_width_child = ::std::integral<char_type> && r
 	} noexcept -> ::std::same_as<::std::size_t>;
 };
 
+/// @brief Recognizes a child explicitly authorized for print's direct bounded put-area strategy.
+template <typename char_type, typename T>
+concept print_single_pass_bounded_direct_put_area_width_child =
+	::std::integral<char_type> && requires {
+		{
+			print_single_pass_bounded_direct_put_area_safe(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Computes `max(child bound, width)` without observing the child after width already rejects the frame.
 template <::std::integral char_type, typename T>
 	requires concat_single_pass_bounded_width_child<char_type, T>
@@ -264,6 +291,73 @@ concat_single_pass_bounded_width_size(
 	return child_size < width ? width : child_size;
 }
 
+/// @brief Recognizes a width child whose compiler-constant replacement has a non-throwing exact protocol.
+/// @details Width must know the selected child's exact length before applying placement. Requiring the existing
+///          precise-compact contract makes that length query stable and lets the width replacement retain the child's
+///          mature constant materializer without allocating its conservative reserve maximum.
+template <typename char_type, typename T>
+concept compiler_constant_width_child = ::std::integral<char_type> &&
+	::fast_io::compiler_constant_pre_normalization_safe<char_type, T> &&
+	::fast_io::compiler_constant_precise_compact_preferred<
+		char_type,
+		::fast_io::details::compiler_constant_materialized_t<char_type, T>> &&
+	requires {
+		{
+			print_compiler_constant_eligible_implies_compact_size(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+template <::std::integral char_type>
+inline constexpr ::std::size_t compiler_constant_width_capacity{
+	::fast_io::details::compiler_constant_materialization_max_bytes /
+	sizeof(char_type)};
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+compiler_constant_width_child_eligible(T const &value) noexcept
+{
+	// The exact child protocol owns the size computation. Its explicit marker states that a true eligibility result has
+	// already compared that exact spelling with this same character-domain byte budget, so repeating materialization
+	// here would only duplicate expensive floating precision work.
+	return print_compiler_constant_materialization_eligible(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		value);
+}
+
+template <::fast_io::manipulators::scalar_placement placement,
+	::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+compiler_constant_width_materialize(T const &child, ::std::size_t width,
+	char_type fill,
+	::fast_io::manipulators::scalar_placement runtime_placement = placement) noexcept
+{
+	auto materialized{print_compiler_constant_materialize(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, child)};
+	auto const child_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type,
+			::std::remove_cvref_t<decltype(materialized)>>,
+		materialized)};
+	constexpr auto capacity{
+		::fast_io::details::compiler_constant_width_capacity<char_type>};
+	// Direct calls to the materializer outside its eligibility arm remain memory-safe. Such calls have no replacement
+	// semantics contract, but clamping the layout metadata preserves the proxy's type-level reserve invariant.
+	auto const bounded_width{width < capacity ? width : capacity};
+	auto const normalized_placement{
+		static_cast<::std::size_t>(runtime_placement) - 1u < 4u
+			? runtime_placement
+			: ::fast_io::manipulators::scalar_placement::right};
+	using materialized_type = ::std::remove_cvref_t<decltype(materialized)>;
+	return ::fast_io::manipulators::compiler_constant_width_t<
+		placement, materialized_type, char_type>{
+		::std::move(materialized), child_size,
+		static_cast<::std::uint_least16_t>(bounded_width), fill,
+		normalized_placement};
+}
+
 } // namespace details
 
 /// @brief Propagates an audited one-pass concat bound through fixed-placement width layout.
@@ -272,6 +366,17 @@ template <::std::integral char_type,
 	requires ::fast_io::details::concat_single_pass_bounded_width_child<
 		char_type, T>
 inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::print_single_pass_bounded_direct_put_area_width_child<
+		char_type, T>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_t<placement, T>>) noexcept
 {
@@ -309,6 +414,19 @@ template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::print_single_pass_bounded_direct_put_area_width_child<
+			char_type, T>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
 		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
 inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
@@ -325,6 +443,16 @@ template <::std::integral char_type, typename T>
 	requires ::fast_io::details::concat_single_pass_bounded_width_child<
 		char_type, T>
 inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::print_single_pass_bounded_direct_put_area_width_child<
+		char_type, T>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>) noexcept
 {
@@ -359,6 +487,18 @@ inline constexpr ::std::true_type concat_single_pass_bounded_materialization_pre
 template <::std::integral char_type, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::print_single_pass_bounded_direct_put_area_width_child<
+			char_type, T>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
 		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
 inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
@@ -368,6 +508,409 @@ inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
 {
 	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
 		value.reference, value.width, maximum_size);
+}
+
+// Width is a semantic/layout node, so its compiler-constant protocol recursively replaces only its child.  The
+// ordinary width types and format lowering remain algorithm-neutral; print/concat decide whether the complete bounded
+// replacement is profitable for the destination.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>,
+	::fast_io::manipulators::width_t<placement, T> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.width) &&
+		value.width <= ::fast_io::details::compiler_constant_width_capacity<char_type> &&
+		::fast_io::details::compiler_constant_width_child_eligible<char_type>(
+			value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>,
+	::fast_io::manipulators::width_t<placement, T> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<placement>(
+		value.reference, value.width,
+		::fast_io::char_literal_v<u8' ', char_type>);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
+	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.width) && __builtin_constant_p(value.ch) &&
+		value.width <= ::fast_io::details::compiler_constant_width_capacity<char_type> &&
+		::fast_io::details::compiler_constant_width_child_eligible<char_type>(
+			value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
+	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<placement>(
+		value.reference, value.width, value.ch);
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>,
+	::fast_io::manipulators::width_runtime_t<T> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.placement) &&
+		__builtin_constant_p(value.width) &&
+		static_cast<::std::size_t>(value.placement) - 1u < 4u &&
+		value.width <= ::fast_io::details::compiler_constant_width_capacity<char_type> &&
+		::fast_io::details::compiler_constant_width_child_eligible<char_type>(
+			value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>,
+	::fast_io::manipulators::width_runtime_t<T> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<
+		::fast_io::manipulators::scalar_placement::none>(
+		value.reference, value.width,
+		::fast_io::char_literal_v<u8' ', char_type>, value.placement);
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
+	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.placement) &&
+		__builtin_constant_p(value.width) && __builtin_constant_p(value.ch) &&
+		static_cast<::std::size_t>(value.placement) - 1u < 4u &&
+		value.width <= ::fast_io::details::compiler_constant_width_capacity<char_type> &&
+		::fast_io::details::compiler_constant_width_child_eligible<char_type>(
+			value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
+	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<
+		::fast_io::manipulators::scalar_placement::none>(
+		value.reference, value.width, value.ch, value.placement);
+}
+
+namespace details
+{
+
+template <::std::integral char_type>
+inline constexpr void
+compiler_constant_width_fill(char_type *first, ::std::size_t count,
+	char_type fill) noexcept
+{
+	for (; count != 0u; --count)
+	{
+		*first++ = fill;
+	}
+}
+
+template <::std::integral char_type>
+inline constexpr void
+compiler_constant_width_move_right(char_type *first, ::std::size_t size,
+	::std::size_t displacement) noexcept
+{
+	for (auto current{size}; current != 0u; --current)
+	{
+		first[current - 1u + displacement] = first[current - 1u];
+	}
+}
+
+template <::fast_io::manipulators::scalar_placement placement,
+	::std::integral char_type, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_width_define(
+	char_type *first,
+	::fast_io::manipulators::compiler_constant_width_t<
+		placement, T, char_type> const &value) noexcept
+{
+	char_type *const child_end{print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, T>, first, value.child_size,
+		value.reference)};
+	if (child_end != first + value.child_size) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	auto const width{static_cast<::std::size_t>(value.width)};
+	if (width <= value.child_size)
+	{
+		return child_end;
+	}
+	auto actual_placement{placement};
+	if constexpr (placement ==
+		::fast_io::manipulators::scalar_placement::none)
+	{
+		actual_placement = value.runtime_placement;
+	}
+	auto const padding{width - value.child_size};
+	if (actual_placement ==
+		::fast_io::manipulators::scalar_placement::left)
+	{
+		::fast_io::details::compiler_constant_width_fill(
+			child_end, padding, value.fill);
+		return first + width;
+	}
+	if (actual_placement ==
+		::fast_io::manipulators::scalar_placement::middle)
+	{
+		auto const left_padding{padding >> 1u};
+		auto const right_padding{padding - left_padding};
+		::fast_io::details::compiler_constant_width_move_right(
+			first, value.child_size, left_padding);
+		::fast_io::details::compiler_constant_width_fill(
+			first, left_padding, value.fill);
+		::fast_io::details::compiler_constant_width_fill(
+			first + left_padding + value.child_size, right_padding, value.fill);
+		return first + width;
+	}
+	if (actual_placement ==
+		::fast_io::manipulators::scalar_placement::internal)
+	{
+		if constexpr (::fast_io::printable_internal_shift<char_type, T>)
+		{
+			auto const internal_shift{print_define_internal_shift(
+				::fast_io::io_reserve_type<char_type, T>, value.reference)};
+			if (internal_shift <= value.child_size)
+			{
+				::fast_io::details::compiler_constant_width_move_right(
+					first + internal_shift, value.child_size - internal_shift,
+					padding);
+				::fast_io::details::compiler_constant_width_fill(
+					first + internal_shift, padding, value.fill);
+				return first + width;
+			}
+			return child_end;
+		}
+	}
+	// Right placement, invalid run-time placement, and internal placement without a child shift all share the mature
+	// width fallback: pad before the already-produced child.
+	::fast_io::details::compiler_constant_width_move_right(
+		first, value.child_size, padding);
+	::fast_io::details::compiler_constant_width_fill(
+		first, padding, value.fill);
+	return first + width;
+}
+
+} // namespace details
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_width_t<
+			placement, T, char_type>>) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_capacity<char_type>;
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_width_t<
+			placement, T, char_type>>,
+	char_type *iter,
+	::fast_io::manipulators::compiler_constant_width_t<
+		placement, T, char_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_define(iter, value);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+[[nodiscard]] inline constexpr ::std::size_t
+print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_width_t<
+			placement, T, char_type>>,
+	::fast_io::manipulators::compiler_constant_width_t<
+		placement, T, char_type> const &value) noexcept
+{
+	auto const width{static_cast<::std::size_t>(value.width)};
+	return value.child_size < width ? width : value.child_size;
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+inline constexpr char_type *print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_width_t<
+			placement, T, char_type>> tag,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::compiler_constant_width_t<
+		placement, T, char_type> const &value) noexcept
+{
+	(void)precise_size;
+	return print_reserve_define(tag, iter, value);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_precise_compact(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_width_t<
+			placement, T, char_type>>) noexcept
+{
+	return {};
 }
 
 #if 0

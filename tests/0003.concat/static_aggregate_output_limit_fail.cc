@@ -10,5 +10,5 @@ int main()
 	// 16896 code units.  A known static result above 16 KiB is a contract error,
 	// not permission to silently select the dynamic path.
 	(void)::fast_io::fmt::concat_std<"{::064}">(
-		::fast_io::fmt::static_arg<values>());
+		::fast_io::fmt::static_arg<values>);
 }

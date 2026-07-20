@@ -304,6 +304,19 @@ struct scalar_manip_t
 	T reference;
 };
 
+/// @brief Print/concat-owned reserve proxy for an optimizer-proven constant scalar.
+/// @details Ordinary scalar formatting deliberately keeps its established integer algorithm.  This distinct type is
+///          created only by the compiler-constant strategy and selects a compact constant-friendly digit writer without
+///          inserting a probe or branch into the hot run-time formatter.
+template <scalar_flags flags, typename T>
+struct compiler_constant_scalar_manip_t
+{
+	using value_type = T;
+	using scalar_flags_type = scalar_flags;
+	using manip_tag = manip_tag_t;
+	T reference;
+};
+
 struct member_function_pointer_holder_t
 {
 	using manip_tag = manip_tag_t;
@@ -3098,6 +3111,211 @@ inline constexpr char_type *print_reserve_integral_define(char_type *first, int_
 	}
 }
 
+/// Selects one explicitly converted execution character without assuming that
+/// the lowercase and uppercase alphabets are arithmetically related.
+template <bool uppercase, char8_t lowercase_character,
+		  char8_t uppercase_character, ::std::integral char_type>
+inline constexpr char_type compiler_constant_case_literal_v{[]() constexpr {
+	if constexpr (uppercase)
+	{
+		return ::fast_io::char_literal_v<uppercase_character, char_type>;
+	}
+	else
+	{
+		return ::fast_io::char_literal_v<lowercase_character, char_type>;
+	}
+}()};
+
+/// @brief Writes a base prefix using semantic execution characters only.
+/// @details The established formatter uses native string literals for a few
+///          two-character prefixes.  GCC can pack a one-byte wide execution
+///          charset into those literals, so a compiler-constant proxy needs an
+///          explicit code-unit spelling to remain correct for wide EBCDIC.
+template <::std::size_t base, bool uppercase_showbase, bool modern_octal,
+		  ::std::integral char_type>
+	requires(2u <= base && base <= 36u)
+inline constexpr char_type *
+print_compiler_constant_show_base_define(char_type *iter) noexcept
+{
+	if constexpr (base != 10u)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+	}
+	if constexpr (base == 2u)
+	{
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase_showbase, u8'b', u8'B', char_type>;
+	}
+	else if constexpr (base == 3u)
+	{
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase_showbase, u8't', u8'T', char_type>;
+	}
+	else if constexpr (base == 8u)
+	{
+		if constexpr (modern_octal)
+		{
+			*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+				uppercase_showbase, u8'o', u8'O', char_type>;
+		}
+	}
+	else if constexpr (base == 16u)
+	{
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase_showbase, u8'x', u8'X', char_type>;
+	}
+	else if constexpr (base != 10u)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'[', char_type>;
+		if constexpr (base < 10u)
+		{
+			*iter++ = ::fast_io::char_literal_add<char_type>(base);
+		}
+		else
+		{
+			*iter++ = ::fast_io::char_literal_add<char_type>(base / 10u);
+			*iter++ = ::fast_io::char_literal_add<char_type>(base % 10u);
+		}
+		*iter++ = ::fast_io::char_literal_v<u8']', char_type>;
+	}
+	return iter;
+}
+
+template <bool uppercase, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_compiler_constant_boolalpha_define(
+	char_type *iter, bool value) noexcept
+{
+	if (value)
+	{
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8't', u8'T', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'r', u8'R', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'u', u8'U', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'e', u8'E', char_type>;
+	}
+	else
+	{
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'f', u8'F', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'a', u8'A', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'l', u8'L', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8's', u8'S', char_type>;
+		*iter++ = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'e', u8'E', char_type>;
+	}
+	return iter;
+}
+
+/// @brief Emits one optimizer-proven constant integer without entering the run-time decimal algorithm.
+/// @details This is intentionally a sibling of `print_reserve_integral_define`, not a branch inside it.  The public
+///          print/concat strategy reaches this helper only through `compiler_constant_scalar_manip_t`; an unknown value
+///          therefore instantiates and executes the original formatter with no extra test or altered inlining body.
+template <::std::size_t base, bool showbase = false, bool uppercase_showbase = false, bool showpos = false,
+		  bool uppercase = false, bool full = false, bool oct_c2y = false, typename int_type, ::std::integral char_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+print_reserve_integral_compiler_constant_define(char_type *first, int_type t)
+{
+	if constexpr (base <= 10 && uppercase)
+	{
+		return print_reserve_integral_compiler_constant_define<base, showbase, uppercase_showbase, showpos,
+															   false, full, oct_c2y>(first, t);
+	}
+	else
+	{
+		static_assert((2 <= base) && (base <= 36));
+		if constexpr (::std::same_as<bool, ::std::remove_cvref_t<int_type>>)
+		{
+			if constexpr (showpos)
+			{
+				*first++ = char_literal_v<u8'+', char_type>;
+			}
+			if constexpr (showbase && (base != 10))
+			{
+				first = print_compiler_constant_show_base_define<
+					base, uppercase_showbase, oct_c2y>(first);
+			}
+			*first++ = t ? char_literal_v<u8'1', char_type> : char_literal_v<u8'0', char_type>;
+			return first;
+		}
+		else
+		{
+			using unsigned_type = ::fast_io::details::my_make_unsigned_t<int_type>;
+			unsigned_type value{static_cast<unsigned_type>(t)};
+			if constexpr (showpos)
+			{
+				if constexpr (::fast_io::details::my_unsigned_integral<int_type>)
+				{
+					*first = char_literal_v<u8'+', char_type>;
+				}
+				else if (t < 0)
+				{
+					*first = char_literal_v<u8'-', char_type>;
+					constexpr unsigned_type zero{};
+					value = zero - value;
+				}
+				else
+				{
+					*first = char_literal_v<u8'+', char_type>;
+				}
+				++first;
+			}
+			else if constexpr (::fast_io::details::my_signed_integral<int_type>)
+			{
+				if (t < 0)
+				{
+					*first++ = char_literal_v<u8'-', char_type>;
+					constexpr unsigned_type zero{};
+					value = zero - value;
+				}
+			}
+			if constexpr (showbase && (base != 10))
+			{
+				first = print_compiler_constant_show_base_define<
+					base, uppercase_showbase, oct_c2y>(first);
+			}
+			constexpr ::std::size_t full_digits{
+				::fast_io::details::cal_max_int_size<unsigned_type, base>()};
+			::std::size_t const digits{full ? full_digits : chars_len<base, false>(value)};
+			if (digits == 1u)
+			{
+				// Keep the overwhelmingly common literal case as a forward store.
+				// Besides being the minimal lowering, this gives object-size analysis
+				// an explicit in-bounds write instead of asking it to reconstruct the
+				// one-step `*--end` invariant of the generic reverse formatter.
+				if constexpr (base <= 10u)
+				{
+					*first++ = ::fast_io::char_literal_add<char_type>(value);
+				}
+				else
+				{
+					constexpr auto table{
+						::fast_io::details::digits_table<char_type, base, uppercase>};
+					*first++ = static_cast<char_type>(
+						table[(static_cast<::std::size_t>(value) << 1u) + 1u]);
+				}
+				return first;
+			}
+			char_type *const last{first + digits};
+			if constexpr (sizeof(value) <= sizeof(unsigned))
+			{
+				print_reserve_integral_main_impl<base, uppercase>(
+					last, static_cast<unsigned>(value), digits);
+			}
+			else
+			{
+				print_reserve_integral_main_impl<base, uppercase>(last, value, digits);
+			}
+			return last;
+		}
+	}
+}
+
 template <::std::size_t base, bool showbase = false, bool uppercase_showbase = false, bool showpos = false,
 		  bool uppercase = false, bool oct_c2y = false, typename int_type, ::std::integral char_type>
 inline constexpr void print_reserve_integral_define_precise(char_type *start, ::std::size_t n, int_type t)
@@ -3792,6 +4010,798 @@ print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scala
 	{
 		return details::print_reserve_integral_define<flags.base, flags.showbase, flags.uppercase_showbase,
 													  flags.showpos, flags.uppercase, flags.full, flags.modern_octal>(iter, t.reference);
+	}
+}
+
+/// @brief Reports whether the optimizer proves the complete integral scalar payload constant at this call site.
+/// @details The function is forced inline so `__builtin_constant_p` observes the public print/concat expression rather
+///          than an out-of-line parameter.  Unsupported compilers conservatively retain the ordinary formatter.
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type, T>, T const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+/// @brief Materializes a raw default-format integer before its ordinary scalar alias is constructed.
+/// @details This is the source-level counterpart of the scalar-manipulator overload below. Keeping the alias integer
+///          type in the proxy makes the true arm byte-for-byte equivalent to the established default alias, while the
+///          early gate's false arm performs no cast and enters that alias unchanged.
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type, T>, T const &value) noexcept
+{
+	using alias_type = ::fast_io::details::integer_alias_type<T>;
+	return ::fast_io::manipulators::compiler_constant_scalar_manip_t<
+		::fast_io::manipulators::integral_default_scalar_flags, alias_type>{
+		static_cast<alias_type>(value)};
+}
+
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<char_type,
+		manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	io_reserve_type_t<char_type,
+		manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
+	manipulators::scalar_manip_t<flags, T> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+/// @brief Rebinds a proven constant scalar to its isolated reserve formatter.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
+	manipulators::scalar_manip_t<flags, T> const &value) noexcept
+{
+	return manipulators::compiler_constant_scalar_manip_t<flags, T>{value.reference};
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+inline constexpr ::std::size_t print_reserve_size(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+{
+	return print_reserve_size(
+		io_reserve_type<char_type, manipulators::scalar_manip_t<flags, T>>);
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+	char_type *iter,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> value) noexcept
+{
+	if constexpr (flags.alphabet)
+	{
+		return details::print_compiler_constant_boolalpha_define<flags.uppercase>(
+			iter, value.reference);
+	}
+	else if constexpr (::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
+	{
+		return details::print_reserve_integral_compiler_constant_define<
+			flags.base, flags.showbase, flags.uppercase_showbase, flags.showpos,
+			flags.uppercase, flags.full, flags.modern_octal>(
+			iter, static_cast<char8_t>(value.reference));
+	}
+	else
+	{
+		return details::print_reserve_integral_compiler_constant_define<
+			flags.base, flags.showbase, flags.uppercase_showbase, flags.showpos,
+			flags.uppercase, flags.full, flags.modern_octal>(iter, value.reference);
+	}
+}
+
+namespace details
+{
+
+/// Immutable digit storage used by the compiler-constant scatter formatter.
+/// A descriptor points at one element of this table; no digit is first copied
+/// through the caller's stack merely to make it addressable by writev.
+template <::std::integral char_type, bool uppercase>
+inline constexpr ::fast_io::freestanding::array<char_type, 26u>
+	compiler_constant_integral_alphabet_fragments{
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'a', u8'A', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'b', u8'B', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'c', u8'C', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'd', u8'D', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'e', u8'E', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'f', u8'F', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'g', u8'G', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'h', u8'H', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'i', u8'I', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'j', u8'J', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'k', u8'K', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'l', u8'L', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'm', u8'M', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'n', u8'N', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'o', u8'O', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'p', u8'P', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'q', u8'Q', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'r', u8'R', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8's', u8'S', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8't', u8'T', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'u', u8'U', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'v', u8'V', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'w', u8'W', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'x', u8'X', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'y', u8'Y', char_type>,
+		::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'z', u8'Z', char_type>};
+
+template <::std::integral char_type, bool uppercase>
+inline constexpr auto compiler_constant_integral_digit_fragments{[]() constexpr {
+	::fast_io::freestanding::array<char_type, 36u> result{};
+	for (::std::size_t index{}; index != 10u; ++index)
+	{
+		result[index] = ::fast_io::char_literal_add<char_type>(index);
+	}
+	for (::std::size_t index{10u}; index != 36u; ++index)
+	{
+		result[index] =
+			::fast_io::details::compiler_constant_integral_alphabet_fragments<
+				char_type, uppercase>[index - 10u];
+	}
+	return result;
+}()};
+
+/// Immutable two-digit spellings for one radix.  Each entry is an actual
+/// `char_type[2]` fragment, so the scatter path never relies on ASCII byte
+/// identity or reinterprets the narrow table for another character domain.
+/// Every code unit originates in `compiler_constant_integral_digit_fragments`,
+/// whose decimal digits use `char_literal_add` and whose alphabetic digits use
+/// explicit `char_literal_v` entries (required because EBCDIC letters are not
+/// one contiguous arithmetic range).
+template <::std::integral char_type, ::std::size_t base, bool uppercase>
+	requires(2u <= base && base <= 36u)
+inline constexpr auto compiler_constant_integral_pair_fragments{[]() constexpr {
+	::fast_io::freestanding::array<char_type, base * base * 2u> result{};
+	auto const &digits{
+		::fast_io::details::compiler_constant_integral_digit_fragments<
+			char_type, uppercase>};
+	for (::std::size_t high{}; high != base; ++high)
+	{
+		for (::std::size_t low{}; low != base; ++low)
+		{
+			auto const offset{(high * base + low) * 2u};
+			result[offset] = digits[high];
+			result[offset + 1u] = digits[low];
+		}
+	}
+	return result;
+}()};
+
+template <typename integer_type>
+struct compiler_constant_integral_unsigned_type
+{
+	using type = ::fast_io::details::my_make_unsigned_t<integer_type>;
+};
+
+// `std::make_unsigned<bool>` is intentionally ill-formed.  Numeric bool still
+// participates in the scalar protocol, but its magnitude is always one digit.
+template <>
+struct compiler_constant_integral_unsigned_type<bool>
+{
+	using type = unsigned char;
+};
+
+template <typename integer_type>
+using compiler_constant_integral_unsigned_type_t =
+	typename compiler_constant_integral_unsigned_type<integer_type>::type;
+
+template <::std::integral char_type>
+inline constexpr ::fast_io::freestanding::array<char_type, 2u>
+	compiler_constant_integral_sign_fragments{
+		::fast_io::char_literal_v<u8'+', char_type>,
+		::fast_io::char_literal_v<u8'-', char_type>};
+
+template <::std::integral char_type, bool uppercase, bool value>
+inline constexpr auto compiler_constant_boolalpha_fragment{[]() constexpr {
+	constexpr ::std::size_t size{value ? 4u : 5u};
+	::fast_io::freestanding::array<char_type, size> result{};
+	if constexpr (value)
+	{
+		result[0u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8't', u8'T', char_type>;
+		result[1u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'r', u8'R', char_type>;
+		result[2u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'u', u8'U', char_type>;
+		result[3u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'e', u8'E', char_type>;
+	}
+	else
+	{
+		result[0u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'f', u8'F', char_type>;
+		result[1u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'a', u8'A', char_type>;
+		result[2u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'l', u8'L', char_type>;
+		result[3u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8's', u8'S', char_type>;
+		result[4u] = ::fast_io::details::compiler_constant_case_literal_v<
+			uppercase, u8'e', u8'E', char_type>;
+	}
+	return result;
+}()};
+
+template <::std::integral char_type, ::std::size_t base,
+		  bool uppercase_showbase, bool modern_octal>
+inline constexpr auto compiler_constant_integral_prefix_fragment{[]() constexpr {
+	constexpr ::std::size_t size{
+		::fast_io::details::print_showbase_length<base, modern_octal>};
+	::fast_io::freestanding::array<char_type, size> result{};
+	auto const end{
+		::fast_io::details::print_compiler_constant_show_base_define<
+			base, uppercase_showbase, modern_octal>(result.data())};
+	if (end != result.data() + size)
+	{
+		::fast_io::fast_terminate();
+	}
+	return result;
+}()};
+
+} // namespace details
+
+/// Maximum descriptor count for the immutable-fragment spelling of one
+/// optimizer-proven integer. Signs and base prefixes each occupy one fragment;
+/// digit payloads use one leading code unit when needed followed by shared
+/// two-code-unit fragments.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+inline constexpr ::std::size_t print_compiler_constant_static_fragments_size(
+	io_reserve_type_t<char_type,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+{
+	if constexpr (flags.alphabet)
+	{
+		return 1u;
+	}
+	else
+	{
+		using integer_type = ::std::conditional_t<
+			::std::same_as<::std::remove_cv_t<T>, ::std::byte>, char8_t,
+			::std::remove_cv_t<T>>;
+		using unsigned_type = ::fast_io::details::
+			compiler_constant_integral_unsigned_type_t<integer_type>;
+		constexpr ::std::size_t digits{[]() constexpr {
+			if constexpr (::std::same_as<integer_type, bool>)
+			{
+				return 1u;
+			}
+			else
+			{
+				return ::fast_io::details::cal_max_int_size<
+					unsigned_type, flags.base>();
+			}
+		}()};
+		constexpr ::std::size_t sign{
+			flags.showpos ||
+			(::fast_io::details::my_signed_integral<integer_type> &&
+			 !::std::same_as<integer_type, bool>)};
+		constexpr ::std::size_t prefix{
+			flags.showbase && flags.base != 10u};
+		return (digits + 1u) / 2u + sign + prefix;
+	}
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::basic_io_scatter_t<char_type> *
+print_compiler_constant_static_fragments_define(
+	io_reserve_type_t<char_type,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+	::fast_io::basic_io_scatter_t<char_type> *first,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> const &value) noexcept
+{
+	if constexpr (flags.alphabet)
+	{
+		if (value.reference)
+		{
+			auto const &storage{
+				::fast_io::details::compiler_constant_boolalpha_fragment<
+					char_type, flags.uppercase, true>};
+			*first++ = {storage.data(), storage.size()};
+		}
+		else
+		{
+			auto const &storage{
+				::fast_io::details::compiler_constant_boolalpha_fragment<
+					char_type, flags.uppercase, false>};
+			*first++ = {storage.data(), storage.size()};
+		}
+		return first;
+	}
+	else
+	{
+		using integer_type = ::std::conditional_t<
+			::std::same_as<::std::remove_cv_t<T>, ::std::byte>, char8_t,
+			::std::remove_cv_t<T>>;
+		using unsigned_type = ::fast_io::details::
+			compiler_constant_integral_unsigned_type_t<integer_type>;
+		integer_type const signed_value{[](
+											auto const &source) constexpr -> integer_type {
+			if constexpr (::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
+			{
+				return static_cast<char8_t>(source);
+			}
+			else
+			{
+				return source;
+			}
+		}(value.reference)};
+		unsigned_type magnitude{static_cast<unsigned_type>(signed_value)};
+		bool negative{};
+		if constexpr (
+			::fast_io::details::my_signed_integral<integer_type> &&
+			!::std::same_as<integer_type, bool>)
+		{
+			negative = signed_value < 0;
+			if (negative)
+			{
+				constexpr unsigned_type zero{};
+				magnitude = zero - magnitude;
+			}
+		}
+		if constexpr (
+			flags.showpos ||
+			(::fast_io::details::my_signed_integral<integer_type> &&
+			 !::std::same_as<integer_type, bool>))
+		{
+			if (flags.showpos || negative)
+			{
+				auto const &signs{
+					::fast_io::details::compiler_constant_integral_sign_fragments<
+						char_type>};
+				*first++ = {signs.data() + static_cast<::std::size_t>(negative), 1u};
+			}
+		}
+		if constexpr (flags.showbase && flags.base != 10u)
+		{
+			auto const &prefix{
+				::fast_io::details::compiler_constant_integral_prefix_fragment<
+					char_type, flags.base, flags.uppercase_showbase,
+					flags.modern_octal>};
+			*first++ = {prefix.data(), prefix.size()};
+		}
+		if constexpr (::std::same_as<integer_type, bool>)
+		{
+			auto const &storage{
+				::fast_io::details::compiler_constant_integral_digit_fragments<
+					char_type, flags.uppercase>};
+			*first++ = {storage.data() + static_cast<::std::size_t>(magnitude),
+						1u};
+			return first;
+		}
+		// The established split-width formatter deliberately recurses through its
+		// lowercase specialization.  The constant scatter spelling must preserve
+		// those exact historical bytes rather than silently changing an existing
+		// `__int128` (or analogous two-word integer) result.
+		constexpr bool effective_uppercase{
+			flags.uppercase &&
+			!::fast_io::details::need_seperate_print<unsigned_type>};
+		constexpr ::std::size_t maximum_digits{
+			::fast_io::details::cal_max_int_size<unsigned_type, flags.base>()};
+		::std::size_t digits{maximum_digits};
+		if constexpr (!flags.full)
+		{
+			digits = 1u;
+			for (auto remaining{magnitude};
+				 remaining >= static_cast<unsigned_type>(flags.base);
+				 remaining = static_cast<unsigned_type>(
+					 remaining / static_cast<unsigned_type>(flags.base)))
+			{
+				++digits;
+			}
+		}
+		auto const digit_fragments{(digits + 1u) / 2u};
+		auto digit_iter{first + digit_fragments};
+		first = digit_iter;
+		auto const &single_storage{
+			::fast_io::details::compiler_constant_integral_digit_fragments<
+				char_type, effective_uppercase>};
+		auto const &pair_storage{
+			::fast_io::details::compiler_constant_integral_pair_fragments<
+				char_type, flags.base, effective_uppercase>};
+		constexpr unsigned_type base_value{
+			static_cast<unsigned_type>(flags.base)};
+		for (auto remaining{digits}; remaining >= 2u; remaining -= 2u)
+		{
+			auto const low{static_cast<::std::size_t>(magnitude % base_value)};
+			magnitude = static_cast<unsigned_type>(
+				magnitude / base_value);
+			auto const high{static_cast<::std::size_t>(magnitude % base_value)};
+			magnitude = static_cast<unsigned_type>(
+				magnitude / base_value);
+			auto const pair_offset{(high * flags.base + low) * 2u};
+			*--digit_iter = {pair_storage.data() + pair_offset, 2u};
+		}
+		if ((digits & 1u) != 0u)
+		{
+			auto const digit{static_cast<::std::size_t>(magnitude % base_value)};
+			*--digit_iter = {single_storage.data() + digit, 1u};
+		}
+		return first;
+	}
+}
+
+/// @brief Reports the exact contiguous spelling length of one proven-constant integer proxy.
+/// @details Concat consumes this protocol only after its optimizer gate has replaced the mature run-time scalar.  The
+///          length calculation mirrors the immutable-fragment spelling but does not construct descriptors or copy any
+///          character payload: the companion precise writer still emits directly into concat's one final destination.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+print_reserve_precise_size(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> const &value) noexcept
+{
+	if constexpr (flags.alphabet)
+	{
+		return value.reference ? 4u : 5u;
+	}
+	else
+	{
+		using integer_type = ::std::conditional_t<
+			::std::same_as<::std::remove_cv_t<T>, ::std::byte>, char8_t,
+			::std::remove_cv_t<T>>;
+		using unsigned_type = ::fast_io::details::
+			compiler_constant_integral_unsigned_type_t<integer_type>;
+		integer_type const signed_value{[](auto const &source) constexpr
+												 -> integer_type {
+			if constexpr (
+				::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
+			{
+				return static_cast<char8_t>(source);
+			}
+			else
+			{
+				return source;
+			}
+		}(value.reference)};
+		unsigned_type magnitude{static_cast<unsigned_type>(signed_value)};
+		bool negative{};
+		if constexpr (
+			::fast_io::details::my_signed_integral<integer_type> &&
+			!::std::same_as<integer_type, bool>)
+		{
+			negative = signed_value < 0;
+			if (negative)
+			{
+				constexpr unsigned_type zero{};
+				magnitude = zero - magnitude;
+			}
+		}
+
+		::std::size_t size{};
+		if (negative || flags.showpos)
+		{
+			++size;
+		}
+		if constexpr (flags.showbase && flags.base != 10u)
+		{
+			size += ::fast_io::details::print_showbase_length<
+				flags.base, flags.modern_octal>;
+		}
+		if constexpr (::std::same_as<integer_type, bool>)
+		{
+			return size + 1u;
+		}
+		else if constexpr (flags.full)
+		{
+			return size + ::fast_io::details::cal_max_int_size<
+				unsigned_type, flags.base>();
+		}
+		else
+		{
+			::std::size_t digits{1u};
+			constexpr unsigned_type base_value{
+				static_cast<unsigned_type>(flags.base)};
+			for (; magnitude >= base_value;
+				 magnitude = static_cast<unsigned_type>(magnitude / base_value))
+			{
+				++digits;
+			}
+			return size + digits;
+		}
+	}
+}
+
+/// @brief Emits a proven-constant integer into concat's exact destination slice.
+/// @details The exact-size protocol is a destination/allocation refinement only.  It deliberately reuses the isolated
+///          compiler-constant reserve formatter and never converts concat into a retained-scatter output operation.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+print_reserve_precise_define(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>> tag,
+	char_type *iter, ::std::size_t precise_size,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> value) noexcept
+{
+	(void)precise_size;
+	return print_reserve_define(tag, iter, value);
+}
+
+/// @brief Selects the exact-size compact protocol for a proven-constant integer proxy.
+/// @details The precise size query is a pure integer calculation and the companion pointer-returning writer emits
+///          exactly that extent.  Print/concat may therefore ignore the proxy's all-values reserve bound after the
+///          compiler-constant gate has selected this type.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_precise_compact(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+/// @brief Returns one provider-owned immutable spelling when the complete integer is a single table slice.
+/// @details Alphabetic booleans already occupy one typed static object.  A numeric value can similarly use one digit
+///          or one radix-pair entry when it has no observable sign/base prefix and its effective digit count is at most
+///          two.  Every table is built from semantic character literals, so `char`/`wchar_t` remain correct for EBCDIC
+///          execution sets and the three Unicode character types never borrow narrow storage.  More complex spellings
+///          return an empty descriptor and retain the established multi-fragment protocol.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+	::fast_io::basic_io_scatter_t<char_type>
+print_compiler_constant_single_static_fragment(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> const &value) noexcept
+{
+	if constexpr (flags.alphabet)
+	{
+		if (value.reference)
+		{
+			auto const &storage{
+				::fast_io::details::compiler_constant_boolalpha_fragment<
+					char_type, flags.uppercase, true>};
+			return {storage.data(), storage.size()};
+		}
+		auto const &storage{
+			::fast_io::details::compiler_constant_boolalpha_fragment<
+				char_type, flags.uppercase, false>};
+		return {storage.data(), storage.size()};
+	}
+	else
+	{
+		using integer_type = ::std::conditional_t<
+			::std::same_as<::std::remove_cv_t<T>, ::std::byte>, char8_t,
+			::std::remove_cv_t<T>>;
+		using unsigned_type = ::fast_io::details::
+			compiler_constant_integral_unsigned_type_t<integer_type>;
+		integer_type const signed_value{[](auto const &source) constexpr
+											 -> integer_type {
+			if constexpr (
+				::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
+			{
+				return static_cast<char8_t>(source);
+			}
+			else
+			{
+				return source;
+			}
+		}(value.reference)};
+		unsigned_type magnitude{static_cast<unsigned_type>(signed_value)};
+		bool negative{};
+		if constexpr (
+			::fast_io::details::my_signed_integral<integer_type> &&
+			!::std::same_as<integer_type, bool>)
+		{
+			negative = signed_value < 0;
+			if (negative)
+			{
+				constexpr unsigned_type zero{};
+				magnitude = static_cast<unsigned_type>(zero - magnitude);
+			}
+		}
+		if (negative || flags.showpos ||
+			(flags.showbase && flags.base != 10u))
+		{
+			return {};
+		}
+
+		::std::size_t digits{};
+		if constexpr (flags.full)
+		{
+			digits = ::fast_io::details::cal_max_int_size<
+				unsigned_type, flags.base>();
+		}
+		else
+		{
+			digits = 1u;
+			constexpr unsigned_type base_value{
+				static_cast<unsigned_type>(flags.base)};
+			for (auto remaining{magnitude}; remaining >= base_value;
+				 remaining = static_cast<unsigned_type>(remaining / base_value))
+			{
+				++digits;
+				if (2u < digits)
+				{
+					return {};
+				}
+			}
+		}
+		constexpr bool effective_uppercase{
+			flags.uppercase &&
+			!::fast_io::details::need_seperate_print<unsigned_type>};
+		if (digits == 1u)
+		{
+			auto const &storage{
+				::fast_io::details::compiler_constant_integral_digit_fragments<
+					char_type, effective_uppercase>};
+			return {storage.data() + static_cast<::std::size_t>(magnitude),
+				1u};
+		}
+		if (digits == 2u)
+		{
+			constexpr unsigned_type base_value{
+				static_cast<unsigned_type>(flags.base)};
+			auto const low{static_cast<::std::size_t>(magnitude % base_value)};
+			auto const high{static_cast<::std::size_t>(
+				(magnitude / base_value) % base_value)};
+			auto const &storage{
+				::fast_io::details::compiler_constant_integral_pair_fragments<
+					char_type, flags.base, effective_uppercase>};
+			return {storage.data() + (high * flags.base + low) * 2u, 2u};
+		}
+		return {};
+	}
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			  !flags.alphabet &&
+			  (flags.showpos || (details::my_signed_integral<T> &&
+							 !::std::same_as<::std::remove_cv_t<T>, bool>)))
+inline constexpr ::std::size_t print_define_internal_shift(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+	manipulators::compiler_constant_scalar_manip_t<flags, T> value) noexcept
+{
+	if constexpr (flags.showpos)
+	{
+		return 1u;
+	}
+	else
+	{
+		return value.reference < 0;
 	}
 }
 

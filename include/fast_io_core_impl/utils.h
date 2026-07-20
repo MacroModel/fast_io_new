@@ -6,15 +6,21 @@
 
 // Clang recognizes the __bf16 spelling on every target, but referencing it is a hard error when the selected ISA
 // lacks a BFloat16 type. Clang does not provide a target-aware __has_feature query for this extension, so keep every
-// reference behind the target and feature combinations verified by the compiler driver. ARM64EC uses its own target
-// macro instead of __aarch64__. LoongArch support starts in upstream Clang 21; x86 and 32-bit Arm additionally require
-// the features that make the type available.
-#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__) &&                                    \
-	(defined(__aarch64__) || defined(__arm64ec__) || defined(__riscv) || defined(__AMDGCN__) || \
-	 defined(__NVPTX__) ||                                                                      \
-	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__) &&                         \
-	  !(defined(__arm64ec__) || defined(_M_ARM64EC))) ||                                         \
-	 (defined(__arm__) && defined(__ARM_FP)) ||                                                 \
+// reference behind the target and feature combinations verified by the compiler driver. Before Clang 17, the targets
+// that exposed __bf16 only provided its storage-only form, which cannot perform the float conversions fast_io needs.
+// ARM64EC uses its own target macro instead of __aarch64__. RISC-V, LoongArch, and SPIR/SPIR-V gain the usable type in
+// Clang 18, 21, and 22 respectively. x86 and 32-bit Arm additionally require the features that make the type available.
+// SPIR and SPIR-V expose LLVM's native `bfloat` scalar directly, including by-value scalar/aggregate transport, even
+// though they do not define a CPU feature macro.
+#if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__) &&                                      \
+	(((defined(__aarch64__) || defined(__arm64ec__) || defined(__AMDGCN__) ||                     \
+	   defined(__NVPTX__)) &&                                                                     \
+	  __clang_major__ >= 17) ||                                                                   \
+	 (defined(__riscv) && __clang_major__ >= 18) ||                                               \
+	 ((defined(__SPIR__) || defined(__SPIRV__)) && __clang_major__ >= 22) ||                      \
+	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__) && __clang_major__ >= 17 && \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC))) ||                                          \
+	 (defined(__arm__) && defined(__ARM_FP) && __clang_major__ >= 17) ||                          \
 	 (defined(__loongarch__) && __clang_major__ >= 21))
 #define FAST_IO_CLANG_HAS_BFLOAT16_TYPE 1
 #endif

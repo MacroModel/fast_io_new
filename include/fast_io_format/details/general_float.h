@@ -5,6 +5,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -264,6 +265,12 @@ template <typename floating_type>
 	return result;
 }
 
+struct general_float_selection_hint
+{
+	bool scientific{};
+	bool requires_validation{};
+};
+
 /**
  * Chooses the likely one-pass child without participating in correctness.
  *
@@ -273,21 +280,47 @@ template <typename floating_type>
  * exponentiation by squaring, so an attacker-controlled dynamic precision
  * costs O(log P), and overflow merely produces infinity and selects fixed as
  * the tentative child.  No libm logarithm, locale, or format parsing is used.
+ *
+ * Most values are also far enough from either notation boundary that decimal
+ * rounding cannot change the initial answer.  The widest possible directed
+ * significant-digit adjustment is less than one unit in the last retained
+ * place.  Values below half of 1e-4 therefore cannot round up to 1e-4, and
+ * fixed candidates below half of 10^P cannot round up to 10^P.  Only the two
+ * remaining half-open boundary neighborhoods need the emitted-text proof.
  */
 template <typename fixed_type>
-[[nodiscard]] inline constexpr bool general_float_initial_scientific(
+[[nodiscard]] inline constexpr general_float_selection_hint
+general_float_initial_selection(
 	fixed_type const &fixed, ::std::size_t precision) noexcept
 {
 	decltype(auto) transported{general_float_scalar_reference(fixed)};
 	using floating_type = ::std::remove_cvref_t<decltype(transported)>;
 	static_assert(::fast_io::details::my_floating_point<floating_type>,
 		"fast_io format: general-float children must transport a floating value");
-	if (!(transported == transported)) return false; // NaN
+	if (!(transported == transported)) return {}; // NaN
 	auto const magnitude{transported < floating_type{} ? -transported : transported};
-	if (magnitude == floating_type{}) return false;
-	if (magnitude < floating_type{1} / floating_type{10000}) return true;
+	if (magnitude == floating_type{}) return {};
+	if constexpr (::std::numeric_limits<floating_type>::has_infinity)
+	{
+		if (magnitude == ::std::numeric_limits<floating_type>::infinity())
+			return {};
+	}
+	constexpr auto lower_boundary{
+		floating_type{1} / floating_type{10000}};
+	if (magnitude < lower_boundary)
+	{
+		return {true, !(magnitude < lower_boundary / floating_type{2})};
+	}
 	auto const upper{general_float_pow10<floating_type>(precision)};
-	return magnitude >= upper;
+	if (magnitude >= upper) return {true, false};
+	return {false, !(magnitude < upper / floating_type{2})};
+}
+
+template <typename fixed_type>
+[[nodiscard]] inline constexpr bool general_float_initial_scientific(
+	fixed_type const &fixed, ::std::size_t precision) noexcept
+{
+	return general_float_initial_selection(fixed, precision).scientific;
 }
 
 template <bool alternate_form, typename fixed_type, typename scientific_type>
@@ -366,16 +399,17 @@ inline constexpr char_type *print_reserve_define(
 			::fast_io::io_reserve_type<char_type, scientific_type>,
 			iter, value.scientific)))
 {
-	bool const initial_scientific{
-		::fast_io::fmt::details::general_float_initial_scientific(
+	auto const initial_selection{
+		::fast_io::fmt::details::general_float_initial_selection(
 			value.fixed, value.precision)};
-	if (initial_scientific)
+	if (initial_selection.scientific)
 	{
 		auto end{print_reserve_define(
 			::fast_io::io_reserve_type<char_type, scientific_type>,
 			iter, value.scientific)};
 		if constexpr (alternate_form)
 			end = ::fast_io::fmt::details::general_float_apply_alternate(iter, end);
+		if (!initial_selection.requires_validation) return end;
 		auto const exponent{
 			::fast_io::fmt::details::general_float_rounded_exponent(iter, end)};
 		if (::fast_io::fmt::details::general_float_uses_scientific(
@@ -394,6 +428,7 @@ inline constexpr char_type *print_reserve_define(
 			::fast_io::io_reserve_type<char_type, fixed_type>, iter, value.fixed)};
 		if constexpr (alternate_form)
 			end = ::fast_io::fmt::details::general_float_apply_alternate(iter, end);
+		if (!initial_selection.requires_validation) return end;
 		auto const exponent{
 			::fast_io::fmt::details::general_float_rounded_exponent(iter, end)};
 		if (!::fast_io::fmt::details::general_float_uses_scientific(

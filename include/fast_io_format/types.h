@@ -138,10 +138,56 @@ struct is_basic_static_c_array_value<
 	basic_static_c_array_value<element_type, extent>> : ::std::true_type
 {};
 
-template <auto value_literal>
+/**
+ * Structural wrapper used by the `static_arg<...>` variable template.
+ *
+ * Keeping the selected value as a public subobject is more than API plumbing:
+ * older Clang releases accept a deduced structural class NTTP containing a
+ * floating member even where spelling that floating value again as a direct
+ * `auto` NTTP is rejected.  Every holder below therefore remains parameterized
+ * by this wrapper and reads its member; it never re-injects the member as a
+ * second non-type template argument.
+ */
+template <typename value_type>
+struct static_argument_constant
+{
+	value_type value;
+
+	// Take an already deduced scalar/structural value by value.  Clang 17
+	// rejects a reference-taking converting constructor here because the
+	// converted constant expression used for a class NTTP would bind that
+	// reference to the literal's temporary.  This object exists only during
+	// constant evaluation, so copying is both semantically exact and free at
+	// run time.
+	consteval static_argument_constant(value_type source) noexcept
+		: value(source)
+	{}
+
+	// A character array needs its own exact-match constructor: routing it
+	// through the by-value overload would require a second user-defined
+	// conversion to basic_fixed_string.  The fixed string owns every code unit,
+	// including the terminator, and therefore remains a structural NTTP value.
+	template <format_character char_type, ::std::size_t extent>
+		requires ::std::same_as<
+			value_type, basic_fixed_string<char_type, extent>>
+	consteval static_argument_constant(
+		char_type const (&source)[extent]) noexcept
+		: value(source)
+	{}
+};
+
+template <typename value_type>
+static_argument_constant(value_type const &)
+	-> static_argument_constant<value_type>;
+
+template <format_character char_type, ::std::size_t extent>
+static_argument_constant(char_type const (&)[extent])
+	-> static_argument_constant<basic_fixed_string<char_type, extent>>;
+
+template <static_argument_constant value_literal>
 struct static_format_arg
 {
-	static inline constexpr auto stored_value{value_literal};
+	static inline constexpr auto stored_value{value_literal.value};
 
 	[[nodiscard]] inline static constexpr decltype(auto) get() noexcept
 	{
@@ -237,7 +283,7 @@ template <typename T>
 struct is_static_format_arg : ::std::false_type
 {};
 
-template <auto value_literal>
+template <static_argument_constant value_literal>
 struct is_static_format_arg<static_format_arg<value_literal>> : ::std::true_type
 {};
 
@@ -284,39 +330,45 @@ template <basic_fixed_string name_literal, typename T>
 	return static_named_arg<name_literal, storage_type>{::std::forward<T>(value)};
 }
 
-/** Creates an unnamed NTTP-backed format argument. */
-template <auto value_literal>
-	requires (!is_basic_fixed_string<
-		::std::remove_cv_t<decltype(value_literal)>>::value &&
-		!is_format_character_pointer_v<decltype(value_literal)>)
-[[nodiscard]] inline consteval auto static_arg() noexcept
+namespace details
+{
+
+template <static_argument_constant value_literal>
+	requires (!is_format_character_pointer_v<
+		::std::remove_cv_t<decltype(value_literal.value)>>)
+[[nodiscard]] inline consteval auto make_static_argument() noexcept
 {
 	return static_format_arg<value_literal>{};
 }
 
-/** Creates an unnamed fixed-string NTTP-backed format argument. */
-template <basic_fixed_string value_literal>
-[[nodiscard]] inline consteval auto static_arg() noexcept
+template <static_argument_constant name_literal,
+	static_argument_constant value_literal>
+	requires (is_basic_fixed_string<
+		::std::remove_cv_t<decltype(name_literal.value)>>::value &&
+		!is_format_character_pointer_v<
+			::std::remove_cv_t<decltype(value_literal.value)>>)
+[[nodiscard]] inline consteval auto make_static_argument() noexcept
 {
-	return static_format_arg<value_literal>{};
+	return static_named_arg<
+		name_literal.value, static_format_arg<value_literal>>{};
 }
 
-/** Creates a named NTTP-backed format argument without a run-time member value. */
-template <basic_fixed_string name_literal, auto value_literal>
-	requires (!is_basic_fixed_string<
-		::std::remove_cv_t<decltype(value_literal)>>::value &&
-		!is_format_character_pointer_v<decltype(value_literal)>)
-[[nodiscard]] inline consteval auto static_arg() noexcept
-{
-	return static_named_arg<name_literal, static_format_arg<value_literal>>{};
-}
+} // namespace details
 
-/** Creates a named fixed-string NTTP-backed format argument. */
-template <basic_fixed_string name_literal, basic_fixed_string value_literal>
-[[nodiscard]] inline consteval auto static_arg() noexcept
-{
-	return static_named_arg<name_literal, static_format_arg<value_literal>>{};
-}
+/**
+ * An NTTP-backed format argument with no run-time value member.
+ *
+ * This is intentionally a variable template, so the proof-bearing spelling is
+ * `static_arg<42>` (or `static_arg<"name", 42>`).  The resulting object has no
+ * call operator: both `static_arg<42>()` and calls with run-time arguments are
+ * rejected instead of silently resembling the old factory-function API.
+ */
+template <static_argument_constant... value_literals>
+	requires requires {
+		::fast_io::fmt::details::make_static_argument<value_literals...>();
+	}
+inline constexpr auto static_arg{
+	::fast_io::fmt::details::make_static_argument<value_literals...>()};
 
 /** Creates an NTTP-reference carrier for a fixed non-character C array. */
 template <auto &array_literal,

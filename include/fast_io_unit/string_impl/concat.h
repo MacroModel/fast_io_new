@@ -11,7 +11,7 @@ template <typename... Args>
 	::std::string
 	concat(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char, ::std::string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::std::string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -24,7 +24,7 @@ template <typename... Args>
 	::std::basic_string<wchar_t>
 	wconcat(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, wchar_t, ::std::basic_string<wchar_t>>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, wchar_t, ::std::basic_string<wchar_t>>(
 		::std::forward<Args>(args)...);
 }
 #endif
@@ -37,7 +37,7 @@ template <typename... Args>
 	::std::u8string
 	u8concat(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char8_t, ::std::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char8_t, ::std::u8string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -49,7 +49,7 @@ template <typename... Args>
 	::std::u16string
 	u16concat(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char16_t, ::std::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char16_t, ::std::u16string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -61,7 +61,7 @@ template <typename... Args>
 	::std::u32string
 	u32concat(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char32_t, ::std::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char32_t, ::std::u32string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -73,7 +73,7 @@ template <typename... Args>
 	::std::basic_string<char>
 	concatln(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char, ::std::basic_string<char>>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char, ::std::basic_string<char>>(
 		::std::forward<Args>(args)...);
 }
 
@@ -87,7 +87,7 @@ template <typename... Args>
 	::std::basic_string<wchar_t>
 	wconcatln(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, wchar_t, ::std::basic_string<wchar_t>>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, wchar_t, ::std::basic_string<wchar_t>>(
 		::std::forward<Args>(args)...);
 }
 #endif
@@ -100,7 +100,7 @@ template <typename... Args>
 	::std::u8string
 	u8concatln(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char8_t, ::std::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char8_t, ::std::u8string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -112,7 +112,7 @@ template <typename... Args>
 	::std::u16string
 	u16concatln(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char16_t, ::std::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char16_t, ::std::u16string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -124,7 +124,7 @@ template <typename... Args>
 	::std::u32string
 	u32concatln(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char32_t, ::std::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char32_t, ::std::u32string>(
 		::std::forward<Args>(args)...);
 }
 

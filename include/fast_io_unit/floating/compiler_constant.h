@@ -1,0 +1,4672 @@
+﻿#pragma once
+
+namespace fast_io
+{
+
+namespace manipulators
+{
+
+/// @brief Print/concat-owned proxy for an optimizer-proven constant floating scalar.
+/// @details Its formatter is deliberately independent of the ordinary floating reserve writer. The value remains in
+///          the proxy so GCC/Clang can propagate it into a compact bit-to-text routine only in the proven constant arm;
+///          an unknown run-time scalar never constructs this type or enters this algorithm.
+template <typename char_type, scalar_flags flags, typename value_type>
+struct compiler_constant_floating_scalar_manip_t
+{
+	using manip_tag = manip_tag_t;
+	using clean_type = ::std::remove_cv_t<value_type>;
+	using binary_mantissa_type =
+		typename ::fast_io::details::iec559_traits<clean_type>::mantissa_type;
+	using decimal_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<clean_type>;
+
+	binary_mantissa_type binary_mantissa{};
+	decimal_mantissa_type decimal_mantissa{};
+	::std::uint_least32_t binary_exponent{};
+	::std::int_least32_t decimal_exponent{};
+	bool negative{};
+};
+
+/// @brief Print/concat-owned integer carrier for a proven constant floating
+///        value and precision.
+/// @details Keeping the native scalar out of this proxy preserves every
+///          bfloat16 subnormal and NaN payload.  Decimal formats additionally
+///          retain a proved shortest carrier when one is sufficient for the
+///          requested rounding grid; an exact-fields fallback remains available
+///          for every other constant admitted by the bounded protocol.
+template <typename char_type, scalar_flags flags, typename value_type>
+struct compiler_constant_floating_precision_manip_t
+{
+	using manip_tag = manip_tag_t;
+	using output_char_type = char_type;
+	using clean_type = ::std::remove_cv_t<value_type>;
+	using floating_trait = ::fast_io::details::iec559_traits<clean_type>;
+	using dragonbox_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<clean_type>;
+	// A narrow shortest carrier uses uint32_t, but an exact binary16 dyadic
+	// coefficient can require 17 decimal digits.  The precision-only proxy may
+	// retain such a coefficient in uint64_t without changing the scalar path.
+	using decimal_mantissa_type = ::std::conditional_t<
+		(floating_trait::mbits <= 10u &&
+		 sizeof(dragonbox_mantissa_type) < sizeof(::std::uint_least64_t)),
+		::std::uint_least64_t, dragonbox_mantissa_type>;
+	::fast_io::details::punning_result<clean_type> fields{};
+	::std::size_t precision;
+	decimal_mantissa_type decimal_mantissa{};
+	::std::int_least32_t decimal_exponent{};
+	bool decimal_carrier_available{};
+	bool decimal_rounding_discarded{};
+	// Cached while all source fields are still optimizer-local.  Prepared
+	// unbuffered print reads this scalar before deciding whether the proxy must
+	// escape to its large immutable-fragment fallback; that ordering lets Clang
+	// eliminate the fallback and scalar-replace short constant records.
+	::std::size_t materialized_size{};
+};
+
+} // namespace manipulators
+
+namespace details
+{
+
+// Scientific, general and decimal shortest spellings are bounded by 32 code
+// units.  Fixed is different: the smallest binary128 subnormal has a shortest
+// fixed spelling just over five thousand code units long.  The complete
+// supported IEC 60559 set (binary16, bfloat16, binary32, binary64, binary80
+// and binary128) is bounded by binary128's ordinary fixed reserve cache:
+//
+// * sign + radix grammar + e10max + m10digits = 5,006 code units.
+//
+// The fixed emitter maps its long zero runs to this immutable storage, so this
+// is a reserve/payload bound rather than a per-call character buffer.
+inline constexpr ::std::size_t compiler_constant_floating_scalar_capacity{5006u};
+
+template <typename floating_type>
+inline constexpr bool compiler_constant_floating_type_supported =
+	#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	(::fast_io::details::print_floating_decimal_direct_supported<
+		 ::std::remove_cv_t<floating_type>> ||
+	 ::fast_io::details::print_floating_decimal_exact_supported<
+		 ::std::remove_cv_t<floating_type>>)
+	#else
+	false
+#endif
+	;
+
+template <typename floating_type>
+inline constexpr bool compiler_constant_floating_hex_type_supported =
+	#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	::fast_io::details::compiler_constant_hex_has_iec559_traits<
+		::std::remove_cv_t<floating_type>>
+#else
+	false
+#endif
+	;
+
+// A constant precision request is still a run-time object as far as the C++
+// type system is concerned: __builtin_constant_p cannot turn its value into a
+// non-type template argument.  Inspect precision through 1024 so a compile-time
+// request can be admitted when its *result* is short.  The character-specific
+// proxy reserve contract is exactly the shared 256-byte materialization budget;
+// a longer spelling stays on the established formatter.
+inline constexpr ::std::size_t compiler_constant_decimal_precision_limit{1024u};
+template <::std::integral char_type>
+inline constexpr ::std::size_t compiler_constant_decimal_precision_capacity{
+	::fast_io::details::compiler_constant_materialization_max_bytes /
+	sizeof(char_type)};
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+inline constexpr bool compiler_constant_floating_precision_supported{
+	::fast_io::details::print_floating_precision_supported<flags, floating_type> &&
+	::fast_io::details::print_floating_precision_valid<flags.precision> &&
+	flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+	flags.rounding !=
+		::fast_io::manipulators::floating_rounding::current_environment &&
+	(flags.floating == ::fast_io::manipulators::floating_format::hexfloat
+		 ? ::fast_io::details::compiler_constant_hex_precision_supported<
+			   flags, floating_type>
+		 : ::fast_io::details::compiler_constant_floating_type_supported<
+			   floating_type>)};
+
+template <::fast_io::manipulators::scalar_flags flags>
+inline constexpr ::std::size_t compiler_constant_floating_precision_limit{
+	flags.floating == ::fast_io::manipulators::floating_format::hexfloat
+		? ::fast_io::details::compiler_constant_hex_precision_limit
+		: ::fast_io::details::compiler_constant_decimal_precision_limit};
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+		 requires(::fast_io::details::compiler_constant_floating_precision_supported<
+			 flags, floating_type>)
+[[nodiscard]] inline consteval ::std::size_t
+compiler_constant_floating_precision_capacity() noexcept
+{
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_hex_capacity;
+	}
+	else
+	{
+		return ::fast_io::details::
+			compiler_constant_decimal_precision_capacity<char_type>;
+	}
+}
+
+/// @brief Rebuilds a native scalar from already captured IEC 60559 fields.
+/// @details This is a bit-copy adapter used only inside the proven-constant
+///          branch.  The proxy itself continues to cross print/concat layers as
+///          integers, so no native floating reference ABI is introduced.
+template <typename floating_type>
+[[nodiscard]] inline constexpr floating_type
+compiler_constant_floating_value_from_fields(
+	::fast_io::details::punning_result<floating_type> fields) noexcept
+{
+	using clean_type = ::std::remove_cv_t<floating_type>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	using mantissa_type = typename trait::mantissa_type;
+#if defined(__SIZEOF_FLOAT80__) ||                              \
+	(defined(__LDBL_MANT_DIG__) && defined(__LDBL_MAX_EXP__) && \
+	 __LDBL_MANT_DIG__ == 64 && __LDBL_MAX_EXP__ == 16384)
+	if constexpr (
+		::fast_io::details::fp_floating_point_is_float80<clean_type> &&
+		::std::endian::native == ::std::endian::little)
+	{
+		using storage_type = ::fast_io::details::float80_storage<
+			sizeof(clean_type) - sizeof(::std::uint_least64_t) -
+			sizeof(::std::uint_least16_t)>;
+		storage_type storage{};
+		constexpr ::std::uint_least64_t explicit_integer_bit{
+			::std::uint_least64_t{1u} << 63u};
+		storage.mantissa = static_cast<::std::uint_least64_t>(fields.mantissa);
+		if (fields.exponent != 0u)
+		{
+			storage.mantissa |= explicit_integer_bit;
+		}
+		storage.exponent = static_cast<::std::uint_least16_t>(
+			fields.exponent |
+			(static_cast<::std::uint_least32_t>(static_cast<bool>(fields.sign))
+			 << 15u));
+		return ::fast_io::bit_cast<clean_type>(storage);
+	}
+	else
+#endif
+	{
+		static_assert(sizeof(clean_type) == sizeof(mantissa_type));
+		auto const bits{static_cast<mantissa_type>(
+			fields.mantissa |
+			(static_cast<mantissa_type>(fields.exponent) << trait::mbits) |
+			(static_cast<mantissa_type>(static_cast<bool>(fields.sign))
+			 << (trait::mbits + trait::ebits)))};
+		return ::fast_io::bit_cast<clean_type>(bits);
+	}
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type>
+		 requires(
+			flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+			::fast_io::details::compiler_constant_floating_precision_supported<
+				flags, floating_type>)
+inline constexpr char_type *
+compiler_constant_floating_decimal_precision_fields_define(
+	char_type *iter,
+	::fast_io::details::punning_result<floating_type> fields,
+	::std::size_t precision) noexcept
+{
+	using clean_type = ::std::remove_cv_t<floating_type>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (fields.exponent == exponent_mask)
+	{
+		return ::fast_io::details::prsv_fp_nan_impl<
+			flags.showpos, flags.uppercase, flags.nan_show_sign,
+			flags.nan_show_type, trait::mbits>(
+				iter, fields.mantissa, static_cast<bool>(fields.sign));
+	}
+	iter = ::fast_io::details::print_rsv_fp_sign_impl<flags.showpos>(
+		iter, static_cast<bool>(fields.sign));
+	if (fields.mantissa == 0u && fields.exponent == 0u)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			auto fractional_digits{precision};
+			if constexpr (::fast_io::details::
+				floating_precision_is_significant<flags.precision>)
+			{
+				fractional_digits = precision ? precision - 1u : 0u;
+			}
+			if constexpr (::fast_io::details::
+				floating_precision_preserves_trailing_zero<flags.precision>)
+			{
+				if (fractional_digits)
+				{
+					*iter++ = ::fast_io::char_literal_v<
+						(flags.comma ? u8',' : u8'.'), char_type>;
+					iter = ::fast_io::details::fill_zeros_impl(
+						iter, fractional_digits);
+				}
+			}
+			return ::fast_io::details::print_rsv_fp_e_impl<
+				clean_type, flags.uppercase_e>(iter, 0);
+		}
+		else if constexpr (::fast_io::details::
+			floating_precision_is_fractional<flags.precision>)
+		{
+			if constexpr (flags.json_float)
+			{
+				if (!precision || !::fast_io::details::
+					floating_precision_preserves_trailing_zero<flags.precision>)
+				{
+					return ::fast_io::details::
+						print_rsv_fp_append_json_float_zero<flags.comma>(iter);
+				}
+			}
+			if constexpr (::fast_io::details::
+				floating_precision_preserves_trailing_zero<flags.precision>)
+			{
+				return ::fast_io::details::print_rsv_fp_append_point_zeros<
+					flags.comma>(iter, precision);
+			}
+			return iter;
+		}
+		else if constexpr (flags.precision ==
+			::fast_io::manipulators::floating_precision::
+				significant_preserve_trailing_zero)
+		{
+			if constexpr (flags.json_float)
+			{
+				if (precision <= 1u)
+				{
+					return ::fast_io::details::
+						print_rsv_fp_append_json_float_zero<flags.comma>(iter);
+				}
+			}
+			return ::fast_io::details::print_rsv_fp_append_point_zeros<
+				flags.comma>(iter, precision ? precision - 1u : 0u);
+		}
+		else
+		{
+			if constexpr (flags.json_float)
+			{
+				return ::fast_io::details::
+					print_rsv_fp_append_json_float_zero<flags.comma>(iter);
+			}
+			return iter;
+		}
+	}
+	return ::fast_io::details::print_rsvflt_exact_precision_body_impl<
+		clean_type, flags.comma, flags.uppercase_e, flags.floating,
+		flags.precision, flags.rounding, flags.json_float>(
+			iter, fields.mantissa, fields.exponent, precision,
+			static_cast<bool>(fields.sign));
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+		 requires(
+			flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+			::fast_io::details::compiler_constant_floating_precision_supported<
+				flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_decimal_precision_fields_size(
+	::fast_io::details::punning_result<floating_type> fields,
+	::std::size_t precision) noexcept
+{
+	using clean_type = ::std::remove_cv_t<floating_type>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (fields.exponent == exponent_mask)
+	{
+		return ::fast_io::details::floating_precise_special_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			trait::mbits>(fields.mantissa, static_cast<bool>(fields.sign));
+	}
+	auto const sign_size{
+		::fast_io::details::floating_precise_sign_size<flags.showpos>(
+			static_cast<bool>(fields.sign))};
+	if (fields.mantissa == 0u && fields.exponent == 0u)
+	{
+		return ::fast_io::details::floating_precise_add(
+			sign_size,
+			::fast_io::details::floating_precise_precision_zero_body_size<
+				clean_type, flags.precision, flags.json_float>(
+					flags.floating, precision));
+	}
+	constexpr bool fractional{
+		::fast_io::details::floating_precision_is_fractional<flags.precision>};
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	constexpr auto int32_max{
+		(::std::numeric_limits<::std::int_least32_t>::max)()};
+	auto decimal{::fast_io::details::exact_precision_from_binary<clean_type>(
+		fields.mantissa, fields.exponent)};
+	auto const real_exponent{
+		decimal.exponent + static_cast<::std::int_least32_t>(decimal.size) - 1};
+	::std::size_t significant{};
+	::std::int_least32_t keep{};
+	if constexpr (fractional)
+	{
+		if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			significant = ::fast_io::details::exact_precision_saturating_add(
+				precision, 1u);
+			keep = significant > static_cast<::std::size_t>(int32_max)
+				? int32_max
+				: static_cast<::std::int_least32_t>(significant);
+		}
+		else if (precision > static_cast<::std::size_t>(int32_max))
+		{
+			keep = int32_max;
+			significant = static_cast<::std::size_t>(keep);
+		}
+		else
+		{
+			auto const requested_keep{
+				static_cast<::std::int_least64_t>(real_exponent) + 1 +
+				static_cast<::std::int_least64_t>(precision)};
+			keep = int32_max < requested_keep
+				? int32_max
+				: static_cast<::std::int_least32_t>(requested_keep);
+			significant = keep < 0 ? 0u : static_cast<::std::size_t>(keep);
+		}
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		keep = significant > static_cast<::std::size_t>(int32_max)
+			? int32_max
+			: static_cast<::std::int_least32_t>(significant);
+	}
+	auto const rounded{
+		static_cast<::std::int_least32_t>(decimal.size) > keep};
+	::fast_io::details::exact_precision_round<flags.rounding>(
+		decimal, keep, static_cast<bool>(fields.sign));
+	if constexpr (!preserve)
+	{
+		::fast_io::details::exact_precision_trim(decimal);
+	}
+	if constexpr (fractional && preserve &&
+		flags.floating == ::fast_io::manipulators::floating_format::general)
+	{
+		significant = rounded
+			? ::fast_io::details::
+				exact_precision_fractional_general_rounded_virtual_size(
+					decimal, precision)
+			: decimal.size;
+	}
+	auto const body_size{
+		::fast_io::details::floating_precise_rounded_precision_size<
+			clean_type, flags.floating, flags.precision, flags.json_float>(
+				decimal, precision, significant)};
+	return ::fast_io::details::floating_precise_add(sign_size, body_size);
+}
+
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_unsigned_digits(::std::uint_least32_t value) noexcept
+{
+	::std::size_t digits{1u};
+	while (10u <= value)
+	{
+		value /= 10u;
+		++digits;
+	}
+	return digits;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *
+compiler_constant_floating_write_unsigned(
+	char_type *iter, ::std::uint_least32_t value,
+	::std::size_t minimum_digits = 1u) noexcept
+{
+	auto size{
+		::fast_io::details::compiler_constant_floating_unsigned_digits(value)};
+	if (size < minimum_digits)
+	{
+		size = minimum_digits;
+	}
+	// Constant floating proxies overwhelmingly emit one- and two-digit
+	// exponents.  Spell those cases forward so GCC can turn an optimizer-proven
+	// value into direct stores instead of retaining a one-iteration backwards
+	// loop.  `char_literal_add` preserves non-ASCII execution character sets.
+	if (size == 1u)
+	{
+		*iter++ = ::fast_io::char_literal_add<char_type>(value % 10u);
+		return iter;
+	}
+	if (size == 2u)
+	{
+		*iter++ = ::fast_io::char_literal_add<char_type>((value / 10u) % 10u);
+		*iter++ = ::fast_io::char_literal_add<char_type>(value % 10u);
+		return iter;
+	}
+	auto *const end{iter + size};
+	for (auto *current{end}; current != iter;)
+	{
+		*--current = ::fast_io::char_literal_add<char_type>(value % 10u);
+		value /= 10u;
+	}
+	return end;
+}
+
+template <typename unsigned_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_decimal_digits(unsigned_type value) noexcept;
+
+template <::std::integral char_type, typename unsigned_type>
+inline constexpr char_type *
+compiler_constant_floating_write_decimal_digits(
+	char_type *iter, unsigned_type value) noexcept
+{
+	auto const size{
+		::fast_io::details::compiler_constant_floating_decimal_digits(value)};
+	if (size == 1u)
+	{
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(value));
+		return iter;
+	}
+	if (size == 2u)
+	{
+		auto const quotient{static_cast<unsigned_type>(value / 10u)};
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(quotient));
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(
+				value - quotient * 10u));
+		return iter;
+	}
+	auto *const end{iter + size};
+	for (auto *current{end}; current != iter;)
+	{
+		auto const quotient{static_cast<unsigned_type>(value / 10u)};
+		auto const remainder{static_cast<::std::uint_least32_t>(
+			value - quotient * 10u)};
+		*--current = ::fast_io::char_literal_add<char_type>(remainder);
+		value = quotient;
+	}
+	return end;
+}
+
+template <::std::integral char_type, typename unsigned_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_floating_write_decimal_digits_exact(
+	char_type *iter, unsigned_type value, ::std::size_t size) noexcept
+
+{
+	if (size == 1u)
+	{
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(value % 10u));
+		return iter;
+	}
+	if (size == 2u)
+	{
+		auto const quotient{static_cast<unsigned_type>(value / 10u)};
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(quotient % 10u));
+		*iter++ = ::fast_io::char_literal_add<char_type>(
+			static_cast<::std::uint_least32_t>(
+				value - quotient * 10u));
+		return iter;
+	}
+	auto *const end{iter + size};
+	for (auto *current{end}; current != iter;)
+	{
+		auto const quotient{static_cast<unsigned_type>(value / 10u)};
+		auto const remainder{static_cast<::std::uint_least32_t>(
+			value - quotient * 10u)};
+		*--current = ::fast_io::char_literal_add<char_type>(remainder);
+		value = quotient;
+	}
+	return end;
+}
+
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+compiler_constant_floating_decimal_digits_u64(
+	::std::uint_least64_t input) noexcept
+{
+	// Keep this detector local to the compiler-constant carrier. Calling the
+	// ordinary integer-length CPO here made Clang outline that otherwise tiny
+	// boundary, while the old division loop prevented GCC from proving the
+	// compact-output capacity. The converter-shaped tree folds immediately for
+	// a known carrier and remains bounded if a proxy is inspected at run time.
+	if (input < UINT64_C(100000000))
+	{
+		if (input < UINT64_C(10000))
+		{
+			if (input < UINT64_C(100))
+			{
+				return 1u + static_cast<::std::size_t>(input >= UINT64_C(10));
+			}
+			return 3u + static_cast<::std::size_t>(input >= UINT64_C(1000));
+		}
+		if (input < UINT64_C(1000000))
+		{
+			return 5u + static_cast<::std::size_t>(input >= UINT64_C(100000));
+		}
+		return 7u + static_cast<::std::size_t>(input >= UINT64_C(10000000));
+	}
+	if (input < UINT64_C(1000000000000))
+	{
+		if (input < UINT64_C(10000000000))
+		{
+			return 9u + static_cast<::std::size_t>(input >= UINT64_C(1000000000));
+		}
+		return 11u + static_cast<::std::size_t>(input >= UINT64_C(100000000000));
+	}
+	if (input < UINT64_C(10000000000000000))
+	{
+		if (input < UINT64_C(100000000000000))
+		{
+			return 13u + static_cast<::std::size_t>(input >= UINT64_C(10000000000000));
+		}
+		return 15u + static_cast<::std::size_t>(input >= UINT64_C(1000000000000000));
+	}
+	if (input < UINT64_C(1000000000000000000))
+	{
+		return 17u + static_cast<::std::size_t>(input >= UINT64_C(100000000000000000));
+	}
+	return 19u + static_cast<::std::size_t>(input >= UINT64_C(10000000000000000000));
+}
+
+template <typename unsigned_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+compiler_constant_floating_decimal_digits(unsigned_type value) noexcept
+{
+	if constexpr (sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
+	{
+		return ::fast_io::details::compiler_constant_floating_decimal_digits_u64(
+			static_cast<::std::uint_least64_t>(value));
+	}
+#if defined(__SIZEOF_INT128__)
+	else if constexpr (sizeof(unsigned_type) <= sizeof(__uint128_t))
+	{
+		constexpr __uint128_t ten_to_19{UINT64_C(10000000000000000000)};
+		constexpr __uint128_t ten_to_20{ten_to_19 * 10u};
+		if (value < ten_to_19)
+		{
+			return ::fast_io::details::compiler_constant_floating_decimal_digits_u64(
+				static_cast<::std::uint_least64_t>(value));
+		}
+		if (value < ten_to_20)
+		{
+			return 20u;
+		}
+		return 20u +
+			::fast_io::details::compiler_constant_floating_decimal_digits_u64(
+				static_cast<::std::uint_least64_t>(
+					static_cast<__uint128_t>(value) / ten_to_20));
+	}
+#endif
+	else
+	{
+		::std::size_t size{1u};
+		while (10u <= value)
+		{
+			value = static_cast<unsigned_type>(value / 10u);
+			++size;
+		}
+		return size;
+	}
+}
+
+template <typename unsigned_type>
+[[nodiscard]] inline constexpr unsigned_type
+compiler_constant_floating_power_of_ten(::std::size_t exponent) noexcept
+{
+	unsigned_type value{1u};
+	while (exponent != 0u)
+	{
+		value = static_cast<unsigned_type>(value * 10u);
+		--exponent;
+	}
+	return value;
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type>
+inline constexpr char_type *
+compiler_constant_floating_write_sign(
+	char_type *iter, bool negative) noexcept
+{
+	if (negative)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'-', char_type>;
+	}
+	else if constexpr (flags.showpos)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'+', char_type>;
+	}
+	return iter;
+}
+
+template <::fast_io::manipulators::scalar_flags flags>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_sign_size(bool negative) noexcept
+{
+	return static_cast<::std::size_t>(negative || flags.showpos);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::size_t mantissa_bits, ::std::integral char_type,
+	typename mantissa_type>
+inline constexpr char_type *
+compiler_constant_floating_write_special(
+	char_type *iter, mantissa_type mantissa, bool negative) noexcept
+{
+	return ::fast_io::details::prsv_fp_nan_impl<
+		flags.showpos, flags.uppercase, flags.nan_show_sign,
+		flags.nan_show_type, mantissa_bits>(iter, mantissa, negative);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::size_t mantissa_bits, typename mantissa_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_special_size(
+	mantissa_type mantissa, bool negative) noexcept
+{
+	if (mantissa == 0u)
+	{
+		return ::fast_io::details::compiler_constant_floating_sign_size<flags>(
+			negative) + 3u;
+	}
+	::std::size_t size{3u};
+	if constexpr (flags.nan_show_sign)
+	{
+		size += ::fast_io::details::compiler_constant_floating_sign_size<flags>(
+			negative);
+	}
+	if constexpr (flags.nan_show_type)
+	{
+		constexpr mantissa_type quiet_bit{
+			::fast_io::details::fp_quiet_nan_mantissa_mask<
+				mantissa_type, mantissa_bits>()};
+		if (negative && mantissa == quiet_bit)
+		{
+			size += 5u;
+		}
+		else if (::fast_io::details::fp_nan_is_signaling<
+				mantissa_type, mantissa_bits>(mantissa))
+		{
+			size += 6u;
+		}
+	}
+	return size;
+}
+
+template <::std::size_t minimum_digits, bool hexadecimal, bool uppercase,
+	::std::integral char_type>
+inline constexpr char_type *
+compiler_constant_floating_write_exponent(
+	char_type *iter, ::std::int_least32_t exponent) noexcept
+{
+	if constexpr (hexadecimal)
+	{
+		*iter++ = uppercase ? ::fast_io::char_literal_v<u8'P', char_type>
+							 : ::fast_io::char_literal_v<u8'p', char_type>;
+	}
+	else
+	{
+		*iter++ = uppercase ? ::fast_io::char_literal_v<u8'E', char_type>
+							 : ::fast_io::char_literal_v<u8'e', char_type>;
+	}
+	bool const negative{exponent < 0};
+	*iter++ = negative ? ::fast_io::char_literal_v<u8'-', char_type>
+					   : ::fast_io::char_literal_v<u8'+', char_type>;
+	auto const magnitude{static_cast<::std::uint_least32_t>(
+		negative ? -static_cast<::std::int_least64_t>(exponent) : exponent)};
+	return ::fast_io::details::compiler_constant_floating_write_unsigned(
+		iter, magnitude, minimum_digits);
+}
+
+template <bool uppercase, ::std::integral char_type>
+[[nodiscard]] inline constexpr char_type
+compiler_constant_floating_hex_digit(::std::uint_least32_t nibble) noexcept
+{
+	if (nibble < 10u)
+	{
+		return ::fast_io::char_literal_add<char_type>(nibble);
+	}
+	switch (nibble)
+	{
+	case 10u:
+		return uppercase ? ::fast_io::char_literal_v<u8'A', char_type>
+						 : ::fast_io::char_literal_v<u8'a', char_type>;
+	case 11u:
+		return uppercase ? ::fast_io::char_literal_v<u8'B', char_type>
+						 : ::fast_io::char_literal_v<u8'b', char_type>;
+	case 12u:
+		return uppercase ? ::fast_io::char_literal_v<u8'C', char_type>
+						 : ::fast_io::char_literal_v<u8'c', char_type>;
+	case 13u:
+		return uppercase ? ::fast_io::char_literal_v<u8'D', char_type>
+						 : ::fast_io::char_literal_v<u8'd', char_type>;
+	case 14u:
+		return uppercase ? ::fast_io::char_literal_v<u8'E', char_type>
+						 : ::fast_io::char_literal_v<u8'e', char_type>;
+	default:
+		return uppercase ? ::fast_io::char_literal_v<u8'F', char_type>
+						 : ::fast_io::char_literal_v<u8'f', char_type>;
+	}
+}
+
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_exponent_size(
+	::std::int_least32_t exponent, ::std::size_t minimum_digits) noexcept
+{
+	auto const magnitude{static_cast<::std::uint_least32_t>(
+		exponent < 0 ? -static_cast<::std::int_least64_t>(exponent) : exponent)};
+	auto digits{
+		::fast_io::details::compiler_constant_floating_unsigned_digits(magnitude)};
+	if (digits < minimum_digits)
+	{
+		digits = minimum_digits;
+	}
+	return 2u + digits;
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename unsigned_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_fixed_size(
+	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
+{
+	auto const digits{static_cast<::std::int_least32_t>(
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa))};
+	auto const real_exponent{static_cast<::std::int_least32_t>(
+		exponent + digits - 1)};
+	::std::size_t size;
+	if (digits <= real_exponent)
+	{
+		size = static_cast<::std::size_t>(real_exponent + 1);
+		if constexpr (flags.json_float)
+		{
+			size += 2u;
+		}
+	}
+	else if (0 <= real_exponent)
+	{
+		size = static_cast<::std::size_t>(digits + 1);
+		if (digits == real_exponent + 1)
+		{
+			--size;
+			if constexpr (flags.json_float)
+			{
+				size += 2u;
+			}
+		}
+	}
+	else
+	{
+		size = static_cast<::std::size_t>(-real_exponent) +
+			static_cast<::std::size_t>(digits) + 1u;
+	}
+	return size;
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	typename unsigned_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_scientific_size(
+	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
+{
+	auto const digits{static_cast<::std::int_least32_t>(
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa))};
+	auto const real_exponent{static_cast<::std::int_least32_t>(
+		exponent + digits - 1)};
+	return static_cast<::std::size_t>(digits == 1 ? 1 : digits + 1) +
+		::fast_io::details::compiler_constant_floating_exponent_size(
+			real_exponent, 2u);
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename unsigned_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+compiler_constant_floating_uses_fixed(
+	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
+{
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::fixed)
+	{
+		return true;
+	}
+	else if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		return false;
+	}
+	else if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::general)
+	{
+		return -5 < exponent && exponent < 7;
+	}
+	else
+	{
+		auto const digits{
+			::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+		auto const real_exponent{static_cast<::std::int_least32_t>(
+			exponent + static_cast<::std::int_least32_t>(digits) - 1)};
+		::std::size_t fixed_length{};
+		if (static_cast<::std::int_least32_t>(digits) <= real_exponent)
+		{
+			fixed_length = static_cast<::std::size_t>(real_exponent + 1);
+		}
+		else if (0 <= real_exponent)
+		{
+			fixed_length = digits + 2u;
+			if (static_cast<::std::int_least32_t>(digits) == real_exponent + 1)
+			{
+				--fixed_length;
+			}
+		}
+		else
+		{
+			fixed_length = static_cast<::std::size_t>(-real_exponent) +
+				digits + 1u;
+		}
+		auto const scientific_length{digits == 1u ? digits + 3u : digits + 5u};
+		return scientific_length >= fixed_length;
+	}
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename unsigned_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_floating_write_fixed(
+	char_type *iter, unsigned_type mantissa,
+	::std::int_least32_t exponent) noexcept
+{
+	auto const size{static_cast<::std::int_least32_t>(
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa))};
+	auto const real_exponent{static_cast<::std::int_least32_t>(
+		exponent + size - 1)};
+	if (size <= real_exponent)
+	{
+		iter = ::fast_io::details::
+			compiler_constant_floating_write_decimal_digits(iter, mantissa);
+		for (auto count{static_cast<::std::size_t>(real_exponent + 1 - size)};
+			 count != 0u; --count)
+		{
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		if constexpr (flags.json_float)
+		{
+			*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+	}
+	else if (0 <= real_exponent)
+	{
+		auto const integral_size{static_cast<::std::size_t>(real_exponent + 1)};
+		auto const fractional_size{
+			static_cast<::std::size_t>(size) - integral_size};
+		if (fractional_size != 0u)
+		{
+			auto const divisor{
+				::fast_io::details::compiler_constant_floating_power_of_ten<
+					unsigned_type>(fractional_size)};
+			iter = ::fast_io::details::
+				compiler_constant_floating_write_decimal_digits_exact(
+					iter, static_cast<unsigned_type>(mantissa / divisor),
+					integral_size);
+			*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+			iter = ::fast_io::details::
+				compiler_constant_floating_write_decimal_digits_exact(
+					iter, static_cast<unsigned_type>(mantissa % divisor),
+					fractional_size);
+		}
+		else
+		{
+			iter = ::fast_io::details::
+				compiler_constant_floating_write_decimal_digits_exact(
+					iter, mantissa, integral_size);
+			if constexpr (flags.json_float)
+			{
+				*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+				*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+			}
+		}
+	}
+	else
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+		for (auto count{static_cast<::std::size_t>(-real_exponent - 1)};
+			 count != 0u; --count)
+		{
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		iter = ::fast_io::details::
+			compiler_constant_floating_write_decimal_digits(iter, mantissa);
+	}
+	return iter;
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type, typename unsigned_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_floating_write_scientific(
+	char_type *iter, unsigned_type mantissa,
+	::std::int_least32_t exponent) noexcept
+{
+	auto const size{
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+	auto const divisor{
+		::fast_io::details::compiler_constant_floating_power_of_ten<unsigned_type>(
+			size - 1u)};
+	*iter++ = ::fast_io::char_literal_add<char_type>(
+		static_cast<::std::uint_least32_t>(mantissa / divisor));
+	if (1u < size)
+	{
+		*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+		iter = ::fast_io::details::
+			compiler_constant_floating_write_decimal_digits_exact(
+				iter, static_cast<unsigned_type>(mantissa % divisor), size - 1u);
+	}
+	auto const real_exponent{static_cast<::std::int_least32_t>(
+		exponent + static_cast<::std::int_least32_t>(size) - 1)};
+	return ::fast_io::details::compiler_constant_floating_write_exponent<
+		2u, false,
+		flags.uppercase_e>(iter, real_exponent);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	typename floating_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_hex_size(
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr ::std::uint_least32_t exponent_mask{
+		(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+	if (exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_special_size<
+			flags, trait::mbits>(mantissa, negative);
+	}
+	constexpr ::std::size_t nibble_count{(trait::mbits + 3u) / 4u};
+	constexpr ::std::size_t padding_bits{nibble_count * 4u - trait::mbits};
+	auto aligned{static_cast<typename trait::mantissa_type>(mantissa << padding_bits)};
+	::std::size_t fractional_digits{nibble_count};
+	while (fractional_digits != 0u && (aligned & 0x0fu) == 0u)
+	{
+		aligned = static_cast<typename trait::mantissa_type>(aligned >> 4u);
+		--fractional_digits;
+	}
+	constexpr auto bias{static_cast<::std::int_least32_t>(
+		(static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u)};
+	auto const binary_exponent{exponent == 0u && mantissa == 0u ? 0
+		: exponent == 0u ? 1 - bias
+		: static_cast<::std::int_least32_t>(exponent) - bias};
+	return ::fast_io::details::compiler_constant_floating_sign_size<flags>(negative) +
+		static_cast<::std::size_t>(flags.showbase ? 2u : 0u) + 1u +
+		static_cast<::std::size_t>(fractional_digits != 0u) + fractional_digits +
+		::fast_io::details::compiler_constant_floating_exponent_size(
+			binary_exponent, 1u);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename floating_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_floating_write_hex(
+	char_type *iter,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr ::std::uint_least32_t exponent_mask{
+		(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+	if (exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_write_special<
+			flags, trait::mbits>(iter, mantissa, negative);
+	}
+	iter = ::fast_io::details::compiler_constant_floating_write_sign<flags>(
+		iter, negative);
+	if constexpr (flags.showbase)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		*iter++ = flags.uppercase_showbase
+			? ::fast_io::char_literal_v<u8'X', char_type>
+			: ::fast_io::char_literal_v<u8'x', char_type>;
+	}
+	*iter++ = ::fast_io::char_literal_add<char_type>(exponent == 0u ? 0u : 1u);
+	constexpr ::std::size_t nibble_count{(trait::mbits + 3u) / 4u};
+	constexpr ::std::size_t padding_bits{nibble_count * 4u - trait::mbits};
+	auto aligned{static_cast<typename trait::mantissa_type>(mantissa << padding_bits)};
+	::std::size_t fractional_digits{nibble_count};
+	while (fractional_digits != 0u && (aligned & 0x0fu) == 0u)
+	{
+		aligned = static_cast<typename trait::mantissa_type>(aligned >> 4u);
+		--fractional_digits;
+	}
+	if (fractional_digits != 0u)
+	{
+		*iter++ = ::fast_io::char_literal_v<(flags.comma ? u8',' : u8'.'), char_type>;
+		for (::std::size_t index{fractional_digits}; index != 0u; --index)
+		{
+			auto const nibble{static_cast<::std::uint_least32_t>(
+				(aligned >> ((index - 1u) * 4u)) & 0x0fu)};
+			*iter++ = ::fast_io::details::compiler_constant_floating_hex_digit<
+				flags.uppercase, char_type>(nibble);
+		}
+	}
+	constexpr auto bias{static_cast<::std::int_least32_t>(
+		(static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u)};
+	auto const binary_exponent{exponent == 0u && mantissa == 0u ? 0
+		: exponent == 0u ? 1 - bias
+		: static_cast<::std::int_least32_t>(exponent) - bias};
+	if (mantissa == 0u && exponent == 0u)
+	{
+		return ::fast_io::details::compiler_constant_floating_write_exponent<
+			1u, true, flags.uppercase>(iter, binary_exponent);
+	}
+	return ::fast_io::details::compiler_constant_floating_write_exponent<
+		1u, true, flags.uppercase_e>(iter, binary_exponent);
+}
+
+/// @brief Constant-arm copy of Dragonbox's public policy composition.
+/// @details The arithmetic kernels remain the ordinary library implementation;
+///          only their call sites are forced into this compiler-constant arm.
+///          This prevents the optimizer from outlining a conversion after the
+///          value-level gate has already proved the source constant, without
+///          changing any ordinary run-time floating specialization.
+template <typename decimal_type>
+inline constexpr auto
+compiler_constant_floating_trim_decimal(
+	::fast_io::details::m10_result<decimal_type> value) noexcept
+{
+	while (value.m10 % 10u == 0u)
+	{
+		value.m10 = static_cast<decimal_type>(value.m10 / 10u);
+		++value.e10;
+	}
+	return value;
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__const__)
+[[__gnu__::__const__]]
+#endif
+[[nodiscard]] inline constexpr auto
+compiler_constant_floating_narrow_to_decimal(
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using decimal_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	using result_type = ::fast_io::details::m10_result<decimal_type>;
+	if constexpr (rounding ==
+		::fast_io::manipulators::floating_rounding::nearest_to_even)
+	{
+		auto const decimal{
+			::fast_io::details::dragonbox_narrow_shortest_lookup<floating_type>(
+				mantissa, static_cast<::std::int_least32_t>(exponent))};
+		return result_type{decimal.m10, decimal.e10};
+	}
+	else
+	{
+		constexpr bool bfloat16{
+			::fast_io::details::iec559_traits<floating_type>::mbits == 7u &&
+			::fast_io::details::iec559_traits<floating_type>::ebits == 8u};
+		if constexpr (!bfloat16)
+		{
+			auto direct{::fast_io::details::dragonbox_impl<
+				floating_type, rounding>(mantissa,
+					static_cast<::std::int_least32_t>(exponent), negative)};
+			if (direct.m10 &&
+				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<
+					floating_type, rounding>(direct.m10, direct.e10, mantissa,
+						static_cast<::std::int_least32_t>(exponent), negative))
+			{
+				return direct;
+			}
+		}
+		else if (exponent < static_cast<::std::uint_least32_t>(
+			::fast_io::details::dragonbox_bfloat16_high_fallback_min_exponent))
+		{
+			auto direct{::fast_io::details::dragonbox_impl<
+				floating_type, rounding>(mantissa,
+					static_cast<::std::int_least32_t>(exponent), negative)};
+			if (direct.m10 &&
+				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<
+					floating_type, rounding>(direct.m10, direct.e10, mantissa,
+						static_cast<::std::int_least32_t>(exponent), negative))
+			{
+				return direct;
+			}
+		}
+
+		// This is the body of the ordinary narrow fallback, kept in the
+		// compiler-constant layer so its deliberately cold/noinline run-time
+		// entry does not survive after all fields are optimizer constants.
+		auto const widened{
+			::fast_io::details::dragonbox_narrow_float_punned<floating_type>(
+				mantissa, static_cast<::std::int_least32_t>(exponent), negative)};
+		auto converted{::fast_io::details::dragonbox_impl<float, rounding>(
+			widened.mantissa,
+			static_cast<::std::int_least32_t>(widened.exponent), widened.sign)};
+		::fast_io::details::dragonbox_shorten_decimal_to_target<
+			floating_type, rounding>(converted.m10, converted.e10, mantissa,
+				static_cast<::std::int_least32_t>(exponent), negative);
+		return result_type{converted.m10, converted.e10};
+	}
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+[[nodiscard]] inline constexpr auto
+compiler_constant_floating_dragonbox_main(
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::int_least32_t exponent, bool negative) noexcept
+{
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+	{
+		return ::fast_io::details::dragonbox_main_nearest_policy<
+			floating_type, rounding>(mantissa, exponent, negative);
+	}
+	else if constexpr (rounding ==
+		::fast_io::manipulators::floating_rounding::toward_zero)
+	{
+		return ::fast_io::details::dragonbox_main_directed<floating_type, false>(
+			mantissa, exponent);
+	}
+	else if constexpr (rounding ==
+		::fast_io::manipulators::floating_rounding::away_from_zero)
+	{
+		return ::fast_io::details::dragonbox_main_directed<floating_type, true>(
+			mantissa, exponent);
+	}
+	else
+	{
+		constexpr bool positive_rounds_up{
+			rounding == ::fast_io::manipulators::floating_rounding::toward_plus_infinity};
+		bool const right_closed{negative != positive_rounds_up};
+		if (right_closed)
+		{
+			return ::fast_io::details::dragonbox_main_directed<floating_type, true>(
+				mantissa, exponent);
+		}
+		return ::fast_io::details::dragonbox_main_directed<floating_type, false>(
+			mantissa, exponent);
+	}
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+[[nodiscard]] inline constexpr bool
+compiler_constant_floating_decimal_roundtrips_to(
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> decimal_mantissa,
+	::std::int_least32_t decimal_exponent,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type binary_mantissa,
+	::std::int_least32_t binary_exponent, bool negative) noexcept
+{
+	::fast_io::details::dragonbox_decimal_adjusted_mantissa adjusted;
+	bool const converted{[&]() constexpr noexcept {
+		return ::fast_io::details::dragonbox_decimal_compute_adjusted<
+			floating_type, rounding>(decimal_exponent,
+				static_cast<::std::uint_least64_t>(decimal_mantissa), negative,
+				adjusted);
+	}()};
+	return converted && adjusted.mantissa == binary_mantissa &&
+		adjusted.power2 == binary_exponent;
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+[[nodiscard]] inline constexpr bool
+compiler_constant_floating_decimal_printable_roundtrips_to(
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> decimal_mantissa,
+	::std::int_least32_t decimal_exponent,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type binary_mantissa,
+	::std::int_least32_t binary_exponent, bool negative) noexcept
+{
+	::std::uint_least64_t decimal_mantissa_limit{1u};
+	for (::std::uint_least32_t index{};
+		 index != ::fast_io::details::iec559_traits<floating_type>::m10digits;
+		 ++index)
+	{
+		decimal_mantissa_limit *= 10u;
+	}
+	return decimal_mantissa != 0u &&
+		static_cast<::std::uint_least64_t>(decimal_mantissa) <
+			decimal_mantissa_limit &&
+		::fast_io::details::
+			compiler_constant_floating_decimal_roundtrips_to<
+				floating_type, rounding>(decimal_mantissa, decimal_exponent,
+					binary_mantissa, binary_exponent, negative);
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+inline constexpr bool
+compiler_constant_floating_correct_extend(
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> base,
+	::std::int_least32_t exponent,
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> &mantissa,
+	::std::int_least32_t &decimal_exponent,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type binary_mantissa,
+	::std::int_least32_t binary_exponent, bool negative) noexcept
+{
+	using decimal_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	decimal_type add_limit{1u};
+	for (::std::uint_least32_t extension{}; extension != 3u; ++extension)
+	{
+		auto const next_base{static_cast<decimal_type>(base * 10u)};
+		if (next_base / 10u != base)
+		{
+			break;
+		}
+		base = next_base;
+		add_limit = static_cast<decimal_type>(add_limit * 10u);
+		--exponent;
+		for (decimal_type add{}; add != add_limit; ++add)
+		{
+			auto const candidate{static_cast<decimal_type>(base + add)};
+			if (::fast_io::details::
+				compiler_constant_floating_decimal_printable_roundtrips_to<
+					floating_type, rounding>(candidate, exponent, binary_mantissa,
+						binary_exponent, negative))
+			{
+				mantissa = candidate;
+				decimal_exponent = exponent;
+				return true;
+			}
+		}
+		for (decimal_type sub{1u}; sub != add_limit && sub <= base; ++sub)
+		{
+			auto const candidate{static_cast<decimal_type>(base - sub)};
+			if (::fast_io::details::
+				compiler_constant_floating_decimal_printable_roundtrips_to<
+					floating_type, rounding>(candidate, exponent, binary_mantissa,
+						binary_exponent, negative))
+			{
+				mantissa = candidate;
+				decimal_exponent = exponent;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+inline constexpr void
+compiler_constant_floating_correct(
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> &mantissa,
+	::std::int_least32_t &decimal_exponent,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type binary_mantissa,
+	::std::int_least32_t binary_exponent, bool negative) noexcept
+{
+	using decimal_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	auto roundtrips = [&](decimal_type candidate,
+		::std::int_least32_t exponent) constexpr noexcept {
+		return ::fast_io::details::
+			compiler_constant_floating_decimal_printable_roundtrips_to<
+				floating_type, rounding>(candidate, exponent, binary_mantissa,
+					binary_exponent, negative);
+	};
+	if (roundtrips(mantissa, decimal_exponent))
+	{
+		return;
+	}
+	auto const next{static_cast<decimal_type>(mantissa + 1u)};
+	if (roundtrips(next, decimal_exponent))
+	{
+		mantissa = next;
+		return;
+	}
+	if (mantissa != 0u)
+	{
+		auto const previous{static_cast<decimal_type>(mantissa - 1u)};
+		if (roundtrips(previous, decimal_exponent))
+		{
+			mantissa = previous;
+			return;
+		}
+	}
+	auto const nearest_untrimmed{[&]() constexpr noexcept {
+		return ::fast_io::details::dragonbox_main<floating_type>(
+			binary_mantissa, binary_exponent);
+	}()};
+	auto const nearest{
+		::fast_io::details::compiler_constant_floating_trim_decimal(
+			nearest_untrimmed)};
+	if (roundtrips(nearest.m10, nearest.e10))
+	{
+		mantissa = nearest.m10;
+		decimal_exponent = nearest.e10;
+		return;
+	}
+	auto const nearest_next{static_cast<decimal_type>(nearest.m10 + 1u)};
+	if (roundtrips(nearest_next, nearest.e10))
+	{
+		mantissa = nearest_next;
+		decimal_exponent = nearest.e10;
+		return;
+	}
+	if (nearest.m10 != 0u)
+	{
+		auto const nearest_previous{
+			static_cast<decimal_type>(nearest.m10 - 1u)};
+		if (roundtrips(nearest_previous, nearest.e10))
+		{
+			mantissa = nearest_previous;
+			decimal_exponent = nearest.e10;
+			return;
+		}
+	}
+	if (::fast_io::details::compiler_constant_floating_correct_extend<
+			floating_type, rounding>(nearest.m10, nearest.e10, mantissa,
+				decimal_exponent, binary_mantissa, binary_exponent, negative))
+	{
+		return;
+	}
+	(void)::fast_io::details::compiler_constant_floating_correct_extend<
+		floating_type, rounding>(mantissa, decimal_exponent, mantissa,
+			decimal_exponent, binary_mantissa, binary_exponent, negative);
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__const__)
+[[__gnu__::__const__]]
+#endif
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+compiler_constant_floating_to_decimal(
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	if constexpr (
+		::fast_io::details::dragonbox_uses_binary32_core<floating_type> &&
+		sizeof(floating_type) < sizeof(float))
+	{
+		return ::fast_io::details::compiler_constant_floating_narrow_to_decimal<
+			floating_type, rounding>(mantissa, exponent, negative);
+	}
+	else if constexpr (rounding ==
+			::fast_io::manipulators::floating_rounding::nearest_to_even &&
+		((::fast_io::details::iec559_traits<floating_type>::mbits == 23u &&
+		  ::fast_io::details::iec559_traits<floating_type>::ebits == 8u) ||
+		 (::fast_io::details::iec559_traits<floating_type>::mbits == 52u &&
+		  ::fast_io::details::iec559_traits<floating_type>::ebits == 11u)))
+	{
+		// Preserve the ordinary DA carrier exactly.  Trailing zero removal is
+		// performed by the small local loop in the materializer below instead
+		// of DA's run-time-tuned rtz helper, which need not inline in a literal
+		// fixed-format call even though every operand is optimizer-constant.
+		return ::fast_io::details::da::to_decimal<floating_type>(
+			mantissa, exponent);
+	}
+	else
+	{
+		auto converted{
+			::fast_io::details::compiler_constant_floating_dragonbox_main<
+				floating_type, rounding>(mantissa,
+					static_cast<::std::int_least32_t>(exponent), negative)};
+		auto trimmed{
+			::fast_io::details::compiler_constant_floating_trim_decimal(converted)};
+		::fast_io::details::compiler_constant_floating_correct<
+			floating_type, rounding>(trimmed.m10, trimmed.e10, mantissa,
+				static_cast<::std::int_least32_t>(exponent), negative);
+		return ::fast_io::details::compiler_constant_floating_trim_decimal(trimmed);
+	}
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+compiler_constant_floating_scalar_materialize(floating_type const &value) noexcept
+{
+	// This routine reads through `value`.  GNU `const` would incorrectly claim
+	// that the result is independent of pointed-to storage (the reference is
+	// transported as a pointer at the ABI boundary), allowing calls across a
+	// store to be commoned.  Keep the optimizer-visible implementation inline;
+	// do not attach a pointer-insensitive function attribute here.
+	using clean_type = ::std::remove_cv_t<floating_type>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	using result_type =
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, clean_type>;
+	auto const [mantissa, exponent, negative]{
+		::fast_io::details::compiler_constant_floating_capture_fields(value)};
+	result_type result{
+		.binary_mantissa = mantissa,
+		.binary_exponent = exponent,
+		.negative = static_cast<bool>(negative)};
+	if constexpr (flags.floating !=
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+		if (exponent != exponent_mask && (mantissa != 0u || exponent != 0u))
+		{
+#if defined(__SIZEOF_INT128__)
+			if constexpr (
+				::fast_io::details::print_floating_decimal_exact_supported<clean_type>)
+			{
+				auto decimal{
+					::fast_io::details::wide_shortest_from_binary<
+						clean_type, flags.rounding>(
+							mantissa, exponent, negative)};
+				if (decimal.success)
+				{
+					result.decimal_mantissa = decimal.m10;
+					result.decimal_exponent = decimal.e10;
+				}
+			}
+			else
+#endif
+			{
+				auto decimal{
+					::fast_io::details::compiler_constant_floating_to_decimal<
+						clean_type, flags.rounding>(mantissa, exponent, negative)};
+				while (decimal.m10 % 10u == 0u)
+				{
+					decimal.m10 = static_cast<decltype(decimal.m10)>(
+						decimal.m10 / 10u);
+					++decimal.e10;
+				}
+				result.decimal_mantissa = decimal.m10;
+				result.decimal_exponent = decimal.e10;
+			}
+		}
+	}
+	return result;
+}
+
+template <typename floating_type>
+using compiler_constant_floating_precision_mantissa_type =
+	::std::conditional_t<
+		(::fast_io::details::iec559_traits<floating_type>::mbits <= 10u &&
+		 sizeof(::fast_io::details::dragonbox_decimal_mantissa_type<
+			 floating_type>) < sizeof(::std::uint_least64_t)),
+		::std::uint_least64_t,
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>>;
+
+template <typename floating_type>
+struct compiler_constant_floating_decimal_precision_plan
+{
+	using decimal_mantissa_type =
+		::fast_io::details::
+			compiler_constant_floating_precision_mantissa_type<floating_type>;
+	decimal_mantissa_type mantissa{};
+	::std::int_least32_t exponent{};
+	bool success{};
+	bool rounding_discarded{};
+};
+
+template <typename unsigned_type>
+[[nodiscard]] inline constexpr ::std::int_least32_t
+compiler_constant_floating_remove_binary_zeroes(
+	unsigned_type &value) noexcept
+{
+	::std::int_least32_t count{};
+	for (; (value & static_cast<unsigned_type>(1u)) == 0u;
+		 value = static_cast<unsigned_type>(value >> 1u))
+	{
+		++count;
+	}
+	return count;
+}
+
+/// @brief Proves that a shortest decimal carrier is the exact binary value.
+/// @details The run-time predicate intentionally stops at uint64_t because its
+///          callers need only binary32/binary64.  Constant precision also owns
+///          binary80/binary128, so this integer-only counterpart widens the
+///          same factorization proof to native uint128 when available.  It may
+///          conservatively reject on a power-of-five overflow.
+template <typename floating_type>
+[[nodiscard]] inline constexpr bool
+compiler_constant_floating_decimal_carrier_is_binary_exact(
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type
+		binary_mantissa,
+	::std::uint_least32_t raw_exponent,
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type>
+		decimal_mantissa,
+	::std::int_least32_t decimal_exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	using binary_mantissa_type = typename trait::mantissa_type;
+	using decimal_mantissa_type =
+		::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+			floating_type>;
+#if defined(__SIZEOF_INT128__)
+	using work_type = ::std::conditional_t<
+		(sizeof(binary_mantissa_type) > sizeof(::std::uint_least64_t) ||
+		 sizeof(decimal_mantissa_type) > sizeof(::std::uint_least64_t)),
+		__uint128_t, ::std::uint_least64_t>;
+#else
+	using work_type = ::std::uint_least64_t;
+	if constexpr (sizeof(binary_mantissa_type) > sizeof(work_type) ||
+				  sizeof(decimal_mantissa_type) > sizeof(work_type))
+	{
+		return false;
+	}
+#endif
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	work_type binary{static_cast<work_type>(binary_mantissa)};
+	::std::int_least32_t binary_exponent{};
+	if (raw_exponent)
+	{
+		binary |= static_cast<work_type>(1u) << trait::mbits;
+		binary_exponent = static_cast<::std::int_least32_t>(raw_exponent) -
+			bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent = 1 - bias -
+			static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	if (!binary || !decimal_mantissa)
+	{
+		return binary == 0u && decimal_mantissa == 0u;
+	}
+
+	work_type decimal{static_cast<work_type>(decimal_mantissa)};
+	auto decimal_binary_exponent{decimal_exponent};
+	if (decimal_exponent < 0)
+	{
+		auto count{static_cast<::std::uint_least32_t>(-decimal_exponent)};
+		for (; count; --count)
+		{
+			if (decimal % 5u)
+			{
+				return false;
+			}
+			decimal = static_cast<work_type>(decimal / 5u);
+		}
+	}
+	else
+	{
+		constexpr work_type maximum{static_cast<work_type>(~work_type{})};
+		auto count{static_cast<::std::uint_least32_t>(decimal_exponent)};
+		for (; count; --count)
+		{
+			if (maximum / 5u < decimal)
+			{
+				return false;
+			}
+			decimal = static_cast<work_type>(decimal * 5u);
+		}
+	}
+	decimal_binary_exponent +=
+		::fast_io::details::compiler_constant_floating_remove_binary_zeroes(
+			decimal);
+	binary_exponent +=
+		::fast_io::details::compiler_constant_floating_remove_binary_zeroes(
+			binary);
+	return decimal == binary && decimal_binary_exponent == binary_exponent;
+}
+
+template <typename floating_type>
+[[nodiscard]] inline constexpr auto
+compiler_constant_floating_nearest_decimal_from_fields(
+	::fast_io::details::punning_result<floating_type> fields) noexcept
+{
+	using decimal_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	using result_type = ::fast_io::details::m10_result<decimal_type>;
+#if defined(__SIZEOF_INT128__)
+	if constexpr (
+		::fast_io::details::print_floating_decimal_exact_supported<floating_type>)
+	{
+		auto const wide{::fast_io::details::wide_shortest_from_binary<
+			floating_type,
+			::fast_io::manipulators::floating_rounding::nearest_to_even>(
+				fields.mantissa, fields.exponent,
+				static_cast<bool>(fields.sign))};
+		return result_type{wide.success ? static_cast<decimal_type>(wide.m10)
+									 : decimal_type{},
+			wide.success ? wide.e10 : 0};
+	}
+	else
+#endif
+	{
+		auto const decimal{
+			::fast_io::details::compiler_constant_floating_to_decimal<
+				floating_type,
+				::fast_io::manipulators::floating_rounding::nearest_to_even>(
+					fields.mantissa, fields.exponent,
+					static_cast<bool>(fields.sign))};
+		return result_type{decimal.m10, decimal.e10};
+	}
+}
+
+template <typename floating_type>
+[[nodiscard]] inline constexpr bool
+compiler_constant_floating_carrier_grid_supported(
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t requested,
+	::std::size_t precision, bool fractional_grid) noexcept
+{
+	auto const length{static_cast<::std::size_t>(
+		::fast_io::details::chars_len<10u, true>(mantissa))};
+	if (!fractional_grid)
+	{
+		return requested >= length || length - requested < 20u;
+	}
+	if (0 <= exponent ||
+		precision >= static_cast<::std::size_t>(
+			-static_cast<::std::int_least64_t>(exponent)))
+	{
+		return true;
+	}
+	auto const cut{static_cast<::std::int_least64_t>(
+		-static_cast<::std::int_least64_t>(precision)) - exponent};
+	return cut < 20;
+}
+
+/// @brief Selects the compiler-friendly decimal precision carrier.
+/// @details Success is a numeric proof, not merely a shortest-format
+///          heuristic.  Exact dyadics are complete carriers.  Other nearest
+///          requests use the same strict distance-from-half and normal-value
+///          separation proofs as the ordinary precision formatter.  Directed
+///          requests accept only exact carriers or a value strictly below the
+///          requested fractional quantum.  Every miss retains the exact binary
+///          expansion fallback.
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+[[nodiscard]] inline constexpr auto
+compiler_constant_floating_make_decimal_precision_plan(
+	::fast_io::details::punning_result<floating_type> fields,
+	::std::size_t precision) noexcept
+{
+	using result_type =
+		::fast_io::details::compiler_constant_floating_decimal_precision_plan<
+			floating_type>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (fields.exponent == exponent_mask ||
+		(fields.mantissa == 0u && fields.exponent == 0u))
+	{
+		return result_type{};
+	}
+	constexpr bool fractional{
+		::fast_io::details::floating_precision_is_fractional<flags.precision>};
+	constexpr bool fractional_grid{
+		fractional && flags.floating !=
+			::fast_io::manipulators::floating_format::scientific};
+#if defined(__SIZEOF_INT128__)
+	/*
+	 The complete binary80/binary128 coefficient at the minimum exponent has
+	 more than eleven thousand digits.  Asking wide-shortest to build that
+	 object merely to retain P+guard digits exceeds Clang's default constexpr
+	 step budget.  Raw exponent 0 and 1 share the same binary exponent; restore
+	 the normal's implicit bit and reuse the proved 512-bit subnormal window.
+	 Its equal-endpoint acceptance supplies an exact prefix plus sticky state,
+	 so this is a compile-time complexity reduction, not an approximation.
+	 */
+	if constexpr ((trait::mbits == 63u || trait::mbits == 112u) &&
+		trait::ebits == 15u)
+	{
+		auto significand{static_cast<__uint128_t>(fields.mantissa)};
+		constexpr ::std::int_least32_t bias{16383};
+		::std::int_least32_t binary_exponent{
+			1 - bias - static_cast<::std::int_least32_t>(trait::mbits)};
+		if (fields.exponent)
+		{
+			significand |= static_cast<__uint128_t>(1u) << trait::mbits;
+			binary_exponent = static_cast<::std::int_least32_t>(fields.exponent) -
+				bias - static_cast<::std::int_least32_t>(trait::mbits);
+		}
+		auto const exponent_probe{::fast_io::details::
+			exact_precision_wide_window_from_significand(
+				significand, trait::mbits, binary_exponent, 1u)};
+		if (exponent_probe.success)
+		{
+			::std::size_t requested{};
+			if constexpr (fractional)
+			{
+				if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::scientific)
+				{
+					requested = ::fast_io::details::
+						exact_precision_saturating_add(precision, 1u);
+				}
+				else if (0 <= exponent_probe.real_exponent)
+				{
+					requested = ::fast_io::details::
+						exact_precision_saturating_add(
+							::fast_io::details::
+								exact_precision_saturating_add(
+									static_cast<::std::size_t>(
+										exponent_probe.real_exponent),
+									precision),
+							1u);
+				}
+				else
+				{
+					auto const leading_zeroes{static_cast<::std::size_t>(
+						-exponent_probe.real_exponent)};
+					requested = leading_zeroes <= precision
+						? precision - leading_zeroes + 1u
+						: 0u;
+				}
+			}
+			else
+			{
+				requested = precision ? precision : 1u;
+			}
+			constexpr auto carrier_digits{
+				::std::numeric_limits<__uint128_t>::digits10};
+			if (requested < static_cast<::std::size_t>(carrier_digits))
+			{
+				auto const window{::fast_io::details::
+					exact_precision_wide_window_from_significand(
+						significand, trait::mbits, binary_exponent,
+						requested + 1u)};
+				if (window.success)
+				{
+					__uint128_t encoded{};
+					for (::std::size_t index{};
+						 index != window.decimal.size; ++index)
+					{
+						auto digit{static_cast<unsigned>(
+							window.decimal.digits[index])};
+						if (index + 1u == window.decimal.size &&
+							window.tail_nonzero &&
+							(digit == 0u || digit == 5u))
+						{
+							++digit;
+						}
+						encoded = encoded * 10u + digit;
+					}
+					auto const guard{window.decimal.digits[requested]};
+					return result_type{encoded, window.decimal.exponent,
+						true, guard != 0u || window.tail_nonzero};
+				}
+			}
+		}
+
+		/*
+		 For the remaining wide exponents, precision formatting needs only the
+		 requested decimal grid plus one guard digit.  Building the shortest
+		 round-trip interval first would construct three full endpoint expansions;
+		 at binary80/binary128 maximum finite values that needlessly exceeds
+		 Clang's default constexpr step budget.  One exact expansion is sufficient:
+		 its canonical final digit is nonzero, so any omitted suffix is a proved
+		 sticky tail.  The compact uint128 carrier below therefore preserves every
+		 nearest tie and directed-rounding decision without consulting ftoa again.
+		 */
+		if (1u < fields.exponent)
+		{
+			auto const exact{
+				::fast_io::details::exact_precision_from_binary<floating_type>(
+					fields.mantissa, fields.exponent)};
+			auto const real_exponent{static_cast<::std::int_least32_t>(
+				exact.exponent + static_cast<::std::int_least32_t>(exact.size) - 1)};
+			::std::size_t requested{};
+			if constexpr (fractional)
+			{
+				if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::scientific)
+				{
+					requested = ::fast_io::details::exact_precision_saturating_add(
+						precision, 1u);
+				}
+				else if (0 <= real_exponent)
+				{
+					requested = ::fast_io::details::exact_precision_saturating_add(
+						::fast_io::details::exact_precision_saturating_add(
+							static_cast<::std::size_t>(real_exponent), precision),
+						1u);
+				}
+				else
+				{
+					auto const leading_zeroes{static_cast<::std::size_t>(
+						-real_exponent)};
+					requested = leading_zeroes <= precision
+						? precision - leading_zeroes + 1u
+						: 0u;
+				}
+			}
+			else
+			{
+				requested = precision ? precision : 1u;
+			}
+
+			constexpr auto carrier_digits{static_cast<::std::size_t>(
+				::std::numeric_limits<__uint128_t>::digits10)};
+			if (exact.size <= carrier_digits && exact.size <= requested)
+			{
+				__uint128_t coefficient{};
+				for (::std::size_t index{}; index != exact.size; ++index)
+				{
+					coefficient = coefficient * 10u + exact.digits[index];
+				}
+				return result_type{coefficient, exact.exponent, true, false};
+			}
+			if (requested < exact.size && requested < carrier_digits)
+			{
+				auto const encoded_size{requested + 1u};
+				__uint128_t encoded{};
+				for (::std::size_t index{}; index != encoded_size; ++index)
+				{
+					auto digit{static_cast<unsigned>(exact.digits[index])};
+					if (index + 1u == encoded_size && encoded_size < exact.size &&
+						(digit == 0u || digit == 5u))
+					{
+						++digit;
+					}
+					encoded = encoded * 10u + digit;
+				}
+				auto const encoded_exponent{static_cast<::std::int_least32_t>(
+					exact.exponent + static_cast<::std::int_least32_t>(
+						exact.size - encoded_size))};
+				return result_type{encoded, encoded_exponent, true, true};
+			}
+		}
+	}
+#endif
+	auto const carrier{
+		::fast_io::details::compiler_constant_floating_nearest_decimal_from_fields(
+			fields)};
+	if (!carrier.m10)
+	{
+		return result_type{};
+	}
+	auto const length{static_cast<::std::size_t>(
+		::fast_io::details::chars_len<10u, true>(carrier.m10))};
+	auto const real_exponent{
+		carrier.e10 + static_cast<::std::int_least32_t>(length) - 1};
+	auto const requested_for_real_exponent{
+		[precision](::std::int_least32_t candidate_real_exponent)
+			constexpr noexcept -> ::std::size_t {
+			if constexpr (fractional)
+			{
+				if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::scientific)
+				{
+					return ::fast_io::details::exact_precision_saturating_add(
+						precision, 1u);
+				}
+				else if (0 <= candidate_real_exponent)
+				{
+					return ::fast_io::details::exact_precision_saturating_add(
+						::fast_io::details::exact_precision_saturating_add(
+							static_cast<::std::size_t>(candidate_real_exponent),
+							precision),
+						1u);
+				}
+				else
+				{
+					auto const leading_zeroes{static_cast<::std::size_t>(
+						-static_cast<::std::int_least64_t>(
+							candidate_real_exponent))};
+					return leading_zeroes <= precision
+						? precision - leading_zeroes + 1u
+						: 0u;
+				}
+			}
+			else
+			{
+				return precision ? precision : 1u;
+			}
+		}};
+	auto const requested{requested_for_real_exponent(real_exponent)};
+
+	auto const rounding_discarded{[&]() constexpr noexcept {
+		if constexpr (fractional_grid)
+		{
+			return carrier.e10 < 0 &&
+				precision < static_cast<::std::size_t>(
+					-static_cast<::std::int_least64_t>(carrier.e10));
+		}
+		else
+		{
+			return requested < length;
+		}
+	}()};
+	auto const grid_supported{
+		::fast_io::details::compiler_constant_floating_carrier_grid_supported<
+			floating_type>(carrier.m10, carrier.e10, requested, precision,
+				fractional_grid)};
+	if (grid_supported &&
+		::fast_io::details::
+			compiler_constant_floating_decimal_carrier_is_binary_exact<
+				floating_type>(fields.mantissa, fields.exponent, carrier.m10,
+					carrier.e10))
+	{
+		return result_type{carrier.m10, carrier.e10, true,
+			rounding_discarded};
+	}
+
+	/*
+	 Binary32/binary64 precision cannot in general be reconstructed from the
+	 shortest round-trip carrier: the minimum binary64 subnormal at P=6
+	 scientific is the canonical counterexample.  Reuse the established exact
+	 prefix window instead of constructing its complete 114/768-digit dyadic
+	 expansion.  Only requested digits, one guard and a sticky bit escape.  A
+	 sticky guard 0/5 is moved to 1/6, respectively, which encodes exactly the
+	 below/equal/above-half distinction needed by all six nearest policies while
+	 also preserving the nonzero-discard fact required by the four directed
+	 policies.  This constant-only consumer does not alter the run-time ftoa
+	 carrier or its by-value floating ABI.
+	 */
+#if defined(__SIZEOF_INT128__)
+	if constexpr (::std::same_as<::std::remove_cv_t<floating_type>, float> ||
+		::std::same_as<::std::remove_cv_t<floating_type>, double>)
+	{
+		using clean_type = ::std::remove_cv_t<floating_type>;
+		constexpr auto carrier_digits{static_cast<::std::size_t>(
+			::std::numeric_limits<
+				::fast_io::details::
+					compiler_constant_floating_precision_mantissa_type<
+						clean_type>>::digits10)};
+		if (requested < carrier_digits)
+		{
+			auto window_real_exponent{real_exponent};
+			auto window_requested{requested};
+			for (unsigned attempt{}; attempt != 2u; ++attempt)
+			{
+				auto const window{::fast_io::details::
+					exact_precision_compact_window_from_binary<clean_type>(
+						fields.mantissa, fields.exponent,
+						window_requested + 1u, window_real_exponent)};
+				if (!window.success)
+				{
+					break;
+				}
+				if (window.real_exponent != window_real_exponent)
+				{
+					window_real_exponent = window.real_exponent;
+					window_requested = requested_for_real_exponent(
+						window_real_exponent);
+					if (carrier_digits <= window_requested)
+					{
+						break;
+					}
+					continue;
+				}
+				using precision_mantissa_type = ::fast_io::details::
+					compiler_constant_floating_precision_mantissa_type<
+						clean_type>;
+				precision_mantissa_type encoded{};
+				for (::std::size_t index{};
+					 index != window.decimal.size; ++index)
+				{
+					auto digit{static_cast<precision_mantissa_type>(
+						window.decimal.digits[index])};
+					if (index + 1u == window.decimal.size &&
+						window.tail_nonzero && (digit == 0u || digit == 5u))
+					{
+						++digit;
+					}
+					encoded = static_cast<precision_mantissa_type>(
+						encoded * 10u + digit);
+				}
+				return result_type{encoded, window.decimal.exponent, true,
+					window.tail_nonzero};
+			}
+		}
+	}
+#endif
+
+	/*
+	 A binary16/bfloat16 value can likewise need more coefficient digits than
+	 its shortest carrier (for example 1.53125).  Its complete exact expansion
+	 is small, so keeping that simpler uint64 path avoids routing narrow formats
+	 through a binary32-specific window merely because Dragonbox shares a core.
+	 */
+	if constexpr (trait::mbits <= 10u && trait::ebits <= 8u)
+	{
+		auto const exact{
+			::fast_io::details::exact_precision_from_binary<floating_type>(
+				fields.mantissa, fields.exponent)};
+		constexpr auto carrier_digits{
+			::std::numeric_limits<::std::uint_least64_t>::digits10};
+		if (exact.size <= static_cast<::std::size_t>(carrier_digits))
+		{
+			using precision_mantissa_type = ::fast_io::details::
+				compiler_constant_floating_precision_mantissa_type<floating_type>;
+			precision_mantissa_type exact_mantissa{};
+			bool carrier_fits{true};
+			constexpr auto carrier_maximum{
+				(::std::numeric_limits<precision_mantissa_type>::max)()};
+			for (::std::size_t index{}; index != exact.size; ++index)
+			{
+				auto const digit{
+					static_cast<precision_mantissa_type>(exact.digits[index])};
+				if ((carrier_maximum - digit) / 10u < exact_mantissa)
+				{
+					carrier_fits = false;
+					break;
+				}
+				exact_mantissa = static_cast<precision_mantissa_type>(
+					exact_mantissa * 10u + digit);
+			}
+			auto const exact_real_exponent{
+				exact.exponent +
+				static_cast<::std::int_least32_t>(exact.size) - 1};
+			::std::size_t exact_requested{};
+			if constexpr (fractional)
+			{
+				if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::scientific)
+				{
+					exact_requested =
+						::fast_io::details::exact_precision_saturating_add(
+							precision, 1u);
+				}
+				else if (0 <= exact_real_exponent)
+				{
+					exact_requested =
+						::fast_io::details::exact_precision_saturating_add(
+							::fast_io::details::
+								exact_precision_saturating_add(
+									static_cast<::std::size_t>(
+										exact_real_exponent),
+									precision),
+							1u);
+				}
+				else
+				{
+					auto const leading_zeroes{static_cast<::std::size_t>(
+						-exact_real_exponent)};
+					exact_requested = leading_zeroes <= precision
+						? precision - leading_zeroes + 1u
+						: 0u;
+				}
+			}
+			else
+			{
+				exact_requested = precision ? precision : 1u;
+			}
+			auto const exact_rounding_discarded{[&]() constexpr noexcept {
+				if constexpr (fractional_grid)
+				{
+					return exact.exponent < 0 &&
+						precision < static_cast<::std::size_t>(
+							-static_cast<::std::int_least64_t>(
+								exact.exponent));
+				}
+				else
+				{
+					return exact_requested < exact.size;
+				}
+			}()};
+			if (carrier_fits && ::fast_io::details::
+					compiler_constant_floating_carrier_grid_supported<
+						floating_type>(exact_mantissa, exact.exponent,
+							exact_requested, precision, fractional_grid))
+			{
+				return result_type{exact_mantissa, exact.exponent, true,
+					exact_rounding_discarded};
+			}
+		}
+
+		/*
+		 When the complete coefficient is longer than uint64_t, retain one
+		 decimal guard digit beyond the requested grid.  A nonzero tail turns
+		 guard 0 into 1 and guard 5 into 6; those are the only cases where the
+		 discarded tail changes any of the ten deterministic policies.  The
+		 ordinary carrier rounder can then make the final decision exactly from
+		 at most nineteen digits, with no floating arithmetic.
+		 */
+		auto const exact_real_exponent{
+			exact.exponent + static_cast<::std::int_least32_t>(exact.size) - 1};
+		::std::size_t exact_requested{};
+		if constexpr (fractional)
+		{
+			if constexpr (flags.floating ==
+				::fast_io::manipulators::floating_format::scientific)
+			{
+				exact_requested =
+					::fast_io::details::exact_precision_saturating_add(
+						precision, 1u);
+			}
+			else if (0 <= exact_real_exponent)
+			{
+				exact_requested =
+					::fast_io::details::exact_precision_saturating_add(
+						::fast_io::details::exact_precision_saturating_add(
+							static_cast<::std::size_t>(exact_real_exponent),
+							precision),
+						1u);
+			}
+			else
+			{
+				auto const leading_zeroes{
+					static_cast<::std::size_t>(-exact_real_exponent)};
+				exact_requested = leading_zeroes <= precision
+					? precision - leading_zeroes + 1u
+					: 0u;
+			}
+		}
+		else
+		{
+			exact_requested = precision ? precision : 1u;
+		}
+		if (exact_requested < exact.size &&
+			exact_requested < static_cast<::std::size_t>(carrier_digits))
+		{
+			using precision_mantissa_type = ::fast_io::details::
+				compiler_constant_floating_precision_mantissa_type<floating_type>;
+			auto const encoded_size{exact_requested + 1u};
+			precision_mantissa_type encoded_mantissa{};
+			bool carrier_fits{true};
+			constexpr auto carrier_maximum{
+				(::std::numeric_limits<precision_mantissa_type>::max)()};
+			for (::std::size_t index{}; index != encoded_size; ++index)
+			{
+				auto digit{
+					static_cast<precision_mantissa_type>(exact.digits[index])};
+				if (index + 1u == encoded_size && encoded_size < exact.size &&
+					(digit == 0u || digit == 5u))
+				{
+					++digit;
+				}
+				if ((carrier_maximum - digit) / 10u < encoded_mantissa)
+				{
+					carrier_fits = false;
+					break;
+				}
+				encoded_mantissa = static_cast<precision_mantissa_type>(
+					encoded_mantissa * 10u + digit);
+			}
+			auto const encoded_exponent{static_cast<::std::int_least32_t>(
+				exact.exponent + static_cast<::std::int_least32_t>(
+					exact.size - encoded_size))};
+			if (carrier_fits && ::fast_io::details::
+					compiler_constant_floating_carrier_grid_supported<
+						floating_type>(encoded_mantissa, encoded_exponent,
+							exact_requested, precision, fractional_grid))
+			{
+				return result_type{encoded_mantissa, encoded_exponent, true,
+					true};
+			}
+		}
+	}
+
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<
+		flags.rounding>)
+	{
+		bool exact_enough{};
+		if (requested && requested < length)
+		{
+			auto const cut{length - requested};
+			if (cut < 20u)
+			{
+				auto const divisor{
+					::fast_io::details::print_rsv_fp_pow10_0_to_19_table[cut]};
+				auto const remainder{static_cast<::std::uint_least64_t>(
+					carrier.m10 % divisor)};
+				auto const half{divisor / 2u};
+				auto const distance{remainder <= half
+					? divisor - remainder * 2u
+					: (remainder - half) * 2u};
+				exact_enough = 1u < distance;
+			}
+		}
+		else if (fields.exponent && length <= requested &&
+			requested <= static_cast<::std::size_t>(
+				(::std::numeric_limits<floating_type>::digits10)))
+		{
+			if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::general &&
+				flags.precision == ::fast_io::manipulators::floating_precision::
+					fractional_preserve_trailing_zero)
+			{
+				exact_enough = length == requested;
+			}
+			else
+			{
+				exact_enough = true;
+			}
+		}
+		if (exact_enough && grid_supported)
+		{
+			return result_type{carrier.m10, carrier.e10, true,
+				rounding_discarded};
+		}
+	}
+
+	if constexpr (fractional_grid)
+	{
+		constexpr auto int32_max{
+			(::std::numeric_limits<::std::int_least32_t>::max)()};
+		if (precision <= static_cast<::std::size_t>(int32_max) &&
+			static_cast<::std::int_least64_t>(real_exponent) +
+					static_cast<::std::int_least64_t>(precision) <=
+				-2)
+		{
+			return result_type{carrier.m10, carrier.e10, true, true};
+		}
+	}
+	return result_type{};
+}
+
+inline constexpr ::std::size_t
+	compiler_constant_floating_compact_decimal_capacity{40u};
+
+struct compiler_constant_floating_compact_decimal
+{
+	unsigned char
+		digits[compiler_constant_floating_compact_decimal_capacity]{};
+	::std::size_t size{1u};
+	::std::int_least32_t exponent{};
+};
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+struct compiler_constant_floating_rounded_carrier
+{
+	compiler_constant_floating_compact_decimal decimal{};
+	::std::size_t significant{};
+};
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding,
+	typename mantissa_type>
+inline constexpr void
+compiler_constant_floating_round_to_significant(
+	mantissa_type &mantissa, ::std::int_least32_t &exponent,
+	::std::size_t precision, bool negative) noexcept
+{
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
+		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		::fast_io::details::print_rsv_fp_round_to_significant<
+			floating_type, rounding, false>(
+				mantissa, exponent, precision, negative);
+	}
+	else
+	{
+		if (!mantissa)
+		{
+			return;
+		}
+		if (!precision)
+		{
+			precision = 1u;
+		}
+		auto const length{static_cast<::std::size_t>(
+			::fast_io::details::chars_len<10u, true>(mantissa))};
+		if (precision < length)
+		{
+			auto const cut{length - precision};
+			mantissa_type divisor{1u};
+			for (::std::size_t index{}; index != cut; ++index)
+			{
+				divisor *= 10u;
+			}
+			auto quotient{static_cast<mantissa_type>(mantissa / divisor)};
+			auto const remainder{static_cast<mantissa_type>(
+				mantissa - quotient * divisor)};
+			bool round_up{};
+			if (remainder)
+			{
+				if constexpr (::fast_io::details::floating_rounding_is_nearest<
+					rounding>)
+				{
+					auto const half{static_cast<mantissa_type>(divisor >> 1u)};
+					if (half < remainder)
+					{
+						round_up = true;
+					}
+					else if (remainder == half)
+					{
+						round_up = ::fast_io::details::
+							print_rsv_fp_decimal_tie_round_up<rounding>(
+								negative,
+								static_cast<::std::uint_least64_t>(quotient));
+					}
+				}
+				else
+				{
+					round_up = ::fast_io::details::
+						floating_rounding_directed_round_up<rounding>(negative);
+				}
+			}
+			if (round_up)
+			{
+				++quotient;
+			}
+			mantissa = quotient;
+			exponent += static_cast<::std::int_least32_t>(cut);
+			if (precision < static_cast<::std::size_t>(
+					::std::numeric_limits<mantissa_type>::digits10) + 1u &&
+				static_cast<::std::size_t>(
+					::fast_io::details::chars_len<10u, true>(mantissa)) > precision)
+			{
+				mantissa /= 10u;
+				++exponent;
+			}
+		}
+	}
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding,
+	typename mantissa_type>
+inline constexpr void
+compiler_constant_floating_round_to_fractional(
+	mantissa_type &mantissa, ::std::int_least32_t &exponent,
+	::std::size_t precision, bool negative) noexcept
+{
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
+		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		::fast_io::details::print_rsv_fp_round_to_fractional<
+			floating_type, rounding>(
+				mantissa, exponent, precision, negative);
+	}
+	else
+	{
+		if (!mantissa || 0 <= exponent ||
+			precision >= static_cast<::std::size_t>(
+				-static_cast<::std::int_least64_t>(exponent)))
+		{
+			return;
+		}
+		auto const target_exponent{-static_cast<::std::int_least32_t>(precision)};
+		auto const cut{static_cast<::std::uint_least32_t>(
+			target_exponent - exponent)};
+		if (static_cast<::std::uint_least32_t>(
+				::std::numeric_limits<mantissa_type>::digits10) < cut)
+		{
+			if constexpr (::fast_io::details::floating_rounding_is_nearest<
+				rounding>)
+			{
+				mantissa = 0u;
+			}
+			else
+			{
+				mantissa = static_cast<mantissa_type>(
+					::fast_io::details::floating_rounding_directed_round_up<
+						rounding>(negative));
+			}
+			exponent = target_exponent;
+			return;
+		}
+		mantissa_type divisor{1u};
+		for (::std::uint_least32_t index{}; index != cut; ++index)
+		{
+			divisor *= 10u;
+		}
+		auto quotient{static_cast<mantissa_type>(mantissa / divisor)};
+		auto const remainder{static_cast<mantissa_type>(
+			mantissa - quotient * divisor)};
+		bool round_up{};
+		if (remainder)
+		{
+			if constexpr (::fast_io::details::floating_rounding_is_nearest<
+				rounding>)
+			{
+				auto const half{static_cast<mantissa_type>(divisor >> 1u)};
+				if (half < remainder)
+				{
+					round_up = true;
+				}
+				else if (remainder == half)
+				{
+					round_up = ::fast_io::details::
+						print_rsv_fp_decimal_tie_round_up<rounding>(
+							negative,
+							static_cast<::std::uint_least64_t>(quotient));
+				}
+			}
+			else
+			{
+				round_up = ::fast_io::details::
+					floating_rounding_directed_round_up<rounding>(negative);
+			}
+		}
+		if (round_up)
+		{
+			++quotient;
+		}
+		mantissa = quotient;
+		exponent = target_exponent;
+	}
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+[[nodiscard]] inline constexpr auto
+compiler_constant_floating_round_decimal_carrier(
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
+	bool rounding_discarded) noexcept
+{
+	using result_type =
+		::fast_io::details::compiler_constant_floating_rounded_carrier<
+			flags, floating_type>;
+	constexpr bool fractional{
+		::fast_io::details::floating_precision_is_fractional<flags.precision>};
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	::std::size_t significant{};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		significant = fractional
+			? ::fast_io::details::exact_precision_saturating_add(precision, 1u)
+			: (precision ? precision : 1u);
+		::fast_io::details::compiler_constant_floating_round_to_significant<
+			floating_type, flags.rounding>(
+				mantissa, exponent, significant, negative);
+	}
+	else if constexpr (fractional)
+	{
+		::fast_io::details::compiler_constant_floating_round_to_fractional<
+			floating_type, flags.rounding>(
+				mantissa, exponent, precision, negative);
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		::fast_io::details::compiler_constant_floating_round_to_significant<
+			floating_type, flags.rounding>(
+				mantissa, exponent, significant, negative);
+	}
+	if constexpr (!preserve)
+	{
+		::fast_io::details::print_rsv_fp_trim_trailing_zero(
+			mantissa, exponent);
+	}
+
+	result_type result{};
+	result.decimal.exponent = exponent;
+	if (!mantissa)
+	{
+		result.decimal.digits[0] = 0u;
+		result.decimal.size = 1u;
+	}
+	else
+	{
+		auto const size{
+			::fast_io::details::compiler_constant_floating_decimal_digits(
+				mantissa)};
+		if (compiler_constant_floating_compact_decimal_capacity < size)
+		{
+			return result_type{};
+		}
+		result.decimal.size = size;
+		for (auto index{size}; index; mantissa /= 10u)
+		{
+			result.decimal.digits[--index] =
+				static_cast<unsigned char>(mantissa % 10u);
+		}
+	}
+	if constexpr (fractional && preserve &&
+		flags.floating == ::fast_io::manipulators::floating_format::general)
+	{
+		significant = rounding_discarded
+			? ::fast_io::details::
+				exact_precision_fractional_general_rounded_virtual_size(
+					result.decimal, precision)
+			: result.decimal.size;
+	}
+	result.significant = significant;
+	return result;
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_decimal_precision_carrier_size(
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
+	bool rounding_discarded) noexcept
+{
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	constexpr bool significant{
+		::fast_io::details::floating_precision_is_significant<flags.precision>};
+	auto const direct{[&]() constexpr noexcept {
+		if constexpr (!preserve || !significant ||
+			flags.floating ==
+				::fast_io::manipulators::floating_format::scientific)
+		{
+			return true;
+		}
+		else
+		{
+			auto const requested{precision ? precision : 1u};
+			auto const length{static_cast<::std::size_t>(
+				::fast_io::details::chars_len<10u, true>(mantissa))};
+			if (requested <= length)
+			{
+				return true;
+			}
+			auto const padding{requested - length};
+			if (static_cast<::std::size_t>(
+					::fast_io::details::iec559_traits<floating_type>::m10digits) <
+					requested ||
+				20u <= padding)
+			{
+				return false;
+			}
+			auto const multiplier{
+				::fast_io::details::print_rsv_fp_pow10_0_to_19_table[padding]};
+			using mantissa_type = ::fast_io::details::
+				compiler_constant_floating_precision_mantissa_type<floating_type>;
+			auto const next{static_cast<mantissa_type>(mantissa * multiplier)};
+			return next / multiplier == mantissa;
+		}
+	}()};
+	using precision_mantissa_type = ::fast_io::details::
+		compiler_constant_floating_precision_mantissa_type<floating_type>;
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<precision_mantissa_type, native_mantissa_type> &&
+		sizeof(precision_mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		if (direct)
+		{
+			return ::fast_io::details::floating_precise_carrier_precision_size<
+				floating_type, flags.floating, flags.precision, flags.rounding,
+				flags.json_float>(
+					mantissa, exponent, precision, negative);
+		}
+	}
+	auto const rounded{
+		::fast_io::details::compiler_constant_floating_round_decimal_carrier<
+			flags, floating_type>(mantissa, exponent, precision, negative,
+				rounding_discarded)};
+	return ::fast_io::details::floating_precise_rounded_precision_size<
+		floating_type, flags.floating, flags.precision, flags.json_float>(
+			rounded.decimal, precision, rounded.significant);
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type>
+inline constexpr char_type *
+compiler_constant_floating_decimal_precision_carrier_define(
+	char_type *iter,
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
+	bool rounding_discarded) noexcept
+{
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	constexpr bool significant{
+		::fast_io::details::floating_precision_is_significant<flags.precision>};
+	auto const direct{[&]() constexpr noexcept {
+		if constexpr (!preserve || !significant ||
+			flags.floating ==
+				::fast_io::manipulators::floating_format::scientific)
+		{
+			return true;
+		}
+		else
+		{
+			auto const requested{precision ? precision : 1u};
+			auto const length{static_cast<::std::size_t>(
+				::fast_io::details::chars_len<10u, true>(mantissa))};
+			if (requested <= length)
+			{
+				return true;
+			}
+			auto const padding{requested - length};
+			if (static_cast<::std::size_t>(
+					::fast_io::details::iec559_traits<floating_type>::m10digits) <
+					requested ||
+				20u <= padding)
+			{
+				return false;
+			}
+			auto const multiplier{
+				::fast_io::details::print_rsv_fp_pow10_0_to_19_table[padding]};
+			using mantissa_type = ::fast_io::details::
+				compiler_constant_floating_precision_mantissa_type<floating_type>;
+			auto const next{static_cast<mantissa_type>(mantissa * multiplier)};
+			return next / multiplier == mantissa;
+		}
+	}()};
+	using precision_mantissa_type = ::fast_io::details::
+		compiler_constant_floating_precision_mantissa_type<floating_type>;
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<precision_mantissa_type, native_mantissa_type> &&
+		sizeof(precision_mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		if (direct)
+		{
+			return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+				floating_type, flags.comma, flags.uppercase_e, flags.floating,
+				flags.precision, flags.rounding, flags.json_float>(
+					iter, mantissa, exponent, precision, negative);
+		}
+	}
+	auto const rounded{
+		::fast_io::details::compiler_constant_floating_round_decimal_carrier<
+			flags, floating_type>(mantissa, exponent, precision, negative,
+				rounding_discarded)};
+	return ::fast_io::details::print_rsvflt_rounded_precision_define_impl<
+		floating_type, flags.comma, flags.uppercase_e, flags.floating,
+		flags.precision, flags.json_float>(
+			iter, rounded.decimal, precision, rounded.significant);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+compiler_constant_floating_scalar_materialized_output_size(
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_floating_hex_size<
+			flags, floating_type>(value.binary_mantissa, value.binary_exponent,
+			value.negative);
+	}
+	else if (value.binary_exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_special_size<
+			flags, trait::mbits>(value.binary_mantissa, value.negative);
+	}
+	else if (value.binary_mantissa == 0u && value.binary_exponent == 0u)
+	{
+		auto size{
+			::fast_io::details::compiler_constant_floating_sign_size<flags>(
+				value.negative) + 1u};
+		if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			size += 3u;
+		}
+		else if constexpr (flags.json_float)
+		{
+			size += 2u;
+		}
+		return size;
+	}
+	else
+	{
+		auto size{
+			::fast_io::details::compiler_constant_floating_sign_size<flags>(
+				value.negative)};
+		if (::fast_io::details::compiler_constant_floating_uses_fixed<flags>(
+				value.decimal_mantissa, value.decimal_exponent))
+		{
+			size += ::fast_io::details::compiler_constant_floating_fixed_size<flags>(
+				value.decimal_mantissa, value.decimal_exponent);
+		}
+		else
+		{
+			size += ::fast_io::details::compiler_constant_floating_scientific_size<
+				flags, floating_type>(value.decimal_mantissa,
+				value.decimal_exponent);
+		}
+		return size;
+	}
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+#if __has_cpp_attribute(__gnu__::__const__)
+[[__gnu__::__const__]]
+#endif
+[[nodiscard]] inline constexpr ::std::size_t
+compiler_constant_floating_scalar_output_size(floating_type value) noexcept
+{
+	auto const materialized{
+		::fast_io::details::compiler_constant_floating_scalar_materialize<
+			char, flags>(value)};
+	return ::fast_io::details::
+		compiler_constant_floating_scalar_materialized_output_size<flags>(
+			materialized);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, ::std::integral proxy_char_type,
+	typename floating_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+compiler_constant_floating_scalar_define(
+	char_type *iter,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_floating_write_hex<
+			flags, char_type, floating_type>(iter, value.binary_mantissa,
+			value.binary_exponent, value.negative);
+	}
+	else if (value.binary_exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_write_special<
+			flags, trait::mbits>(iter, value.binary_mantissa, value.negative);
+	}
+	iter = ::fast_io::details::compiler_constant_floating_write_sign<flags>(
+		iter, value.negative);
+	if (value.binary_mantissa == 0u && value.binary_exponent == 0u)
+	{
+		*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			*iter++ = flags.uppercase
+				? ::fast_io::char_literal_v<u8'E', char_type>
+				: ::fast_io::char_literal_v<u8'e', char_type>;
+			*iter++ = ::fast_io::char_literal_v<u8'+', char_type>;
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		else if constexpr (flags.json_float)
+		{
+			*iter++ = ::fast_io::char_literal_v<
+				(flags.comma ? u8',' : u8'.'), char_type>;
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		return iter;
+	}
+	if (::fast_io::details::compiler_constant_floating_uses_fixed<flags>(
+			value.decimal_mantissa, value.decimal_exponent))
+	{
+		return ::fast_io::details::compiler_constant_floating_write_fixed<flags>(
+			iter, value.decimal_mantissa, value.decimal_exponent);
+	}
+	return ::fast_io::details::compiler_constant_floating_write_scientific<
+		flags, floating_type>(iter, value.decimal_mantissa,
+		value.decimal_exponent);
+}
+
+/*
+Immutable character storage for the unbuffered compiler-constant path.  Every
+entry is constructed through char_literal_v/char_literal_add, rather than by
+assuming the execution character set is ASCII.  Consequently char and wchar_t
+remain correct on EBCDIC targets, while char8_t/char16_t/char32_t each retain
+their own correctly typed storage.  Descriptors may point into these inline
+objects for the duration of the program; no descriptor ever points into a
+floating proxy or a local formatting buffer.
+*/
+template <::std::integral char_type>
+struct compiler_constant_floating_fragment_storage
+{
+	inline static constexpr auto decimal_digits{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 10u> result{};
+		for (::std::size_t index{}; index != result.size(); ++index)
+		{
+			result[index] = ::fast_io::char_literal_add<char_type>(index);
+		}
+		return result;
+	}()};
+
+	inline static constexpr auto decimal_digit_pairs{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 200u> result{};
+		for (::std::size_t value{}; value != 100u; ++value)
+		{
+			result[value * 2u] =
+				::fast_io::char_literal_add<char_type>(value / 10u);
+			result[value * 2u + 1u] =
+				::fast_io::char_literal_add<char_type>(value % 10u);
+		}
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto hexadecimal_digits{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 16u> result{};
+		for (::std::size_t index{}; index != result.size(); ++index)
+		{
+			result[index] = ::fast_io::details::compiler_constant_floating_hex_digit<
+				uppercase, char_type>(static_cast<::std::uint_least32_t>(index));
+		}
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto hexadecimal_digit_pairs{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 512u> result{};
+		for (::std::size_t value{}; value != 256u; ++value)
+		{
+			result[value * 2u] =
+				::fast_io::details::compiler_constant_floating_hex_digit<
+					uppercase, char_type>(
+						static_cast<::std::uint_least32_t>(value >> 4u));
+			result[value * 2u + 1u] =
+				::fast_io::details::compiler_constant_floating_hex_digit<
+					uppercase, char_type>(
+						static_cast<::std::uint_least32_t>(value & 0x0fu));
+		}
+		return result;
+	}()};
+
+	inline static constexpr auto zeroes{[]() constexpr {
+		::fast_io::freestanding::array<
+			char_type, compiler_constant_floating_scalar_capacity> result{};
+		for (auto &element : result)
+		{
+			element = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		return result;
+	}()};
+
+	inline static constexpr ::fast_io::freestanding::array<char_type, 2u>
+		signs{::fast_io::char_literal_v<u8'+', char_type>,
+			  ::fast_io::char_literal_v<u8'-', char_type>};
+	inline static constexpr ::fast_io::freestanding::array<char_type, 2u>
+		decimal_points{::fast_io::char_literal_v<u8'.', char_type>,
+					   ::fast_io::char_literal_v<u8',', char_type>};
+	inline static constexpr ::fast_io::freestanding::array<char_type, 2u>
+		lower_hex_prefix{::fast_io::char_literal_v<u8'0', char_type>,
+						 ::fast_io::char_literal_v<u8'x', char_type>};
+	inline static constexpr ::fast_io::freestanding::array<char_type, 2u>
+		upper_hex_prefix{::fast_io::char_literal_v<u8'0', char_type>,
+						 ::fast_io::char_literal_v<u8'X', char_type>};
+
+	template <bool hexadecimal, bool uppercase, bool negative>
+	inline static constexpr auto exponent_prefix{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 2u> result{};
+		if constexpr (hexadecimal)
+		{
+			result[0u] = ::fast_io::char_literal_v<
+				uppercase ? u8'P' : u8'p', char_type>;
+		}
+		else
+		{
+			result[0u] = ::fast_io::char_literal_v<
+				uppercase ? u8'E' : u8'e', char_type>;
+		}
+		result[1u] = ::fast_io::char_literal_v<
+			negative ? u8'-' : u8'+', char_type>;
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto infinity{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 3u> result{};
+		result[0u] = ::fast_io::char_literal_v<uppercase ? u8'I' : u8'i', char_type>;
+		result[1u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		result[2u] = ::fast_io::char_literal_v<uppercase ? u8'F' : u8'f', char_type>;
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto nan{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 3u> result{};
+		result[0u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		result[1u] = ::fast_io::char_literal_v<uppercase ? u8'A' : u8'a', char_type>;
+		result[2u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto indeterminate_suffix{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 5u> result{};
+		result[0u] = ::fast_io::char_literal_v<u8'(', char_type>;
+		result[1u] = ::fast_io::char_literal_v<uppercase ? u8'I' : u8'i', char_type>;
+		result[2u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		result[3u] = ::fast_io::char_literal_v<uppercase ? u8'D' : u8'd', char_type>;
+		result[4u] = ::fast_io::char_literal_v<u8')', char_type>;
+		return result;
+	}()};
+
+	template <bool uppercase>
+	inline static constexpr auto signaling_suffix{[]() constexpr {
+		::fast_io::freestanding::array<char_type, 6u> result{};
+		result[0u] = ::fast_io::char_literal_v<u8'(', char_type>;
+		result[1u] = ::fast_io::char_literal_v<uppercase ? u8'S' : u8's', char_type>;
+		result[2u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		result[3u] = ::fast_io::char_literal_v<uppercase ? u8'A' : u8'a', char_type>;
+		result[4u] = ::fast_io::char_literal_v<uppercase ? u8'N' : u8'n', char_type>;
+		result[5u] = ::fast_io::char_literal_v<u8')', char_type>;
+		return result;
+	}()};
+};
+
+template <::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_append(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	char_type const *base, ::std::size_t size) noexcept
+{
+	if (size != 0u)
+	{
+		*current++ = {base, size};
+	}
+	return current;
+}
+
+template <::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_decimal_exact(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type value, ::std::size_t digits) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	if ((digits & 1u) != 0u)
+	{
+		auto const divisor{
+			::fast_io::details::compiler_constant_floating_power_of_ten<
+				unsigned_type>(digits - 1u)};
+		auto const digit{static_cast<::std::size_t>(value / divisor)};
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, storage::decimal_digits.data() + digit, 1u);
+		value = static_cast<unsigned_type>(value % divisor);
+		--digits;
+	}
+	if (digits != 0u)
+	{
+		auto divisor{
+			::fast_io::details::compiler_constant_floating_power_of_ten<
+				unsigned_type>(digits - 2u)};
+		for (;;)
+		{
+			auto const pair{static_cast<::std::size_t>(value / divisor)};
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, storage::decimal_digit_pairs.data() + pair * 2u, 2u);
+			value = static_cast<unsigned_type>(value % divisor);
+			if (digits == 2u)
+			{
+				break;
+			}
+			digits -= 2u;
+			divisor = static_cast<unsigned_type>(divisor / 100u);
+		}
+	}
+	return current;
+}
+
+template <::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_zeroes(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::std::size_t count) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	return ::fast_io::details::compiler_constant_floating_fragment_append(
+		current, storage::zeroes.data(), count);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_sign(
+	::fast_io::basic_io_scatter_t<char_type> *current, bool negative) noexcept
+{
+	if (negative || flags.showpos)
+	{
+		using storage = ::fast_io::details::
+			compiler_constant_floating_fragment_storage<char_type>;
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, storage::signs.data() + static_cast<::std::size_t>(negative),
+			1u);
+	}
+	return current;
+}
+
+template <bool hexadecimal, bool uppercase, ::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_exponent(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::std::int_least32_t exponent, ::std::size_t minimum_digits) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	bool const negative{exponent < 0};
+	if (negative)
+	{
+		auto const &prefix{storage::template exponent_prefix<
+			hexadecimal, uppercase, true>};
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, prefix.data(), prefix.size());
+	}
+	else
+	{
+		auto const &prefix{storage::template exponent_prefix<
+			hexadecimal, uppercase, false>};
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, prefix.data(), prefix.size());
+	}
+	auto const magnitude{static_cast<::std::uint_least32_t>(
+		negative ? -static_cast<::std::int_least64_t>(exponent) : exponent)};
+	auto digits{
+		::fast_io::details::compiler_constant_floating_unsigned_digits(magnitude)};
+	if (digits < minimum_digits)
+	{
+		digits = minimum_digits;
+	}
+	return ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+		current, magnitude, digits);
+}
+
+template <::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_decimal_slice(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type value, ::std::size_t total_digits, ::std::size_t first,
+	::std::size_t last) noexcept
+{
+	if (first == last)
+	{
+		return current;
+	}
+	auto const trailing{total_digits - last};
+	if (trailing)
+	{
+		value = static_cast<unsigned_type>(
+			value / ::fast_io::details::compiler_constant_floating_power_of_ten<
+				unsigned_type>(trailing));
+	}
+	auto const digits{last - first};
+	if (first)
+	{
+		value = static_cast<unsigned_type>(
+			value % ::fast_io::details::compiler_constant_floating_power_of_ten<
+				unsigned_type>(digits));
+	}
+	return ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+		current, value, digits);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_rounded_fixed(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type mantissa, ::std::int_least32_t exponent,
+	::std::size_t virtual_size, bool force_fractional,
+	::std::size_t fractional_precision) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	auto const size{
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+	auto const point{exponent + static_cast<::std::int_least32_t>(size)};
+	auto append_point = [&](auto *iter) constexpr noexcept {
+		return ::fast_io::details::compiler_constant_floating_fragment_append(
+			iter,
+			storage::decimal_points.data() +
+				static_cast<::std::size_t>(flags.comma),
+			1u);
+	};
+	if (force_fractional && fractional_precision && 0 < point)
+	{
+		auto const integer_digits{static_cast<::std::size_t>(point)};
+		if (integer_digits <= size && virtual_size == size)
+		{
+			current = ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_slice(
+					current, mantissa, size, 0u, integer_digits);
+			current = append_point(current);
+			current = ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_slice(
+					current, mantissa, size, integer_digits, size);
+			auto const present{size - integer_digits};
+			return ::fast_io::details::
+				compiler_constant_floating_fragment_zeroes(
+					current, present < fractional_precision
+						? fractional_precision - present
+						: 0u);
+		}
+	}
+	bool wrote_point{};
+	if (point <= 0)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, 1u);
+		if (mantissa != 0u || force_fractional)
+		{
+			current = append_point(current);
+			wrote_point = true;
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, static_cast<::std::size_t>(-point));
+			current = ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_exact(
+					current, mantissa, size);
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, virtual_size - size);
+		}
+	}
+	else
+	{
+		auto const integer_digits{static_cast<::std::size_t>(point)};
+		if (integer_digits < virtual_size)
+		{
+			auto const from_mantissa{
+				integer_digits < size ? integer_digits : size};
+			current = ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_slice(
+					current, mantissa, size, 0u, from_mantissa);
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, from_mantissa < integer_digits
+					? integer_digits - from_mantissa
+					: 0u);
+			current = append_point(current);
+			wrote_point = true;
+			if (integer_digits < size)
+			{
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_decimal_slice(
+						current, mantissa, size, integer_digits, size);
+			}
+			if (size < virtual_size)
+			{
+				auto const already{
+					size < integer_digits ? integer_digits : size};
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_zeroes(
+						current, virtual_size - already);
+			}
+		}
+		else
+		{
+			current = ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_exact(
+					current, mantissa, size);
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, integer_digits - size);
+		}
+	}
+	if (force_fractional)
+	{
+		auto const present{point <= 0
+			? static_cast<::std::size_t>(-point) + virtual_size
+			: point < static_cast<::std::int_least32_t>(virtual_size)
+				? virtual_size - static_cast<::std::size_t>(point)
+				: 0u};
+		if (!wrote_point && fractional_precision)
+		{
+			current = append_point(current);
+			wrote_point = true;
+		}
+		if (present < fractional_precision)
+		{
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, fractional_precision - present);
+		}
+	}
+	if constexpr (flags.json_float)
+	{
+		if (!wrote_point)
+		{
+			current = append_point(current);
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, 1u);
+		}
+	}
+	return current;
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_rounded_scientific(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type mantissa, ::std::int_least32_t exponent,
+	::std::size_t fractional_precision, bool preserve) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	auto const size{
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+	auto const real_exponent{
+		exponent + static_cast<::std::int_least32_t>(size) - 1};
+	current = ::fast_io::details::
+		compiler_constant_floating_fragment_decimal_slice(
+			current, mantissa, size, 0u, 1u);
+	auto const available{size - 1u};
+	auto const used{
+		available < fractional_precision ? available : fractional_precision};
+	if (used || (preserve && fractional_precision))
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			storage::decimal_points.data() +
+				static_cast<::std::size_t>(flags.comma),
+			1u);
+		current = ::fast_io::details::
+			compiler_constant_floating_fragment_decimal_slice(
+				current, mantissa, size, 1u, used + 1u);
+		if (preserve && used < fractional_precision)
+		{
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, fractional_precision - used);
+		}
+	}
+	return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+		false, flags.uppercase_e>(current, real_exponent, 2u);
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_decimal_precision_carrier(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
+		floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
+	bool rounding_discarded) noexcept
+{
+	constexpr bool fractional{
+		::fast_io::details::floating_precision_is_fractional<flags.precision>};
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	::std::size_t significant{};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		significant = fractional
+			? ::fast_io::details::exact_precision_saturating_add(precision, 1u)
+			: (precision ? precision : 1u);
+		::fast_io::details::compiler_constant_floating_round_to_significant<
+			floating_type, flags.rounding>(
+				mantissa, exponent, significant, negative);
+	}
+	else if constexpr (fractional)
+	{
+		::fast_io::details::compiler_constant_floating_round_to_fractional<
+			floating_type, flags.rounding>(
+				mantissa, exponent, precision, negative);
+	}
+	else
+	{
+		significant = precision ? precision : 1u;
+		::fast_io::details::compiler_constant_floating_round_to_significant<
+			floating_type, flags.rounding>(
+				mantissa, exponent, significant, negative);
+	}
+	if constexpr (!preserve)
+	{
+		::fast_io::details::print_rsv_fp_trim_trailing_zero(mantissa, exponent);
+	}
+	auto const size{
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+	if constexpr (fractional && preserve &&
+		flags.floating == ::fast_io::manipulators::floating_format::general)
+	{
+		if (rounding_discarded)
+		{
+			::std::size_t padding{};
+			if (0 <= exponent)
+			{
+				padding = ::fast_io::details::exact_precision_saturating_add(
+					precision, static_cast<::std::size_t>(exponent));
+			}
+			else
+			{
+				auto const magnitude{static_cast<::std::size_t>(
+					-static_cast<::std::int_least64_t>(exponent))};
+				if (magnitude < precision)
+				{
+					padding = precision - magnitude;
+				}
+			}
+			significant = ::fast_io::details::exact_precision_saturating_add(
+				size, padding);
+		}
+		else
+		{
+			significant = size;
+		}
+	}
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		auto const fractional_digits{
+			fractional ? precision : significant - 1u};
+		return ::fast_io::details::
+			compiler_constant_floating_fragment_rounded_scientific<
+				flags, floating_type>(current, mantissa, exponent,
+					fractional_digits, preserve);
+	}
+	auto virtual_size{size};
+	if constexpr (preserve &&
+		(!fractional || flags.floating ==
+			::fast_io::manipulators::floating_format::general))
+	{
+		if (virtual_size < significant)
+		{
+			virtual_size = significant;
+		}
+	}
+	if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::fixed ||
+		(fractional && flags.floating ==
+			::fast_io::manipulators::floating_format::decimal))
+	{
+		return ::fast_io::details::
+			compiler_constant_floating_fragment_rounded_fixed<flags>(
+				current, mantissa, exponent, virtual_size,
+				fractional && preserve, precision);
+	}
+	auto const virtual_padding{virtual_size - size};
+	bool fixed{};
+	constexpr auto int32_max{
+		(::std::numeric_limits<::std::int_least32_t>::max)()};
+	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	{
+		auto const virtual_exponent{
+			static_cast<::std::int_least64_t>(exponent) -
+			static_cast<::std::int_least64_t>(virtual_padding)};
+		fixed = -5 < virtual_exponent && virtual_exponent < 7;
+	}
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::decimal)
+	{
+		auto const rounded_exponent{
+			exponent + static_cast<::std::int_least32_t>(size) - 1};
+		::std::size_t fixed_length{};
+		if (0 <= rounded_exponent)
+		{
+			auto const integer_digits{
+				static_cast<::std::size_t>(rounded_exponent) + 1u};
+			if (virtual_size <= static_cast<::std::size_t>(rounded_exponent))
+			{
+				fixed_length = integer_digits;
+			}
+			else
+			{
+				fixed_length = ::fast_io::details::exact_precision_saturating_add(
+					virtual_size, virtual_size == integer_digits ? 1u : 2u);
+			}
+		}
+		else
+		{
+			fixed_length = ::fast_io::details::exact_precision_saturating_add(
+				virtual_size,
+				static_cast<::std::size_t>(-rounded_exponent) + 1u);
+		}
+		auto const scientific_length{
+			::fast_io::details::exact_precision_saturating_add(
+				virtual_size, virtual_size == 1u ? 3u : 5u)};
+		fixed = scientific_length >= fixed_length;
+	}
+	if (fixed)
+	{
+		return ::fast_io::details::
+			compiler_constant_floating_fragment_rounded_fixed<flags>(
+				current, mantissa, exponent, virtual_size,
+				fractional && preserve, precision);
+	}
+	return ::fast_io::details::
+		compiler_constant_floating_fragment_rounded_scientific<
+			flags, floating_type>(current, mantissa, exponent,
+				virtual_size - 1u, preserve);
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_decimal_precision_zero(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::std::size_t precision) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+		current, 1u);
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		auto fractional_digits{precision};
+		if constexpr (::fast_io::details::
+			floating_precision_is_significant<flags.precision>)
+		{
+			fractional_digits = precision ? precision - 1u : 0u;
+		}
+		if constexpr (::fast_io::details::
+			floating_precision_preserves_trailing_zero<flags.precision>)
+		{
+			if (fractional_digits)
+			{
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_append(
+						current,
+						storage::decimal_points.data() +
+							static_cast<::std::size_t>(flags.comma),
+						1u);
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_zeroes(
+						current, fractional_digits);
+			}
+		}
+		return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+			false, flags.uppercase_e>(current, 0, 2u);
+	}
+	constexpr bool fractional{
+		::fast_io::details::floating_precision_is_fractional<flags.precision>};
+	constexpr bool preserve{
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>};
+	::std::size_t zeroes{};
+	if constexpr (fractional && preserve)
+	{
+		zeroes = precision;
+	}
+	else if constexpr (!fractional && preserve)
+	{
+		zeroes = precision ? precision - 1u : 0u;
+	}
+	else if constexpr (flags.json_float)
+	{
+		zeroes = 1u;
+	}
+	if (zeroes)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			storage::decimal_points.data() +
+				static_cast<::std::size_t>(flags.comma),
+			1u);
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, zeroes);
+	}
+	return current;
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::size_t mantissa_bits, ::std::integral char_type,
+	typename mantissa_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_special(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	mantissa_type mantissa, bool negative) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	if (mantissa == 0u)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+			current, negative);
+		auto const &text{storage::template infinity<flags.uppercase>};
+		return ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, text.data(), text.size());
+	}
+	if constexpr (flags.nan_show_sign)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+			current, negative);
+	}
+	auto const &text{storage::template nan<flags.uppercase>};
+	current = ::fast_io::details::compiler_constant_floating_fragment_append(
+		current, text.data(), text.size());
+	if constexpr (flags.nan_show_type)
+	{
+		constexpr mantissa_type quiet_bit{
+			::fast_io::details::fp_quiet_nan_mantissa_mask<
+				mantissa_type, mantissa_bits>()};
+		if (negative && mantissa == quiet_bit)
+		{
+			auto const &suffix{
+				storage::template indeterminate_suffix<flags.uppercase>};
+			return ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, suffix.data(), suffix.size());
+		}
+		if (::fast_io::details::fp_nan_is_signaling<
+				mantissa_type, mantissa_bits>(mantissa))
+		{
+			auto const &suffix{
+				storage::template signaling_suffix<flags.uppercase>};
+			return ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, suffix.data(), suffix.size());
+		}
+	}
+	return current;
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_fixed(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	auto const digits{static_cast<::std::int_least32_t>(
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa))};
+	auto const real_exponent{
+		static_cast<::std::int_least32_t>(exponent + digits - 1)};
+	if (digits <= real_exponent)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+			current, mantissa, static_cast<::std::size_t>(digits));
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, static_cast<::std::size_t>(real_exponent + 1 - digits));
+		if constexpr (flags.json_float)
+		{
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current,
+				storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+				1u);
+			current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, 1u);
+		}
+	}
+	else if (0 <= real_exponent)
+	{
+		auto const integral_size{static_cast<::std::size_t>(real_exponent + 1)};
+		auto const fractional_size{
+			static_cast<::std::size_t>(digits) - integral_size};
+		if (fractional_size != 0u)
+		{
+			auto const divisor{
+				::fast_io::details::compiler_constant_floating_power_of_ten<
+					unsigned_type>(fractional_size)};
+			current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+				current, static_cast<unsigned_type>(mantissa / divisor), integral_size);
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current,
+				storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+				1u);
+			current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+				current, static_cast<unsigned_type>(mantissa % divisor), fractional_size);
+		}
+		else
+		{
+			current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+				current, mantissa, integral_size);
+			if constexpr (flags.json_float)
+			{
+				current = ::fast_io::details::compiler_constant_floating_fragment_append(
+					current,
+					storage::decimal_points.data() +
+						static_cast<::std::size_t>(flags.comma),
+					1u);
+				current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+					current, 1u);
+			}
+		}
+	}
+	else
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, 1u);
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+			1u);
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, static_cast<::std::size_t>(-real_exponent - 1));
+		current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+			current, mantissa, static_cast<::std::size_t>(digits));
+	}
+	return current;
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename unsigned_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_scientific(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
+{
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	auto const digits{
+		::fast_io::details::compiler_constant_floating_decimal_digits(mantissa)};
+	auto const divisor{
+		::fast_io::details::compiler_constant_floating_power_of_ten<unsigned_type>(
+			digits - 1u)};
+	current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+		current, static_cast<unsigned_type>(mantissa / divisor), 1u);
+	if (1u < digits)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+			1u);
+		current = ::fast_io::details::compiler_constant_floating_fragment_decimal_exact(
+			current, static_cast<unsigned_type>(mantissa % divisor), digits - 1u);
+	}
+	auto const real_exponent{static_cast<::std::int_least32_t>(
+		exponent + static_cast<::std::int_least32_t>(digits) - 1)};
+	return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+		false, flags.uppercase_e>(current, real_exponent, 2u);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, typename floating_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_fragment_hex(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	constexpr ::std::uint_least32_t exponent_mask{
+		(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+	if (exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_fragment_special<
+			flags, trait::mbits>(current, mantissa, negative);
+	}
+	current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+		current, negative);
+	if constexpr (flags.showbase)
+	{
+		auto const &prefix{flags.uppercase_showbase ? storage::upper_hex_prefix
+											 : storage::lower_hex_prefix};
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current, prefix.data(), prefix.size());
+	}
+	auto const &hex_digits{storage::template hexadecimal_digits<flags.uppercase>};
+	current = ::fast_io::details::compiler_constant_floating_fragment_append(
+		current, hex_digits.data() + static_cast<::std::size_t>(exponent != 0u), 1u);
+	constexpr ::std::size_t nibble_count{(trait::mbits + 3u) / 4u};
+	constexpr ::std::size_t padding_bits{nibble_count * 4u - trait::mbits};
+	auto aligned{static_cast<mantissa_type>(mantissa << padding_bits)};
+	::std::size_t fractional_digits{nibble_count};
+	while (fractional_digits != 0u && (aligned & 0x0fu) == 0u)
+	{
+		aligned = static_cast<mantissa_type>(aligned >> 4u);
+		--fractional_digits;
+	}
+	if (fractional_digits != 0u)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+			1u);
+		if ((fractional_digits & 1u) != 0u)
+		{
+			auto const shift{(fractional_digits - 1u) * 4u};
+			auto const digit{static_cast<::std::size_t>(
+				(aligned >> shift) & static_cast<mantissa_type>(0x0fu))};
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, hex_digits.data() + digit, 1u);
+			--fractional_digits;
+		}
+		auto const &pairs{
+			storage::template hexadecimal_digit_pairs<flags.uppercase>};
+		while (fractional_digits != 0u)
+		{
+			auto const shift{(fractional_digits - 2u) * 4u};
+			auto const pair{static_cast<::std::size_t>(
+				(aligned >> shift) & static_cast<mantissa_type>(0xffu))};
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, pairs.data() + pair * 2u, 2u);
+			fractional_digits -= 2u;
+		}
+	}
+	constexpr auto bias{static_cast<::std::int_least32_t>(
+		(static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u)};
+	auto const binary_exponent{exponent == 0u && mantissa == 0u ? 0
+		: exponent == 0u ? 1 - bias
+		: static_cast<::std::int_least32_t>(exponent) - bias};
+	if (mantissa == 0u && exponent == 0u)
+	{
+		return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+			true, flags.uppercase>(current, binary_exponent, 1u);
+	}
+	return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+		true, flags.uppercase_e>(current, binary_exponent, 1u);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, ::std::integral proxy_char_type,
+	typename floating_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_scalar_static_fragments_define(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_floating_fragment_hex<
+			flags, char_type, floating_type>(current, value.binary_mantissa,
+			value.binary_exponent, value.negative);
+	}
+	else if (value.binary_exponent == exponent_mask)
+	{
+		return ::fast_io::details::compiler_constant_floating_fragment_special<
+			flags, trait::mbits>(current, value.binary_mantissa, value.negative);
+	}
+	current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+		current, value.negative);
+	if (value.binary_mantissa == 0u && value.binary_exponent == 0u)
+	{
+		current = ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+			current, 1u);
+		if constexpr (flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+				false, flags.uppercase>(current, 0, 1u);
+		}
+		else if constexpr (flags.json_float)
+		{
+			using storage = ::fast_io::details::
+				compiler_constant_floating_fragment_storage<char_type>;
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current,
+				storage::decimal_points.data() + static_cast<::std::size_t>(flags.comma),
+				1u);
+			return ::fast_io::details::compiler_constant_floating_fragment_zeroes(
+				current, 1u);
+		}
+		return current;
+	}
+	if (::fast_io::details::compiler_constant_floating_uses_fixed<flags>(
+			value.decimal_mantissa, value.decimal_exponent))
+	{
+		return ::fast_io::details::compiler_constant_floating_fragment_fixed<flags>(
+			current, value.decimal_mantissa, value.decimal_exponent);
+	}
+	return ::fast_io::details::compiler_constant_floating_fragment_scientific<flags>(
+		current, value.decimal_mantissa, value.decimal_exponent);
+}
+
+template <::fast_io::manipulators::scalar_flags flags,
+	::std::integral char_type, ::std::integral proxy_char_type,
+	typename floating_type>
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+compiler_constant_floating_precision_static_fragments_define(
+	::fast_io::basic_io_scatter_t<char_type> *current,
+	::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	auto const [mantissa, exponent, negative]{value.fields};
+	constexpr ::std::uint_least32_t exponent_mask{
+		(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+	if constexpr (flags.floating !=
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		if (exponent == exponent_mask)
+		{
+			return ::fast_io::details::compiler_constant_floating_fragment_special<
+				flags, trait::mbits>(current, mantissa, negative);
+		}
+		current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+			current, negative);
+		if (mantissa == 0u && exponent == 0u)
+		{
+			return ::fast_io::details::
+				compiler_constant_floating_fragment_decimal_precision_zero<
+					flags, floating_type>(current, value.precision);
+		}
+		if (!value.decimal_carrier_available)
+		{
+			// This proxy is created only after the source eligibility proof has
+			// selected either a finite carrier or a special/zero spelling.  Keep
+			// the invariant defensive for manually forged internal proxies.
+			return current;
+		}
+		return ::fast_io::details::
+			compiler_constant_floating_fragment_decimal_precision_carrier<
+				flags, floating_type>(
+					current, value.decimal_mantissa, value.decimal_exponent,
+					value.precision, negative,
+					value.decimal_rounding_discarded);
+	}
+	else
+	{
+		if (exponent == exponent_mask)
+		{
+			return ::fast_io::details::compiler_constant_floating_fragment_special<
+				flags, trait::mbits>(current, mantissa, negative);
+		}
+		current = ::fast_io::details::compiler_constant_floating_fragment_sign<flags>(
+			current, negative);
+		if constexpr (flags.showbase)
+		{
+			auto const &prefix{flags.uppercase_showbase
+				? storage::upper_hex_prefix
+				: storage::lower_hex_prefix};
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current, prefix.data(), prefix.size());
+		}
+		auto const plan{
+			::fast_io::details::compiler_constant_hex_make_precision_plan<flags>(
+				value.fields, value.precision)};
+		auto const &digits{
+			storage::template hexadecimal_digits<flags.uppercase>};
+		current = ::fast_io::details::compiler_constant_floating_fragment_append(
+			current,
+			digits.data() + ::fast_io::details::
+				compiler_constant_hex_precision_plan_digit(plan, 0u),
+			1u);
+		if (1u < plan.digits_to_print)
+		{
+			current = ::fast_io::details::compiler_constant_floating_fragment_append(
+				current,
+				storage::decimal_points.data() +
+					static_cast<::std::size_t>(flags.comma),
+				1u);
+			auto const digit_limit{plan.digits_to_print < plan.retained_digits
+				? plan.digits_to_print
+				: plan.retained_digits};
+			::std::size_t index{1u};
+			if (((digit_limit - index) & 1u) != 0u)
+			{
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_append(
+						current,
+						digits.data() + ::fast_io::details::
+							compiler_constant_hex_precision_plan_digit(
+								plan, index),
+						1u);
+				++index;
+			}
+			auto const &pairs{
+				storage::template hexadecimal_digit_pairs<flags.uppercase>};
+			for (; index != digit_limit; index += 2u)
+			{
+				auto const pair{static_cast<::std::size_t>(
+					(::fast_io::details::
+						 compiler_constant_hex_precision_plan_digit(plan, index)
+					 << 4u) |
+					::fast_io::details::
+						compiler_constant_hex_precision_plan_digit(
+							plan, index + 1u))};
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_append(
+						current, pairs.data() + pair * 2u, 2u);
+			}
+			if (digit_limit < plan.digits_to_print)
+			{
+				current = ::fast_io::details::
+					compiler_constant_floating_fragment_zeroes(
+						current, plan.digits_to_print - digit_limit);
+			}
+		}
+		return ::fast_io::details::compiler_constant_floating_fragment_exponent<
+			true, flags.uppercase_e>(
+				current, plan.binary_exponent, 1u);
+	}
+}
+} // namespace details
+
+/// @brief Exposes a raw default-format floating source to print's pre-alias compiler-constant gate.
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type, floating_type>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type, floating_type>,
+	floating_type const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type, floating_type>,
+	floating_type const &value) noexcept
+{
+	using alias_type = ::fast_io::details::float_alias_type<floating_type>;
+	return ::fast_io::details::compiler_constant_floating_scalar_materialize<
+		char_type, ::fast_io::manipulators::floating_point_default_scalar_flags>(
+		static_cast<alias_type>(value));
+}
+
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type, floating_type>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>,
+	::fast_io::manipulators::scalar_manip_t<flags, floating_type> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(value.reference);
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>,
+	::fast_io::manipulators::scalar_manip_t<flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::
+		compiler_constant_floating_scalar_materialize<char_type, flags>(
+			value.reference);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type>)
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, floating_type>>) noexcept
+{
+	return ::fast_io::details::compiler_constant_floating_scalar_capacity;
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type>)
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, floating_type>>,
+	char_type *iter,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		char_type, flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_floating_scalar_define<flags>(
+		iter, value);
+}
+
+/// @brief Reports the exact spelling length carried by a proven constant float.
+/// @details The scalar proxy stores only binary/decimal fields; even a binary128
+///          fixed spelling can therefore expose its exact (possibly large)
+///          destination extent without allocating or materializing a character
+///          array.  Concat uses this protocol to resize its final destination
+///          once instead of treating the 5,006-code-unit fixed upper bound as a
+///          per-call temporary-buffer requirement.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, floating_type>>,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		char_type, flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::
+		compiler_constant_floating_scalar_materialized_output_size<flags>(value);
+}
+
+/// @brief Writes a proven constant float into its exact destination slice.
+/// @details `precise_size` is the result of the companion size CPO.  The writer
+///          deliberately reuses the same field emitter as reserve output; no
+///          native floating arithmetic or second conversion is introduced.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			char_type, flags, floating_type>>,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		char_type, flags, floating_type> const &value) noexcept
+{
+	(void)precise_size;
+	return ::fast_io::details::compiler_constant_floating_scalar_define<flags>(
+		iter, value);
+}
+
+/// @brief Returns the complete scalar spelling when it is one provider-owned immutable slice.
+/// @details This is deliberately narrower than the general static-fragment protocol.  It lets direct print preserve
+///          the zero-copy rodata path for values such as `2.0` before considering exact compact materialization, without
+///          constructing the scalar proxy's conservative 32-descriptor graph merely to discover its actual count.
+///          A zero-length result means that punctuation, sign, exponent, padding, or multiple digit-table slices are
+///          required; floating scalar spellings themselves are never empty.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<
+		floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+	::fast_io::basic_io_scatter_t<char_type>
+print_compiler_constant_single_static_fragment(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, floating_type>>,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	using storage =
+		::fast_io::details::compiler_constant_floating_fragment_storage<char_type>;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (value.binary_exponent == exponent_mask)
+	{
+		if (value.binary_mantissa == 0u)
+		{
+			if (value.negative || flags.showpos)
+			{
+				return {};
+			}
+			auto const &text{storage::template infinity<flags.uppercase>};
+			return {text.data(), text.size()};
+		}
+		if constexpr (flags.nan_show_sign)
+		{
+			if (value.negative || flags.showpos)
+			{
+				return {};
+			}
+		}
+		if constexpr (flags.nan_show_type)
+		{
+			constexpr auto quiet_bit{
+				::fast_io::details::fp_quiet_nan_mantissa_mask<
+					mantissa_type, trait::mbits>()};
+			if ((value.negative && value.binary_mantissa == quiet_bit) ||
+				::fast_io::details::fp_nan_is_signaling<
+					mantissa_type, trait::mbits>(value.binary_mantissa))
+			{
+				return {};
+			}
+		}
+		auto const &text{storage::template nan<flags.uppercase>};
+		return {text.data(), text.size()};
+	}
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return {};
+	}
+	if (value.negative || flags.showpos)
+	{
+		return {};
+	}
+	if (value.binary_mantissa == 0u && value.binary_exponent == 0u)
+	{
+		if constexpr (flags.floating ==
+				::fast_io::manipulators::floating_format::scientific ||
+			flags.json_float)
+		{
+			return {};
+		}
+		return {storage::zeroes.data(), 1u};
+	}
+	if (!::fast_io::details::compiler_constant_floating_uses_fixed<flags>(
+			value.decimal_mantissa, value.decimal_exponent) ||
+		value.decimal_exponent != 0 || flags.json_float)
+	{
+		return {};
+	}
+	auto const digits{
+		::fast_io::details::compiler_constant_floating_decimal_digits(
+			value.decimal_mantissa)};
+	if (digits == 1u)
+	{
+		return {storage::decimal_digits.data() +
+			static_cast<::std::size_t>(value.decimal_mantissa), 1u};
+	}
+	if (digits == 2u)
+	{
+		return {storage::decimal_digit_pairs.data() +
+			static_cast<::std::size_t>(value.decimal_mantissa) * 2u, 2u};
+	}
+	return {};
+}
+
+/// @brief Allows exact compact materialization for a scalar constant after the single-fragment rodata probe.
+/// @details The scalar proxy's 5,006-code-unit ordinary reserve bound covers binary128 fixed output and is not a
+///          profitability estimate.  Its precise protocol instead reports the selected value's actual spelling and
+///          writes exactly that range, enabling buffered print and concat to admit short constants without a large
+///          temporary.  Unknown source values never construct this proxy.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<
+			floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_precise_compact(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Maximum immutable-fragment descriptor count for one constant float.
+/// @details Decimal and hexadecimal coefficient digits are emitted in pairs;
+///          sign, radix point, base prefix, exponent prefix and special text
+///          each consume at most one descriptor.  The conservative bound also
+///          covers a binary128 coefficient; a complete fixed-format zero run
+///          is one descriptor into the bounded immutable zero table.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+		requires(
+			::fast_io::details::compiler_constant_floating_type_supported<
+				floating_type>)
+inline constexpr ::std::size_t print_compiler_constant_static_fragments_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return 32u;
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+		requires(
+			::fast_io::details::compiler_constant_floating_type_supported<
+				floating_type>)
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+print_compiler_constant_static_fragments_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, floating_type>>,
+	::fast_io::basic_io_scatter_t<char_type> *first,
+	::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::
+		compiler_constant_floating_scalar_static_fragments_define<flags>(
+			first, value);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<
+			flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<
+			flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Proves that precision-float eligibility already bounded the exact replacement.
+/// @details The value-dependent eligibility query computes the complete output
+///          size and accepts only when it fits the compiler-constant byte
+///          budget for `char_type`. Width and other semantic wrappers may
+///          therefore reuse a true result without materializing the numeric
+///          carrier merely to repeat its precise-size query.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_eligible_implies_compact_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<
+			flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, floating_type>>,
+	::fast_io::manipulators::scalar_manip_precision_t<
+		flags, floating_type> const &value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	if (!__builtin_constant_p(value.reference) ||
+		!__builtin_constant_p(value.precision) ||
+		::fast_io::details::compiler_constant_floating_precision_limit<flags> <
+			value.precision)
+	{
+		return false;
+	}
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return true;
+	}
+	else
+	{
+		auto const fields{
+			::fast_io::details::compiler_constant_floating_capture_fields(
+				value.reference)};
+		using clean_type = ::std::remove_cv_t<floating_type>;
+		using trait = ::fast_io::details::iec559_traits<clean_type>;
+		constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) -
+			1u)};
+		::std::size_t output_size{};
+		if (fields.exponent != exponent_mask &&
+			(fields.mantissa != 0u || fields.exponent != 0u))
+		{
+			auto const plan{::fast_io::details::
+				compiler_constant_floating_make_decimal_precision_plan<
+					flags, clean_type>(fields, value.precision)};
+			if (plan.success)
+			{
+				output_size = ::fast_io::details::floating_precise_sign_size<
+					flags.showpos>(static_cast<bool>(fields.sign));
+				output_size = ::fast_io::details::floating_precise_add(
+					output_size,
+					::fast_io::details::
+						compiler_constant_floating_decimal_precision_carrier_size<
+							flags, clean_type>(plan.mantissa, plan.exponent,
+								value.precision, static_cast<bool>(fields.sign),
+								plan.rounding_discarded));
+			}
+			else
+			{
+				// A finite decimal precision replacement must own a proved compact
+				// carrier.  This invariant lets the unbuffered branch describe every
+				// payload byte through immutable digit/pair/zero tables; an ambiguous
+				// value remains on the established exact formatter instead of
+				// constructing either a 256-byte reserve frame or a local exact array.
+				return false;
+			}
+		}
+		if (!output_size)
+		{
+			output_size = ::fast_io::details::
+				compiler_constant_floating_decimal_precision_fields_size<flags>(
+					fields, value.precision);
+		}
+		return output_size <= ::fast_io::details::
+			compiler_constant_decimal_precision_capacity<char_type>;
+	}
+#else
+	(void)value;
+	return false;
+#endif
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, floating_type>>,
+	::fast_io::manipulators::scalar_manip_precision_t<
+		flags, floating_type> const &value) noexcept
+{
+	using clean_type = ::std::remove_cv_t<floating_type>;
+	using result_type =
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			char_type, flags, clean_type>;
+	auto const fields{
+		::fast_io::details::compiler_constant_floating_capture_fields(
+			value.reference)};
+	result_type result{.fields = fields, .precision = value.precision};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		result.materialized_size = ::fast_io::details::
+			compiler_constant_hex_precision_fields_size_impl<flags>(
+				fields, value.precision);
+	}
+	else
+	{
+		auto const plan{::fast_io::details::
+			compiler_constant_floating_make_decimal_precision_plan<
+				flags, clean_type>(fields, value.precision)};
+		result.decimal_mantissa = plan.mantissa;
+		result.decimal_exponent = plan.exponent;
+		result.decimal_carrier_available = plan.success;
+		result.decimal_rounding_discarded = plan.rounding_discarded;
+		if (plan.success)
+		{
+			auto size{::fast_io::details::floating_precise_sign_size<
+				flags.showpos>(static_cast<bool>(fields.sign))};
+			result.materialized_size = ::fast_io::details::floating_precise_add(
+				size,
+				::fast_io::details::
+					compiler_constant_floating_decimal_precision_carrier_size<
+						flags, clean_type>(
+							plan.mantissa, plan.exponent, value.precision,
+							static_cast<bool>(fields.sign),
+							plan.rounding_discarded));
+		}
+		else
+		{
+			result.materialized_size = ::fast_io::details::
+				compiler_constant_floating_decimal_precision_fields_size<flags>(
+					fields, value.precision);
+		}
+	}
+	return result;
+}
+
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return ::fast_io::details::compiler_constant_floating_precision_capacity<
+		char_type, flags, floating_type>();
+}
+
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>,
+	char_type *iter,
+	::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_hex_precision_fields_define<
+			flags>(iter, value.fields, value.precision);
+	}
+	else
+	{
+		if (value.decimal_carrier_available)
+		{
+			iter = ::fast_io::details::print_rsv_fp_sign_impl<flags.showpos>(
+				iter, static_cast<bool>(value.fields.sign));
+			return ::fast_io::details::
+				compiler_constant_floating_decimal_precision_carrier_define<
+					flags, floating_type>(
+						iter, value.decimal_mantissa, value.decimal_exponent,
+						value.precision, static_cast<bool>(value.fields.sign),
+						value.decimal_rounding_discarded);
+		}
+		return ::fast_io::details::
+			compiler_constant_floating_decimal_precision_fields_define<flags>(
+				iter, value.fields, value.precision);
+	}
+}
+
+/// @brief Returns the exact destination extent for a constant precision float.
+/// @details The decimal branch delegates to the same independently proved
+///          fields/precision sizing algorithm as ordinary precise reserve.  It
+///          does not format into scratch storage and therefore lets concat
+///          resize exactly once.
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>,
+	::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	if (value.materialized_size != 0u)
+	{
+		return value.materialized_size;
+	}
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::
+			compiler_constant_hex_precision_fields_size_impl<flags>(
+				value.fields, value.precision);
+	}
+	else
+	{
+		if (value.decimal_carrier_available)
+		{
+			auto size{::fast_io::details::floating_precise_sign_size<
+				flags.showpos>(static_cast<bool>(value.fields.sign))};
+			return ::fast_io::details::floating_precise_add(
+				size,
+				::fast_io::details::
+					compiler_constant_floating_decimal_precision_carrier_size<
+						flags, floating_type>(
+							value.decimal_mantissa, value.decimal_exponent,
+							value.precision, static_cast<bool>(value.fields.sign),
+							value.decimal_rounding_discarded));
+		}
+		return ::fast_io::details::
+			compiler_constant_floating_decimal_precision_fields_size<flags>(
+				value.fields, value.precision);
+	}
+}
+
+/// @brief Emits a constant precision float into its exact destination slice.
+/// @details Native floating values never cross this proxy CPO by reference;
+///          the integer fields are reconstructed only inside the selected
+///          algorithm and every lower native floating formatter remains
+///          register-class by value.
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>> tag,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	(void)tag;
+	(void)precise_size;
+	return print_reserve_define(
+		::fast_io::io_reserve_type<char_type,
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				proxy_char_type, flags, floating_type>>,
+		iter, value);
+}
+
+/// @brief Selects exact compact materialization before an expensive immutable-fragment graph is built.
+/// @details A precision-float proxy advertises a conservative 32-descriptor immutable spelling so long preserving
+///          fields can remain zero-copy.  For a short spelling, constructing that worst-case descriptor array first is
+///          counterproductive.  This type-only strategy marker promises that the companion precise-size query is
+///          pure, repeatable and non-throwing, and that its non-throwing pointer-returning precise writer emits exactly
+///          the measured extent.  Direct unbuffered print may therefore measure first and, when its generic compact
+///          threshold admits the value, materialize once into the selected small tier without touching descriptors.
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_precise_compact(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Immutable-fragment capacity for a bounded constant precision float.
+/// @details Hexadecimal nibbles and decimal carrier digits are emitted in
+///          pairs.  Decimal padding is one slice of the typed immutable zero
+///          table, so even a 256-byte preserving spelling needs no proportional
+///          descriptor run or character scratch array.
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+		requires(
+			::fast_io::details::compiler_constant_floating_precision_supported<
+				flags, floating_type>)
+inline constexpr ::std::size_t print_compiler_constant_static_fragments_size(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return 32u;
+}
+
+template <::std::integral char_type, ::std::integral proxy_char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+		requires(
+			::fast_io::details::compiler_constant_floating_precision_supported<
+				flags, floating_type>)
+inline constexpr
+	::fast_io::basic_io_scatter_t<char_type> *
+print_compiler_constant_static_fragments_define(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			proxy_char_type, flags, floating_type>>,
+	::fast_io::basic_io_scatter_t<char_type> *first,
+	::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+		proxy_char_type, flags, floating_type> const &value) noexcept
+{
+	if (::fast_io::details::compiler_constant_floating_precision_limit<flags> <
+		value.precision)
+	{
+		return first;
+	}
+	return ::fast_io::details::
+		compiler_constant_floating_precision_static_fragments_define<flags>(
+			first, value);
+}
+
+} // namespace fast_io

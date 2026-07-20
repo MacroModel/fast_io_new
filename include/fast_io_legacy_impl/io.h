@@ -162,10 +162,9 @@ inline constexpr void print(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_borrowed_output<false>(
-			outref,
-			::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization<false>(
+				outref, args...);
 	}
 	else
 	{
@@ -192,9 +191,8 @@ inline constexpr void print(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				::fast_io::details::print_after_io_print_forward<false>(
-					::fast_io::io_print_forward<char>(::fast_io::io_print_alias(t)),
-					::fast_io::io_print_forward<char>(::fast_io::io_print_alias(args))...);
+				::fast_io::details::print_after_source_pre_normalization<false>(
+					t, args...);
 			}
 			else
 			{
@@ -234,10 +232,9 @@ inline constexpr void println(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_borrowed_output<true>(
-			outref,
-			::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization<true>(
+				outref, args...);
 	}
 	else
 	{
@@ -264,9 +261,8 @@ inline constexpr void println(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				::fast_io::details::print_after_io_print_forward<true>(
-					::fast_io::io_print_forward<char>(::fast_io::io_print_alias(t)),
-					::fast_io::io_print_forward<char>(::fast_io::io_print_alias(args))...);
+				::fast_io::details::print_after_source_pre_normalization<true>(
+					t, args...);
 			}
 			else
 			{
@@ -299,10 +295,9 @@ inline constexpr void perr(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_cold_borrowed_output<false>(
-			outref,
-			::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization_cold<false>(
+				outref, args...);
 	}
 	else
 	{
@@ -328,9 +323,8 @@ inline constexpr void perr(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				::fast_io::details::perr_after_io_print_forward<false>(
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(t)),
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(args))...);
+				::fast_io::details::perr_after_source_pre_normalization<false>(
+					t, args...);
 			}
 			else
 			{
@@ -365,10 +359,9 @@ inline constexpr void perrln(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_cold_borrowed_output<true>(
-			outref,
-			::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization_cold<true>(
+				outref, args...);
 	}
 	else
 	{
@@ -394,9 +387,8 @@ inline constexpr void perrln(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				::fast_io::details::perr_after_io_print_forward<true>(
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(t)),
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(args))...);
+				::fast_io::details::perr_after_source_pre_normalization<true>(
+					t, args...);
 			}
 			else
 			{
@@ -423,24 +415,76 @@ static_assert(device_and_type_ok, "some types are not printable for perrln");
 	}
 }
 
+namespace panic_details
+{
+
+/// @brief Owns panic's exact historical perr/catch/terminate operation in a dedicated cold continuation.
+/// @details This is a semantic fallback boundary, not a promise that an outlined public panic wrapper adds no call
+///          frame. Current compilers may retain both functions when their noreturn/cold inline threshold is zero.
+template <bool line, typename... Args>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+[[noreturn]] inline constexpr void fallback(Args &&...args) noexcept
+{
+#ifdef __cpp_exceptions
+	try
+	{
+#endif
+		if constexpr (line)
+		{
+			::fast_io::io::perrln(::std::forward<Args>(args)...);
+		}
+		else
+		{
+			::fast_io::io::perr(::std::forward<Args>(args)...);
+		}
+#ifdef __cpp_exceptions
+	}
+	catch (...)
+	{
+	}
+#endif
+	::fast_io::fast_terminate();
+}
+
+} // namespace panic_details
+
+/// @brief Prints an optional diagnostic through perr and terminates.
+/// @details The speculative source gate is deliberately ordinary-inline. Current Clang and GCC may outline a noreturn
+///          call at an effective zero inline threshold, in which case caller-literal `__builtin_constant_p` evidence is
+///          unavailable and the exact cold fallback is selected. Do not force this diagnostic front door inline merely
+///          to recover that optional strategy; the structural gate remains here for callers/targets which inline it
+///          naturally and for future source representations carrying compile-time storage in their type. Consequently
+///          this interface promises neither caller-literal folding nor a single generated call frame on current tools.
 template <typename... Args>
 [[noreturn]] inline constexpr void panic(Args &&...args) noexcept
 {
-	if constexpr (sizeof...(Args) != 0)
+	if constexpr (sizeof...(Args) == 0u)
+	{
+		::fast_io::fast_terminate();
+	}
+	else
 	{
 #ifdef __cpp_exceptions
 		try
 		{
 #endif
-			::fast_io::io::perr(::std::forward<Args>(args)...);
+			if (::fast_io::details::
+					panic_try_compiler_constant_pre_normalization<false>(args...))
+			{
+				::fast_io::fast_terminate();
+			}
 #ifdef __cpp_exceptions
 		}
 		catch (...)
 		{
+			::fast_io::fast_terminate();
 		}
 #endif
+		::fast_io::io::panic_details::fallback<false>(
+			::std::forward<Args>(args)...);
 	}
-	::fast_io::fast_terminate();
 }
 
 template <typename... Args>
@@ -451,14 +495,20 @@ template <typename... Args>
 	try
 	{
 #endif
-		::fast_io::io::perrln(::std::forward<Args>(args)...);
+		if (::fast_io::details::
+				panic_try_compiler_constant_pre_normalization<true>(args...))
+		{
+			::fast_io::fast_terminate();
+		}
 #ifdef __cpp_exceptions
 	}
 	catch (...)
 	{
+		::fast_io::fast_terminate();
 	}
 #endif
-	::fast_io::fast_terminate();
+	::fast_io::io::panic_details::fallback<true>(
+		::std::forward<Args>(args)...);
 }
 
 // Allow debug print
@@ -472,10 +522,9 @@ inline constexpr void debug_print(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_borrowed_output<false>(
-			outref,
-			fast_io::io_print_forward<char_type>(fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization<false>(
+				outref, args...);
 	}
 	else
 	{
@@ -501,9 +550,8 @@ inline constexpr void debug_print(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				fast_io::details::debug_print_after_io_print_forward<false>(
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(t)),
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(args))...);
+				fast_io::details::debug_print_after_source_pre_normalization<false>(
+					t, args...);
 			}
 			else
 			{
@@ -538,10 +586,9 @@ inline constexpr void debug_println(T &&t, Args &&...args)
 	if constexpr (device_and_type_ok)
 	{
 		decltype(auto) outref = ::fast_io::operations::output_stream_ref(t);
-		using char_type = typename ::std::remove_cvref_t<decltype(outref)>::output_char_type;
-		::fast_io::operations::decay::print_freestanding_decay_borrowed_output<true>(
-			outref,
-			fast_io::io_print_forward<char_type>(fast_io::io_print_alias(args))...);
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization<true>(
+				outref, args...);
 	}
 	else
 	{
@@ -567,9 +614,8 @@ inline constexpr void debug_println(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
-				fast_io::details::debug_print_after_io_print_forward<true>(
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(t)),
-					fast_io::io_print_forward<char>(fast_io::io_print_alias(args))...);
+				fast_io::details::debug_print_after_source_pre_normalization<true>(
+					t, args...);
 			}
 			else
 			{

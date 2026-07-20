@@ -4,5 +4,82 @@ ignore = true
 ["constexpr.cc"] # compiler in CI is old
 ignore = true
 
+["dynamic_float_put_area.cc"]
+
+["format_consteval_brace_extra_fail.cc"]
+will_fail = "compiletime"
+
+["format_consteval_printf_extra_fail.cc"]
+will_fail = "compiletime"
+
+["format_consteval_default_print_fail.cc"]
+will_fail = "compiletime"
+
+["format_consteval_default_printf_fail.cc"]
+will_fail = "compiletime"
+
 ["static_aggregate_output_limit_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_nullary_call_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_runtime_call_fail.cc"]
+will_fail = "compiletime"
+
+["printf_argument_count_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_print_default_extra_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_wprint_output_missing_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_printf_print_default_missing_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_concat_missing_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_concat_fast_io_hole_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_printf_concatf_missing_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_printf_concatf_fast_io_hole_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_dynamic_hole_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_dynamic_extra_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_printf_dynamic_hole_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_printf_dynamic_extra_fail.cc"]
+will_fail = "compiletime"
+
+["format_argument_brace_named_hole_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_brace_string_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_printf_string_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_brace_concat_string_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_printf_concat_string_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_brace_array_fail.cc"]
+will_fail = "compiletime"
+
+["format_runtime_printf_concat_array_fail.cc"]
 will_fail = "compiletime"

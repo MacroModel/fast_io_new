@@ -1292,6 +1292,9 @@ inline constexpr void print_rsvhexfloat_mantissa_fixed_impl(char_type *last, man
 	}
 }
 
+/// @brief Formats a shortest hexadecimal floating value at the native floating ABI boundary.
+/// @details The floating parameter is intentionally by value so ordinary scalars remain in their floating-point
+/// register class.  The upper CPO extracts integer fields from a representation-sensitive __bf16 owning object.
 template <bool showbase, bool showbase_uppercase, bool showpos, bool uppercase, bool uppercase_e, bool comma,
 		  bool nan_show_sign = true, bool nan_show_type = false, typename flt, ::std::integral char_type>
 inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f) noexcept
@@ -1398,12 +1401,15 @@ template <::fast_io::manipulators::floating_rounding rounding>
 	}
 }
 
+/// @brief Formats a precision-controlled hexadecimal floating value at the native floating ABI boundary.
+/// @details The floating parameter intentionally remains by value, matching the scalar entry above.  A frontend/type
+/// exception is normalized to integer fields by the upper CPO instead of changing this general low-level ABI.
 template <bool showbase, bool showbase_uppercase, bool showpos, bool uppercase, bool uppercase_e, bool comma,
-		  ::fast_io::manipulators::floating_rounding rounding =
-			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
-		  ::fast_io::manipulators::floating_precision precision_mode =
-			  ::fast_io::manipulators::floating_precision::significant,
-		  bool nan_show_sign = true, bool nan_show_type = false, typename flt, ::std::integral char_type>
+          ::fast_io::manipulators::floating_rounding rounding =
+              ::fast_io::manipulators::floating_rounding::nearest_to_even,
+          ::fast_io::manipulators::floating_precision precision_mode =
+              ::fast_io::manipulators::floating_precision::significant,
+          bool nan_show_sign = true, bool nan_show_type = false, typename flt, ::std::integral char_type>
 inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *iter, flt f,
 																	::std::size_t precision) noexcept
 {

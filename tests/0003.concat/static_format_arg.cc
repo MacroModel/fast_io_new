@@ -22,7 +22,7 @@ enum class static_printf_enum : unsigned
 };
 
 using static_printf_enum_argument = decltype(
-	::fast_io::fmt::static_arg<static_printf_enum::value>());
+	::fast_io::fmt::static_arg<static_printf_enum::value>);
 inline constexpr ::fast_io::fmt::basic_fixed_string
 	static_printf_enum_format{"%u"};
 static_assert(::fast_io::fmt::details::static_format_groups<
@@ -34,7 +34,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal, auto value>
 {
 	auto const statically_formatted{
 		::fast_io::fmt::concat_std<format_literal>(
-			::fast_io::fmt::static_arg<value>())};
+			::fast_io::fmt::static_arg<value>)};
 	auto const dynamically_formatted{
 		::fast_io::fmt::concat_std<format_literal>(value)};
 	return statically_formatted == dynamically_formatted;
@@ -46,8 +46,8 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 {
 	auto const statically_formatted{
 		::fast_io::fmt::concat_std<format_literal>(
-			::fast_io::fmt::static_arg<value>(),
-			::fast_io::fmt::static_arg<parameter>())};
+			::fast_io::fmt::static_arg<value>,
+			::fast_io::fmt::static_arg<parameter>)};
 	auto const dynamically_formatted{
 		::fast_io::fmt::concat_std<format_literal>(value, parameter)};
 	return statically_formatted == dynamically_formatted;
@@ -58,7 +58,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal, auto value>
 {
 	auto const statically_formatted{
 		::fast_io::fmt::concatf_std<format_literal>(
-			::fast_io::fmt::static_arg<value>())};
+			::fast_io::fmt::static_arg<value>)};
 	auto const dynamically_formatted{
 		::fast_io::fmt::concatf_std<format_literal>(value)};
 	return statically_formatted == dynamically_formatted;
@@ -70,8 +70,8 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 {
 	auto const statically_formatted{
 		::fast_io::fmt::concatf_std<format_literal>(
-			::fast_io::fmt::static_arg<parameter>(),
-			::fast_io::fmt::static_arg<value>())};
+			::fast_io::fmt::static_arg<parameter>,
+			::fast_io::fmt::static_arg<value>)};
 	auto const dynamically_formatted{
 		::fast_io::fmt::concatf_std<format_literal>(parameter, value)};
 	return statically_formatted == dynamically_formatted;
@@ -82,7 +82,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal, auto value>
 {
 	auto const statically_formatted{
 		::fast_io::fmt::u8concat_std<format_literal>(
-			::fast_io::fmt::static_arg<value>())};
+			::fast_io::fmt::static_arg<value>)};
 	auto const dynamically_formatted{
 		::fast_io::fmt::u8concat_std<format_literal>(value)};
 	return statically_formatted == dynamically_formatted;
@@ -94,7 +94,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 {
 	auto const statically_formatted{
 		::fast_io::fmt::concat_std<format_literal>(
-			::fast_io::fmt::static_arg<value>())};
+			::fast_io::fmt::static_arg<value>)};
 	auto const &dynamic_value{
 		::fast_io::fmt::static_format_arg<value>::get()};
 	auto const dynamically_formatted{
@@ -108,9 +108,9 @@ consteval auto render_static_record()
 	::fast_io::obuffer_view buffer{result};
 	::fast_io::fmt::print<"user={name} id={id:08x} pi={pi:.2f}">(
 		buffer,
-		::fast_io::fmt::static_arg<"name", "xxx">(),
-		::fast_io::fmt::static_arg<"id", 42u>(),
-		::fast_io::fmt::static_arg<"pi", 3.14>());
+		::fast_io::fmt::static_arg<"name", "xxx">,
+		::fast_io::fmt::static_arg<"id", 42u>,
+		::fast_io::fmt::static_arg<"pi", 3.14>);
 	return result;
 }
 
@@ -137,9 +137,9 @@ static_assert(::std::string_view{direct_width_overlap.data(),
 
 inline constexpr char linked_static_text[]{"linked-array"};
 using linked_static_text_type =
-	decltype(::fast_io::fmt::static_arg<linked_static_text>());
+	decltype(::fast_io::fmt::static_arg<linked_static_text>);
 using named_linked_static_text_type =
-	decltype(::fast_io::fmt::static_arg<"text", linked_static_text>());
+	decltype(::fast_io::fmt::static_arg<"text", linked_static_text>);
 static_assert(::fast_io::fmt::is_static_format_argument_holder_v<
 			  linked_static_text_type>);
 static_assert(::fast_io::fmt::is_static_format_argument_holder_v<
@@ -147,8 +147,8 @@ static_assert(::fast_io::fmt::is_static_format_argument_holder_v<
 
 inline constexpr ::fast_io::fmt::basic_fixed_string mixed_format{
 	"user={} id={:08x} score={:.2f}"};
-using static_name_type = decltype(::fast_io::fmt::static_arg<"xxx">());
-using static_id_type = decltype(::fast_io::fmt::static_arg<42u>());
+using static_name_type = decltype(::fast_io::fmt::static_arg<"xxx">);
+using static_id_type = decltype(::fast_io::fmt::static_arg<42u>);
 inline constexpr auto mixed_plan{
 	::fast_io::fmt::details::static_format_groups<
 		mixed_format, ::fast_io::fmt::brace_fmt_t,
@@ -181,7 +181,7 @@ static_assert(!runtime_width_plan.has_static_replacement);
 
 inline constexpr int pointed_value{};
 using static_pointer_type =
-	decltype(::fast_io::fmt::static_arg<&pointed_value>());
+	decltype(::fast_io::fmt::static_arg<&pointed_value>);
 inline constexpr ::fast_io::fmt::basic_fixed_string pointer_format{"{}"};
 inline constexpr auto pointer_plan{
 	::fast_io::fmt::details::static_format_groups<
@@ -200,7 +200,7 @@ static_assert(!runtime_named_plan.has_static_replacement);
 
 inline constexpr ::fast_io::fmt::basic_fixed_string wchar_static_format{
 	L"{:☆^5}:{:04x}"};
-using wchar_text_type = decltype(::fast_io::fmt::static_arg<L"猫">());
+using wchar_text_type = decltype(::fast_io::fmt::static_arg<L"猫">);
 using wchar_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		wchar_static_format, ::fast_io::fmt::brace_fmt_t,
@@ -212,7 +212,7 @@ static_assert(::std::wstring_view{wchar_static_program::storage.data(),
 
 inline constexpr ::fast_io::fmt::basic_fixed_string u16_static_format{
 	u"{:☆^5}:{:04x}"};
-using u16_text_type = decltype(::fast_io::fmt::static_arg<u"猫">());
+using u16_text_type = decltype(::fast_io::fmt::static_arg<u"猫">);
 using u16_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		u16_static_format, ::fast_io::fmt::brace_fmt_t,
@@ -224,7 +224,7 @@ static_assert(::std::u16string_view{u16_static_program::storage.data(),
 
 inline constexpr ::fast_io::fmt::basic_fixed_string u32_static_format{
 	U"{:☆^5}:{:04x}"};
-using u32_text_type = decltype(::fast_io::fmt::static_arg<U"猫">());
+using u32_text_type = decltype(::fast_io::fmt::static_arg<U"猫">);
 using u32_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		u32_static_format, ::fast_io::fmt::brace_fmt_t,
@@ -239,8 +239,8 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	char output[128u]{};
 	::fast_io::obuffer_view buffer{output, output + 128u};
 	::fast_io::fmt::print<mixed_format>(
-		buffer, ::fast_io::fmt::static_arg<"xxx">(),
-		::fast_io::fmt::static_arg<42u>(), 3.14);
+		buffer, ::fast_io::fmt::static_arg<"xxx">,
+		::fast_io::fmt::static_arg<42u>, 3.14);
 	return ::std::string_view{output, buffer.size()} ==
 		   "user=xxx id=0000002a score=3.14";
 }
@@ -249,8 +249,8 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 {
 	auto const reordered{
 		::fast_io::fmt::concat_std<"{2}:{0}:{1}">(
-			::fast_io::fmt::static_arg<42u>(), "runtime",
-			::fast_io::fmt::static_arg<'X'>())};
+			::fast_io::fmt::static_arg<42u>, "runtime",
+			::fast_io::fmt::static_arg<'X'>)};
 	if (reordered != "X:42:runtime")
 	{
 		return false;
@@ -259,7 +259,7 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	unsigned const dynamic_width{8u};
 	auto const width_result{
 		::fast_io::fmt::concat_std<"[{1:0{0}x}]">(
-			dynamic_width, ::fast_io::fmt::static_arg<42u>())};
+			dynamic_width, ::fast_io::fmt::static_arg<42u>)};
 	if (width_result != "[0000002a]")
 	{
 		return false;
@@ -268,7 +268,7 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	unsigned const dynamic_precision{3u};
 	auto const precision_result{
 		::fast_io::fmt::concat_std<"{0:.{1}f}">(
-			::fast_io::fmt::static_arg<3.1415926535>(),
+			::fast_io::fmt::static_arg<3.1415926535>,
 			dynamic_precision)};
 	if (precision_result != "3.142")
 	{
@@ -279,7 +279,7 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	auto const named_result{
 		::fast_io::fmt::concat_std<"{runtime}:{fixed}:{runtime}">(
 			::fast_io::fmt::arg<"runtime">(runtime_value),
-			::fast_io::fmt::static_arg<"fixed", 42u>())};
+			::fast_io::fmt::static_arg<"fixed", 42u>)};
 	return named_result == "7:42:7";
 }
 
@@ -335,11 +335,11 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && static_string_matches_dynamic<"{:*^12.2}", "abcdef">();
 	result = result &&
 			 ::fast_io::fmt::concat_std<"[{}]">(
-				 ::fast_io::fmt::static_arg<linked_static_text>()) ==
+				 ::fast_io::fmt::static_arg<linked_static_text>) ==
 				 "[linked-array]";
 	result = result &&
 			 ::fast_io::fmt::concat_std<"[{text}]">(
-				 ::fast_io::fmt::static_arg<"text", linked_static_text>()) ==
+				 ::fast_io::fmt::static_arg<"text", linked_static_text>) ==
 				 "[linked-array]";
 	return result;
 }
@@ -384,18 +384,18 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 [[nodiscard]] bool static_width_overlap_matrix()
 {
 	return ::fast_io::fmt::concat_std<"{:>4d}">(
-			   ::fast_io::fmt::static_arg<123>()) == " 123" &&
+			   ::fast_io::fmt::static_arg<123>) == " 123" &&
 		   ::fast_io::fmt::concat_std<"{:^5d}">(
-			   ::fast_io::fmt::static_arg<123>()) == " 123 " &&
+			   ::fast_io::fmt::static_arg<123>) == " 123 " &&
 		   ::fast_io::fmt::concat_std<"{:04d}">(
-			   ::fast_io::fmt::static_arg<-12>()) == "-012" &&
+			   ::fast_io::fmt::static_arg<-12>) == "-012" &&
 		   ::fast_io::fmt::concat_std<"{:#06x}">(
-			   ::fast_io::fmt::static_arg<0xabcu>()) == "0x0abc" &&
+			   ::fast_io::fmt::static_arg<0xabcu>) == "0x0abc" &&
 		   ::fast_io::fmt::concat_std<"{:08}">(
-			   ::fast_io::fmt::static_arg<-3.14>()) == "-0003.14" &&
+			   ::fast_io::fmt::static_arg<-3.14>) == "-0003.14" &&
 		   ::fast_io::fmt::concat_std<"{:^16}">(
 			   ::fast_io::fmt::static_arg<
-				   (::std::numeric_limits<double>::denorm_min)()>()) ==
+				   (::std::numeric_limits<double>::denorm_min)()>) ==
 			   "     5e-324     ";
 }
 
@@ -406,16 +406,16 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && u8brace_matches_dynamic<u8"pi={:.2f}", 3.14>();
 	result = result &&
 			 ::fast_io::fmt::wconcat_std<wchar_static_format>(
-				 ::fast_io::fmt::static_arg<L"猫">(),
-				 ::fast_io::fmt::static_arg<42u>()) == L"☆猫☆☆:002a";
+				 ::fast_io::fmt::static_arg<L"猫">,
+				 ::fast_io::fmt::static_arg<42u>) == L"☆猫☆☆:002a";
 	result = result &&
 			 ::fast_io::fmt::u16concat_std<u16_static_format>(
-				 ::fast_io::fmt::static_arg<u"猫">(),
-				 ::fast_io::fmt::static_arg<42u>()) == u"☆猫☆☆:002a";
+				 ::fast_io::fmt::static_arg<u"猫">,
+				 ::fast_io::fmt::static_arg<42u>) == u"☆猫☆☆:002a";
 	result = result &&
 			 ::fast_io::fmt::u32concat_std<u32_static_format>(
-				 ::fast_io::fmt::static_arg<U"猫">(),
-				 ::fast_io::fmt::static_arg<42u>()) == U"☆猫☆☆:002a";
+				 ::fast_io::fmt::static_arg<U"猫">,
+				 ::fast_io::fmt::static_arg<42u>) == U"☆猫☆☆:002a";
 	return result;
 }
 

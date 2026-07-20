@@ -74,79 +74,80 @@ using u32ostring_ref_fast_io_tlc = ::fast_io::containers::basic_ostring_ref_fast
 // repeat status forwarding on the resulting object; probing a dummy stream also rejected valid destination-specific
 // print definitions. Direct perfect forwarding therefore aligns diagnostics, strategy admission, and CPO execution.
 template <::std::integral char_type, typename... Args>
-constexpr inline ::fast_io::basic_string<char_type> basic_concat_fast_io(Args &&...args)
+constexpr inline ::fast_io::basic_string<char_type>
+basic_concat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
 		false, char_type, ::fast_io::basic_string<char_type>>(::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::string concat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char, ::fast_io::string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::fast_io::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::wstring wconcat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, wchar_t, ::fast_io::wstring>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, wchar_t, ::fast_io::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u8string u8concat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char8_t, ::fast_io::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char8_t, ::fast_io::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u16string u16concat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char16_t, ::fast_io::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char16_t, ::fast_io::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u32string u32concat_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char32_t, ::fast_io::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char32_t, ::fast_io::u32string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::string concatln_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char, ::fast_io::string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char, ::fast_io::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::wstring wconcatln_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, wchar_t, ::fast_io::wstring>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, wchar_t, ::fast_io::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u8string u8concatln_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char8_t, ::fast_io::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char8_t, ::fast_io::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u16string u16concatln_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char16_t, ::fast_io::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char16_t, ::fast_io::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::u32string u32concatln_fast_io(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char32_t, ::fast_io::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char32_t, ::fast_io::u32string>(
 		::std::forward<Args>(args)...);
 }
 
@@ -154,79 +155,80 @@ namespace tlc
 {
 
 template <::std::integral char_type, typename... Args>
-constexpr inline ::fast_io::tlc::basic_string<char_type> basic_concat_fast_io_tlc(Args &&...args)
+constexpr inline ::fast_io::tlc::basic_string<char_type>
+basic_concat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
 		false, char_type, ::fast_io::tlc::basic_string<char_type>>(::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::string concat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char, ::fast_io::tlc::string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::fast_io::tlc::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::wstring wconcat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, wchar_t, ::fast_io::tlc::wstring>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, wchar_t, ::fast_io::tlc::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u8string u8concat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char8_t, ::fast_io::tlc::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char8_t, ::fast_io::tlc::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u16string u16concat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char16_t, ::fast_io::tlc::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char16_t, ::fast_io::tlc::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u32string u32concat_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<false, char32_t, ::fast_io::tlc::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char32_t, ::fast_io::tlc::u32string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::string concatln_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char, ::fast_io::tlc::string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char, ::fast_io::tlc::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::wstring wconcatln_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, wchar_t, ::fast_io::tlc::wstring>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, wchar_t, ::fast_io::tlc::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u8string u8concatln_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char8_t, ::fast_io::tlc::u8string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char8_t, ::fast_io::tlc::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u16string u16concatln_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char16_t, ::fast_io::tlc::u16string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char16_t, ::fast_io::tlc::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 constexpr inline ::fast_io::tlc::u32string u32concatln_fast_io_tlc(Args &&...args)
 {
-	return ::fast_io::basic_general_concat_checked<true, char32_t, ::fast_io::tlc::u32string>(
+	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char32_t, ::fast_io::tlc::u32string>(
 		::std::forward<Args>(args)...);
 }
 

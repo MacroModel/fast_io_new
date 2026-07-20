@@ -176,6 +176,31 @@ template <debug_text_kind text_kind, ::fast_io::fmt::format_character char_type>
 	return {debug_escape_kind::hexadecimal_2, {}, escaped_value & 0xffu, decoded.code_units, 4u, 4u};
 }
 
+/** Returns the initial printable ASCII run which debug emission may copy verbatim. */
+template <debug_text_kind text_kind, ::fast_io::fmt::format_character char_type>
+[[nodiscard]] inline constexpr ::std::size_t debug_ascii_copy_run(
+	char_type const *source, ::std::size_t size) noexcept
+{
+	if constexpr (!::fast_io::details::is_unicode_execution_charset<char_type>)
+	{
+		return 0u;
+	}
+	else
+	{
+		::std::size_t count{};
+		for (; count != size; ++count)
+		{
+			auto const value{format_unicode_code_unit_value(source[count])};
+			if (value < 0x20u || 0x7eu < value || value == 0x5cu ||
+				value == (text_kind == debug_text_kind::string ? 0x22u : 0x27u))
+			{
+				break;
+			}
+		}
+		return count;
+	}
+}
+
 template <::fast_io::fmt::format_character char_type>
 inline constexpr char_type debug_hex_digits[16u]{
 	::fast_io::char_literal_v<u8'0', char_type>,
@@ -304,8 +329,24 @@ measure_debug_text_payload(char_type const *data, ::std::size_t size,
 	::std::size_t consumed{};
 	while (consumed != size && result.display_width != maximum_display_width)
 	{
-		auto const rendering{classify_debug_scalar<text_kind>(data + consumed, size - consumed)};
 		auto const remaining{maximum_display_width - result.display_width};
+#if defined(__clang__)
+		auto const ascii_run{debug_ascii_copy_run<text_kind>(
+			data + consumed, size - consumed)};
+		if (ascii_run != 0u)
+		{
+			auto const amount{ascii_run < remaining ? ascii_run : remaining};
+			result.storage_size += amount;
+			result.display_width += amount;
+			consumed += amount;
+			if (amount != ascii_run)
+			{
+				break;
+			}
+			continue;
+		}
+#endif
+		auto const rendering{classify_debug_scalar<text_kind>(data + consumed, size - consumed)};
 		if (rendering.display_width <= remaining)
 		{
 			result.storage_size += rendering.storage_size;
@@ -402,6 +443,23 @@ inline constexpr char_type *emit_debug_text_payload(char_type *output,
 	::std::size_t consumed{};
 	while (consumed != size && storage_size != 0u)
 	{
+#if defined(__clang__)
+		auto const ascii_run{debug_ascii_copy_run<text_kind>(
+			data + consumed, size - consumed)};
+		if (ascii_run != 0u)
+		{
+			auto const amount{ascii_run < storage_size ? ascii_run : storage_size};
+			output = ::fast_io::details::non_overlapped_copy_n(
+				data + consumed, amount, output);
+			storage_size -= amount;
+			if (amount != ascii_run)
+			{
+				return output;
+			}
+			consumed += amount;
+			continue;
+		}
+#endif
 		auto const rendering{classify_debug_scalar<text_kind>(data + consumed, size - consumed)};
 		auto const amount{rendering.storage_size < storage_size
 							  ? rendering.storage_size

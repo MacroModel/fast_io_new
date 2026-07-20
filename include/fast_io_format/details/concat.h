@@ -13,7 +13,8 @@ template <typename result_type, ::std::integral char_type>
 struct concat_lowered_components
 {
 	template <typename... component_types>
-	[[nodiscard]] inline constexpr result_type operator()(component_types &&...components) const
+	[[nodiscard]] inline constexpr result_type
+	operator()(component_types &&...components) const
 	{
 		if constexpr (sizeof...(component_types) == 0u)
 		{
@@ -21,7 +22,8 @@ struct concat_lowered_components
 		}
 		else
 		{
-			return ::fast_io::basic_general_concat_checked<false, char_type, result_type>(
+			return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
+				false, char_type, result_type>(
 				::std::forward<component_types>(components)...);
 		}
 	}
@@ -32,9 +34,11 @@ template <typename result_type, ::std::integral char_type>
 struct concat_line_lowered_components
 {
 	template <typename... component_types>
-	[[nodiscard]] inline constexpr result_type operator()(component_types &&...components) const
+	[[nodiscard]] inline constexpr result_type
+	operator()(component_types &&...components) const
 	{
-		return ::fast_io::basic_general_concat_checked<true, char_type, result_type>(
+		return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
+			true, char_type, result_type>(
 			::std::forward<component_types>(components)...);
 	}
 };

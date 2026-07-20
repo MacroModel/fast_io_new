@@ -132,7 +132,7 @@ bool check_all_characters(flt const (&values)[size]) noexcept
 }
 
 template <typename flt>
-consteval bool wide_decimal_capability_is_precise_only() noexcept
+consteval bool wide_decimal_capability_has_scalar_and_precise() noexcept
 {
 	constexpr auto decimal_flags{[]() constexpr noexcept {
 		auto flags{::fast_io::manipulators::floating_point_default_scalar_flags};
@@ -142,12 +142,11 @@ consteval bool wide_decimal_capability_is_precise_only() noexcept
 	using scalar_type = ::fast_io::manipulators::scalar_manip_t<decimal_flags, flt>;
 	using runtime_type = ::fast_io::manipulators::scalar_manip_precision_t<decimal_flags, flt>;
 	/*
-	The scalar CPO promises a shortest spelling and therefore remains absent
-	until wide shortest selection has its own interval proof.  Runtime precision
-	is a different public capability: the strict binary80/binary128 gate routes
-	it through the exact decimal backend used by both emission and precise size.
+	The exact-interval shortest backend now supplies the scalar CPO, while the
+	runtime-precision CPO continues to use the exact decimal backend.  Both are
+	part of the strict binary80/binary128 representation capability.
 	*/
-	return !::fast_io::precise_reserve_printable<char, scalar_type> &&
+	return ::fast_io::precise_reserve_printable<char, scalar_type> &&
 		   ::fast_io::precise_reserve_printable<char, runtime_type>;
 }
 
@@ -157,7 +156,7 @@ bool check_binary80_impl() noexcept
 	if constexpr ((::std::numeric_limits<flt>::digits) == 64 &&
 				  (::std::numeric_limits<flt>::max_exponent) == 16384)
 	{
-		static_assert(wide_decimal_capability_is_precise_only<flt>());
+		static_assert(wide_decimal_capability_has_scalar_and_precise<flt>());
 		flt const values[]{
 			static_cast<flt>(0.0L),
 			static_cast<flt>(-0.0L),
@@ -193,7 +192,7 @@ constexpr __float128 binary128(__uint128_t bits) noexcept
 
 bool check_binary128() noexcept
 {
-	static_assert(wide_decimal_capability_is_precise_only<__float128>());
+	static_assert(wide_decimal_capability_has_scalar_and_precise<__float128>());
 	constexpr __uint128_t sign{static_cast<__uint128_t>(1u) << 127u};
 	constexpr __uint128_t exponent_one{static_cast<__uint128_t>(16383u) << 112u};
 	constexpr __uint128_t special{static_cast<__uint128_t>(0x7fffu) << 112u};

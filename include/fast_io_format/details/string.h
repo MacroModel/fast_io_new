@@ -150,44 +150,55 @@ inline constexpr ::std::array<char_type, 6u> null_string_storage{
 /// explicit size, including embedded nulls.
 template <typename char_type, typename T>
 	requires format_string_like<char_type, T>
-[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char_type>
-make_string_scatter(T &value, ::std::size_t maximum = SIZE_MAX) noexcept
+[[nodiscard]] inline constexpr auto make_string_scatter(
+	T &value, ::std::size_t maximum = SIZE_MAX) noexcept
 {
 	using clean_type = ::std::remove_cvref_t<T>;
 	if constexpr (same_character_array_v<char_type, T>)
 	{
 		constexpr ::std::size_t extent{::std::extent_v<::std::remove_reference_t<T>>};
 		auto const bound{bounded_length(extent, maximum)};
-		return {value, ::fast_io::cstr_nlen(value, bound)};
+		// Preserve the finite readable extent without changing the ordinary scatter path.  Only print/concat's optional
+		// compiler-constant protocol may turn this descriptor into a short reserve proxy.
+		return ::fast_io::manipulators::bounded_cstr_scatter_t<
+			char_type, extent>{
+			value, ::fast_io::cstr_nlen(value, bound)};
 	}
 	else if constexpr (same_character_pointer_v<char_type, T>)
 	{
 		auto const pointer{value};
 		if (pointer == nullptr)
 		{
-			return {null_string_storage<char_type>.data(), null_string_storage<char_type>.size()};
+			return ::fast_io::basic_io_scatter_t<char_type>{
+				null_string_storage<char_type>.data(),
+				null_string_storage<char_type>.size()};
 		}
 		if (maximum == SIZE_MAX)
 		{
-			return {pointer, ::fast_io::cstr_len(pointer)};
+			return ::fast_io::basic_io_scatter_t<char_type>{
+				pointer, ::fast_io::cstr_len(pointer)};
 		}
-		return {pointer, ::fast_io::cstr_nlen(pointer, maximum)};
+		return ::fast_io::basic_io_scatter_t<char_type>{
+			pointer, ::fast_io::cstr_nlen(pointer, maximum)};
 	}
 	else if constexpr (same_character_scatter_v<char_type, T>)
 	{
 		if constexpr (::std::same_as<clean_type, ::fast_io::basic_io_scatter_t<char_type>>)
 		{
-			return {value.base, bounded_length(value.len, maximum)};
+			return ::fast_io::basic_io_scatter_t<char_type>{
+				value.base, bounded_length(value.len, maximum)};
 		}
 		else
 		{
 			auto const scatter{value.scatter()};
-			return {scatter.base, bounded_length(scatter.len, maximum)};
+			return ::fast_io::basic_io_scatter_t<char_type>{
+				scatter.base, bounded_length(scatter.len, maximum)};
 		}
 	}
 	else
 	{
-		return {::std::ranges::data(value),
+		return ::fast_io::basic_io_scatter_t<char_type>{
+			::std::ranges::data(value),
 			bounded_length(static_cast<::std::size_t>(::std::ranges::size(value)), maximum)};
 	}
 }

@@ -92,6 +92,21 @@ inline constexpr ::std::true_type concat_single_pass_bounded_materialization_pre
 	return {};
 }
 
+/// @brief Propagates print's direct-put-area authorization through conditional radix insertion.
+template <::std::integral char_type, typename value_type>
+	requires requires {
+		{
+			print_single_pass_bounded_direct_put_area_safe(
+				::fast_io::io_reserve_type<char_type, value_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::printf_force_radix_t<value_type>>) noexcept
+{
+	return {};
+}
+
 /// @brief Adds the active radix code unit using the caller's non-fatal remaining budget.
 template <::std::integral char_type, typename value_type>
 	requires requires(value_type &value, ::std::size_t maximum_size) {
@@ -784,6 +799,12 @@ template <typename char_type, format_specification specification, typename value
 	}
 	else
 	{
+		// The finite-array descriptor intentionally stays a scatter on the ordinary path,
+		// but template argument deduction for the text-field factories does not consider
+		// its conversion operator.  Project it explicitly only after we know that width,
+		// precision, or debug processing needs the field wrapper.
+		auto const source_scatter{
+			static_cast<::fast_io::basic_io_scatter_t<char_type>>(source)};
 		constexpr auto placement{
 			static_field_placement<specification, false, false>()};
 		auto const options{make_text_field_options<char_type>(
@@ -793,11 +814,11 @@ template <typename char_type, format_specification specification, typename value
 			specification.has_fill ? specification.fill_size : 0u)};
 		if constexpr (specification.presentation == presentation_type::debug)
 		{
-			return make_debug_string_field(source, options);
+			return make_debug_string_field(source_scatter, options);
 		}
 		else
 		{
-			return make_unicode_text_field(source, options);
+			return make_unicode_text_field(source_scatter, options);
 		}
 	}
 }

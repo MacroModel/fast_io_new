@@ -26,6 +26,21 @@ struct basic_timestamp
 	}
 };
 
+namespace manipulators
+{
+
+/// @brief Print/concat-owned proxy for an optimizer-proven constant timestamp.
+/// @details The ordinary timestamp keeps its established run-time integer formatter. This proxy is formed only by
+///          the compiler-constant materialization strategy and lets the seconds field use its isolated
+///          constant-friendly integer writer before the optional fractional suffix is appended.
+template <::std::int_least64_t off_to_epoch>
+struct compiler_constant_timestamp_t
+{
+	basic_timestamp<off_to_epoch> value;
+};
+
+} // namespace manipulators
+
 template <::std::int_least64_t off_to_epoch>
 inline constexpr bool operator==(basic_timestamp<off_to_epoch> a, basic_timestamp<off_to_epoch> b) noexcept
 {
@@ -805,6 +820,63 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ba
 	{
 		return details::print_reserve_bsc_timestamp_impl(iter, {timestamp.seconds, timestamp.subseconds});
 	}
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_query_inline_safe(
+	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+print_compiler_constant_materialization_eligible(
+	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>,
+	basic_timestamp<off_to_epoch> const &timestamp) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	return __builtin_constant_p(timestamp.seconds) &&
+		   __builtin_constant_p(timestamp.subseconds);
+#else
+	(void)timestamp;
+	return false;
+#endif
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+print_compiler_constant_materialize(
+	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>,
+	basic_timestamp<off_to_epoch> const &timestamp) noexcept
+{
+	return manipulators::compiler_constant_timestamp_t<off_to_epoch>{timestamp};
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+inline constexpr ::std::size_t print_reserve_size(
+	io_reserve_type_t<
+		char_type, manipulators::compiler_constant_timestamp_t<off_to_epoch>>) noexcept
+{
+	return print_reserve_size(io_reserve_type<char_type, basic_timestamp<off_to_epoch>>);
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<
+		char_type, manipulators::compiler_constant_timestamp_t<off_to_epoch>>,
+	char_type *iter,
+	manipulators::compiler_constant_timestamp_t<off_to_epoch> timestamp) noexcept
+{
+	iter = ::fast_io::details::print_reserve_integral_compiler_constant_define<10>(
+		iter, timestamp.value.seconds);
+	if (timestamp.value.subseconds != 0u)
+	{
+		iter = ::fast_io::details::output_iso8601_subseconds(
+			iter, timestamp.value.subseconds);
+	}
+	return iter;
 }
 
 template <::std::integral char_type>

@@ -4,6 +4,7 @@
 #include "compile.h"
 #include "replacement_rules.h"
 #include "rule_protocol.h"
+#include "../../fast_io_dsal/array.h"
 
 #include <array>
 #include <cstddef>
@@ -181,34 +182,12 @@ template <auto format_literal, typename grammar_tag,
 		// strategy selection; the continuation owns the separately proved LF.
 		return ::fast_io::io_null;
 	}
-	else if constexpr (exposed_size == 1u)
-	{
-		// This is the same canonicalization performed by fast_io's array alias:
-		// a one-code-unit literal is a character semantic node, not a scatter
-		// carrying a pointer.  Besides matching the direct io::print type graph,
-		// the distinction is material on GCC: static_scatter<1> otherwise leaves
-		// one address load and one weak one-byte storage object per separator,
-		// while chvw carries the code unit directly in its ABI value.  The core can
-		// then combine spaces/newlines with adjacent reserve leaves exactly as if
-		// the user had written mnp::chvw in the original print call.
-		return ::fast_io::manipulators::chvw(literal_type::storage[0u]);
-	}
-	else if constexpr (exposed_size <= 16u)
-	{
-		// fast_io's semantic pack is the pointer-free canonical form for a short
-		// format-owned literal.  Its print/concat front doors flatten the pack
-		// before strategy selection, after which adjacent characters and reserve
-		// leaves share one contiguous materialization.  GCC 15 AArch64 evidence
-		// shows exact direct-literal code for lengths 2..12 and better inlining for
-		// 13..16, with no pack object, weak storage, or GOT access left in output.
-		// The cutoff matches the core small-copy policy; expanding larger runs
-		// would inflate template state and function ABI instead of improving the
-		// memcpy-shaped backend path.
-		return make_small_literal_pack<literal_type>(
-			::std::make_index_sequence<exposed_size>{});
-	}
 	else if constexpr (exposed_size < 64u)
 	{
+		// A format literal is provider-owned immutable storage.  Preserve that fact
+		// in the lowered print component even for one code unit: unbuffered native-
+		// scatter outputs can then pass the provider pointer directly, while concat
+		// and buffered print continue to consume static_scatter's reserve spelling.
 		return ::fast_io::manipulators::static_scatter_t<
 			typename literal_type::char_type, exposed_size>{
 			literal_type::storage.data()};
@@ -300,7 +279,7 @@ struct static_evaluation_argument
 	using type = static_evaluation_unused_argument;
 };
 
-template <auto value_literal>
+template <::fast_io::fmt::static_argument_constant value_literal>
 struct static_evaluation_argument<
 	::fast_io::fmt::static_format_arg<value_literal>>
 {
@@ -822,7 +801,7 @@ make_static_format_aggregate_shape() noexcept
 }
 
 template <auto format_literal, argument_reference reference,
-		  typename... argument_types>
+			  typename... argument_types>
 [[nodiscard]] inline consteval bool
 static_format_reference_is_aggregate() noexcept
 {
@@ -854,8 +833,41 @@ static_format_reference_is_aggregate() noexcept
 	}
 }
 
+template <typename value_type>
+struct static_format_native_scalar_manip : ::std::false_type
+{};
+
+template <::fast_io::manipulators::scalar_flags flags, typename value_type>
+struct static_format_native_scalar_manip<
+	::fast_io::manipulators::scalar_manip_t<flags, value_type>>
+	: ::std::bool_constant<
+		  ::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> ||
+		  ::fast_io::details::my_floating_point<
+			  ::std::remove_cvref_t<value_type>> ||
+		  ::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
+		  ::std::same_as<::std::remove_cvref_t<value_type>,
+					 ::std::nullptr_t>>
+{};
+
+template <::fast_io::manipulators::scalar_flags flags, typename value_type>
+struct static_format_native_scalar_manip<
+	::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>
+	: ::std::bool_constant<
+		  ::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> ||
+		  ::fast_io::details::my_floating_point<
+			  ::std::remove_cvref_t<value_type>> ||
+		  ::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
+		  ::std::same_as<::std::remove_cvref_t<value_type>,
+					 ::std::nullptr_t>>
+{};
+
+template <typename value_type>
+inline constexpr bool static_format_native_scalar_manip_v{
+	static_format_native_scalar_manip<
+		::std::remove_cvref_t<value_type>>::value};
+
 template <auto format_literal, argument_reference reference,
-		  typename... argument_types>
+			  typename... argument_types>
 [[nodiscard]] inline consteval bool static_format_reference() noexcept
 {
 	constexpr auto resolution{
@@ -893,10 +905,11 @@ template <auto format_literal, argument_reference reference,
 					char_type>};
 			constexpr bool scalar_or_text{
 				::fast_io::details::my_integral<clean_value_type> ||
-				::fast_io::details::my_floating_point<clean_value_type> ||
-				::std::same_as<clean_value_type, ::std::byte> ||
-				::std::same_as<clean_value_type, ::std::nullptr_t> ||
-				same_character_array};
+					::fast_io::details::my_floating_point<clean_value_type> ||
+					::std::same_as<clean_value_type, ::std::byte> ||
+					::std::same_as<clean_value_type, ::std::nullptr_t> ||
+					static_format_native_scalar_manip_v<clean_value_type> ||
+					same_character_array};
 			if constexpr (scalar_or_text)
 			{
 				return true;
@@ -2133,16 +2146,6 @@ template <auto format_literal, replacement_field field, typename grammar_type,
 	{
 		return ::fast_io::io_null;
 	}
-	else if constexpr (replacement_type::size == 1u)
-	{
-		return ::fast_io::manipulators::chvw(
-			replacement_type::storage[0u]);
-	}
-	else if constexpr (replacement_type::size <= 16u)
-	{
-		return make_small_static_replacement_pack<replacement_type>(
-			::std::make_index_sequence<replacement_type::size>{});
-	}
 	else if constexpr (replacement_type::size < 64u)
 	{
 		return ::fast_io::manipulators::static_scatter_t<
@@ -2239,6 +2242,11 @@ template <auto format_literal, typename grammar_tag,
 		  bool trim_terminal_literal_line_feed = false,
 		  typename callback_type, typename argument_pack,
 		  ::std::size_t... operation_index>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr decltype(auto) lower_format_program_impl(
 	callback_type &&callback, argument_pack &arguments,
 	::std::index_sequence<operation_index...>)
@@ -2445,7 +2453,7 @@ template <::std::integral char_type>
 struct measure_static_format_components
 {
 	template <typename... component_types>
-	[[nodiscard]] inline consteval ::std::size_t operator()(
+	[[nodiscard]] inline constexpr ::std::size_t operator()(
 		component_types &&...components) const
 	{
 		return ::fast_io::operations::decay::
@@ -2459,7 +2467,7 @@ struct emit_static_format_components
 	char_type *output;
 
 	template <typename... component_types>
-	[[nodiscard]] inline consteval char_type *operator()(
+	[[nodiscard]] inline constexpr char_type *operator()(
 		component_types &&...components) const
 	{
 		return ::fast_io::operations::decay::
@@ -2521,11 +2529,14 @@ struct compiled_static_format_run
 		if constexpr (size == SIZE_MAX ||
 					  size > static_format_output_code_unit_limit)
 		{
-			return ::std::array<char_type, 0u>{};
+			return ::fast_io::containers::array<char_type, 0u>{};
 		}
 		else
 		{
-			::std::array<char_type, size> result{};
+			// The final spelling owns its code units in fast_io's DSAL array.  In
+			// particular, no pointer into a consteval scratch object escapes into
+			// the print layer: `storage` itself is the immutable provider object.
+			::fast_io::containers::array<char_type, size> result{};
 			if constexpr (size != 0u)
 			{
 				auto const end{evaluate(
@@ -2600,6 +2611,11 @@ template <auto format_literal, typename grammar_tag,
 		  bool trim_terminal_literal_line_feed = false,
 		  typename callback_type, typename argument_pack,
 		  ::std::size_t... group_index>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr decltype(auto) lower_format_program_grouped_impl(
 	callback_type &&callback, argument_pack &arguments,
 	::std::index_sequence<group_index...>)
@@ -2658,11 +2674,14 @@ struct compiled_static_format_program
 		if constexpr (size == SIZE_MAX ||
 					  size > static_format_output_code_unit_limit)
 		{
-			return ::std::array<char_type, 0u>{};
+			return ::fast_io::containers::array<char_type, 0u>{};
 		}
 		else
 		{
-			::std::array<char_type, size> result{};
+			// This inline variable is the provider whose address reaches a
+			// synchronous unbuffered write.  Own the final code units in a DSAL
+			// array rather than borrowing consteval scratch storage.
+			::fast_io::containers::array<char_type, size> result{};
 			if constexpr (size != 0u)
 			{
 				auto const end{evaluate(
@@ -2687,9 +2706,21 @@ struct compiled_static_format_program
 template <auto format_literal, typename grammar_tag,
 		  bool trim_terminal_literal_line_feed,
 		  typename callback_type, typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr decltype(auto) lower_format_program_with_trim_policy(
 	callback_type &&callback, argument_types &...arguments)
 {
+	if constexpr (::fast_io::fmt::details::format_argument_list_validation_adl::
+					  expression<format_literal, grammar_tag,
+								 argument_types...>)
+	{
+		::fast_io::fmt::details::format_argument_list_validation_adl::invoke<
+			format_literal, grammar_tag, argument_types...>();
+	}
 	static_assert(!trim_terminal_literal_line_feed ||
 					  format_program_has_terminal_literal_line_feed<
 						  format_literal, grammar_tag>(),
@@ -2711,22 +2742,12 @@ inline constexpr decltype(auto) lower_format_program_with_trim_policy(
 		{
 			return ::std::forward<callback_type>(callback)();
 		}
-		else if constexpr (exposed_size == 1u)
+		else if constexpr (exposed_size < 64u)
 		{
-			// Keep tiny literal-only programs in the same pointer-free form used by
-			// an individual literal operation. This lets owning concat construct its
-			// SSO result from the code-unit value instead of retaining a storage address.
 			return ::std::forward<callback_type>(callback)(
-				::fast_io::manipulators::chvw(literal_program::storage[0u]));
-		}
-		else if constexpr (exposed_size == 2u)
-		{
-			// Two code units are still small enough to transport as one semantic pack.
-			// GCC can consequently form the final SSO bytes with an immediate store;
-			// longer literal-only programs retain the compact scatter representation.
-			return ::std::forward<callback_type>(callback)(
-				::fast_io::fmt::details::make_small_literal_pack<literal_program>(
-					::std::make_index_sequence<exposed_size>{}));
+				::fast_io::manipulators::static_scatter_t<
+					typename literal_program::char_type, exposed_size>{
+					literal_program::storage.data()});
 		}
 		else
 		{
@@ -2835,6 +2856,11 @@ inline constexpr decltype(auto) lower_format_program_with_trim_policy(
 /** Preserves the original public lowering entry and its explicit template-argument order. */
 template <auto format_literal, typename grammar_tag, typename callback_type,
 		  typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr decltype(auto) lower_format_program(
 	callback_type &&callback, argument_types &...arguments)
 {
@@ -2846,6 +2872,11 @@ inline constexpr decltype(auto) lower_format_program(
 /** Lowers a proved terminal literal LF as concat's separate line flag. */
 template <auto format_literal, typename grammar_tag, typename callback_type,
 		  typename... argument_types>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr decltype(auto) lower_format_program_trim_terminal_line_feed(
 	callback_type &&callback, argument_types &...arguments)
 {
@@ -2855,3 +2886,58 @@ inline constexpr decltype(auto) lower_format_program_trim_terminal_line_feed(
 }
 
 } // namespace fast_io::fmt::details
+
+namespace fast_io::fmt::details
+{
+
+template <::fast_io::fmt::format_character char_type>
+[[nodiscard]] inline consteval auto
+make_static_argument_identity_format_literal() noexcept
+{
+	char_type source[]{
+		::fast_io::char_literal_v<u8'{', char_type>,
+		::fast_io::char_literal_v<u8'}', char_type>, char_type{}};
+	return ::fast_io::fmt::basic_fixed_string{source};
+}
+
+template <::fast_io::fmt::format_character char_type>
+inline constexpr auto static_argument_identity_format_literal{
+	::fast_io::fmt::details::
+		make_static_argument_identity_format_literal<char_type>()};
+
+} // namespace fast_io::fmt::details
+
+namespace fast_io::fmt
+{
+
+/**
+ * Exposes an explicit `static_arg<V>` to raw `fast_io::io::print`/concat.
+ *
+ * The ordinary value is formatted once by the same compile-time brace rule as
+ * `"{}"`, into `compiled_static_format_program::storage`.  The returned
+ * `static_scatter_t` therefore points at one provider-owned DSAL array; it never
+ * points into this forwarding frame.  The core output gate decides whether a
+ * synchronous direct destination may observe that address or must copy it into
+ * destination-owned storage first.
+ */
+template <::fast_io::fmt::format_character char_type, typename holder_type>
+	requires (
+		::fast_io::fmt::is_static_format_argument_holder_v<holder_type> &&
+		::fast_io::fmt::details::static_format_program<
+			::fast_io::fmt::details::
+				static_argument_identity_format_literal<char_type>,
+			::fast_io::fmt::brace_fmt_t,
+			::std::remove_cvref_t<holder_type>>())
+[[nodiscard]] inline constexpr auto status_io_print_forward(
+	::fast_io::io_alias_type_t<char_type>, holder_type) noexcept
+{
+	using clean_holder_type = ::std::remove_cvref_t<holder_type>;
+	using static_program = ::fast_io::fmt::details::compiled_static_format_program<
+		::fast_io::fmt::details::
+			static_argument_identity_format_literal<char_type>,
+		::fast_io::fmt::brace_fmt_t, clean_holder_type>;
+	return ::fast_io::manipulators::static_scatter_t<
+		char_type, static_program::size>{static_program::storage.data()};
+}
+
+} // namespace fast_io::fmt
