@@ -653,9 +653,9 @@ static_assert(rich_context_round_trip());
 
 inline constexpr ::fast_io::fmt::basic_fixed_string static_custom_format{
 	"A{}B{:x}C"};
-using static_format_as_argument = decltype(::fast_io::fmt::static_arg<
+using static_format_as_argument = decltype(::fast_io::mnp::static_arg<
 										   static_custom_probe::format_as_value{42u}>);
-using static_custom_argument = decltype(::fast_io::fmt::static_arg<
+using static_custom_argument = decltype(::fast_io::mnp::static_arg<
 										static_custom_probe::custom_value{7u}>);
 using static_custom_program =
 	::fast_io::fmt::details::compiled_static_format_program<
@@ -670,7 +670,7 @@ inline constexpr ::fast_io::fmt::basic_fixed_string empty_static_format{
 using empty_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		empty_static_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<
+		decltype(::fast_io::mnp::static_arg<
 				 static_custom_probe::empty_value{}>)>;
 static_assert(::std::string_view{
 	empty_static_program::storage.data(), empty_static_program::size} ==
@@ -681,9 +681,9 @@ inline constexpr ::fast_io::fmt::basic_fixed_string automatic_static_format{
 using automatic_static_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		automatic_static_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<
+		decltype(::fast_io::mnp::static_arg<
 			static_custom_probe::automatic_format_as_value{42u}>),
-		decltype(::fast_io::fmt::static_arg<
+		decltype(::fast_io::mnp::static_arg<
 			static_custom_probe::automatic_text_value{}>)>;
 static_assert(::std::string_view{
 				  automatic_static_program::storage.data(),
@@ -693,7 +693,7 @@ inline constexpr custom_tuple_fallback_probe::value_type
 	custom_tuple_value{7u};
 inline constexpr custom_tuple_fallback_probe::leaf_type
 	custom_leaf_value{8u};
-using custom_tuple_argument = decltype(::fast_io::fmt::static_arg<
+using custom_tuple_argument = decltype(::fast_io::mnp::static_arg<
 									   custom_tuple_value>);
 static_assert(!::fast_io::fmt::details::static_format_program<
 			  ::fast_io::fmt::basic_fixed_string{"{}"},
@@ -712,7 +712,7 @@ static_assert(!::fast_io::fmt::details::static_format_program<
 			  ::fast_io::fmt::brace_fmt_t, custom_leaf_tuple_argument>());
 inline constexpr recursive_tuple_fallback_probe::value_type
 	recursive_tuple_value{7u};
-using recursive_tuple_argument = decltype(::fast_io::fmt::static_arg<
+using recursive_tuple_argument = decltype(::fast_io::mnp::static_arg<
 										  recursive_tuple_value>);
 static_assert(!::fast_io::fmt::details::
 				   make_static_format_aggregate_shape<
@@ -732,29 +732,29 @@ template <typename string_type, typename char_type>
 [[nodiscard]] bool all_character_domains_fold()
 {
 	auto const narrow{::fast_io::fmt::concat_std<"A{}B{:x}C">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 	auto const wide{::fast_io::fmt::wconcat_std<L"A{}B{:q}C">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 	auto const utf8{::fast_io::fmt::u8concat_std<u8"A{}B{:x}C">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 	auto const utf16{::fast_io::fmt::u16concat_std<u"A{}B{:q}C">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 	auto const utf32{::fast_io::fmt::u32concat_std<U"A{}B{:x}C">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 
 	return text_equal(narrow, "A42Bx07C") &&
@@ -770,15 +770,15 @@ template <typename string_type, typename char_type>
 {
 	auto const partial{::fast_io::fmt::concat_std<
 		"A{}B{:x}C{}D">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::format_as_value{42u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>,
 		9u)};
 	auto const named{::fast_io::fmt::concat_std<"{left}-{1:q}">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			"left", static_custom_probe::format_as_value{13u}>,
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{8u}>)};
 	return partial == "A42Bx07C9D" && named == "13-q08" &&
 		   static_custom_probe::format_as_runtime_calls == 0u &&
@@ -789,10 +789,10 @@ template <typename string_type, typename char_type>
 {
 	static_custom_probe::automatic_format_as_runtime_calls = 0u;
 	auto const static_narrow{::fast_io::fmt::concat_std<"A{}B">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::automatic_format_as_value{42u}>)};
 	auto const static_wide{::fast_io::fmt::u16concat_std<u"A{}B">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::automatic_format_as_value{13u}>)};
 	if (static_narrow != "A42B" || static_wide != u"A13B" ||
 		static_custom_probe::automatic_format_as_runtime_calls != 0u)
@@ -821,7 +821,7 @@ template <typename string_type, typename char_type>
 
 	malformed_static_probe::runtime_calls = 0u;
 	auto const malformed{::fast_io::fmt::concat_std<"{}">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			malformed_static_probe::value_type{42u}>)};
 	if (malformed != "42" || malformed_static_probe::runtime_calls != 1u)
 	{
@@ -830,7 +830,7 @@ template <typename string_type, typename char_type>
 
 	narrow_only_static_probe::runtime_calls = 0u;
 	auto const wrong_domain{::fast_io::fmt::u16concat_std<u"{}">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			narrow_only_static_probe::value_type{42u}>)};
 	if (wrong_domain != u"42" ||
 		narrow_only_static_probe::runtime_calls != 1u)
@@ -840,7 +840,7 @@ template <typename string_type, typename char_type>
 
 	static_custom_probe::runtime_backed_text_calls = 0u;
 	auto const runtime_backed{::fast_io::fmt::concat_std<"A{}B">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::runtime_backed_text_value{}>)};
 	if (runtime_backed != "ArunB" ||
 		static_custom_probe::runtime_backed_text_calls != 1u)
@@ -850,7 +850,7 @@ template <typename string_type, typename char_type>
 
 	custom_tuple_fallback_probe::runtime_calls = 0u;
 	auto const custom_tuple{::fast_io::fmt::concat_std<"{}">(
-		::fast_io::fmt::static_arg<custom_tuple_value>)};
+		::fast_io::mnp::static_arg<custom_tuple_value>)};
 	if (custom_tuple != "7" ||
 		custom_tuple_fallback_probe::runtime_calls != 1u)
 	{
@@ -876,7 +876,7 @@ template <typename string_type, typename char_type>
 	}
 	recursive_tuple_fallback_probe::runtime_calls = 0u;
 	auto const recursive_tuple{::fast_io::fmt::concat_std<"{}">(
-		::fast_io::fmt::static_arg<recursive_tuple_value>)};
+		::fast_io::mnp::static_arg<recursive_tuple_value>)};
 	if (recursive_tuple != "(7)" ||
 		recursive_tuple_fallback_probe::runtime_calls != 1u)
 	{
@@ -887,7 +887,7 @@ template <typename string_type, typename char_type>
 	// the terminal CPO itself has the correct protocol shape.
 	static_custom_probe::custom_alias_runtime_calls = 0u;
 	auto const locale_specific{::fast_io::fmt::concat_std<"{:Lx}">(
-		::fast_io::fmt::static_arg<
+		::fast_io::mnp::static_arg<
 			static_custom_probe::custom_value{7u}>)};
 	return locale_specific == "x07" &&
 		   static_custom_probe::custom_alias_runtime_calls == 1u;

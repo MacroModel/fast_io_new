@@ -1,6 +1,7 @@
 #pragma once
 
 #include "forward.h"
+#include "static_arg.h"
 
 namespace fast_io
 {

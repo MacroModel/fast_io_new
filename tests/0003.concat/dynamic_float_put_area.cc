@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -123,6 +124,34 @@ struct observed_buffer_ref
 	using output_char_type = char;
 	observed_buffer *state{};
 };
+
+struct rejected_bounded_output
+{
+	using output_char_type = char;
+	::std::string *storage{};
+	::std::size_t *write_calls{};
+};
+
+inline constexpr rejected_bounded_output output_stream_ref_define(
+	rejected_bounded_output output) noexcept
+{
+	return output;
+}
+
+inline constexpr ::std::size_t full_output_coalesce_threshold(
+	::fast_io::io_reserve_type_t<char, rejected_bounded_output>) noexcept
+{
+	// This admits print's 512-code-unit single-pass probe but deliberately
+	// rejects the 600-digit field below, exercising its ordered fallback.
+	return 512u;
+}
+
+inline void write_all_overflow_define(rejected_bounded_output output,
+	char const *first, char const *last)
+{
+	++*output.write_calls;
+	output.storage->append(first, last);
+}
 
 inline constexpr observed_buffer_ref output_stream_ref_define(
 	observed_buffer &output) noexcept
@@ -272,6 +301,23 @@ inline void write_all_overflow_define(
 								  output.current - output.storage.data())} == "    3.14";
 }
 
+[[nodiscard]] bool large_precision_rejected_bound_matches_concat()
+{
+	double const value{3.125};
+	unsigned const width{700u};
+	unsigned const precision{600u};
+	::std::string actual;
+	::std::size_t write_calls{};
+	rejected_bounded_output output{__builtin_addressof(actual), &write_calls};
+	::fast_io::fmt::print<"v={0:*^{1}.{2}f}">(
+		output, value, width, precision);
+	auto const expected{::fast_io::fmt::concat_std<"v={0:*^{1}.{2}f}">(
+		value, width, precision)};
+	// The post-rejection fallback may stream ordered components, so only byte
+	// identity and forward progress are contractual here—not a write count.
+	return write_calls != 0u && actual == expected;
+}
+
 } // namespace dynamic_float_put_area_test
 
 int main()
@@ -282,7 +328,8 @@ int main()
 				   exact_capacity_line_falls_back_without_overflow() &&
 				   const_wrappers_are_printable() &&
 				   wide_character_domain_matches() &&
-				   unmarked_obuffer_keeps_precise_probe_order()
+				   unmarked_obuffer_keeps_precise_probe_order() &&
+				   large_precision_rejected_bound_matches_concat()
 			   ? 0
 			   : 1;
 }

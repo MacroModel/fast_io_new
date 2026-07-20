@@ -737,9 +737,7 @@ to_chars(char_type *first, char_type *last, T value, int base = 10) noexcept
 {
 	// Valid calls already satisfy the standard [2, 36] radix precondition.  The
 	// optional attribute is optimizer information, not algorithm dispatch.
-#if __has_cpp_attribute(assume)
-	[[assume(2 <= base && base <= 36)]];
-#endif
+	FAST_IO_ASSUME(2 <= base && base <= 36);
 	using unsigned_type = ::fast_io::details::my_make_unsigned_t<T>;
 	bool negative{};
 	unsigned_type magnitude{static_cast<unsigned_type>(value)};

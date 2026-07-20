@@ -266,14 +266,18 @@ concept format_backend_identity_printable =
 namespace custom_format_adl
 {
 
-// Poison pills suppress accidental ordinary-lookup fallbacks while retaining
-// argument-dependent lookup in the customization type's namespace.
-template <typename... argument_types>
-void format_parse_define(argument_types &&...) = delete;
-template <typename... argument_types>
-void format_alias_define(argument_types &&...) = delete;
-template <typename... argument_types>
-void format_as(argument_types &&...) = delete;
+// These ellipsis poison pills stop ordinary lookup in this namespace while
+// still allowing dependent argument-dependent lookup to find the user's
+// customization.  Ellipsis is intentional: GCC 13 diagnoses a zero-argument
+// poison pill while forming the structural NTTP probe, whereas a forwarding-
+// reference catch-all is a better match than a perfectly valid user CPO taking
+// `T const&` and consequently rejects ordinary run-time custom values.
+template <typename...>
+void format_parse_define(...) = delete;
+template <typename...>
+void format_alias_define(...) = delete;
+template <typename...>
+void format_as(...) = delete;
 
 template <auto format_literal, auto source, typename value_type>
 concept parse_expression = requires {

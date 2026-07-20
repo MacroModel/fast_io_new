@@ -329,9 +329,119 @@ template <typename floating_type, ::std::integral char_type>
 			edge_kind::signaling_nan>();
 }
 
+template <typename floating_type, ::std::integral char_type,
+	floating_format format, floating_precision precision,
+	floating_rounding rounding, ::std::size_t requested_precision = 3u>
+[[nodiscard]] bool check_bounded_sample() noexcept
+{
+	return check_constant_value<char_type,
+		make_flags(format, precision, rounding), floating_type,
+		rounding_sample, requested_precision>();
+}
+
+// The full Cartesian product is intentionally not the default translation
+// unit.  It creates more than one thousand independent formatter
+// instantiations per floating type; measured -O2 builds took 3.5--4.6 minutes
+// and 1.4--3.3 GiB per TU on Clang 23/GCC 15.  The bounded gate below covers
+// every format, precision mode, deterministic rounding policy, character
+// domain and edge category in 25 instantiations.  Sanitizer fuzzing exercises
+// the complete cross product.  Defining the opt-in macro retains the exhaustive
+// source-level matrix for dedicated compile-pressure runs outside normal CI.
+template <typename floating_type>
+[[nodiscard]] bool run_bounded() noexcept
+{
+	return
+		// Ten calls cover the ten deterministic rounding policies while cycling
+		// over all five formats and all four precision modes.
+		check_bounded_sample<floating_type, char,
+			floating_format::general, floating_precision::significant,
+			floating_rounding::nearest_to_even>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::fixed, floating_precision::fractional,
+			floating_rounding::nearest_to_odd>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::scientific,
+			floating_precision::significant_preserve_trailing_zero,
+			floating_rounding::nearest_toward_plus_infinity>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::decimal,
+			floating_precision::fractional_preserve_trailing_zero,
+			floating_rounding::nearest_toward_minus_infinity>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::hexfloat, floating_precision::significant,
+			floating_rounding::nearest_toward_zero>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::general, floating_precision::fractional,
+			floating_rounding::nearest_away_from_zero>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::fixed,
+			floating_precision::significant_preserve_trailing_zero,
+			floating_rounding::toward_plus_infinity>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::scientific,
+			floating_precision::fractional_preserve_trailing_zero,
+			floating_rounding::toward_minus_infinity>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::decimal, floating_precision::significant,
+			floating_rounding::toward_zero>() &&
+		check_bounded_sample<floating_type, char,
+			floating_format::hexfloat, floating_precision::fractional,
+			floating_rounding::away_from_zero>() &&
+
+		// One independent spelling per public character domain.  The non-hex
+		// flags include JSON-float and comma-radix semantics.
+		check_bounded_sample<floating_type, wchar_t,
+			floating_format::fixed, floating_precision::fractional,
+			floating_rounding::nearest_to_even>() &&
+		check_bounded_sample<floating_type, char8_t,
+			floating_format::scientific, floating_precision::significant,
+			floating_rounding::nearest_to_even>() &&
+		check_bounded_sample<floating_type, char16_t,
+			floating_format::decimal,
+			floating_precision::fractional_preserve_trailing_zero,
+			floating_rounding::nearest_to_even>() &&
+		check_bounded_sample<floating_type, char32_t,
+			floating_format::hexfloat,
+			floating_precision::significant_preserve_trailing_zero,
+			floating_rounding::nearest_to_even>() &&
+
+		// Exercise both ends of the admitted runtime precision range used by the
+		// compiler-constant materializer.
+		check_bounded_sample<floating_type, char,
+			floating_format::fixed,
+			floating_precision::fractional_preserve_trailing_zero,
+			floating_rounding::nearest_to_even, 0u>() &&
+		check_bounded_sample<floating_type, char32_t,
+			floating_format::hexfloat,
+			floating_precision::fractional_preserve_trailing_zero,
+			floating_rounding::nearest_to_even, 40u>() &&
+
+		// Edge categories are distributed across the five character domains so
+		// wide-output special values and original-field sNaN handling stay gated.
+		check_edge<floating_type, char,
+			edge_kind::positive_zero>() &&
+		check_edge<floating_type, wchar_t,
+			edge_kind::negative_zero>() &&
+		check_edge<floating_type, char8_t,
+			edge_kind::denormal_minimum>() &&
+		check_edge<floating_type, char16_t,
+			edge_kind::minimum_normal>() &&
+		check_edge<floating_type, char32_t,
+			edge_kind::maximum_finite>() &&
+		check_edge<floating_type, char,
+			edge_kind::positive_infinity>() &&
+		check_edge<floating_type, wchar_t,
+			edge_kind::negative_infinity>() &&
+		check_edge<floating_type, char16_t,
+			edge_kind::quiet_nan>() &&
+		check_edge<floating_type, char32_t,
+			edge_kind::signaling_nan>();
+}
+
 template <typename floating_type>
 [[nodiscard]] bool run() noexcept
 {
+#if defined(FAST_IO_TEST_EXHAUSTIVE_COMPILER_CONSTANT_PRECISION)
 	return check_formats<floating_type, char>() &&
 		check_formats<floating_type, wchar_t>() &&
 		check_formats<floating_type, char8_t>() &&
@@ -342,6 +452,9 @@ template <typename floating_type>
 		check_edges_for_character<floating_type, char8_t>() &&
 		check_edges_for_character<floating_type, char16_t>() &&
 		check_edges_for_character<floating_type, char32_t>();
+#else
+	return run_bounded<floating_type>();
+#endif
 }
 
 } // namespace fast_io::tests::compiler_constant_precision

@@ -37,7 +37,7 @@ struct print_floating_decimal_direct_supported_impl<T, true>
 #ifdef __STDCPP_FLOAT32_T__
 		|| ::std::same_as<no_cvref_t, _Float32>
 #endif
-#ifdef __STDCPP_FLOAT64_T__
+#if defined(FAST_IO_HAS_FLOAT64_TYPE)
 		|| ::std::same_as<no_cvref_t, _Float64>
 #endif
 	};

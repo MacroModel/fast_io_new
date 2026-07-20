@@ -330,7 +330,10 @@ compiler_constant_width_child_eligible(T const &value) noexcept
 template <::fast_io::manipulators::scalar_placement placement,
 	::std::integral char_type, typename T>
 	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
-[[nodiscard]] inline constexpr auto
+// This leaf belongs only to the compiler-constant replacement protocol. A per-function -O3 audit on GCC 13/15 and
+// Clang 23 showed that losing this boundary prevents all four width families from completing constant materialization
+// and reconnects their constant callers to the generic formatter; every unknown-double caller stayed instruction-identical.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 compiler_constant_width_materialize(T const &child, ::std::size_t width,
 	char_type fill,
 	::fast_io::manipulators::scalar_placement runtime_placement = placement) noexcept
@@ -558,7 +561,9 @@ print_compiler_constant_materialization_eligible(
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T>
 	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
-[[nodiscard]] inline constexpr auto
+// This CPO is a compiler-constant-protocol leaf. The GCC 13/15 and Clang 23 -O3 audit showed that removing only this
+// boundary reconnects a constant width_t caller to the generic formatter, while its unknown-double body is identical.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_t<placement, T>>,
@@ -622,7 +627,9 @@ template <::std::integral char_type,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
 		::fast_io::details::compiler_constant_width_child<char_type, T>
-[[nodiscard]] inline constexpr auto
+// The matching GCC 13/15 and Clang 23 -O3 A/B proved this compiler-constant-protocol boundary independently for
+// width_ch_t: without it the constant caller rejoins the generic formatter; the unknown-double caller is identical.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
@@ -675,7 +682,9 @@ print_compiler_constant_materialization_eligible(
 
 template <::std::integral char_type, typename T>
 	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
-[[nodiscard]] inline constexpr auto
+// Run-time placement can itself be optimizer-proven constant. GCC 13/15 and Clang 23 -O3 require this constant-protocol
+// boundary to finish materialization instead of reconnecting to the generic formatter; the fully unknown caller is identical.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>,
@@ -738,7 +747,9 @@ template <::std::integral char_type, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
 		::fast_io::details::compiler_constant_width_child<char_type, T>
-[[nodiscard]] inline constexpr auto
+// The placement-plus-fill variant has the same independently audited constant-only requirement: without this boundary
+// GCC 13/15 and Clang 23 reconnect its constant caller to the generic formatter; the fully unknown caller is identical.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,

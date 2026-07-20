@@ -627,13 +627,7 @@ inline
 		}
 	}
 #elif defined(_MSC_VER) && defined(_M_X64) && !defined(_M_ARM64EC) && !defined(__arm64ec__)
-#if __cpp_if_consteval >= 202106L && 0
-	if !consteval
-	{
-		return umul_least_64_emulated(a, b, high);
-	}
-	else
-#elif __cpp_lib_is_constant_evaluated >= 201811L
+#if __cpp_lib_is_constant_evaluated >= 201811L
 	if (__builtin_is_constant_evaluated())
 	{
 		return umul_least_64_emulated(a, b, high);

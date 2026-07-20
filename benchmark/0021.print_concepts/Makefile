@@ -19,6 +19,7 @@ CXXFLAGS ?= -O3 -march=native -std=c++20 -DNDEBUG
 	compiler-constant-integer-rodata-asm-gate \
 	compiler-constant-integer-facade-asm-gate \
 	static-fragment-hot-policy-asm-gate \
+	static-argument-large-record-asm-gate \
 	static-argument-fixed-width-asm-gate clean
 
 all: $(OUT)
@@ -71,6 +72,9 @@ compiler-constant-integer-facade-asm-gate: compiler-constant-integer-rodata-asm-
 
 static-fragment-hot-policy-asm-gate:
 	ROOT="$(abspath $(ROOT))" bash ./check_static_fragment_hot_policy_asm.sh
+
+static-argument-large-record-asm-gate:
+	ROOT="$(abspath $(ROOT))" bash ./check_static_argument_large_record_asm.sh
 
 static-argument-fixed-width-asm-gate:
 	ROOT="$(abspath $(ROOT))" bash ./check_static_argument_fixed_width_asm.sh

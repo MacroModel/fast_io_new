@@ -154,12 +154,12 @@ void test_direct_marker_and_unmarked_adapter()
 void test_static_argument_provider_gate()
 {
 	constexpr auto provider{::fast_io::fmt::status_io_print_forward(
-		::fast_io::io_alias_type<char>, ::fast_io::fmt::static_arg<42>)};
+		::fast_io::io_alias_type<char>, ::fast_io::mnp::static_arg<42>)};
 
 	capture_state direct_state{.expected_source = provider.base};
 	::fast_io::io::print(
 		direct_sink{__builtin_addressof(direct_state)},
-		::fast_io::fmt::static_arg<42>);
+		::fast_io::mnp::static_arg<42>);
 	assert(direct_state.observed_expected_source);
 	assert(std::string_view(direct_state.bytes.data(), direct_state.size) ==
 		"42");
@@ -167,7 +167,7 @@ void test_static_argument_provider_gate()
 	capture_state adapter_state{.expected_source = provider.base};
 	::fast_io::io::print(
 		unmarked_scatter_adapter{__builtin_addressof(adapter_state)},
-		::fast_io::fmt::static_arg<42>);
+		::fast_io::mnp::static_arg<42>);
 	assert(!adapter_state.observed_expected_source);
 	assert(std::string_view(adapter_state.bytes.data(), adapter_state.size) ==
 		"42");

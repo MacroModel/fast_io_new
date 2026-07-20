@@ -55,6 +55,8 @@ struct capture_state
 	::std::size_t size{};
 	::std::size_t write_calls{};
 	::std::size_t scatter_calls{};
+	char_type const *expected_direct_source{};
+	bool direct_source_matched{};
 };
 
 template <typename char_type>
@@ -91,6 +93,10 @@ inline void write_all_overflow_define(
 	char_type const *last) noexcept
 {
 	auto &state{*sink.state};
+	if (state.expected_direct_source != nullptr)
+	{
+		state.direct_source_matched = first == state.expected_direct_source;
+	}
 	state.sources[0u] = first;
 	state.sizes[0u] = static_cast<::std::size_t>(last - first);
 	++state.write_calls;
@@ -155,6 +161,21 @@ inline void brace_literals(direct_sink<char_type> sink)
 	else
 		::fast_io::fmt::print<U"{}{}">(sink, literals<char32_t>::hello,
 			literals<char32_t>::world);
+}
+
+template <typename char_type>
+inline void brace_single_literal(direct_sink<char_type> sink)
+{
+	if constexpr (::std::same_as<char_type, char>)
+		::fast_io::fmt::print<"{}">(sink, literals<char>::helloworld);
+	else if constexpr (::std::same_as<char_type, wchar_t>)
+		::fast_io::fmt::print<L"{}">(sink, literals<wchar_t>::helloworld);
+	else if constexpr (::std::same_as<char_type, char8_t>)
+		::fast_io::fmt::print<u8"{}">(sink, literals<char8_t>::helloworld);
+	else if constexpr (::std::same_as<char_type, char16_t>)
+		::fast_io::fmt::print<u"{}">(sink, literals<char16_t>::helloworld);
+	else
+		::fast_io::fmt::print<U"{}">(sink, literals<char32_t>::helloworld);
 }
 
 template <typename char_type>
@@ -231,24 +252,24 @@ inline void static_reordered_format(direct_sink<char_type> sink)
 {
 	if constexpr (::std::same_as<char_type, char>)
 		::fast_io::fmt::print<"a{1}c{0}">(sink,
-			::fast_io::fmt::static_arg<"d">,
-			::fast_io::fmt::static_arg<"b">);
+			::fast_io::mnp::static_arg<"d">,
+			::fast_io::mnp::static_arg<"b">);
 	else if constexpr (::std::same_as<char_type, wchar_t>)
 		::fast_io::fmt::print<L"a{1}c{0}">(sink,
-			::fast_io::fmt::static_arg<L"d">,
-			::fast_io::fmt::static_arg<L"b">);
+			::fast_io::mnp::static_arg<L"d">,
+			::fast_io::mnp::static_arg<L"b">);
 	else if constexpr (::std::same_as<char_type, char8_t>)
 		::fast_io::fmt::print<u8"a{1}c{0}">(sink,
-			::fast_io::fmt::static_arg<u8"d">,
-			::fast_io::fmt::static_arg<u8"b">);
+			::fast_io::mnp::static_arg<u8"d">,
+			::fast_io::mnp::static_arg<u8"b">);
 	else if constexpr (::std::same_as<char_type, char16_t>)
 		::fast_io::fmt::print<u"a{1}c{0}">(sink,
-			::fast_io::fmt::static_arg<u"d">,
-			::fast_io::fmt::static_arg<u"b">);
+			::fast_io::mnp::static_arg<u"d">,
+			::fast_io::mnp::static_arg<u"b">);
 	else
 		::fast_io::fmt::print<U"a{1}c{0}">(sink,
-			::fast_io::fmt::static_arg<U"d">,
-			::fast_io::fmt::static_arg<U"b">);
+			::fast_io::mnp::static_arg<U"d">,
+			::fast_io::mnp::static_arg<U"b">);
 }
 
 template <typename char_type>
@@ -309,6 +330,20 @@ inline void test_character_domain()
 	capture_state<char_type> state{};
 	direct_sink<char_type> sink{__builtin_addressof(state)};
 
+	state.expected_direct_source = literals<char_type>::helloworld;
+	::fast_io::print(sink, literals<char_type>::helloworld);
+	assert(state.write_calls == 1u && state.scatter_calls == 0u &&
+		state.direct_source_matched &&
+		equals(state, literals<char_type>::helloworld));
+
+	reset(state);
+	state.expected_direct_source = literals<char_type>::helloworld;
+	brace_single_literal(sink);
+	assert(state.write_calls == 1u && state.scatter_calls == 0u &&
+		state.direct_source_matched &&
+		equals(state, literals<char_type>::helloworld));
+
+	reset(state);
 	::fast_io::print(sink, literals<char_type>::hello,
 		literals<char_type>::world);
 	assert(state.write_calls == 1u && state.scatter_calls == 0u &&

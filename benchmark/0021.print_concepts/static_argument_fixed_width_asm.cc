@@ -4,19 +4,19 @@
 extern "C" [[gnu::noinline]] void brace_static_fixed()
 {
 	::fast_io::fmt::print<"i = {:020.6f}">(
-		::fast_io::out(), ::fast_io::fmt::static_arg<12.44>);
+		::fast_io::out(), ::fast_io::mnp::static_arg<12.44>);
 }
 
 extern "C" [[gnu::noinline]] void printf_static_fixed()
 {
 	::fast_io::fmt::printf<"i = %+020.6f">(
-		::fast_io::out(), ::fast_io::fmt::static_arg<12.44>);
+		::fast_io::out(), ::fast_io::mnp::static_arg<12.44>);
 }
 
 extern "C" [[gnu::noinline]] void brace_static_middle()
 {
 	::fast_io::fmt::print<"i = {:*^20.6f}">(
-		::fast_io::out(), ::fast_io::fmt::static_arg<12.44>);
+		::fast_io::out(), ::fast_io::mnp::static_arg<12.44>);
 }
 
 extern "C" [[gnu::noinline]] void brace_runtime_fixed(double value)

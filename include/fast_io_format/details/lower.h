@@ -259,6 +259,16 @@ concept expression = requires(argument_pack &arguments) {
 template <auto format_literal, auto field, typename grammar_type,
 		  typename argument_pack>
 	requires expression<format_literal, field, grammar_type, argument_pack>
+// GCC 13 does not inline this stateless ADL transport through the two grouped
+// wrappers below.  That turns a literal floating argument into an opaque
+// returned aggregate before core can evaluate its compiler-constant query.
+// The three legacy-GNU placements are an indivisible A/B chain: removing any
+// one leaves static_format_endpoint at exit 25; keeping all three makes the
+// complete 31-byte record one bounded staged write. GCC 15 and Clang already
+// inline the chain and are deliberately left to their normal cost model.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 15
+[[__gnu__::__always_inline__]]
+#endif
 [[nodiscard]] inline constexpr decltype(auto) invoke(argument_pack &arguments)
 {
 	return lower_format_replacement_define(
@@ -279,11 +289,11 @@ struct static_evaluation_argument
 	using type = static_evaluation_unused_argument;
 };
 
-template <::fast_io::fmt::static_argument_constant value_literal>
+template <::fast_io::manipulators::static_argument_constant value_literal>
 struct static_evaluation_argument<
-	::fast_io::fmt::static_format_arg<value_literal>>
+	::fast_io::manipulators::static_arg_t<value_literal>>
 {
-	using type = ::fast_io::fmt::static_format_arg<value_literal>;
+	using type = ::fast_io::manipulators::static_arg_t<value_literal>;
 };
 
 template <auto... value_literals>
@@ -304,6 +314,16 @@ struct static_evaluation_argument<
 		clean_storage_type, static_evaluation_unused_argument>;
 	using type = ::fast_io::fmt::static_named_arg<
 		name_literal, selected_storage_type>;
+};
+
+template <::fast_io::manipulators::static_argument_constant name_literal,
+	::fast_io::manipulators::static_argument_constant value_literal>
+struct static_evaluation_argument<
+	::fast_io::manipulators::static_named_arg_t<
+		name_literal, value_literal>>
+{
+	using type = ::fast_io::manipulators::static_named_arg_t<
+		name_literal, value_literal>;
 };
 
 template <typename argument_type>
@@ -2171,6 +2191,9 @@ template <auto format_literal, typename grammar_tag,
 		  ::std::size_t operation_index,
 		  bool trim_terminal_literal_line_feed = false,
 		  ::std::size_t... index, typename... argument_types>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 15
+[[__gnu__::__always_inline__]]
+#endif
 [[nodiscard]] inline constexpr decltype(auto) make_format_operation(
 	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments)
 {
@@ -2563,6 +2586,9 @@ template <auto format_literal, typename grammar_tag,
 		  bool trim_terminal_literal_line_feed = false,
 		  ::std::size_t... argument_index,
 		  typename... argument_types>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 15
+[[__gnu__::__always_inline__]]
+#endif
 [[nodiscard]] inline constexpr decltype(auto) make_format_group(
 	indexed_argument_pack<::std::index_sequence<argument_index...>,
 						  argument_types...> &arguments)
@@ -2886,58 +2912,3 @@ inline constexpr decltype(auto) lower_format_program_trim_terminal_line_feed(
 }
 
 } // namespace fast_io::fmt::details
-
-namespace fast_io::fmt::details
-{
-
-template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] inline consteval auto
-make_static_argument_identity_format_literal() noexcept
-{
-	char_type source[]{
-		::fast_io::char_literal_v<u8'{', char_type>,
-		::fast_io::char_literal_v<u8'}', char_type>, char_type{}};
-	return ::fast_io::fmt::basic_fixed_string{source};
-}
-
-template <::fast_io::fmt::format_character char_type>
-inline constexpr auto static_argument_identity_format_literal{
-	::fast_io::fmt::details::
-		make_static_argument_identity_format_literal<char_type>()};
-
-} // namespace fast_io::fmt::details
-
-namespace fast_io::fmt
-{
-
-/**
- * Exposes an explicit `static_arg<V>` to raw `fast_io::io::print`/concat.
- *
- * The ordinary value is formatted once by the same compile-time brace rule as
- * `"{}"`, into `compiled_static_format_program::storage`.  The returned
- * `static_scatter_t` therefore points at one provider-owned DSAL array; it never
- * points into this forwarding frame.  The core output gate decides whether a
- * synchronous direct destination may observe that address or must copy it into
- * destination-owned storage first.
- */
-template <::fast_io::fmt::format_character char_type, typename holder_type>
-	requires (
-		::fast_io::fmt::is_static_format_argument_holder_v<holder_type> &&
-		::fast_io::fmt::details::static_format_program<
-			::fast_io::fmt::details::
-				static_argument_identity_format_literal<char_type>,
-			::fast_io::fmt::brace_fmt_t,
-			::std::remove_cvref_t<holder_type>>())
-[[nodiscard]] inline constexpr auto status_io_print_forward(
-	::fast_io::io_alias_type_t<char_type>, holder_type) noexcept
-{
-	using clean_holder_type = ::std::remove_cvref_t<holder_type>;
-	using static_program = ::fast_io::fmt::details::compiled_static_format_program<
-		::fast_io::fmt::details::
-			static_argument_identity_format_literal<char_type>,
-		::fast_io::fmt::brace_fmt_t, clean_holder_type>;
-	return ::fast_io::manipulators::static_scatter_t<
-		char_type, static_program::size>{static_program::storage.data()};
-}
-
-} // namespace fast_io::fmt

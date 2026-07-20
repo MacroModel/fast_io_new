@@ -1533,11 +1533,7 @@ scan_int_contiguous_none_simd_space_part_define_impl(char_type const *first, cha
 {
 	// SIMD and target builtins are excluded from constant evaluation.  The
 	// constexpr arm is a scalar implementation with the same parse contract.
-#ifdef __cpp_if_consteval
-	if !consteval
-#else
-	if (!__builtin_is_constant_evaluated())
-#endif
+	FAST_IO_IF_NOT_CONSTEVAL
 	{
 		using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
 		if constexpr (base == 16 && sizeof(char_type) == sizeof(char8_t) &&
@@ -4065,24 +4061,22 @@ inline constexpr parse_result<char_type const *> scan_context_define_parse_impl(
 	noskipws context.  When the attribute is unavailable, the full switch is the
 	semantically exact fallback.
 	*/
-#if __has_cpp_attribute(assume)
 	if constexpr (my_unsigned_integral<T> && !allow_leading_plus)
 	{
-		[[assume(phase != scan_integral_context_phase::sign)]];
+		FAST_IO_ASSUME(phase != scan_integral_context_phase::sign);
 	}
 	if constexpr (!shbase || base == 10)
 	{
-		[[assume(phase != scan_integral_context_phase::prefix)]];
+		FAST_IO_ASSUME(phase != scan_integral_context_phase::prefix);
 	}
 	if constexpr (skipzero)
 	{
-		[[assume(phase != scan_integral_context_phase::zero_invalid)]];
+		FAST_IO_ASSUME(phase != scan_integral_context_phase::zero_invalid);
 	}
 	else
 	{
-		[[assume(phase != scan_integral_context_phase::zero_skip)]];
+		FAST_IO_ASSUME(phase != scan_integral_context_phase::zero_skip);
 	}
-#endif
 	switch (phase)
 	{
 	case scan_integral_context_phase::space:
@@ -4215,12 +4209,10 @@ inline constexpr parse_code scan_context_eof_define_parse_impl(State &st, T &t) 
 	The EOF assumption is therefore implied by all state writes.  Without
 	[[assume]], the unchanged switch remains the exact semantic fallback.
 	*/
-#if __has_cpp_attribute(assume)
 	if constexpr (!skipzero)
 	{
-		[[assume(phase != scan_integral_context_phase::zero_skip)]];
+		FAST_IO_ASSUME(phase != scan_integral_context_phase::zero_skip);
 	}
-#endif
 	switch (phase)
 	{
 	case scan_integral_context_phase::space:

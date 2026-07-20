@@ -39,13 +39,15 @@ done
 add_compiler clang++
 
 mapfile -t cases < <(find "$test_dir" -maxdepth 1 -name '*fail.cc' -print | sort)
-if (( ${#cases[@]} != 24 )); then
-	printf 'format rejection matrix: expected 24 compile-fail cases, found %d\n' "${#cases[@]}" >&2
+if (( ${#cases[@]} != 38 )); then
+	printf 'format rejection matrix: expected 38 compile-fail cases, found %d\n' "${#cases[@]}" >&2
 	exit 1
 fi
 positive_cases=(
 	"$test_dir/printf_argument_validation.cc"
 	"$test_dir/format_consteval.cc"
+	"$test_dir/format_semantic_lowering.cc"
+	"$test_dir/static_custom_format_arg.cc"
 	"$test_dir/static_format_endpoint.cc"
 )
 
@@ -77,7 +79,7 @@ for compiler in "${compilers[@]}"; do
 			exit 1
 		fi
 	done
-	printf 'format rejection matrix: PASS 24/24 rejects + 3/3 controls (%s)\n' \
+	printf 'format rejection matrix: PASS 38/38 rejects + 5/5 controls (%s)\n' \
 		"$version_line"
 done
 

@@ -31,7 +31,7 @@ static_assert(direct_format_fill_test<char8_t, 8u, 4u>(
 inline constexpr ::fast_io::fmt::basic_fixed_string pattern_width_format{
 	u8"{:😀>5}"};
 using pattern_width_argument =
-	decltype(::fast_io::fmt::static_arg<42u>);
+	decltype(::fast_io::mnp::static_arg<42u>);
 using static_pattern_width =
 	::fast_io::fmt::details::compiled_static_format_program<
 		pattern_width_format, ::fast_io::fmt::brace_fmt_t,

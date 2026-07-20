@@ -142,9 +142,7 @@ inline constexpr ::std::size_t scatter_status_one_size(io_scatter_status_t statu
 template <::std::integral dftype>
 inline constexpr ::fast_io::intfpos_t fposoffadd_nonegative(::fast_io::intfpos_t off, dftype df) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(0 <= df)]];
-#endif
+	FAST_IO_ASSUME(0 <= df);
 
 	constexpr ::fast_io::intfpos_t mxv{::std::numeric_limits<::fast_io::intfpos_t>::max()};
 	constexpr ::fast_io::uintfpos_t umxv{static_cast<::fast_io::uintfpos_t>(mxv)};
@@ -275,9 +273,7 @@ inline constexpr ::fast_io::intfpos_t scatter_fpos_mul(::fast_io::intfpos_t ofd)
 inline constexpr ::fast_io::intfpos_t adjust_instm_offset(::std::ptrdiff_t remainspace,
 														  ::fast_io::intfpos_t requested) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(remainspace >= 0)]];
-#endif
+	FAST_IO_ASSUME(remainspace >= 0);
 	constexpr auto ptrdfmn{::std::numeric_limits<::fast_io::intfpos_t>::min()};
 	if (requested < ptrdfmn + remainspace)
 	{

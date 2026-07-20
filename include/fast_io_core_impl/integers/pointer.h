@@ -556,7 +556,7 @@ print_compiler_constant_materialization_query_inline_safe(
 }
 
 template <::std::integral char_type, ::std::integral pchar_type>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>,
 	manipulators::chvw_t<pchar_type> const &) noexcept
@@ -565,7 +565,7 @@ print_compiler_constant_materialization_eligible(
 }
 
 template <::std::integral char_type, ::std::integral pchar_type>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>,
 	manipulators::chvw_t<pchar_type> const &value) noexcept
@@ -578,7 +578,7 @@ namespace details
 
 template <::std::integral char_type, ::std::size_t extent,
 		  ::std::size_t... index>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 bounded_cstr_compiler_constant_eligible_impl(
 	manipulators::bounded_cstr_scatter_t<char_type, extent> const &value,
 	::std::index_sequence<index...>) noexcept
@@ -617,7 +617,7 @@ print_compiler_constant_pre_normalization_safe(
 }
 
 template <::std::integral char_type, ::std::size_t extent>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<
 		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>,
@@ -638,7 +638,7 @@ print_compiler_constant_materialization_eligible(
 }
 
 template <::std::integral char_type, ::std::size_t extent>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<
 		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>,
@@ -658,7 +658,7 @@ print_compiler_constant_materialization_query_inline_safe(
 }
 
 template <::std::integral char_type, ::std::size_t N>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::static_scatter_t<char_type, N>>,
 	manipulators::static_scatter_t<char_type, N> const &) noexcept
@@ -667,7 +667,7 @@ print_compiler_constant_materialization_eligible(
 }
 
 template <::std::integral char_type, ::std::size_t N>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, manipulators::static_scatter_t<char_type, N>>,
 	manipulators::static_scatter_t<char_type, N> const &value) noexcept
@@ -685,7 +685,7 @@ print_compiler_constant_materialization_query_inline_safe(
 }
 
 template <::std::integral char_type, ::std::size_t N>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::small_scatter_t<char_type, N>>,
 	manipulators::small_scatter_t<char_type, N> const &) noexcept
@@ -694,7 +694,7 @@ print_compiler_constant_materialization_eligible(
 }
 
 template <::std::integral char_type, ::std::size_t N>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, manipulators::small_scatter_t<char_type, N>>,
 	manipulators::small_scatter_t<char_type, N> const &value) noexcept

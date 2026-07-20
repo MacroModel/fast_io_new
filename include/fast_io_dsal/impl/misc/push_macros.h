@@ -225,6 +225,74 @@ Internal assert macros for fuzzing fast_io.
 #define FAST_IO_HAS_BUILTIN(...) 0
 #endif
 
+#pragma push_macro("FAST_IO_HAS_ATTRIBUTE")
+#undef FAST_IO_HAS_ATTRIBUTE
+#ifdef __has_cpp_attribute
+#define FAST_IO_HAS_ATTRIBUTE(...) __has_cpp_attribute(__VA_ARGS__)
+#else
+#define FAST_IO_HAS_ATTRIBUTE(...) 0
+#endif
+
+#pragma push_macro("FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE")
+#undef FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
+// Clang exposes __cpp_static_call_operator in C++20 as an extension, but strict
+// C++20 rejects the syntax.  The language-mode half of this gate prevents a
+// feature-test macro from admitting syntax that the selected standard forbids.
+#if defined(__cpp_static_call_operator) && __cpp_static_call_operator >= 202207L && \
+	((defined(_MSVC_LANG) && _MSVC_LANG > 202002L) ||                              \
+	 (!defined(_MSVC_LANG) && __cplusplus > 202002L))
+#define FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE 1
+#else
+#define FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE 0
+#endif
+
+#pragma push_macro("FAST_IO_IF_CONSTEVAL")
+#undef FAST_IO_IF_CONSTEVAL
+// Preserve the immediate-function context of `if consteval` when the language
+// mode provides it.  In strict C++20 mode both arms must remain ordinary,
+// well-formed statements, so the standard constant-evaluation query is the
+// only portable selection mechanism.
+#if defined(__cpp_if_consteval) && __cpp_if_consteval >= 202106L
+#define FAST_IO_IF_CONSTEVAL if consteval
+#else
+// The lambda keeps GCC from diagnosing the query as tautologically false when
+// an otherwise shared helper is not itself constexpr.  It folds completely and
+// still asks the standard C++20 query in the caller's evaluation context.
+#define FAST_IO_IF_CONSTEVAL \
+	if ([]() constexpr noexcept { return ::std::is_constant_evaluated(); }())
+#endif
+
+#pragma push_macro("FAST_IO_IF_NOT_CONSTEVAL")
+#undef FAST_IO_IF_NOT_CONSTEVAL
+// Keep the runtime half symmetric with FAST_IO_IF_CONSTEVAL so call sites never
+// need to duplicate feature-test branches or rely on a C++23 extension in C++20.
+#if defined(__cpp_if_consteval) && __cpp_if_consteval >= 202106L
+#define FAST_IO_IF_NOT_CONSTEVAL if !consteval
+#else
+#define FAST_IO_IF_NOT_CONSTEVAL \
+	if (![]() constexpr noexcept { return ::std::is_constant_evaluated(); }())
+#endif
+
+#pragma push_macro("FAST_IO_ASSUME")
+#undef FAST_IO_ASSUME
+// Clang advertises the C++23 assume attribute while compiling as C++20, where
+// using it is still a pedantic error.  Require both a post-C++20 language mode
+// and attribute support, then use the compiler builtin when strict C++20 has
+// no standard spelling.  Omitting the hint is always semantics-preserving.
+#if (((defined(__cpp_assume) && __cpp_assume >= 202207L) || \
+	  (!defined(__cpp_assume) &&                                      \
+	   ((defined(_MSVC_LANG) && _MSVC_LANG > 202002L) ||              \
+		(!defined(_MSVC_LANG) && __cplusplus > 202002L)))) &&           \
+	 FAST_IO_HAS_ATTRIBUTE(assume))
+#define FAST_IO_ASSUME(...) [[assume(__VA_ARGS__)]]
+#elif FAST_IO_HAS_BUILTIN(__builtin_assume)
+#define FAST_IO_ASSUME(...) __builtin_assume(__VA_ARGS__)
+#else
+// Keep expressions type-checked and their local inputs marked as used without
+// evaluating them or adding a runtime branch when no assumption facility exists.
+#define FAST_IO_ASSUME(...) ((void)sizeof(static_cast<bool>(__VA_ARGS__)))
+#endif
+
 #pragma push_macro("FAST_IO_CPP_RTTI")
 #undef FAST_IO_CPP_RTTI
 #if defined(_MSC_VER) && !defined(__clang__)

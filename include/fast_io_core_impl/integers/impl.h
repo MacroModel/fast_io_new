@@ -600,7 +600,7 @@ struct float_alias_type_traits
 	using alias_type = flt;
 };
 
-#ifdef __STDCPP_FLOAT64_T__
+#if defined(FAST_IO_HAS_FLOAT64_TYPE)
 template <>
 struct float_alias_type_traits<double>
 {
@@ -3182,7 +3182,7 @@ print_compiler_constant_show_base_define(char_type *iter) noexcept
 }
 
 template <bool uppercase, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_compiler_constant_boolalpha_define(
+inline constexpr char_type *print_compiler_constant_boolalpha_define(
 	char_type *iter, bool value) noexcept
 {
 	if (value)
@@ -3218,7 +3218,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_compiler_constant_bo
 ///          therefore instantiates and executes the original formatter with no extra test or altered inlining body.
 template <::std::size_t base, bool showbase = false, bool uppercase_showbase = false, bool showpos = false,
 		  bool uppercase = false, bool full = false, bool oct_c2y = false, typename int_type, ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+inline constexpr char_type *
 print_reserve_integral_compiler_constant_define(char_type *first, int_type t)
 {
 	if constexpr (base <= 10 && uppercase)
@@ -4027,7 +4027,7 @@ print_compiler_constant_materialization_query_inline_safe(
 
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	::fast_io::io_reserve_type_t<char_type, T>, T const &value) noexcept
 {
@@ -4045,7 +4045,7 @@ print_compiler_constant_materialization_eligible(
 ///          early gate's false arm performs no cast and enters that alias unchanged.
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type, T>, T const &value) noexcept
 {
@@ -4098,7 +4098,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
 			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
 	manipulators::scalar_manip_t<flags, T> const &value) noexcept
@@ -4116,7 +4116,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
 			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
 	manipulators::scalar_manip_t<flags, T> const &value) noexcept
@@ -4140,7 +4140,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
 			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
+inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type,
 					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
 	char_type *iter,
@@ -4397,7 +4397,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			 flags.percentage ==
 				 ::fast_io::manipulators::percentage_flag::none)
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::basic_io_scatter_t<char_type> *
+inline constexpr ::fast_io::basic_io_scatter_t<char_type> *
 print_compiler_constant_static_fragments_define(
 	io_reserve_type_t<char_type,
 					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
@@ -4546,7 +4546,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			 flags.percentage ==
 				 ::fast_io::manipulators::percentage_flag::none)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
+[[nodiscard]] inline constexpr ::std::size_t
 print_reserve_precise_size(
 	io_reserve_type_t<char_type,
 		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
@@ -4626,6 +4626,9 @@ print_reserve_precise_size(
 /// @brief Emits a proven-constant integer into concat's exact destination slice.
 /// @details The exact-size protocol is a destination/allocation refinement only.  It deliberately reuses the isolated
 ///          compiler-constant reserve formatter and never converts concat into a retained-scatter output operation.
+///          This leaf remains forced inline: Clang 23 otherwise outlines the precise writer for multi-digit 64/128-bit
+///          and non-decimal constants, leaving a conversion call in an otherwise fully constant print expression.
+///          Optimizer-unknown integers never acquire this proxy type, so their established run-time writer is unaffected.
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
 	requires((details::my_integral<T> ||
 			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
@@ -4678,7 +4681,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags,
 			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			 flags.percentage ==
 				 ::fast_io::manipulators::percentage_flag::none)
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+[[nodiscard]] inline constexpr
 	::fast_io::basic_io_scatter_t<char_type>
 print_compiler_constant_single_static_fragment(
 	io_reserve_type_t<char_type,

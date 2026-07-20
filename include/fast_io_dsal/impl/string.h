@@ -55,7 +55,7 @@ inline constexpr void string_heap_dilate_uncheck(::fast_io::containers::details:
 		beginptr = nullptr;
 	}
 #if __cpp_constexpr_dynamic_alloc >= 201907L
-	if consteval
+	FAST_IO_IF_CONSTEVAL
 	{
 		auto [newptr, newcap] = typed_allocator_type::allocate_at_least(rsize + 1u);
 		if (beginptr != nullptr)

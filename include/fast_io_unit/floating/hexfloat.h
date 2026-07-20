@@ -537,11 +537,7 @@ inline constexpr char_type const *scan_hexfloat_skip_after_storage_limit_run(cha
 {
 	auto const *const original_first{first};
 	auto truncated_nonzero{state.truncated_nonzero};
-#ifdef __cpp_if_consteval
-	if !consteval
-#else
-	if (!__builtin_is_constant_evaluated())
-#endif
+	FAST_IO_IF_NOT_CONSTEVAL
 	{
 		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
@@ -668,11 +664,7 @@ inline constexpr char_type const *scan_hexfloat_significand_run(char_type const 
 																bool after_decimal,
 																state_type &state) noexcept
 {
-#ifdef __cpp_if_consteval
-	if !consteval
-#else
-	if (!__builtin_is_constant_evaluated())
-#endif
+	FAST_IO_IF_NOT_CONSTEVAL
 	{
 		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)

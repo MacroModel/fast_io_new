@@ -297,9 +297,7 @@ inline constexpr chartype *prrsv_percentage_main_common_impl(chartype *iter, T n
 					::fast_io::intrinsics::udivmod<udivmodtype>(numerator10000low, numerator10000high, denominator,
 																zero);
 
-#if __has_cpp_attribute(assume)
-				[[assume(remainderhigh == 0)]];
-#endif
+				FAST_IO_ASSUME(remainderhigh == 0);
 				if ((denominatordiv2 < remainderlow) ||
 					(remainderlow == denominatordiv2 && denominatoriseven && ((quotientlow & 1u) != 0u))) // round
 				{
@@ -320,10 +318,8 @@ inline constexpr chartype *prrsv_percentage_main_common_impl(chartype *iter, T n
 					constexpr auto mxval{::fast_io::details::base_ul64_max_val<base, T>};
 					auto [quotientlowlow, quotientlowhigh, remainderlowlow, remainderlowhigh] =
 						::fast_io::intrinsics::udivmod<udivmodtype>(quotientlow, quotienthigh, mxval, zero);
-#if __has_cpp_attribute(assume)
-					[[assume(quotientlowhigh == 0)]];
-					[[assume(remainderlowhigh == 0)]];
-#endif
+					FAST_IO_ASSUME(quotientlowhigh == 0);
+					FAST_IO_ASSUME(remainderlowhigh == 0);
 					constexpr ::std::size_t toprint{4u};
 					if constexpr (full)
 					{

@@ -120,7 +120,7 @@ on the same pinned core.
 ## Static floating arguments with width and precision
 
 `static_argument_fixed_width_asm.cc` verifies the variable-template spelling
-`fmt::static_arg<12.44>` through both brace and printf programs.  The matrix
+`mnp::static_arg<12.44>` through both brace and printf programs.  The matrix
 contains zero-filled internal placement and center placement, plus an ordinary
 run-time `double` control.  Every static wrapper must pass one complete 24-byte
 record from `compiled_static_format_program::storage` in `.rodata` to exactly
@@ -136,6 +136,40 @@ TASKSET_CPU=16 \
 CLANG23_CXX=/path/to/clang++-23 \
 make -C benchmark/0021.print_concepts static-argument-fixed-width-asm-gate
 ```
+
+## Static-argument large records and the storage boundary
+
+`static_argument_large_record_asm.cc` checks 65-byte, 4-KiB, and 16-KiB
+`mnp::static_arg` strings.  The last case is the current static-format semantic
+budget, not an unbuffered transport threshold.  Each complete format program
+owns its final code units in one provider-owned core freestanding array in
+`.rodata`; all three sizes pass
+that provider directly to one scalar write retry loop with no stack record,
+formatter call, or scatter metadata.  A complete type-level static provider is
+therefore not capped by the 64-byte automatic-record policy or the 4-KiB
+run-time copy/writev crossover.
+
+The corresponding limit probe is intentionally also a compiler-resource gate.
+On this tree its measured peak front-end RSS was 347,916 KiB for GCC 13,
+356,040 KiB for GCC 15, and 317,996 KiB for Clang 23.  The script checks all
+available GCC 13--16 and Clang 17--23 executables and allows 768 MiB by default;
+`FAST_IO_STATIC_ARGUMENT_MAX_RSS_KIB` can select a stricter build-machine
+budget.
+
+```sh
+make -C benchmark/0021.print_concepts static-argument-large-record-asm-gate
+```
+
+This guarantee requires the value to be represented in the template/type
+graph.  A plain call such as `fmt::print<"i = {}">(out(), 32)` shares its
+function-template specialization with every other run-time `int`, so C++20
+cannot use that parameter to initialize a value-dependent static object.  When
+the optimizer proves such a short ordinary argument, the print layer instead
+builds one caller-local core array and performs one scalar write. In contrast,
+`mnp::static_arg<32>` permits a merged provider-owned core freestanding array
+in `.rodata`. A single string
+literal needs neither construction: its existing literal pointer is forwarded
+directly.
 
 The fast_io-only protocol workloads extend that matrix with pure-text dynamic-reserve (`dynamic9`), retained static
 reserve-scatters (`reserve-scatter9`), incremental context (`context3`), and staged prepare/emit (`staged9`) producers.
@@ -200,7 +234,7 @@ make -C benchmark/0021.print_concepts compiler-constant-float-asm-gate
 
 `static_fragment_direct_write_bench.cc` compares the established outlined
 two-iovec completion, a caller-local first `writev`, a six-byte stack copy plus
-`write`, and an explicit `fmt::static_arg<32>` whose complete spelling is one
+`write`, and an explicit `mnp::static_arg<32>` whose complete spelling is one
 provider-owned DSAL array.  On CPU 4, 25 alternating `/dev/null` process pairs
 gave the public hot-first path median changes of -5.44% on GCC 15 and -4.31% on
 GCC 13.  Clang 23 was neutral at the median and +2.26% slower by paired mean.

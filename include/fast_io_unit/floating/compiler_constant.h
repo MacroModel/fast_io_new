@@ -493,6 +493,10 @@ compiler_constant_floating_write_decimal_digits(
 	return end;
 }
 
+// Constant-proxy digit leaf. Removing this placement together with the two
+// length leaves below makes GCC 15/Clang 23 retain decimal helper calls in the
+// `i=3.2` literal path (0x3f/0x4d-byte callers become 0x210/0x26b-class
+// dispatchers). No run-time integer or floating formatter calls this helper.
 template <::std::integral char_type, typename unsigned_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 compiler_constant_floating_write_decimal_digits_exact(
@@ -527,6 +531,9 @@ compiler_constant_floating_write_decimal_digits_exact(
 	return end;
 }
 
+// The u64 threshold tree is a constant-carrier leaf. At -O3 an ordinary
+// `inline` leaves an outlined length query in both tested compilers; forcing
+// only this bounded tree is required for the digit chain above to fold.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_floating_decimal_digits_u64(
 	::std::uint_least64_t input) noexcept
@@ -575,6 +582,9 @@ compiler_constant_floating_decimal_digits_u64(
 	return 19u + static_cast<::std::size_t>(input >= UINT64_C(10000000000000000000));
 }
 
+// This adapter must expose the u64/u128 split to the constant-proxy caller.
+// A/B removal, with the writers still forced, retains the same helper call and
+// prevents the literal scalar from reaching its 0x3f/0x4d-byte terminal form.
 template <typename unsigned_type>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_floating_decimal_digits(unsigned_type value) noexcept
@@ -617,9 +627,44 @@ compiler_constant_floating_decimal_digits(unsigned_type value) noexcept
 }
 
 template <typename unsigned_type>
-[[nodiscard]] inline constexpr unsigned_type
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr unsigned_type
 compiler_constant_floating_power_of_ten(::std::size_t exponent) noexcept
 {
+	// Keep the binary32/binary64 carrier range branch-shaped.  GCC 13 can
+	// propagate the constant decimal carrier through the proxy but does not
+	// collapse the counted multiply loop below; the surviving loop in turn
+	// prevents its following quotient/remainder stores from becoming immediate
+	// bytes.  A switch has identical constexpr semantics and lets that older
+	// optimizer select the divisor before lowering the digit writer.  Wider
+	// carriers and deliberately out-of-range precision plans retain the generic
+	// overflow-equivalent loop.  In A/B assembly, adding the cases reduced the
+	// GCC 13 field-only probe from 0xdd to 0x5d bytes; this local always-inline
+	// placement is also required because Clang otherwise outlines the enlarged
+	// switch.  Neither helper is reachable from the ordinary run-time ftoa path.
+	switch (exponent)
+	{
+	case 0u: return static_cast<unsigned_type>(UINT64_C(1));
+	case 1u: return static_cast<unsigned_type>(UINT64_C(10));
+	case 2u: return static_cast<unsigned_type>(UINT64_C(100));
+	case 3u: return static_cast<unsigned_type>(UINT64_C(1000));
+	case 4u: return static_cast<unsigned_type>(UINT64_C(10000));
+	case 5u: return static_cast<unsigned_type>(UINT64_C(100000));
+	case 6u: return static_cast<unsigned_type>(UINT64_C(1000000));
+	case 7u: return static_cast<unsigned_type>(UINT64_C(10000000));
+	case 8u: return static_cast<unsigned_type>(UINT64_C(100000000));
+	case 9u: return static_cast<unsigned_type>(UINT64_C(1000000000));
+	case 10u: return static_cast<unsigned_type>(UINT64_C(10000000000));
+	case 11u: return static_cast<unsigned_type>(UINT64_C(100000000000));
+	case 12u: return static_cast<unsigned_type>(UINT64_C(1000000000000));
+	case 13u: return static_cast<unsigned_type>(UINT64_C(10000000000000));
+	case 14u: return static_cast<unsigned_type>(UINT64_C(100000000000000));
+	case 15u: return static_cast<unsigned_type>(UINT64_C(1000000000000000));
+	case 16u: return static_cast<unsigned_type>(UINT64_C(10000000000000000));
+	case 17u: return static_cast<unsigned_type>(UINT64_C(100000000000000000));
+	case 18u: return static_cast<unsigned_type>(UINT64_C(1000000000000000000));
+	case 19u: return static_cast<unsigned_type>(UINT64_C(10000000000000000000));
+	default: break;
+	}
 	unsigned_type value{1u};
 	while (exponent != 0u)
 	{
@@ -772,7 +817,13 @@ compiler_constant_floating_exponent_size(
 }
 
 template <::fast_io::manipulators::scalar_flags flags, typename unsigned_type>
-[[nodiscard]] inline constexpr ::std::size_t
+// GCC 13 outlines this exact-size leaf after the scalar carrier has already
+// been materialized.  The resulting call hides the five-byte `i=3.2` extent
+// from the geometric whole-record selector and leaves four scratch tiers in
+// the caller (0x261 bytes versus 0x67 after forcing this leaf in the GCC 13
+// probe).  This helper is reachable only from compiler-constant proxy sizing;
+// ordinary ftoa has a disjoint size path.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_floating_fixed_size(
 	unsigned_type mantissa, ::std::int_least32_t exponent) noexcept
 {
@@ -824,6 +875,9 @@ compiler_constant_floating_scientific_size(
 			real_exponent, 2u);
 }
 
+// Constant-proxy notation selector. GCC 15 and Clang 23 otherwise outline the
+// decision and block complete folding of an ordinary literal scalar; the
+// dynamic ftoa notation selector is a different function and ABI.
 template <::fast_io::manipulators::scalar_flags flags, typename unsigned_type>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
 compiler_constant_floating_uses_fixed(
@@ -873,6 +927,9 @@ compiler_constant_floating_uses_fixed(
 	}
 }
 
+// Constant-proxy fixed writer. Removing this three-writer placement group
+// changes the GCC 15 literal caller from 0x3f bytes to 0xf1 bytes and the
+// Clang 23 caller from 0x4d to 0x87, both with residual calls.
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, typename unsigned_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
@@ -946,6 +1003,8 @@ compiler_constant_floating_write_fixed(
 	return iter;
 }
 
+// Constant-proxy scientific writer; it shares the measured three-writer A/B
+// above and never changes placement of the ordinary scientific ftoa writer.
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
 	::std::integral char_type, typename unsigned_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
@@ -1010,6 +1069,9 @@ compiler_constant_floating_hex_size(
 			binary_exponent, 1u);
 }
 
+// Constant-proxy hexadecimal writer. Clang 23 specifically changes the direct
+// literal hex symbol from 0x50 to 0x68 bytes and emits an out-of-line call when
+// this attribute alone is removed; the native hexfloat ABI stays by value.
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, typename floating_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
@@ -1089,6 +1151,10 @@ compiler_constant_floating_trim_decimal(
 	return value;
 }
 
+// Integer-field conversion boundary for the constant proxy. Without forced
+// inlining GCC 15 leaves a 0x1cb-byte literal dispatcher and Clang 23 expands
+// the same caller beyond 13 KiB. Ordinary runtime ftoa calls its established
+// DA/Dragonbox entries directly and cannot enter this boundary.
 template <typename floating_type,
 	::fast_io::manipulators::floating_rounding rounding>
 #if __has_cpp_attribute(__gnu__::__const__)
@@ -1422,6 +1488,9 @@ compiler_constant_floating_to_decimal(
 	}
 }
 
+// Owns constant-proxy construction only. A/B removal grows the GCC 15 literal
+// caller from 0x3f to 0x1cb bytes and Clang 23 from 0x4d to more than 14 KiB;
+// dynamic values fail the upper builtin-constant gate before this call exists.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
@@ -1678,6 +1747,16 @@ compiler_constant_floating_carrier_grid_supported(
 ///          requested fractional quantum.  Every miss retains the exact binary
 ///          expansion fallback.
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+// GNU 13/15 at -O3 otherwise outlines this constant-proxy planning leaf and
+// leaves calls in a literal precision+width print (0x817/0x114d-byte callers).
+// Inlining reduces those callers to 0xc4/0xc8 bytes while their dynamic-value
+// controls remain byte-identical. Clang is intentionally excluded: it already
+// makes the better placement decision and forcing this body grows its literal
+// caller from 0x1e7 to 0x5db bytes. This function is reachable only from the
+// compiler-constant precision protocol and cannot alter the run-time ftoa ABI.
+#if defined(__GNUC__) && !defined(__clang__)
+[[__gnu__::__always_inline__]]
+#endif
 [[nodiscard]] inline constexpr auto
 compiler_constant_floating_make_decimal_precision_plan(
 	::fast_io::details::punning_result<floating_type> fields,
@@ -2660,6 +2739,9 @@ compiler_constant_floating_decimal_precision_carrier_define(
 			iter, rounded.decimal, precision, rounded.significant);
 }
 
+// Exact-size leaf for an already materialized constant proxy. Removing the
+// size/define pair leaves an out-of-line proxy call (GCC 15 main 0x8c; Clang 23
+// main 0x5be). It is not the native floating precise-size implementation.
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral proxy_char_type, typename floating_type>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
@@ -2734,6 +2816,9 @@ compiler_constant_floating_scalar_output_size(floating_type value) noexcept
 			materialized);
 }
 
+// Emission leaf paired with the proxy size proof above. Its parameters contain
+// integer fields only; forcing it cannot change native floating register-class
+// transport in the ordinary print/concat path.
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, ::std::integral proxy_char_type,
 	typename floating_type>
@@ -3955,6 +4040,9 @@ template <::std::integral char_type, typename floating_type>
 		::fast_io::details::my_floating_point<floating_type> &&
 		::fast_io::details::compiler_constant_floating_type_supported<
 			::fast_io::details::float_alias_type<floating_type>>)
+// True-arm materializer only. Removing this attribute makes GCC 15 retain a
+// 0x1cb-byte call path and makes Clang 23 expand the literal caller beyond
+// 14 KiB; a dynamic source takes the unchanged false arm before construction.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type, floating_type>,
@@ -4036,6 +4124,9 @@ template <::std::integral char_type,
 		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
 		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
 		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+// Manipulator true-arm counterpart of the raw materializer above. The same A/B
+// leaves residual calls for literal scalar manipulators, while runtime values
+// preserve their original scalar_manip_t and native by-value formatter.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
@@ -4082,6 +4173,9 @@ inline constexpr char_type *print_reserve_define(
 ///          array.  Concat uses this protocol to resize its final destination
 ///          once instead of treating the 5,006-code-unit fixed upper bound as a
 ///          per-call temporary-buffer requirement.
+// Placement evidence: dropping this leaf alone grows GCC 15 main from 0x3f to
+// 0x113 bytes and Clang 23 from 0x4d to more than 13 KiB. Only an integer-field
+// constant proxy satisfies this overload.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
@@ -4102,6 +4196,8 @@ print_reserve_precise_size(
 /// @details `precise_size` is the result of the companion size CPO.  The writer
 ///          deliberately reuses the same field emitter as reserve output; no
 ///          native floating arithmetic or second conversion is introduced.
+// Placement evidence: dropping this leaf leaves a proxy define call (GCC 15
+// main 0x8c, Clang 23 main 0x86 versus 0x3f/0x4d). Native ftoa is disjoint.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
@@ -4126,6 +4222,9 @@ print_reserve_precise_define(
 ///          constructing the scalar proxy's conservative 32-descriptor graph merely to discover its actual count.
 ///          A zero-length result means that punctuation, sign, exponent, padding, or multiple digit-table slices are
 ///          required; floating scalar spellings themselves are never empty.
+// Clang 23 otherwise outlines this lookup and turns the 0x4d-byte ordinary
+// literal print into a 0x308f-byte fragment dispatcher. GCC already inlines it,
+// but the attribute is shared because this is a constant-proxy-only CPO.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags,
 	::std::integral proxy_char_type, typename floating_type>
@@ -4337,7 +4436,15 @@ template <::std::integral char_type,
 	requires(
 		::fast_io::details::compiler_constant_floating_precision_supported<
 			flags, floating_type>)
-[[nodiscard]] inline constexpr bool
+// This is the optimizer query promised by
+// `print_compiler_constant_materialization_query_inline_safe`.  GCC 15
+// otherwise outlines it in a lowered static-prefix + precision-float run; an
+// outlined builtin query necessarily observes an opaque parameter and returns
+// false, leaving the 27-byte prefix and four-byte scalar as two buffered
+// operations.  Forced placement is confined to this query: for an unknown
+// value either builtin predicate folds to false before the precision planner is
+// formed, so the established run-time ftoa path gains no instructions.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::scalar_manip_precision_t<flags, floating_type>>,
@@ -4416,6 +4523,9 @@ template <::std::integral char_type,
 	requires(
 		::fast_io::details::compiler_constant_floating_precision_supported<
 			flags, floating_type>)
+// Precision true-arm materializer. Without this placement Clang 23 expands the
+// direct constant-hex caller from 0x50 to 0x1fe8 bytes; GCC 15 also increases
+// object text. Dynamic precision/value controls remain byte-identical.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
 	::fast_io::io_reserve_type_t<char_type,
@@ -4491,7 +4601,11 @@ template <::std::integral char_type, ::std::integral proxy_char_type,
 		::fast_io::details::compiler_constant_floating_precision_supported<
 			flags, floating_type> &&
 		::std::same_as<char_type, proxy_char_type>)
-inline constexpr char_type *print_reserve_define(
+// Constant-proxy boundary only. Without forced inlining at -O3, GCC 15 grows
+// the formatted literal caller from 0x72 to 0x177 bytes and Clang 23 grows it
+// from 0x59 to 0xa4 bytes, both retaining an out-of-line define call. Dynamic
+// precision floats use the native by-value formatter and never enter this CPO.
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
 			proxy_char_type, flags, floating_type>>,
@@ -4529,6 +4643,9 @@ inline constexpr char_type *print_reserve_define(
 ///          fields/precision sizing algorithm as ordinary precise reserve.  It
 ///          does not format into scratch storage and therefore lets concat
 ///          resize exactly once.
+// A/B removal grows GCC 15's formatted constant-hex caller from 0x72 to 0x178
+// and Clang 23 from 0x59 to 0x3ab, with size calls left behind. The overload is
+// selected only for the integer-field precision proxy.
 template <::std::integral char_type, ::std::integral proxy_char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
@@ -4580,6 +4697,8 @@ print_reserve_precise_size(
 ///          the integer fields are reconstructed only inside the selected
 ///          algorithm and every lower native floating formatter remains
 ///          register-class by value.
+// A/B removal grows the same formatted literal to 0x177/0xa4 on GCC 15/Clang
+// 23 and retains an out-of-line define call. Runtime precision CPOs are separate.
 template <::std::integral char_type, ::std::integral proxy_char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(

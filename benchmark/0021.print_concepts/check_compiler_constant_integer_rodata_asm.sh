@@ -28,6 +28,9 @@ compile_probe()
 	if test "$mode" = explicit
 	then
 		define=(-DFAST_IO_COMPILER_CONSTANT_INTEGER_EXPLICIT_OUT)
+	elif test "$mode" = static
+	then
+		define=(-DFAST_IO_COMPILER_CONSTANT_INTEGER_STATIC_OUT)
 	fi
 	"$cxx" "${common_flags[@]}" "${define[@]}" "$source_file" \
 		-o "$temporary/$mode"
@@ -44,6 +47,7 @@ compile_probe()
 
 compile_probe default
 compile_probe explicit
+compile_probe static
 
 # A literal argument must not leave either the mature integer formatter or the
 # compiler-constant integer writer in the reachable executable.  Checking the
@@ -53,20 +57,31 @@ compile_probe explicit
 ! grep -q -E 'jeaiii|print_reserve_integral_(compiler_constant_)?define' \
 	"$temporary/default.nm"
 
-# The direct POSIX observer has no buffering or locking reason to construct an
-# automatic record.  Its complete six-code-unit spelling must be immutable
-# static storage consumed by one scalar syscall retry loop.
+# A plain function argument cannot become a value-dependent static object: the
+# same template specialization also accepts a different caller value.  The
+# optimizer-proven spelling is therefore one contiguous automatic DSAL record,
+# but it must still use one scalar syscall and must not build scatter metadata.
 "$nm_bin" -C "$temporary/explicit" >"$temporary/explicit.nm"
 ! grep -q -E 'jeaiii|print_reserve_integral_(compiler_constant_)?define' \
 	"$temporary/explicit.nm"
-! grep -q -E '(^|[^[:alnum:]_])(rsp|esp)([^[:alnum:]_]|$)|[[:space:]]push[[:space:]]|[[:space:]]pop[[:space:]]' \
-	"$temporary/explicit.main"
+! grep -q -E 'scatter_write|print_static_scatter' \
+	"$temporary/explicit.nm"
 ! grep -q -E '[[:space:]]call[[:space:]]' "$temporary/explicit.main"
 test "$(grep -c -E '[[:space:]]syscall([[:space:]]|$)' \
 	"$temporary/explicit.main")" -eq 1
 
-"$objcopy_bin" --dump-section .rodata="$temporary/explicit.rodata" \
-	"$temporary/explicit"
-grep -aFq 'i = 32' "$temporary/explicit.rodata"
+# static_arg places the value in the type graph, so the format program can own
+# one merged DSAL array in rodata and pass that provider directly to write-all.
+"$nm_bin" -C "$temporary/static" >"$temporary/static.nm"
+! grep -q -E 'jeaiii|print_reserve_integral_(compiler_constant_)?define|scatter_write' \
+	"$temporary/static.nm"
+! grep -q -E '(^|[^[:alnum:]_])(rsp|esp)([^[:alnum:]_]|$)|[[:space:]]push[[:space:]]|[[:space:]]pop[[:space:]]' \
+	"$temporary/static.main"
+! grep -q -E '[[:space:]]call[[:space:]]' "$temporary/static.main"
+test "$(grep -c -E '[[:space:]]syscall([[:space:]]|$)' \
+	"$temporary/static.main")" -eq 1
+"$objcopy_bin" --dump-section .rodata="$temporary/static.rodata" \
+	"$temporary/static"
+grep -aFq 'i = 32' "$temporary/static.rodata"
 
 printf 'PASS %s\n' "$("$cxx" --version | head -n 1)"

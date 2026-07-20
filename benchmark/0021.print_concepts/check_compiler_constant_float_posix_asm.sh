@@ -26,11 +26,37 @@ awk '
 	in_cold { print }
 ' "$temporary/probe.dump" >"$temporary/main-cold.dump"
 
+awk '
+	/^0*[0-9a-f]+ <fast_io_fmt_constant_float_only>:/ { in_probe = 1; next }
+	in_probe && /^$/ { exit }
+	in_probe { print }
+' "$temporary/probe.dump" >"$temporary/field-only.dump"
+
 test "$(grep -c -E '[[:space:]]syscall([[:space:]]|$)' "$temporary/main.dump")" -eq 1
-grep -q -E 'mov[[:space:]].*0x2e333d69' "$temporary/main.dump"
-grep -q -E 'mov[[:space:]].*0x32' "$temporary/main.dump"
+# GCC commonly splits `i=3.2` into a four-byte and a one-byte store, whereas
+# Clang materializes the complete five-byte record in one wider immediate.
+# Accept both encodings while still proving every payload byte is present in
+# the caller and no formatter survives.
+if ! grep -q -E 'mov[[:space:]].*0x2e333d69' "$temporary/main.dump"; then
+	grep -q -E 'mov(abs)?[[:space:]].*0x322e333d69' "$temporary/main.dump"
+else
+	grep -q -E 'mov[[:space:]].*0x32' "$temporary/main.dump"
+fi
 ! grep -q -E '[[:space:]]call[[:space:]]|writev|scatter|cold_impl' "$temporary/main.dump"
 ! grep -q -E 'sub[[:space:]]+rsp' "$temporary/main.dump"
+
+# This separate function proves that the literal double survives the complete
+# fmt entry/lower/semantic transport into core's compiler-constant gate.  A
+# formatter call here means that some fmt adapter turned the known source into
+# an opaque run-time object even if the prefixed whole-record probe still folds.
+test "$(grep -c -E '[[:space:]]syscall([[:space:]]|$)' "$temporary/field-only.dump")" -eq 1
+if ! grep -q -E 'mov[[:space:]].*0x34312e33' "$temporary/field-only.dump"; then
+	# Clang commonly splits the same four bytes into byte/word stores.
+	grep -q -E 'mov[[:space:]].*0x2e00' "$temporary/field-only.dump"
+	grep -q -E 'mov[[:space:]].*0x33' "$temporary/field-only.dump"
+	grep -q -E 'mov[[:space:]].*0x3431' "$temporary/field-only.dump"
+fi
+! grep -q -E '[[:space:]]call[[:space:]]|writev|scatter|cold_impl' "$temporary/field-only.dump"
 
 # GCC may partition the syscall-error trap.  That block is allowed to contain
 # only the terminating trap and alignment; a successful write, helper call, or

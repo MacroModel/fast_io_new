@@ -2050,11 +2050,7 @@ inline constexpr char_type const *scan_decfloat_skip_after_exact_limit_run(
 {
 	auto const *const original_first{first};
 	auto tail_nonzero{state.exact_truncated_nonzero};
-#ifdef __cpp_if_consteval
-	if !consteval
-#else
-	if (!__builtin_is_constant_evaluated())
-#endif
+	FAST_IO_IF_NOT_CONSTEVAL
 	{
 		if constexpr (::fast_io::details::is_ascii<char_type> && sizeof(char_type) == sizeof(char8_t) &&
 					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
@@ -2242,11 +2238,7 @@ scan_decfloat_digits(char_type const *first, char_type const *last, bool after_d
 	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type> &&
 				  ::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
 	{
-#ifdef __cpp_if_consteval
-		if !consteval
-#else
-		if (!__builtin_is_constant_evaluated())
-#endif
+		FAST_IO_IF_NOT_CONSTEVAL
 		{
 			for (; first != last && !state.has_nonzero_digit; ++first)
 			{
@@ -2329,11 +2321,7 @@ scan_decfloat_exponent(char_type const *first, char_type const *last, ::std::int
 {
 	if constexpr (sizeof(char_type) == sizeof(char8_t) && ::fast_io::details::is_ascii<char_type>)
 	{
-#ifdef __cpp_if_consteval
-		if !consteval
-#else
-		if (!__builtin_is_constant_evaluated())
-#endif
+		FAST_IO_IF_NOT_CONSTEVAL
 		{
 			auto const *const original_first{first};
 			if (first == last)
@@ -2769,19 +2757,11 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 	}
 	else
 	{
-#ifdef __cpp_if_consteval
-		if consteval
+		FAST_IO_IF_CONSTEVAL
 		{
 			return {};
 		}
 		else
-#else
-		if (__builtin_is_constant_evaluated())
-		{
-			return {};
-		}
-		else
-#endif
 		{
 			constexpr auto digit_limit{::fast_io::details::scan_decfloat_significand_digit_limit<T>};
 			::std::uint_least64_t significand{};

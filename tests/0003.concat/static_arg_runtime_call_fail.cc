@@ -2,5 +2,5 @@
 
 int main(int argc, char **)
 {
-	(void)::fast_io::fmt::static_arg<42>(argc);
+	(void)::fast_io::mnp::static_arg<42>(argc);
 }

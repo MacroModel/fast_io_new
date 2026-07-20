@@ -16,7 +16,7 @@ struct scripted_state
 	::std::array<::fast_io::io_scatter_status_t, 4u> script{};
 	::std::size_t script_size{};
 	::std::size_t script_position{};
-	::std::array<char_type, 32u> output{};
+	::std::array<char_type, 96u> output{};
 	::std::size_t output_size{};
 	::std::size_t scatter_calls{};
 	::std::size_t scalar_calls{};
@@ -162,7 +162,7 @@ void check(scripted_state<char_type> const &state,
 }
 
 template <::std::size_t count>
-void run_byte(::std::array<::fast_io::io_scatter_status_t, count> const &script,
+void run_byte_large(::std::array<::fast_io::io_scatter_status_t, count> const &script,
 	::std::size_t expected_scatter_calls,
 	::std::size_t expected_scalar_calls)
 {
@@ -172,14 +172,17 @@ void run_byte(::std::array<::fast_io::io_scatter_status_t, count> const &script,
 	{
 		state.script[index] = script[index];
 	}
-	::fast_io::fmt::print<"i = {}">(byte_sink{&state}, 32);
-	check(state, "i = 32");
+	::fast_io::fmt::print<
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef{}">(
+			byte_sink{&state}, 32);
+	check(state,
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef32");
 	assert(state.scatter_calls == expected_scatter_calls);
 	assert(state.scalar_calls == expected_scalar_calls);
 }
 
 template <::std::size_t count>
-void run_typed(::std::array<::fast_io::io_scatter_status_t, count> const &script,
+void run_typed_large(::std::array<::fast_io::io_scatter_status_t, count> const &script,
 	::std::size_t expected_scatter_calls,
 	::std::size_t expected_scalar_calls)
 {
@@ -189,8 +192,11 @@ void run_typed(::std::array<::fast_io::io_scatter_status_t, count> const &script
 	{
 		state.script[index] = script[index];
 	}
-	::fast_io::fmt::print<u"i = {}">(typed_sink{&state}, 32);
-	check(state, u"i = 32");
+	::fast_io::fmt::print<
+		u"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef{}">(
+			typed_sink{&state}, 32);
+	check(state,
+		u"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef32");
 	assert(state.scatter_calls == expected_scatter_calls);
 	assert(state.scalar_calls == expected_scalar_calls);
 }
@@ -206,17 +212,33 @@ int main()
 		::fast_io::details::decay::
 			print_static_scatter_hot_first_available<typed_sink>);
 
+	// A short all-known record is materialized in one contiguous DSAL array and
+	// uses the scalar write-all protocol; it must not pay for scatter descriptors.
+	{
+		scripted_state<char> state{};
+		::fast_io::fmt::print<"i = {}">(byte_sink{&state}, 32);
+		check(state, "i = 32");
+		assert(state.scatter_calls == 0u && state.scalar_calls == 1u);
+	}
+	{
+		scripted_state<char16_t> state{};
+		::fast_io::fmt::print<u"i = {}">(typed_sink{&state}, 32);
+		check(state, u"i = 32");
+		assert(state.scatter_calls == 0u && state.scalar_calls == 1u);
+	}
+
+	// A record above the compact threshold keeps its two immutable providers.
 	// Complete first attempt, partial first provider, partial second provider,
 	// and a legal zero-progress first attempt all produce the same record.
-	run_byte(::std::array{::fast_io::io_scatter_status_t{2u, 0u}}, 1u, 0u);
-	run_byte(::std::array{::fast_io::io_scatter_status_t{0u, 2u},
+	run_byte_large(::std::array{::fast_io::io_scatter_status_t{2u, 0u}}, 1u, 0u);
+	run_byte_large(::std::array{::fast_io::io_scatter_status_t{0u, 2u},
 		::fast_io::io_scatter_status_t{1u, 0u}}, 2u, 1u);
-	run_byte(::std::array{::fast_io::io_scatter_status_t{1u, 1u}}, 1u, 1u);
-	run_byte(::std::array{::fast_io::io_scatter_status_t{0u, 0u},
+	run_byte_large(::std::array{::fast_io::io_scatter_status_t{1u, 1u}}, 1u, 1u);
+	run_byte_large(::std::array{::fast_io::io_scatter_status_t{0u, 0u},
 		::fast_io::io_scatter_status_t{2u, 0u}}, 2u, 0u);
 
-	run_typed(::std::array{::fast_io::io_scatter_status_t{2u, 0u}}, 1u, 0u);
-	run_typed(::std::array{::fast_io::io_scatter_status_t{0u, 0u},
+	run_typed_large(::std::array{::fast_io::io_scatter_status_t{2u, 0u}}, 1u, 0u);
+	run_typed_large(::std::array{::fast_io::io_scatter_status_t{0u, 0u},
 		::fast_io::io_scatter_status_t{2u, 0u}}, 2u, 0u);
 
 #if defined(__linux__) && defined(__cpp_exceptions)

@@ -11,7 +11,7 @@ payload bits before the formatter observes them.  Integer IEC 60559 fields are
 both representation-exact and small enough for the print/concat materializer.
 */
 template <typename floating_type>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+[[nodiscard]] inline constexpr
 	::fast_io::details::punning_result<
 	::std::remove_cv_t<floating_type>>
 compiler_constant_floating_capture_fields(floating_type const &value) noexcept
@@ -139,6 +139,9 @@ compiler_constant_hex_exponent_size(::std::int_least32_t exponent) noexcept
 ///          bounded integer. Keeping this small decimal writer in the constant
 ///          protocol lets Clang fold literal hex floats while the ordinary
 ///          by-value floating formatter retains its independent register ABI.
+// A/B: without this leaf placement Clang 23 emits a call and stack frame in the
+// formatted literal (0x59 -> 0x64 bytes); GCC 15 is unchanged. The function
+// accepts integer exponent state only and is unreachable from native hexfloat.
 template <::std::integral char_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 compiler_constant_hex_write_exponent(
@@ -215,6 +218,9 @@ compiler_constant_hex_precision_plan_digit(
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 		requires(::fast_io::details::compiler_constant_hex_precision_supported<
 			flags, floating_type>)
+// Constant-proxy planning leaf. Removing the attribute expands Clang 23's
+// direct/formatted literal symbols from 0x50/0x59 to 0x6c8/0x6c8; runtime value
+// and precision controls remain 0x6c/0x7e. No native scalar crosses this API.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 compiler_constant_hex_make_precision_plan(
 	::fast_io::details::punning_result<floating_type> fields,
@@ -368,6 +374,9 @@ compiler_constant_hex_make_precision_plan(
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(::fast_io::details::compiler_constant_hex_precision_supported<
 		flags, floating_type>)
+// Exact-size leaf for integer-field precision proxies. Without forced inlining
+// Clang 23 grows direct literal output from 0x50 to 0x244 bytes and retains a
+// size call; dynamic controls are byte-identical.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_hex_precision_fields_size_impl(
 	::fast_io::details::punning_result<floating_type> fields,
@@ -471,13 +480,15 @@ template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, typename floating_type>
 	requires(::fast_io::details::compiler_constant_hex_precision_supported<
 		flags, floating_type>)
+// Integer-field emitter leaf. Removing this attribute grows GCC 15 direct and
+// formatted literal symbols from 0x82/0x72 to 0x16d/0x366. Native hexfloat
+// formatting still uses its independent by-value implementation.
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *compiler_constant_hex_precision_fields_define_impl(
 	char_type *iter,
 	::fast_io::details::punning_result<floating_type> fields,
 	::std::size_t precision) noexcept
 {
 	using trait = ::fast_io::details::iec559_traits<floating_type>;
-	using mantissa_type = typename trait::mantissa_type;
 	auto const [mantissa, exponent, negative]{fields};
 	constexpr ::std::uint_least32_t exponent_mask{
 		(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
@@ -534,6 +545,9 @@ template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, typename floating_type>
 	requires(::fast_io::details::compiler_constant_hex_precision_supported<
 		flags, floating_type>)
+// Checked constant-proxy adapter. With only this placement removed, GCC 15
+// leaves an outer call and grows direct/formatted literals to 0x16d/0x1b7;
+// Clang 23 grows them to 0x78/0x84. Runtime controls do not use this adapter.
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *compiler_constant_hex_precision_fields_define(
 	char_type *iter, ::fast_io::details::punning_result<floating_type> fields,
 	::std::size_t precision) noexcept

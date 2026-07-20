@@ -855,9 +855,7 @@ from_chars(char_type const *first, char_type const *last, T &value, int base = 1
 	// The standard interface requires base in [2, 36].  This optional attribute
 	// exposes that existing caller precondition to the optimizer and changes no
 	// valid-base result.
-#if __has_cpp_attribute(assume)
-	[[assume(2 <= base && base <= 36)]];
-#endif
+	FAST_IO_ASSUME(2 <= base && base <= 36);
 	/*
 	Clang's `__builtin_constant_p` is evaluated after this always-inline public
 	wrapper sees its caller.  Literal radices therefore retain fixed-base

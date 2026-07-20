@@ -133,10 +133,9 @@ posix_static_scatter_write_bytes_first_impl(int fd,
 	return scatter_size_to_status(static_cast<::std::size_t>(ret), pscatter, n);
 }
 
-/// Ordinary POSIX scatter entry.  The forced leaf above is shared with the
-/// print-level GCC hot-first strategy, but this wrapper itself remains an
-/// ordinary inline function so unrelated scatter callers may keep or share it
-/// according to the compiler's normal text-size heuristic.
+/// Ordinary POSIX scatter entry.  The syscall/error helper above is shared with
+/// the print-level static-scatter path, while this wrapper remains an ordinary
+/// inline function so callers follow the compiler's normal text-size heuristic.
 inline ::fast_io::io_scatter_status_t
 posix_scatter_write_bytes_impl(int fd,
 	::fast_io::io_scatter_t const *pscatter, ::std::size_t n)
@@ -163,10 +162,9 @@ scatter_write_some_bytes_overflow_define(::fast_io::basic_posix_io_observer<char
 	return ::fast_io::details::posix_scatter_write_bytes_impl(piob.fd, pscatters, n);
 }
 
-/// Dedicated first-attempt leaf for a proven synchronous static-fragment plan.
-/// It is deliberately separate from the public scatter CPO above: GCC 13/15
-/// needs this two-function forced chain to expose the measured hot syscall, but
-/// ordinary/runtime scatter users must not inherit that code-size policy.
+/// Dedicated first-attempt entry for a proven synchronous static-fragment plan.
+/// It remains separate from the public scatter CPO so the print dispatcher can
+/// select this protocol without changing ordinary/runtime scatter semantics.
 template <::std::integral char_type>
 inline ::fast_io::io_scatter_status_t
 print_static_scatter_write_some_bytes_overflow_define(

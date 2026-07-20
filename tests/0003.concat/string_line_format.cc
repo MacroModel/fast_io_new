@@ -80,7 +80,7 @@ void test_domain()
 inline constexpr ::fast_io::fmt::basic_fixed_string full_static_line_format{
 	"A{}B\n"};
 using full_static_line_argument =
-	decltype(::fast_io::fmt::static_arg<42u>);
+	decltype(::fast_io::mnp::static_arg<42u>);
 static_assert(::fast_io::fmt::details::static_format_program<
 			  full_static_line_format, ::fast_io::fmt::brace_fmt_t,
 			  full_static_line_argument>());
@@ -88,7 +88,7 @@ static_assert(::fast_io::fmt::details::static_format_program<
 inline constexpr ::fast_io::fmt::basic_fixed_string partial_static_line_format{
 	"A{}B{}C\n"};
 using partial_static_line_argument =
-	decltype(::fast_io::fmt::static_arg<42u>);
+	decltype(::fast_io::mnp::static_arg<42u>);
 static_assert(!::fast_io::fmt::details::static_format_program<
 			  partial_static_line_format, ::fast_io::fmt::brace_fmt_t,
 			  partial_static_line_argument, ::std::string_view>());
@@ -104,9 +104,9 @@ consteval bool constexpr_line_format_is_correct()
 	auto const pack9{::fast_io::fmt::concat_std<"{}{}{}{}{}{}{}{}{}\n">(
 		"a", "b", "c", "d", "e", "f", "g", "h", "i")};
 	auto const fully_static{::fast_io::fmt::concat_std<"A{}B\n">(
-		::fast_io::fmt::static_arg<42u>)};
+		::fast_io::mnp::static_arg<42u>)};
 	auto const empty_static{::fast_io::fmt::concat_std<"{}\n">(
-		::fast_io::fmt::static_arg<"">)};
+		::fast_io::mnp::static_arg<"">)};
 	return ::fast_io::fmt::concat_std<"\n">() == "\n" &&
 		   ::fast_io::fmt::concat_std<"a">() == "a" &&
 		   ::fast_io::fmt::concat_std<"ab">() == "ab" &&
@@ -147,12 +147,12 @@ int main()
 			"a", "b", "c", "d", "e", "f", "g", "h", "i") !=
 			"abcdefghi\n" ||
 		::fast_io::fmt::concat_std<"A{}B{}C\n">(
-			::fast_io::fmt::static_arg<42u>, text) != "A42BabcC\n" ||
+			::fast_io::mnp::static_arg<42u>, text) != "A42BabcC\n" ||
 		::fast_io::fmt::concat_std<"{}{}\n">(
-			text, ::fast_io::fmt::static_arg<"">) != "abc\n" ||
+			text, ::fast_io::mnp::static_arg<"">) != "abc\n" ||
 		::fast_io::fmt::concat_std<"{name}:{fixed}\n">(
 			::fast_io::fmt::arg<"name">(text),
-			::fast_io::fmt::static_arg<"fixed", 42u>) != "abc:42\n" ||
+			::fast_io::mnp::static_arg<"fixed", 42u>) != "abc:42\n" ||
 		::fast_io::fmt::concat_std<"{{x}}={}\n">(42u) != "{x}=42\n" ||
 		::fast_io::fmt::concatf_std<"[%s:%u]\n">(text, 42u) != "[abc:42]\n")
 	{

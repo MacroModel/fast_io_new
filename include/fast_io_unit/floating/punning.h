@@ -162,7 +162,7 @@ struct iec559_traits<_Float32>
 };
 #endif
 
-#ifdef __STDCPP_FLOAT64_T__
+#if defined(FAST_IO_HAS_FLOAT64_TYPE)
 template <>
 struct iec559_traits<_Float64>
 {

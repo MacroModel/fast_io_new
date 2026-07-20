@@ -98,10 +98,24 @@ for compiler in "${compilers[@]}"; do
 
 	default_body="$work_dir/$name.default"
 	constant_body="$work_dir/$name.constant"
+	static_body="$work_dir/$name.static"
+	raw_static_body="$work_dir/$name.raw_static"
+	raw_two_body="$work_dir/$name.raw_two"
+	raw_named_two_body="$work_dir/$name.raw_named_two"
+	raw_mixed_body="$work_dir/$name.raw_mixed"
+	timestamp_body="$work_dir/$name.timestamp"
 	runtime_body="$work_dir/$name.runtime"
+	runtime_timestamp_body="$work_dir/$name.runtime_timestamp"
 	extract_function "$assembly" fast_io_compiler_constant_default_fmt_int32 "$default_body"
 	extract_function "$assembly" fast_io_compiler_constant_posix_fmt_int32 "$constant_body"
+	extract_function "$assembly" fast_io_static_argument_posix_fmt_int32 "$static_body"
+	extract_function "$assembly" fast_io_static_argument_posix_raw_int32 "$raw_static_body"
+	extract_function "$assembly" fast_io_static_argument_posix_raw_two_texts "$raw_two_body"
+	extract_function "$assembly" fast_io_static_argument_posix_raw_two_named_texts "$raw_named_two_body"
+	extract_function "$assembly" fast_io_static_argument_posix_raw_mixed "$raw_mixed_body"
+	extract_function "$assembly" fast_io_compiler_constant_posix_timestamp "$timestamp_body"
 	extract_function "$assembly" fast_io_compiler_constant_posix_fmt_runtime_int "$runtime_body"
+	extract_function "$assembly" fast_io_compiler_constant_posix_runtime_timestamp "$runtime_timestamp_body"
 
 	if rg -q 'jeaiii|print_reserve_integral_define' "$default_body"; then
 		fail "$version_line routes default fmt literal 32 through a runtime integer writer"
@@ -122,31 +136,87 @@ for compiler in "${compilers[@]}"; do
 		fail "$version_line materializes default fmt literal 32 before acquiring stdout's lock"
 	fi
 
-	# The explicit unbuffered record may keep automatic iovec descriptors, but every character range must point at an
-	# immutable provider.  Reject the previous compact-buffer immediates and require both provider symbols in code and
-	# in actual rodata sections of the object.
-	if rg -q "$payload_pattern|memcpy" "$constant_body"; then
-		fail "$version_line copies the explicit fmt literal 32 character payload through automatic storage"
+	# A plain argument value is not part of the function-template specialization, so C++ cannot use it to initialize a
+	# value-dependent static object.  The complete short spelling must instead be one caller-local core array sent by
+	# one scalar write.  It must not retain the old integer writer or build automatic iovec metadata.
+	if rg -q 'writev|scatter_write|print_static_scatter' "$constant_body"; then
+		fail "$version_line routes the explicit short record through scatter output"
 	fi
-	if ! rg -q 'compiled_literal_run.*storage' "$constant_body"; then
-		fail "$version_line lost the compiled format-literal provider in the explicit constant record"
+	if ! rg -q 'rsp|esp' "$constant_body"; then
+		fail "$version_line did not materialize the plain constant in its caller-local record"
 	fi
-	if ! rg -q 'compiler_constant_integral_pair_fragments' "$constant_body"; then
-		fail "$version_line lost the two-digit static integer provider in the explicit constant record"
+	if [[ $(rg -c 'syscall' "$constant_body") -ne 1 ]]; then
+		fail "$version_line explicit short record does not contain exactly one scalar syscall"
+	fi
+
+	# static_arg places the value in the type graph.  This is the language-level case in which the compiled format
+	# program can own one merged freestanding array in rodata and pass its address directly to write-all, without a stack copy.
+	if rg -q 'jeaiii|print_reserve_integral_(compiler_constant_)?define|writev|scatter_write' "$static_body"; then
+		fail "$version_line routes static_arg<32> through formatting or scatter output"
+	fi
+	if rg -q 'rsp|esp|[[:space:]]push[[:space:]]|[[:space:]]pop[[:space:]]' "$static_body"; then
+		fail "$version_line copies static_arg<32> through automatic storage"
+	fi
+	if [[ $(rg -c 'syscall' "$static_body") -ne 1 ]]; then
+		fail "$version_line static_arg<32> does not contain exactly one scalar syscall"
+	fi
+	if ! rg -q 'compiled_static_format_program.*storage' "$static_body"; then
+		fail "$version_line lost the merged static format-program provider"
+	fi
+
+	# Raw IO owns the same facility in the core manipulator graph.  A singleton,
+	# an adjacent pair, and a pair of named nodes must each become one provider-
+	# owned core freestanding array and one scalar write, with no format layer,
+	# integer conversion, automatic payload copy, or writev metadata.
+	for raw_body in "$raw_static_body" "$raw_two_body" "$raw_named_two_body"; do
+		if rg -q 'compiled_static_format_program|jeaiii|print_reserve_integral_(compiler_constant_)?define|writev|scatter_write' "$raw_body"; then
+			fail "$version_line routes a raw static-argument record through format/conversion/scatter output"
+		fi
+		if rg -q 'rsp|esp|[[:space:]]push[[:space:]]|[[:space:]]pop[[:space:]]' "$raw_body"; then
+			fail "$version_line copies a raw static-argument record through automatic storage"
+		fi
+		if [[ $(rg -c 'syscall' "$raw_body") -ne 1 ]]; then
+			fail "$version_line raw static-argument record does not contain exactly one scalar syscall"
+		fi
+		if ! rg -q 'print_static_argument_merged_run_provider.*storage' "$raw_body"; then
+			fail "$version_line lost the core merged static-argument provider"
+		fi
+	done
+
+	# A mixed run cannot be merged because the integer is optimizer-unknown.  Its
+	# immutable component must nevertheless remain a provider pointer instead of
+	# being copied into the runtime digit scratch area.
+	if ! rg -q 'static_argument_materialized_t.*storage' "$raw_mixed_body"; then
+		fail "$version_line lost the provider pointer in a mixed raw static/runtime run"
+	fi
+	if rg -q 'print_static_argument_merged_run_provider.*storage' "$raw_mixed_body"; then
+		fail "$version_line incorrectly treats a mixed raw run as an all-static provider"
 	fi
 	section_table="$work_dir/$name.sections"
 	readelf -SW "$object" > "$section_table"
-	if ! rg -q '\.rodata\..*compiled_literal_run.*storage' "$section_table"; then
-		fail "$version_line did not place the compiled literal provider in rodata"
+	if ! rg -q '\.rodata\..*compiled_static_format_program.*storage' "$section_table"; then
+		fail "$version_line did not place static_arg<32>'s merged format record in rodata"
 	fi
-	if ! rg -q '\.rodata\..*compiler_constant_integral_pair_fragments' "$section_table"; then
-		fail "$version_line did not place the integer pair provider in rodata"
+	if ! rg -q '\.rodata\..*print_static_argument_merged_run_provider.*storage' "$section_table"; then
+		fail "$version_line did not place raw static-argument records in rodata"
+	fi
+
+	# A fixed timestamp is a two-field scalar aggregate.  Its source-safe CPO must run before the ordinary normalization
+	# bridge is allowed to outline, otherwise GCC and Clang lose __builtin_constant_p visibility at that call boundary.
+	if rg -q 'jeaiii|print_reserve_integral_define|[[:space:]]call[q]?[[:space:]]|writev|scatter_write' "$timestamp_body"; then
+		fail "$version_line failed to fold the fixed timestamp at the public source boundary"
+	fi
+	if [[ $(rg -c 'syscall' "$timestamp_body") -ne 1 ]]; then
+		fail "$version_line fixed timestamp does not contain exactly one scalar syscall"
 	fi
 
 	# An optimizer-unknown value must retain the historical dynamic writer and must not acquire a reference to the
 	# compiler-constant digit provider.  This is the zero-residue half of the value gate.
 	if rg -q 'compiler_constant_integral_(pair|digit)_fragments|compiler_constant_scalar_manip' "$runtime_body"; then
 		fail "$version_line leaks compiler-constant integer state into the runtime-value facade"
+	fi
+	if rg -q 'compiler_constant_timestamp|print_reserve_integral_compiler_constant' "$runtime_timestamp_body"; then
+		fail "$version_line leaks compiler-constant timestamp state into the runtime-value facade"
 	fi
 
 	printf 'compiler-constant integer facade asm gate: PASS (%s)\n' "$version_line"

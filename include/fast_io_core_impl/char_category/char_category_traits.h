@@ -110,7 +110,7 @@ public:
 		}
 	}
 	template <::std::integral char_type>
-#ifdef __cpp_static_call_operator
+#if FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 	static
 #endif
 		inline constexpr bool operator()(char_type ch) noexcept
@@ -219,11 +219,11 @@ template <::fast_io::char_category::char_category_family fam>
 struct to_c_common_fn_impl
 {
 	template <::std::integral char_type>
-#ifdef __cpp_static_call_operator
+#if FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 	static
 #endif
 		inline constexpr char_type operator()(char_type ch)
-#ifndef __cpp_static_call_operator
+#if !FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 			const
 #endif
 		noexcept
@@ -563,11 +563,11 @@ struct to_c_common_rg_fn
 
 	template <::std::input_iterator Iter, ::std::sentinel_for<Iter> S, typename Proj = ::std::identity>
 		requires ::std::integral<::std::iter_value_t<Iter>>
-#ifdef __cpp_static_call_operator
+#if FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 	static
 #endif
 		inline constexpr Iter operator()(Iter first, S last, Proj proj = {})
-#ifndef __cpp_static_call_operator
+#if !FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 			const
 #endif
 		noexcept
@@ -591,11 +591,11 @@ struct to_c_common_rg_fn
 	}
 	template <::std::ranges::input_range R, typename Proj = ::std::identity>
 		requires ::std::integral<::std::ranges::range_value_t<R>>
-#ifdef __cpp_static_call_operator
+#if FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 	static
 #endif
 		inline constexpr ::std::ranges::borrowed_iterator_t<R> operator()(R &&r, Proj proj = {})
-#ifndef __cpp_static_call_operator
+#if !FAST_IO_HAS_STATIC_CALL_OPERATOR_IN_LANGUAGE_MODE
 			const
 #endif
 		noexcept

@@ -9,8 +9,8 @@ namespace
 using ::fast_io::fmt::details::brace_argument_list_error;
 using ::fast_io::fmt::details::printf_argument_list_error;
 
-using left_argument = decltype(::fast_io::fmt::static_arg<"left", 1>);
-using right_argument = decltype(::fast_io::fmt::static_arg<"right", 2>);
+using left_argument = decltype(::fast_io::mnp::static_arg<"left", 1>);
+using right_argument = decltype(::fast_io::mnp::static_arg<"right", 2>);
 
 static_assert(
 	::fast_io::fmt::details::validate_brace_argument_list<"{}{}", int, int>()

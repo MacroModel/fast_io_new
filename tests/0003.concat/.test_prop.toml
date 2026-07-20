@@ -6,6 +6,10 @@ ignore = true
 
 ["dynamic_float_put_area.cc"]
 
+["custom_format_adl_reference.cc"]
+
+["format_semantic_lowering.cc"]
+
 ["format_consteval_brace_extra_fail.cc"]
 will_fail = "compiletime"
 
@@ -25,6 +29,42 @@ will_fail = "compiletime"
 will_fail = "compiletime"
 
 ["static_arg_runtime_call_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_wrong_namespace_fail.cc"]
+will_fail = "compiletime"
+
+["format_brace_dynamic_width_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_brace_dynamic_precision_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_printf_dynamic_width_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_printf_dynamic_precision_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_brace_mixed_indexing_fail.cc"]
+will_fail = "compiletime"
+
+["format_printf_mixed_indexing_fail.cc"]
+will_fail = "compiletime"
+
+["format_output_domain_mismatch_fail.cc"]
+will_fail = "compiletime"
+
+["format_brace_presentation_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_printf_string_type_fail.cc"]
+will_fail = "compiletime"
+
+["format_brace_duplicate_named_fail.cc"]
+will_fail = "compiletime"
+
+["format_custom_alias_missing_fail.cc"]
 will_fail = "compiletime"
 
 ["printf_argument_count_fail.cc"]

@@ -51,7 +51,7 @@ void compact_stack_then_write(int fd)
 void merged_static_arg_then_write(int fd)
 {
 	::fast_io::fmt::print<"i = {}">(
-		::fast_io::posix_io_observer{fd}, ::fast_io::fmt::static_arg<32>);
+		::fast_io::posix_io_observer{fd}, ::fast_io::mnp::static_arg<32>);
 }
 
 #if __has_cpp_attribute(__gnu__::__cold__)

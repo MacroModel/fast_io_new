@@ -78,7 +78,7 @@ struct static_tuple_holder_from_sequence<::std::index_sequence<index...>>
 };
 
 using static_std_array_type =
-	decltype(::fast_io::fmt::static_arg<unsigned_values>);
+	decltype(::fast_io::mnp::static_arg<unsigned_values>);
 using static_c_array_type =
 	decltype(::fast_io::fmt::static_array_arg<c_values>());
 using static_tuple_type = decltype(::fast_io::fmt::static_tuple_arg<
@@ -123,12 +123,12 @@ using static_tuple_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		sequence_format, ::fast_io::fmt::brace_fmt_t,
 		static_tuple_type>;
-using output_boundary_argument = decltype(::fast_io::fmt::static_arg<output_boundary_values>);
+using output_boundary_argument = decltype(::fast_io::mnp::static_arg<output_boundary_values>);
 using output_boundary_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		output_boundary_format, ::fast_io::fmt::brace_fmt_t,
 		output_boundary_argument>;
-using empty_large_element_width_argument = decltype(::fast_io::fmt::static_arg<empty_values>);
+using empty_large_element_width_argument = decltype(::fast_io::mnp::static_arg<empty_values>);
 using empty_large_element_width_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		empty_large_element_width_format, ::fast_io::fmt::brace_fmt_t,
@@ -201,7 +201,7 @@ inline constexpr ::fast_io::fmt::basic_fixed_string floating_sequence_format{
 using static_floating_array_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		floating_sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<floating_values>)>;
+		decltype(::fast_io::mnp::static_arg<floating_values>)>;
 static_assert(::std::string_view{
 	static_floating_array_program::storage.data(),
 	static_floating_array_program::size} == "[1.25, -0.00, 3.50]");
@@ -209,7 +209,7 @@ static_assert(::std::string_view{
 using static_nested_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<nested_values>)>;
+		decltype(::fast_io::mnp::static_arg<nested_values>)>;
 static_assert(::std::string_view{
 				  static_nested_program::storage.data(), static_nested_program::size} ==
 			  "[[1, 2], [3, 4]]");
@@ -217,7 +217,7 @@ static_assert(::std::string_view{
 using static_character_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<character_values>)>;
+		decltype(::fast_io::mnp::static_arg<character_values>)>;
 static_assert(::std::string_view{
 				  static_character_program::storage.data(), static_character_program::size} ==
 			  "['a', '\\n', '\\'']");
@@ -225,14 +225,14 @@ static_assert(::std::string_view{
 using static_empty_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<empty_values>)>;
+		decltype(::fast_io::mnp::static_arg<empty_values>)>;
 static_assert(::std::string_view{
 				  static_empty_program::storage.data(), static_empty_program::size} == "[]");
 
 using static_pair_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<pair_value>)>;
+		decltype(::fast_io::mnp::static_arg<pair_value>)>;
 static_assert(::std::string_view{
 				  static_pair_program::storage.data(), static_pair_program::size} ==
 			  "(9, 0)");
@@ -277,7 +277,7 @@ inline constexpr ::fast_io::fmt::basic_fixed_string debug_string_format{
 using static_debug_string_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		debug_string_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_arg<character_values>)>;
+		decltype(::fast_io::mnp::static_arg<character_values>)>;
 static_assert(::std::string_view{
 				  static_debug_string_program::storage.data(),
 				  static_debug_string_program::size} == "\"a\\n'\"");
@@ -303,15 +303,15 @@ using static_element_width_program =
 	::fast_io::fmt::details::compiled_static_format_program<
 		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
 		static_std_array_type,
-		decltype(::fast_io::fmt::static_arg<4u>)>;
+		decltype(::fast_io::mnp::static_arg<4u>)>;
 static_assert(::std::string_view{
 				  static_element_width_program::storage.data(),
 				  static_element_width_program::size} == "[0001, 000f, 00ff]");
 
 using static_narrow_element_width_type =
-	decltype(::fast_io::fmt::static_arg<::std::uint8_t{4u}>);
+	decltype(::fast_io::mnp::static_arg<::std::uint8_t{4u}>);
 using static_narrow_width_array_type =
-	decltype(::fast_io::fmt::static_arg<narrow_width_values>);
+	decltype(::fast_io::mnp::static_arg<narrow_width_values>);
 inline constexpr auto static_narrow_element_width_plan{
 	::fast_io::fmt::details::static_format_groups<
 		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
@@ -357,12 +357,12 @@ static_assert(!::fast_io::fmt::details::static_format_groups<
 {
 	auto const static_std_array{
 		::fast_io::fmt::concat_std<"{}">(
-			::fast_io::fmt::static_arg<unsigned_values>)};
+			::fast_io::mnp::static_arg<unsigned_values>)};
 	auto const dynamic_std_array{
 		::fast_io::fmt::concat_std<"{}">(unsigned_values)};
 	auto const static_floating_array{
 		::fast_io::fmt::concat_std<floating_sequence_format>(
-			::fast_io::fmt::static_arg<floating_values>)};
+			::fast_io::mnp::static_arg<floating_values>)};
 	auto const dynamic_floating_array{
 		::fast_io::fmt::concat_std<floating_sequence_format>(
 			floating_values)};
@@ -380,20 +380,20 @@ static_assert(!::fast_io::fmt::details::static_format_groups<
 			::std::tuple{7, true, ::std::array{2u, 3u}})};
 	auto const static_partial{
 		::fast_io::fmt::concat_std<partial_format>(
-			::fast_io::fmt::static_arg<unsigned_values>, 42u)};
+			::fast_io::mnp::static_arg<unsigned_values>, 42u)};
 	auto const dynamic_partial{
 		::fast_io::fmt::concat_std<partial_format>(unsigned_values, 42u)};
 	auto const static_narrow_element_width{
 		::fast_io::fmt::concat_std<dynamic_element_width_format>(
-			::fast_io::fmt::static_arg<narrow_width_values>,
-			::fast_io::fmt::static_arg<::std::uint8_t{4u}>)};
+			::fast_io::mnp::static_arg<narrow_width_values>,
+			::fast_io::mnp::static_arg<::std::uint8_t{4u}>)};
 	::std::uint8_t const runtime_width{4u};
 	auto const runtime_narrow_element_width{
 		::fast_io::fmt::concat_std<dynamic_element_width_format>(
-			::fast_io::fmt::static_arg<narrow_width_values>, runtime_width)};
+			::fast_io::mnp::static_arg<narrow_width_values>, runtime_width)};
 	auto const empty_large_element_width{
 		::fast_io::fmt::concat_std<empty_large_element_width_format>(
-			::fast_io::fmt::static_arg<empty_values>)};
+			::fast_io::mnp::static_arg<empty_values>)};
 	return static_std_array == dynamic_std_array &&
 		   static_floating_array == dynamic_floating_array &&
 		   static_c_array == dynamic_c_array &&

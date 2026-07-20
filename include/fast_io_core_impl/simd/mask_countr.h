@@ -68,9 +68,7 @@ vector_mask_countr_common_no_intrinsics_impl(::fast_io::intrinsics::simd_vector<
 	constexpr unsigned shift{
 		static_cast<unsigned>(::std::bit_width(sizeof(T) * (::std::numeric_limits<char unsigned>::digits - 1u)))};
 	d >>= shift;
-#if __has_cpp_attribute(assume)
-	[[assume(d <= n)]];
-#endif
+	FAST_IO_ASSUME(d <= n);
 	return d;
 }
 

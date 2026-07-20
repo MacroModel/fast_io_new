@@ -217,9 +217,7 @@ inline constexpr basic_timestamp<0> div_unix_timestamp(::std::int_least64_t divi
 		::fast_io::fast_terminate();
 	}
 	auto [seconds_low, seconds_high, subseconds_low, subseconds_high] = ::fast_io::intrinsics::udivmod(q_low, q_high, ::fast_io::uint_least64_subseconds_per_second, zero);
-#if __has_cpp_attribute(assume)
-	[[assume(subseconds_high == 0u)]];
-#endif
+	FAST_IO_ASSUME(subseconds_high == 0u);
 	if (seconds_high || subseconds_high)
 	{
 		::fast_io::fast_terminate();
@@ -830,8 +828,20 @@ print_compiler_constant_materialization_query_inline_safe(
 	return {};
 }
 
+/// @brief Permits a timestamp literal to be tested before stream/source normalization.
+/// @details `basic_timestamp` is a trivially copied pair of scalar fields.  Testing both fields at the public source
+///          boundary preserves optimizer visibility even when the general run-time normalization bridge is outlined;
+///          an unknown timestamp still falls through to that unchanged bridge with no formatter-side condition.
 template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_pre_normalization_safe(
+	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+[[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>,
 	basic_timestamp<off_to_epoch> const &timestamp) noexcept
@@ -846,7 +856,7 @@ print_compiler_constant_materialization_eligible(
 }
 
 template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>,
 	basic_timestamp<off_to_epoch> const &timestamp) noexcept
@@ -862,6 +872,10 @@ inline constexpr ::std::size_t print_reserve_size(
 	return print_reserve_size(io_reserve_type<char_type, basic_timestamp<off_to_epoch>>);
 }
 
+/// @brief Writes an already-selected constant timestamp into its caller-owned exact record.
+/// @details This leaf remains forced inline because Clang 23 otherwise outlines it even at `-O3`, leaving the fixed
+///          seconds/subseconds conversion as a run-time call.  Inlining exposes both scalar fields to constant folding;
+///          the ordinary `basic_timestamp` formatter and every optimizer-unknown call remain separate and unchanged.
 template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<
@@ -1133,22 +1147,20 @@ inline constexpr parse_result<char_type const *>
 scn_ctx_define_unix_timestamp_impl(timestamp_scan_state_t<char_type> &state, char_type const *begin,
 								   char_type const *end, unix_timestamp &t) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_year)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::month)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_month)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::day)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_day)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::hours)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_hours)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::minutes)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_minutes)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::seconds)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_subseconds_timezone_marker)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::timezone_hours)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::after_timezone_hours)]];
-	[[assume(state.tsp_phase != scan_timestamp_context_phase::timezone_minutes)]];
-#endif
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_year);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::month);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_month);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::day);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_day);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::hours);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_hours);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::minutes);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_minutes);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::seconds);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_subseconds_timezone_marker);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::timezone_hours);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::after_timezone_hours);
+	FAST_IO_ASSUME(state.tsp_phase != scan_timestamp_context_phase::timezone_minutes);
 	switch (state.tsp_phase)
 	{
 	case scan_timestamp_context_phase::year:
@@ -1457,9 +1469,7 @@ inline constexpr parse_result<char_type const *>
 scan_iso8601_context_year_phase(timestamp_scan_state_t<char_type> &state, char_type const *begin, char_type const *end,
 								T &t) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(state.integer_phase != scan_integral_context_phase::prefix)]];
-#endif
+	FAST_IO_ASSUME(state.integer_phase != scan_integral_context_phase::prefix);
 	switch (state.integer_phase)
 	{
 	case scan_integral_context_phase::space:
@@ -1530,9 +1540,7 @@ scan_iso8601_context_year_phase(timestamp_scan_state_t<char_type> &state, char_t
 		else
 		{
 			auto remain_size{(neg ? 1 : 0) + 5 - state.size};
-#if __has_cpp_attribute(assume)
-			[[assume(remain_size != 0)]];
-#endif
+			FAST_IO_ASSUME(remain_size != 0);
 			if (end - begin < remain_size)
 			{
 				for (; begin != end; ++begin)
@@ -1592,9 +1600,7 @@ scan_iso8601_context_2_digits_phase(timestamp_scan_state_t<char_type> &state, ch
 		return {begin, parse_code::partial};
 	}
 	auto buffer_begin{state.buffer.begin()};
-#if __has_cpp_attribute(assume)
-	[[assume(state.size == 0 || state.size == 1)]];
-#endif
+	FAST_IO_ASSUME(state.size == 0 || state.size == 1);
 	switch (state.size)
 	{
 	case 0:

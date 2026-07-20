@@ -104,12 +104,10 @@ inline constexpr ch_type arithmetic_char_literal_v{arithmetic_char_literal<ch_ty
 template <::std::integral char_type, char8_t ch = u8'0', ::fast_io::details::my_integral T>
 inline constexpr char_type char_literal_add(T offs) noexcept
 {
-#if __has_cpp_attribute(assume)
 	if constexpr (ch == u8'0')
 	{
-		[[assume(0 <= offs && offs < 10)]];
+		FAST_IO_ASSUME(0 <= offs && offs < 10);
 	}
-#endif
 	// The future cpp standard prohibits arithmetic between different char_types, but allows the same char_type to be arithmetic, so doing an integral_lifting
 	// and then calculating gives the same result as direct arithmetic
 

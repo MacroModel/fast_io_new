@@ -1,0 +1,6 @@
+#include <fast_io_format.h>
+
+int main()
+{
+	(void)::fast_io::fmt::concatf_std<"%d%2$d">(1, 2);
+}

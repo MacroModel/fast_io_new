@@ -99,10 +99,8 @@ inline constexpr ::std::size_t champagne_lemire_digits(::std::uint_least64_t val
 inline champagne_lemire_i8x16 champagne_lemire_16_digits_from_groups(::std::uint_least64_t high,
 																	 ::std::uint_least64_t low) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(high < static_cast<::std::uint_least64_t>(100000000u))]];
-	[[assume(low < static_cast<::std::uint_least64_t>(100000000u))]];
-#endif
+	FAST_IO_ASSUME(high < static_cast<::std::uint_least64_t>(100000000u));
+	FAST_IO_ASSUME(low < static_cast<::std::uint_least64_t>(100000000u));
 	constexpr ::std::uint_least64_t two52{static_cast<::std::uint_least64_t>(1u) << 52u};
 	champagne_lemire_i64x8 const multipliers{
 		static_cast<long long>(two52 / static_cast<::std::uint_least64_t>(100000000u)),

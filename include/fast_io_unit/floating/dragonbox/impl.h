@@ -8128,8 +8128,8 @@ compute_binary64_common_significant_precision(
 	::std::uint_least64_t mantissa, ::std::uint_least32_t raw_exponent,
 	::std::size_t significant) noexcept
 {
-	[[assume(raw_exponent - 1u < 2046u)]];
-	[[assume(significant - 20u < 14u)]];
+	FAST_IO_ASSUME(raw_exponent - 1u < 2046u);
+	FAST_IO_ASSUME(significant - 20u < 14u);
 	constexpr ::std::uint_least64_t implicit_bit{static_cast<::std::uint_least64_t>(1ULL) << 52u};
 	auto const multiplier{
 		::fast_io::details::print_rsv_fp_pow10_0_to_19_table[significant - 16u]};
@@ -8157,7 +8157,7 @@ compute_binary64_common_significant_precision_carrier(
 {
 	// The carrier spends five metadata bits on P-23; unlike the arithmetic
 	// helper, it is valid only for the independently guarded P23-P33 interval.
-	[[assume(significant - 23u < 11u)]];
+	FAST_IO_ASSUME(significant - 23u < 11u);
 	auto const converted{::fast_io::details::
 		compute_binary64_common_significant_precision(
 			mantissa, raw_exponent, significant)};
@@ -9908,7 +9908,7 @@ template <typename flt, bool comma, bool uppercase_e,
 		  ::fast_io::manipulators::floating_precision precision_mode,
 		  ::fast_io::manipulators::floating_rounding rounding, bool json_float,
 		  ::std::integral char_type>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
+inline constexpr char_type *
 print_rsvflt_exact_precision_body_impl(
 	char_type *iter, typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
 	::std::uint_least32_t exponent, ::std::size_t precision, bool negative) noexcept
@@ -10160,16 +10160,12 @@ inline constexpr char_type *exact_precision_window_print_positive_binary64_fixed
 	char_type *iter, ::std::uint_least64_t mantissa,
 	::std::uint_least32_t binary_exponent, ::std::size_t precision) noexcept
 {
-#if __has_cpp_attribute(assume)
-	[[assume(binary_exponent <= 971u)]];
-	[[assume(mantissa != 0u)]];
-#endif
+	FAST_IO_ASSUME(binary_exponent <= 971u);
+	FAST_IO_ASSUME(mantissa != 0u);
 	auto const integer_end{::fast_io::details::
 		exact_precision_window_print_positive_binary64_integer(
 			iter, mantissa, binary_exponent)};
-#if __has_cpp_attribute(assume)
-	[[assume(integer_end != nullptr)]];
-#endif
+	FAST_IO_ASSUME(integer_end != nullptr);
 	return ::fast_io::details::print_rsv_fp_append_point_zeros<comma>(
 		integer_end, precision);
 }

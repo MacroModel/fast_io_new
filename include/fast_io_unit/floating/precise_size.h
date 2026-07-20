@@ -2292,7 +2292,7 @@ struct floating_precise_field_parameter
 	::fast_io::details::punning_result<::std::remove_cvref_t<flt>> fields{};
 	::std::size_t precision{};
 
-	FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+	inline constexpr
 	floating_precise_field_parameter(manipulator const &value) noexcept
 		: fields{::fast_io::details::compiler_constant_floating_capture_fields(
 			  value.reference)}
@@ -2314,7 +2314,7 @@ using floating_precise_parameter_t = ::std::conditional_t<
 		manipulator>>;
 
 template <typename flt, typename parameter>
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+[[nodiscard]] inline constexpr auto
 floating_precise_captured_fields(parameter const &value) noexcept
 {
 	if constexpr (requires { value.fields; })

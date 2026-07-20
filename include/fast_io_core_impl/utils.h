@@ -25,6 +25,21 @@
 #define FAST_IO_CLANG_HAS_BFLOAT16_TYPE 1
 #endif
 
+// C++23 standardizes the `_Float64` spelling through `__STDCPP_FLOAT64_T__`.
+// GCC 13 and later also expose the same distinct IEC 60559 type in C++20, but
+// do not set that language-version feature macro.  GCC 11 and 12 publish the
+// FLT64 numeric macros while their C++ frontends do not provide the type; glibc
+// may then macro-map `_Float64` to double, which would duplicate specializations.
+// Admit the GNU extension only from the first frontend with a distinct type.
+// Clang deliberately stays behind the standard macro because it rejects the
+// spelling on current targets while publishing the generic numeric macros.
+#if defined(__STDCPP_FLOAT64_T__) ||                                          \
+	(defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13 &&            \
+	 defined(__FLT64_MANT_DIG__) && __FLT64_MANT_DIG__ == 53 &&               \
+	 defined(__FLT64_MAX_EXP__) && __FLT64_MAX_EXP__ == 1024)
+#define FAST_IO_HAS_FLOAT64_TYPE 1
+#endif
+
 namespace fast_io
 {
 
@@ -215,7 +230,7 @@ concept my_floating_point = ::std::floating_point<T>
 #ifdef __STDCPP_FLOAT32_T__
 							|| ::std::same_as<::std::remove_cv_t<T>, _Float32>
 #endif
-#ifdef __STDCPP_FLOAT64_T__
+#if defined(FAST_IO_HAS_FLOAT64_TYPE)
 							|| ::std::same_as<::std::remove_cv_t<T>, _Float64>
 #endif
 #ifdef __STDCPP_FLOAT128_T__
