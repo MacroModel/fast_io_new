@@ -230,6 +230,33 @@ allows that block only when it has no call, syscall, or normal return.  Run the 
 make -C benchmark/0021.print_concepts compiler-constant-float-asm-gate
 ```
 
+`format_plain_float_lowering_asm.cc` is the complementary Clang 23-and-newer
+lowering gate for a plain `{}` float/double field.  It classifies exported
+symbols and call targets instead of matching a particular immediate-store
+sequence: constant leaves must reach one scalar transport (an inline syscall or
+one recognized outlined direct-write transfer) with no `format_scalar_t`
+forwarding CPO or run-time floating conversion.  A separate compact-leaf gate
+bounds the exported ELF symbol size, instruction count, and static stack frame;
+this rejects a complete conversion engine even if a future optimizer inlines it
+and thereby removes every recognizable call target.  An
+optimizer-unknown leaf may either inline the native converter or call the core
+`scalar_manip_t` reserve leaf once.  Both runtime shapes must remain free of the
+format identity wrapper, compiler-constant proxy state, and scatter output.
+Compile-time lowering assertions additionally prove that precision, alternate
+form, sign, width, and e/f/g/a presentation still retain their semantic types;
+the native leaf exemption is restricted to grammar-empty `{}`.  Every compiler
+is checked in both C++20 and the exact C++26 mode that exposed the Clang-trunk
+regression.
+The script intentionally skips non-Linux-x86_64 targets because its syscall and
+ELF/Itanium symbol checks are platform-specific.  It tests an installed Clang
+23 and additionally `CLANG_TRUNK_CXX` when supplied:
+
+```sh
+make -C benchmark/0021.print_concepts format-plain-float-lowering-asm-gate
+CLANG_TRUNK_CXX=/path/to/clang++ \
+  make -C benchmark/0021.print_concepts format-plain-float-lowering-asm-gate
+```
+
 ## Static-fragment first-attempt placement
 
 `static_fragment_direct_write_bench.cc` compares the established outlined

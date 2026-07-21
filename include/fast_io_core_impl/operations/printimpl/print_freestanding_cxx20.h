@@ -8447,6 +8447,55 @@ inline constexpr decltype(auto) print_freestanding_decay_no_pack(outputstmtype &
 	}
 }
 
+/// @brief Emits one already-normalized plain run through a shared bounded staging window.
+/// @details This is the run counterpart of `print_single_pass_stage_and_write`.  It is used only when the destination
+///          authorizes a finite whole-output stack budget and at least one leaf explicitly promises endpoint-independent
+///          one-pass emission.  The ordinary no-pack dispatcher writes every sibling into the same put area, so static
+///          punctuation and a recursive producer share one final write when the record fits.  Overflow never replays a
+///          source: each full prefix is committed and traversal resumes in the reset window.  Therefore after producing
+///          `n` characters the emitted prefix plus `[begin,current)` is exactly the first `n` characters of the ordinary
+///          ordered run, which proves byte and side-effect order by induction over dispatcher operations.
+template <bool line, ::std::integral char_type, ::std::size_t capacity,
+		  typename output_type, typename... Args>
+	requires(capacity != 0u)
+inline constexpr void print_single_pass_stage_run_and_write(
+	output_type &output, Args &...args)
+{
+	char_type buffer[capacity];
+	::fast_io::details::decay::print_single_pass_staging_state<
+		char_type, output_type> state{__builtin_addressof(output), buffer, buffer,
+								 buffer + capacity, false};
+	::fast_io::details::decay::print_single_pass_staging_ref<
+		char_type, output_type> staging{__builtin_addressof(state)};
+#if (defined(_MSC_VER) && defined(_HAS_EXCEPTIONS) && _HAS_EXCEPTIONS != 0) || \
+	(!defined(_MSC_VER) && defined(__cpp_exceptions))
+	try
+	{
+#endif
+		::fast_io::operations::decay::print_freestanding_decay_no_pack<line>(
+			staging, args...);
+		::fast_io::details::decay::print_single_pass_staging_flush(state);
+#if (defined(_MSC_VER) && defined(_HAS_EXCEPTIONS) && _HAS_EXCEPTIONS != 0) || \
+	(!defined(_MSC_VER) && defined(__cpp_exceptions))
+	}
+	catch (...)
+	{
+		if (!state.external_write_active)
+		{
+			try
+			{
+				::fast_io::details::decay::print_single_pass_staging_flush(state);
+			}
+			catch (...)
+			{
+				// Preserve the producer exception; cleanup cannot safely replace it.
+			}
+		}
+		throw;
+	}
+#endif
+}
+
 /// @brief    Forward declaration for semantic-aware freestanding emission.
 /// @tparam   line              true when a trailing newline is appended
 /// @tparam   already_forwarded true when inputs have already passed semantic forwarding
@@ -10129,6 +10178,103 @@ inline constexpr bool print_semantic_single_pass_bounded_component_v =
 	::fast_io::operations::decay::print_semantic_single_pass_bounded_passive_companion<
 		char_type, T>;
 
+/// @brief Extends passive admission only for semantic runs beyond the established compact-record limit.
+/// @details A larger run may contain a finite semantic-width chain around a passive leaf, or a leaf whose associated
+///          namespace explicitly proves the same type-static, non-throwing reserve semantics. This capability describes
+///          a type; only IO core may consume it when selecting a destination strategy.
+template <typename char_type, typename T>
+inline consteval bool
+print_semantic_extended_bounded_passive_companion_impl() noexcept
+{
+	if constexpr (!::std::integral<char_type>)
+	{
+		return false;
+	}
+	else
+	{
+		using node_expression =
+			::fast_io::operations::decay::print_semantic_single_pass_bounded_node_ref_t<T>;
+		using node_type = ::std::remove_cvref_t<node_expression>;
+		if constexpr (::fast_io::details::decay::print_semantic_width_v<node_type>)
+		{
+			using stable_node_expression =
+				::std::add_lvalue_reference_t<::std::remove_reference_t<node_expression>>;
+			using child_expression = decltype((::std::declval<stable_node_expression>().reference));
+			// A width emitter writes a child of length L and max(W-L,0) fill characters, so its length is
+			// max(W,L). From the child's proof L <= B, monotonicity of max gives max(W,L) <= max(W,B),
+			// exactly the semantic bound queried by the extended capacity probe below.
+			return ::fast_io::operations::decay::
+					   print_semantic_single_pass_bounded_define_nothrow<char_type, T &>() &&
+				   ::fast_io::operations::decay::
+					   print_semantic_extended_bounded_passive_companion_impl<
+						   char_type, child_expression>();
+		}
+		else
+		{
+			constexpr bool explicitly_passive = requires {
+				{
+					print_extended_bounded_passive_companion_safe(
+						::fast_io::io_reserve_type<char_type, node_type>)
+				} -> ::std::same_as<::std::true_type>;
+			};
+			return ::fast_io::operations::decay::
+					   print_semantic_single_pass_bounded_passive_companion<char_type, T> ||
+				   (explicitly_passive &&
+					::fast_io::reserve_printable<char_type, node_type> &&
+					requires(node_expression node, char_type *iter) {
+						{
+							print_reserve_define(
+								::fast_io::io_reserve_type<char_type, node_type>, iter, node)
+						} noexcept -> ::std::same_as<char_type *>;
+					});
+		}
+	}
+}
+
+template <typename char_type, typename T>
+concept print_semantic_extended_bounded_passive_companion =
+	::fast_io::operations::decay::
+		print_semantic_extended_bounded_passive_companion_impl<char_type, T>();
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_extended_bounded_component_v =
+	::fast_io::operations::decay::print_semantic_single_pass_bounded_source<char_type, T> ||
+	::fast_io::operations::decay::print_semantic_extended_bounded_passive_companion<
+		char_type, T>;
+
+/// @brief Recognizes a passive component whose object-dependent bound is cheap and non-fatal.
+/// @details The extended companion proof includes semantic width: if its child length L is bounded by B, the complete
+///          field length max(W,L) is bounded by max(W,B). The preflight may therefore read W without formatting the
+///          child. An object-dependent conversion source is excluded so this large-record protocol stays disjoint from
+///          the dynamic-float path, while every admitted define chain remains non-throwing after a successful preflight.
+template <typename char_type, typename T>
+concept print_semantic_large_passive_bounded_component =
+	::std::integral<char_type> &&
+	!::fast_io::operations::decay::print_semantic_single_pass_bounded_source<char_type, T> &&
+	::fast_io::operations::decay::print_semantic_extended_bounded_passive_companion<
+		char_type, T>;
+
+/// @brief Recognizes the first measured all-passive component-count band with severe frontend scaling costs.
+/// @details Twenty complex integer fields lower to 41 components, the first measured point with excessive compile
+///          time and memory consumption. Twenty-four through thirty-two fields lower to 49--65 components, where
+///          affected audited frontends hit their default template-depth limit. A linear non-formatting preflight
+///          prevents this closed band from instantiating the generic whole-run planner; the upper endpoint limits both
+///          the preflight fold and unchecked emitter expansion to the measured 32-field requirement.
+template <::std::integral char_type, typename... Args>
+inline consteval bool print_semantic_large_passive_bounded_run() noexcept
+{
+	if constexpr (sizeof...(Args) < 41u || 65u < sizeof...(Args))
+	{
+		return false;
+	}
+	else
+	{
+		return (::fast_io::operations::decay::print_semantic_large_passive_bounded_component<
+					char_type, Args> &&
+				...);
+	}
+}
+
 /// @brief Recognizes the output-independent structure of one audited bounded run.
 /// @details The source proof and passive-companion whitelist describe formatting semantics, not destination storage.
 ///          Keeping that proof separate lets a writable put area and a compact stream-authorized stack frame reuse the
@@ -10146,6 +10292,28 @@ inline consteval bool print_semantic_single_pass_bounded_run() noexcept
 					char_type, Args> ||
 				...) &&
 			   (::fast_io::operations::decay::print_semantic_single_pass_bounded_component_v<
+					char_type, Args> &&
+				...);
+	}
+}
+
+/// @brief Recognizes only larger audited runs within the extended put-area budget.
+/// @details The size checks precede every capability name so a compact run or a run beyond the cap cannot instantiate
+///          any extended companion, capacity, or emitter machinery. This keeps both excluded regions on their original
+///          type graph and generated code. The upper endpoint is audited separately for compile RSS and text growth.
+template <::std::integral char_type, typename... Args>
+inline consteval bool print_semantic_extended_bounded_run() noexcept
+{
+	if constexpr (sizeof...(Args) <= 8u || 64u < sizeof...(Args))
+	{
+		return false;
+	}
+	else
+	{
+		return (::fast_io::operations::decay::print_semantic_single_pass_bounded_source<
+					char_type, Args> ||
+				...) &&
+			   (::fast_io::operations::decay::print_semantic_extended_bounded_component_v<
 					char_type, Args> &&
 				...);
 	}
@@ -10171,6 +10339,71 @@ inline consteval bool print_semantic_single_pass_bounded_put_area_run() noexcept
 	else
 	{
 		return true;
+	}
+}
+
+/// @brief Selects extended bounded materialization only for an existing safe writable put area.
+/// @details This selector is disjoint from the original compact selector and does not authorize stack materialization.
+///          A failed capacity probe observes only source bounds and then returns to the unchanged semantic dispatcher.
+template <::std::integral char_type, typename outputstmtype, typename... Args>
+inline consteval bool print_semantic_extended_bounded_put_area_run() noexcept
+{
+	if constexpr (!::fast_io::operations::decay::print_semantic_extended_bounded_run<
+					  char_type, Args...>())
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+			   ::fast_io::single_pass_bounded_obuffer_materialization_safe<
+				   char_type, outputstmtype> &&
+			   ::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+				   outputstmtype, char_type>;
+	}
+}
+
+/// @brief Selects a large passive run only for a put area with deferred single-commit semantics.
+template <::std::integral char_type, typename outputstmtype, typename... Args>
+inline consteval bool print_semantic_large_passive_bounded_put_area_run() noexcept
+{
+	if constexpr (!::fast_io::operations::decay::print_semantic_large_passive_bounded_run<
+					  char_type, Args...>())
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+			   ::fast_io::single_pass_bounded_obuffer_materialization_safe<
+				   char_type, outputstmtype> &&
+			   ::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+				   outputstmtype, char_type>;
+	}
+}
+
+/// @brief Selects one bounded stack attempt only when the destination already advertises that byte budget.
+/// @details Runtime widths make the record bound object-dependent, so the stream's fixed whole-output threshold is the
+///          array extent. The preflight below admits emission only when every max(W,B) fits that extent. Requiring the
+///          threshold itself to satisfy core's stack policy prevents a generated record from creating an unbounded
+///          frame merely to avoid the generic planner. Put-area outputs use the cursor selector above and are excluded.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+inline consteval bool print_semantic_large_passive_bounded_stack_run() noexcept
+{
+	if constexpr (!::fast_io::operations::decay::print_semantic_large_passive_bounded_run<
+					  char_type, Args...>() ||
+				  ::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t threshold{
+			::fast_io::details::decay::print_full_output_coalesce_threshold<
+				char_type, outputstmtype>()};
+		return threshold != 0u &&
+			   ::fast_io::details::decay::print_stack_buffer_size_within_limit<
+				   threshold, char_type>;
 	}
 }
 
@@ -10203,6 +10436,46 @@ inline constexpr void print_semantic_single_pass_bounded_add_component(
 	{
 		component_size = print_reserve_size(
 			::fast_io::io_reserve_type<char_type, node_type>);
+	}
+	if (component_size == SIZE_MAX || remaining < component_size)
+	{
+		total = SIZE_MAX;
+		return;
+	}
+	total += component_size;
+}
+
+/// @brief Adds one component admitted only by the extended put-area protocol.
+/// @details Keeping this operation distinct from the compact helper is a code-generation boundary: runs of at most
+///          eight components and runs beyond the extended cap never instantiate its semantic-width machinery.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::operations::decay::print_semantic_extended_bounded_component_v<
+		char_type, T>
+inline constexpr void print_semantic_extended_bounded_add_component(
+	::std::size_t &total, ::std::size_t maximum_size, T &value)
+{
+	if (total == SIZE_MAX || maximum_size < total)
+	{
+		total = SIZE_MAX;
+		return;
+	}
+	auto &&node_ref{::fast_io::details::decay::print_semantic_node_ref(value)};
+	auto const remaining{maximum_size - total};
+	::std::size_t component_size;
+	if constexpr (
+		::fast_io::operations::decay::print_semantic_single_pass_bounded_source<
+			char_type, T>)
+	{
+		component_size =
+			::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+				node_ref, remaining);
+	}
+	else
+	{
+		// Extended passive leaves may be wrapped in semantic widths. The recursive admission proof establishes
+		// that this operation returns max(width, child_bound) at each level without formatting the child.
+		component_size =
+			::fast_io::operations::decay::print_semantic_bounded_size<char_type>(node_ref);
 	}
 	if (component_size == SIZE_MAX || remaining < component_size)
 	{
@@ -10270,6 +10543,163 @@ print_semantic_try_single_pass_bounded_put_area(outputstmtype &optstm, Args &...
 	::fast_io::operations::decay::print_semantic_emit_single_pass_bounded_put_area<
 		line, char_type>(optstm, curr, args...);
 	return true;
+}
+
+/// @brief Publishes one extended bounded run after its complete capacity proof succeeds.
+/// @details The source and companion concepts prove that unchecked bounded emission is non-throwing. The destination
+///          cursor remains unpublished until every component has been written, so no partially visible run exists.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::print_semantic_extended_bounded_put_area_run<
+			char_type, outputstmtype, Args...>())
+inline constexpr void print_semantic_emit_extended_bounded_put_area(
+	outputstmtype &optstm, char_type *current, Args &...args)
+{
+	char_type *const actual_end{
+		::fast_io::operations::decay::print_semantic_emit_unchecked_run<
+			line, char_type, true>(current, args...)};
+	obuffer_set_curr(optstm, actual_end);
+}
+
+/// @brief Attempts the extended run without touching the destination on a capacity miss.
+/// @details Each source query is a read-only, non-fatal bound. Passive companions contribute only type-static reserve
+///          bounds and semantic max(width, child_bound), so returning false has neither formatted a value nor published
+///          a cursor and the caller may enter the historical exact-size path unchanged.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::print_semantic_extended_bounded_put_area_run<
+			char_type, outputstmtype, Args...>())
+inline constexpr bool
+print_semantic_try_extended_bounded_put_area(outputstmtype &optstm, Args &...args)
+{
+	char_type *const current{obuffer_curr(optstm)};
+	char_type *const end{obuffer_end(optstm)};
+	if (current == nullptr || end == nullptr)
+	{
+		return false;
+	}
+	::std::ptrdiff_t const difference{end - current};
+	if (difference < 0)
+	{
+		return false;
+	}
+	::std::size_t const available{static_cast<::std::size_t>(difference)};
+	::std::size_t total{line ? 1u : 0u};
+	(::fast_io::operations::decay::print_semantic_extended_bounded_add_component<
+		 char_type>(total, available, args),
+	 ...);
+	if (total == SIZE_MAX)
+	{
+		return false;
+	}
+	::fast_io::operations::decay::print_semantic_emit_extended_bounded_put_area<
+		line, char_type>(optstm, current, args...);
+	return true;
+}
+
+/// @brief Commits one large passive run when its complete object-dependent bound fits the current put area.
+/// @details Each component contributes either its static reserve maximum or max(runtime_width,child_bound). If their
+///          saturated sum fits, actual_size <= sum(bounds)+line proves every unchecked define remains inside the put
+///          area. A miss performs no formatting, write, or cursor publication and may refresh or use checked output.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::print_semantic_large_passive_bounded_put_area_run<
+			char_type, outputstmtype, Args...>())
+inline constexpr bool print_semantic_try_large_passive_bounded_put_area(
+	outputstmtype &optstm, Args &...args)
+{
+	char_type *const current{obuffer_curr(optstm)};
+	char_type *const end{obuffer_end(optstm)};
+	if (current == nullptr || end == nullptr)
+	{
+		return false;
+	}
+	::std::ptrdiff_t const difference{end - current};
+	if (difference < 0)
+	{
+		return false;
+	}
+	::std::size_t const available{static_cast<::std::size_t>(difference)};
+	::std::size_t total{line ? 1u : 0u};
+	(::fast_io::operations::decay::print_semantic_extended_bounded_add_component<
+		 char_type>(total, available, args),
+	 ...);
+	if (total == SIZE_MAX)
+	{
+		return false;
+	}
+	char_type *const actual_end{
+		::fast_io::operations::decay::print_semantic_emit_unchecked_run<
+			line, char_type, true>(current, args...)};
+	obuffer_set_curr(optstm, actual_end);
+	return true;
+}
+
+/// @brief Attempts one large passive run in the destination's fixed whole-output stack budget.
+/// @details The preflight computes every object-dependent width bound against the fixed capacity before touching the
+///          buffer. Success proves the unchecked ordered concatenation fits and permits one `write_all`; failure leaves
+///          the output untouched for checked component emission. Only [buffer,actual_end) is ever observed.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::print_semantic_large_passive_bounded_stack_run<
+			line, char_type, outputstmtype, Args...>())
+inline constexpr bool print_semantic_try_large_passive_bounded_stack(
+	outputstmtype &optstm, Args &...args)
+{
+	constexpr ::std::size_t capacity{
+		::fast_io::details::decay::print_full_output_coalesce_threshold<
+			char_type, outputstmtype>()};
+	static_assert(capacity != 0u);
+	::std::size_t total{line ? 1u : 0u};
+	(::fast_io::operations::decay::print_semantic_extended_bounded_add_component<
+		 char_type>(total, capacity, args),
+	 ...);
+	if (total == SIZE_MAX)
+	{
+		return false;
+	}
+	char_type buffer[capacity];
+	char_type *const actual_end{
+		::fast_io::operations::decay::print_semantic_emit_unchecked_run<
+			line, char_type, true>(buffer, args...)};
+	::fast_io::operations::decay::write_all_decay(optstm, buffer, actual_end);
+	return true;
+}
+
+/// @brief Emits a capacity-rejected large passive run through checked component operations.
+/// @details Every admitted component has a non-throwing reserve chain; a semantic width is sent through the ordinary
+///          single-component semantic emitter, while a plain leaf uses the no-pack dispatcher. Ordered component output
+///          followed by one optional newline preserves the character sequence without recreating a whole-run planner.
+///          A fold avoids one continuation type per prefix.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+	requires(::fast_io::operations::decay::print_semantic_large_passive_bounded_run<
+			 char_type, Args...>())
+inline constexpr void print_semantic_emit_large_passive_checked(
+	outputstmtype &optstm, Args &...args)
+{
+	auto values{::fast_io::containers::forward_as_tuple(args...)};
+	[&]<::std::size_t... index>(::std::index_sequence<index...>) constexpr {
+		auto emit_component = [&]<::std::size_t position, typename T>(T &value) constexpr {
+			// The ordinary flat continuation gives line ownership to its final component. Preserve that primitive
+			// grouping here: a final literal may append the newline in the same checked write, which also keeps the
+			// same partial-prefix and exception boundary on a capacity miss. Index expansion supplies this fact without
+			// recursively creating one continuation type for every component prefix.
+			constexpr bool component_line{line && position + 1u == sizeof...(Args)};
+			if constexpr (::fast_io::details::decay::print_semantic_node<T>)
+			{
+				::fast_io::operations::decay::print_semantic_emit<
+					component_line, true, char_type>(optstm, value);
+			}
+			else
+			{
+				::fast_io::operations::decay::print_freestanding_decay_no_pack<
+					component_line>(optstm, value);
+			}
+		};
+		(emit_component.template operator()<index>(
+			 ::fast_io::containers::get<index>(values)),
+		 ...);
+	}(::std::make_index_sequence<sizeof...(Args)>{});
 }
 
 /// @brief Maximum compact one-pass frame admitted before exact semantic sizing.
@@ -11740,6 +12170,126 @@ inline constexpr void print_semantic_precise_coalesce_fallback(
 	}
 }
 
+/// @brief Proves that one sibling is locally bounded or explicitly safe for shared one-pass staging.
+/// @details A fixed scatter or static-reserve leaf is admitted only when its complete type-level extent fits the same
+///          destination window.  This deliberately rejects `basic_io_scatter_t`, dynamic reserve, context, and retained
+///          reserve-scatter siblings: their run-time payload can be arbitrarily large, and replacing a native writev
+///          plan with bounded copying would regress the large borrowed-fragment path.  A leaf which reaches
+///          `print_define` must instead supply the stronger single-pass staging CPO; mere direct printability is
+///          insufficient because a custom formatter may inspect or mutate its concrete endpoint.
+template <::std::integral char_type, ::std::size_t capacity, typename T>
+inline consteval bool print_plain_leaf_single_pass_staging_safe() noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	using static_scatter_traits =
+		::fast_io::details::decay::print_static_scatter_traits<
+			char_type, value_type>;
+	if constexpr (::std::same_as<value_type, ::fast_io::io_null_t> ||
+				  ::fast_io::single_pass_staging_printable<char_type, value_type>)
+	{
+		return true;
+	}
+	else if constexpr (static_scatter_traits::available)
+	{
+		return static_scatter_traits::size <= capacity;
+	}
+	else if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+	{
+		return print_reserve_size(
+			::fast_io::io_reserve_type<char_type, value_type>) <= capacity;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Returns the fixed window consumption of one shared-staging sibling.
+/// @details The explicitly marked recursive producer is unbounded and therefore contributes zero to this separate
+///          sibling budget: overflow correctness is supplied by its one-pass protocol.  Fixed leaves contribute their
+///          complete extent.  `SIZE_MAX` is a fail-closed sentinel for a category not admitted by the preceding proof.
+template <::std::integral char_type, typename T>
+inline consteval ::std::size_t
+print_plain_leaf_single_pass_staging_fixed_extent() noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	using static_scatter_traits =
+		::fast_io::details::decay::print_static_scatter_traits<
+			char_type, value_type>;
+	if constexpr (::std::same_as<value_type, ::fast_io::io_null_t> ||
+				  ::fast_io::single_pass_staging_printable<char_type, value_type>)
+	{
+		return 0u;
+	}
+	else if constexpr (static_scatter_traits::available)
+	{
+		return static_scatter_traits::size;
+	}
+	else if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+	{
+		return print_reserve_size(
+			::fast_io::io_reserve_type<char_type, value_type>);
+	}
+	else
+	{
+		return SIZE_MAX;
+	}
+}
+
+/// @brief Selects shared staging for a mixed plain run containing an audited one-pass direct producer.
+/// @details The destination owns both the capacity and stack-placement decision.  Requiring more than one leaf avoids
+///          perturbing the established singleton path.  At least one explicit source marker is necessary so ordinary
+///          reserve/scatter records retain their mature descriptor and contiguous strategies.  Every other leaf must
+///          be representable by a destination-independent protocol, and the exact staged observer must accept the
+///          completed run including line ownership.  Mutex and status customizations have already been selected by the
+///          outer dispatcher; excluding them here prevents a synthetic put area from acquiring endpoint semantics.
+///          Let `F` be the saturating sum of every fixed sibling extent plus the optional line character.  Requiring
+///          `F < capacity` leaves at least one character for an explicitly marked producer, so selecting shared staging
+///          can reduce a write boundary; `F >= capacity` cannot provide that guarantee and keeps the established
+///          scatter/direct plan.  Saturation makes this proof independent of `size_t` wraparound.
+template <bool line, ::std::integral char_type, typename outputstmtype,
+		  typename... Args>
+inline consteval bool print_plain_single_pass_staging_run() noexcept
+{
+	constexpr ::std::size_t capacity{
+		::fast_io::details::decay::print_full_output_coalesce_threshold<
+			char_type, outputstmtype>()};
+	using staging_output = ::fast_io::details::decay::print_single_pass_staging_ref<
+		char_type, outputstmtype>;
+	::std::size_t fixed_sibling_extent{line ? 1u : 0u};
+	((fixed_sibling_extent =
+		  fixed_sibling_extent == SIZE_MAX || fixed_sibling_extent > capacity ||
+			  ::fast_io::operations::decay::
+				  print_plain_leaf_single_pass_staging_fixed_extent<
+					  char_type, Args>() > capacity - fixed_sibling_extent
+			  ? SIZE_MAX
+			  : fixed_sibling_extent +
+					::fast_io::operations::decay::
+						print_plain_leaf_single_pass_staging_fixed_extent<
+							char_type, Args>()),
+	 ...);
+	return sizeof...(Args) > 1u && capacity != 0u &&
+		   fixed_sibling_extent < capacity &&
+		   ::fast_io::details::decay::print_stack_buffer_size_within_limit<
+			   capacity, char_type> &&
+		   !::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+			   outputstmtype> &&
+		   !::fast_io::operations::decay::defines::
+			   has_output_or_io_stream_mutex_ref_define<outputstmtype> &&
+		   !::fast_io::operations::decay::defines::has_status_print_define<
+			   line, outputstmtype, ::std::remove_cvref_t<Args>...> &&
+		   (false || ... || ::fast_io::single_pass_staging_printable<
+						  char_type, ::std::remove_cvref_t<Args>>) &&
+		   (::fast_io::operations::decay::
+				print_plain_leaf_single_pass_staging_safe<
+					char_type, capacity, Args>() &&
+			...) &&
+		   !::fast_io::operations::decay::defines::has_status_print_define<
+			   line, staging_output, ::std::remove_cvref_t<Args>...> &&
+		   ::fast_io::details::decay::print_freestanding_output_run_okay<
+			   line, staging_output, ::std::remove_cvref_t<Args>...>();
+}
+
 /// @brief    Entry continuation for flattened semantic emission.
 /// @details  It first applies the exact-two direct-write policy when its destination proof is complete, then tries
 ///           one-pass static-bound coalescing, exact-size coalescing, and general run-time bounded coalescing before
@@ -11797,6 +12347,11 @@ struct print_semantic_emit_flat_continuation
 			sizeof...(FilteredArgs) != 0u &&
 			(::fast_io::semantic_plain_leaf_coalesce_preferred_stream<char_type, outputstmtype> ||
 			 staged_group::available)};
+		constexpr bool shared_single_pass_staging_run{
+			!has_semantic_node && !has_runtime_scatter_component &&
+			::fast_io::operations::decay::
+				print_plain_single_pass_staging_run<
+					line, char_type, outputstmtype, FilteredArgs...>()};
 		constexpr bool singleton_put_area_preferred_plain_leaf{
 			sizeof...(FilteredArgs) == 1u && !has_semantic_node &&
 			!retain_plain_leaves_for_coalescing &&
@@ -11821,6 +12376,17 @@ struct print_semantic_emit_flat_continuation
 			// singleton leaves.
 			::fast_io::operations::decay::print_freestanding_decay_no_pack<line>(
 				optstm, ::std::forward<FilteredArgs>(filtered_args)...);
+		}
+		else if constexpr (shared_single_pass_staging_run)
+		{
+			// The active run is already flat and every source has passed the staged-observer proof.  One adapter instance
+			// must own the whole sequence; staging each direct leaf separately would retain one syscall per literal/range
+			// boundary and defeat the destination's whole-output threshold.
+			constexpr ::std::size_t capacity{
+				::fast_io::details::decay::print_full_output_coalesce_threshold<
+					char_type, outputstmtype>()};
+			::fast_io::operations::decay::print_single_pass_stage_run_and_write<
+				line, char_type, capacity>(optstm, filtered_args...);
 		}
 		else if constexpr (!has_semantic_node && !has_runtime_scatter_component &&
 						   !retain_plain_leaves_for_coalescing)
@@ -12028,7 +12594,12 @@ struct print_semantic_filter_flat_continuation
 
 /// @brief    Emits a semantic-aware freestanding print run.
 /// @details  The entry expands semantic packs and nulls when needed, then routes the resulting flat run through
-///           coalescing and semantic node emission.
+///           coalescing and semantic node emission. Ordinary `inline` is deliberate. A GCC 11--16 and Clang 17--23
+///           N20/N32 matrix showed that forcing GNU flatten left Clang's generated text unchanged, except for a
+///           256-byte reduction without flatten in the mixed32 benchmark, while it enlarged most GCC texts and raised
+///           GCC compile time or memory. P-core measurements of obuffer, direct, and buffered mixed32 output found no
+///           throughput regression without the attribute. Normal `-O3` therefore provides sufficient local inlining
+///           without imposing every mutually exclusive semantic branch on its caller.
 /// @tparam   line              true when a trailing newline is appended
 /// @tparam   already_forwarded true when inputs have already passed semantic input forwarding
 /// @tparam   char_type         the character type of the output stream
@@ -12037,9 +12608,6 @@ struct print_semantic_filter_flat_continuation
 /// @param    optstm            the output stream reference
 /// @param    args              the arguments to emit
 template <bool line, bool already_forwarded, ::std::integral char_type, typename outputstmtype, typename... Args>
-#if __has_cpp_attribute(__gnu__::__flatten__)
-[[__gnu__::__flatten__]]
-#endif
 inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 {
 	print_semantic_emit_flat_continuation<line, char_type, outputstmtype> emit_flat{optstm};
@@ -12049,13 +12617,36 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 		 ...)};
 	constexpr bool has_top_level_condition{
 		(false || ... || ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>)};
+	constexpr bool bypass_condition_selection = []() consteval {
+		if constexpr (sizeof...(Args) >= 41u)
+		{
+			return true;
+		}
+		else if constexpr (sizeof...(Args) > 24u)
+		{
+			// Only the measured dynamic-precision band needs source capability discovery. Keeping this fold inside a
+			// discarded size branch is a compile-time isolation proof: a run of at most 24 components never names, and
+			// therefore never instantiates, the bounded-source protocol merely to reject this bypass.
+			return (false || ... ||
+					::fast_io::operations::decay::print_semantic_single_pass_bounded_source<
+						char_type, Args>);
+		}
+		else
+		{
+			return false;
+		}
+	}();
 	if constexpr (
 		already_forwarded && !has_pack_or_null && !has_top_level_condition &&
-		sizeof...(Args) > 128u)
+		bypass_condition_selection)
 	{
-		// Every argument is already normalized and no branch can disappear. For generated records above 128 fields,
-		// calling the final strategy continuation directly avoids constructing one condition-selection prefix type per
-		// field; smaller packs retain the established path so their optimized machine code remains unchanged.
+		// Every argument is already normalized and no branch can disappear, so condition selection is the identity map:
+		// it preserves the same objects in the same order and invokes `emit_flat` exactly once. Calling that continuation
+		// directly removes only condition selection's one-prefix-type-per-component nesting; later output strategies retain
+		// their own ordinary pack expansions. The 41-component threshold applies to every normalized flat type sequence,
+		// not merely the passive run optimized below: identity of condition selection follows from the absence of a
+		// top-level condition, pack, or null, independently of leaf protocols. An audited bounded source retains the lower
+		// threshold required by dynamic-precision floating records.
 		emit_flat(::std::forward<Args>(args)...);
 	}
 	else if constexpr (already_forwarded && !has_pack_or_null)
@@ -12206,6 +12797,20 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 			// Run-time descriptor producers must be selected before the legacy mixed dynamic-reserve entry, whose
 			// compile-time descriptor count intentionally models each dynamic producer as one contiguous range.
 			return ::fast_io::details::decay::print_runtime_scatter_plan_fast_entry<line>(optstm, args...);
+		}
+		else if constexpr (
+			::fast_io::operations::decay::print_plain_single_pass_staging_run<
+				line, char_type, outputstmtype, Args...>())
+		{
+			// A format frontend is only one producer of this shape: ordinary IO packs can likewise contain punctuation
+			// beside a recursive one-pass leaf.  Core owns the device decision and lets the complete normalized run share
+			// the stream-authorized window; neither grammar nor range code chooses a syscall policy.
+			constexpr ::std::size_t capacity{
+				::fast_io::details::decay::print_full_output_coalesce_threshold<
+					char_type, outputstmtype>()};
+			return ::fast_io::operations::decay::
+				print_single_pass_stage_run_and_write<line, char_type, capacity>(
+					optstm, args...);
 		}
 		else if constexpr (
 			sizeof...(Args) == 1u &&
@@ -12578,6 +13183,138 @@ inline constexpr void print_freestanding_decay_borrowed_output(
 		optstm, bounded_sources...);
 }
 
+/// @brief Handles the first failing large passive/type-bounded band without constructing the generic semantic planner.
+/// @details A current-window hit writes and commits once. On a buffered stream with an explicit refresh operation, a
+///          tail miss first publishes the pending prefix, restores the full window, and retries the complete run. Only
+///          when the proven bound cannot fit a fresh window (or the destination has no refresh operation) does the
+///          checked component fold run. The miss path is not cold: a steady buffered stream reaches it periodically.
+template <bool line, typename outputstmtype, typename... passive_bounded_types>
+	requires(
+		requires { typename outputstmtype::output_char_type; } &&
+		::fast_io::operations::decay::print_semantic_large_passive_bounded_put_area_run<
+			typename outputstmtype::output_char_type, outputstmtype,
+			passive_bounded_types...>() &&
+		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype, passive_bounded_types...>)
+inline constexpr void print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, passive_bounded_types... passive_bounded_values)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if (::fast_io::operations::decay::print_semantic_try_large_passive_bounded_put_area<
+			line, char_type>(optstm, passive_bounded_values...)) [[likely]]
+	{
+		return;
+	}
+	if constexpr (requires { print_single_pass_bounded_put_area_refresh(optstm); })
+	{
+		char_type *const begin{obuffer_begin(optstm)};
+		char_type *const current{obuffer_curr(optstm)};
+		char_type *const end{obuffer_end(optstm)};
+		if (begin != nullptr && current != begin && end != nullptr && begin <= end)
+		{
+			::std::size_t const full_capacity{static_cast<::std::size_t>(end - begin)};
+			::std::size_t total{line ? 1u : 0u};
+			(::fast_io::operations::decay::print_semantic_extended_bounded_add_component<
+				 char_type>(total, full_capacity, passive_bounded_values),
+			 ...);
+			if (total != SIZE_MAX)
+			{
+				print_single_pass_bounded_put_area_refresh(optstm);
+				if (::fast_io::operations::decay::print_semantic_try_large_passive_bounded_put_area<
+						line, char_type>(optstm, passive_bounded_values...)) [[likely]]
+				{
+					return;
+				}
+			}
+		}
+	}
+	::fast_io::operations::decay::print_semantic_emit_large_passive_checked<
+		line, char_type>(optstm, passive_bounded_values...);
+}
+
+/// @brief Coalesces a large passive/type-bounded run once when its runtime-width bound fits stream policy.
+/// @details The selector establishes structural eligibility and the stream's pre-existing whole-output and stack
+///          budgets; the runtime preflight proves that the summed object-dependent reserve maximum fits those budgets.
+///          The stack emitter therefore performs one materialization and one `write_all`, avoiding both the generic
+///          planner's type graph and one syscall per lowered component on a direct file observer.
+template <bool line, typename outputstmtype, typename... passive_bounded_types>
+	requires(
+		requires { typename outputstmtype::output_char_type; } &&
+		::fast_io::operations::decay::print_semantic_large_passive_bounded_stack_run<
+			line, typename outputstmtype::output_char_type, outputstmtype,
+			passive_bounded_types...>() &&
+		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype, passive_bounded_types...>)
+inline constexpr void print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, passive_bounded_types... passive_bounded_values)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if (::fast_io::operations::decay::print_semantic_try_large_passive_bounded_stack<
+			line, char_type>(optstm, passive_bounded_values...)) [[likely]]
+	{
+		return;
+	}
+	::fast_io::operations::decay::print_semantic_emit_large_passive_checked<
+		line, char_type>(optstm, passive_bounded_values...);
+}
+
+/// @brief Gives only an extended bounded run one destination put-area attempt.
+/// @details This overload is disjoint from the established compact overload above by component count. A failed cheap
+///          capacity proof has not formatted any source or changed the cursor, so the unchanged dispatcher receives the
+///          same named objects. Keeping both the attempt and fallback out of the generic selector prevents runs beyond
+///          the extended cap from instantiating any of this machinery.
+template <bool line, typename outputstmtype, typename... bounded_source_types>
+	requires(
+		requires { typename outputstmtype::output_char_type; } &&
+		::fast_io::operations::decay::print_semantic_extended_bounded_put_area_run<
+			typename outputstmtype::output_char_type, outputstmtype,
+			bounded_source_types...>() &&
+		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype, bounded_source_types...>)
+inline constexpr void print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, bounded_source_types... bounded_sources)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if (::fast_io::operations::decay::print_semantic_try_extended_bounded_put_area<
+			line, char_type>(optstm, bounded_sources...)) [[likely]]
+	{
+		return;
+	}
+	if constexpr (requires { print_single_pass_bounded_put_area_refresh(optstm); })
+	{
+		char_type *const begin{obuffer_begin(optstm)};
+		char_type *const current{obuffer_curr(optstm)};
+		char_type *const end{obuffer_end(optstm)};
+		if (begin != nullptr && current != begin && end != nullptr && begin <= end)
+		{
+			::std::size_t const full_capacity{static_cast<::std::size_t>(end - begin)};
+			::std::size_t total{line ? 1u : 0u};
+			(::fast_io::operations::decay::print_semantic_extended_bounded_add_component<
+				 char_type>(total, full_capacity, bounded_sources),
+			 ...);
+			if (total != SIZE_MAX)
+			{
+				// A steady buffer periodically lacks tail space. Flush only after proving the complete run fits the
+				// fresh window, then retry the same read-only bound and one-pass materialization.
+				print_single_pass_bounded_put_area_refresh(optstm);
+				if (::fast_io::operations::decay::print_semantic_try_extended_bounded_put_area<
+						line, char_type>(optstm, bounded_sources...)) [[likely]]
+				{
+					return;
+				}
+			}
+		}
+	}
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+		optstm, bounded_sources...);
+}
+
 /// @brief Gives an unbuffered destination-neutral bounded run one compact stack attempt.
 /// @details This overload is disjoint from the put-area entry above. A stream must
 ///          explicitly advertise a whole-output coalescing threshold before core
@@ -12734,6 +13471,51 @@ inline constexpr void print_freestanding_decay_borrowed_output(
 	}
 	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
 		optstm, static_prefix, formatted_scalar);
+}
+
+// Declare the generic borrowed fallback after all destination-specialized overloads so the mutex adapter below can
+// re-run exactly this complete overload set for its unlocked observer. The definition remains after the adapter,
+// making the constrained mutex overload more specialized at the original call site.
+template <bool line, typename outputstmtype, typename... Args>
+inline constexpr decltype(auto) print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, Args... args);
+
+/// @brief Selects borrowed-output policy from the final destination while holding its outer lock.
+/// @details A mutex wrapper contributes synchronization but does not replace the unlocked observer's capacity or
+///          coalescing capabilities. This constrained overload is intentionally declared after every destination
+///          specialization and before the generic fallback: recursive overload resolution can therefore select the
+///          same put-area or direct-write strategy the unlocked observer would receive without a wrapper. The guard
+///          spans that complete synchronous call, including status dispatch and a possible buffered refresh.
+template <bool line, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			outputstmtype>)
+inline constexpr decltype(auto)
+print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, Args... args)
+{
+	if constexpr (
+		::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
+			outputstmtype>)
+	{
+		// The arguments are sole owners at this by-value boundary. Moving them transports the normalized graph without
+		// another copy; the recursive call completes before the lock guard releases either an lvalue or owned prvalue
+		// unlocked observer.
+		::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
+			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
+		decltype(auto) unlocked_output =
+			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm);
+		return ::fast_io::operations::decay::print_freestanding_decay_borrowed_output<line>(
+			unlocked_output, ::std::move(args)...);
+	}
+	else
+	{
+		static_assert(
+			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
+				outputstmtype>,
+			"fast_io: an output mutex CPO requires a storable lock/unlock proxy and a type-progressing, "
+			"character-preserving unlocked output reference");
+	}
 }
 
 /// @brief Borrows an output after applying the value-level normalization gate.

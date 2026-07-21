@@ -1562,6 +1562,20 @@ concept deferred_obuffer_commit_safe = ::std::integral<char_type> && requires {
 	} -> ::std::same_as<::std::true_type>;
 };
 
+/// @brief Marks a put area that may receive one completely preflighted non-throwing bounded run.
+/// @details This proof is narrower than general deferred cursor folding. The consumer must first prove the whole run
+///          fits, perform no intervening output operation, and publish only the final cursor. A failed preflight may
+///          neither write nor publish. Outputs with the stronger deferred-commit contract qualify automatically.
+template <typename char_type, typename output>
+concept single_pass_bounded_obuffer_materialization_safe =
+	::std::integral<char_type> &&
+	(::fast_io::deferred_obuffer_commit_safe<char_type, output> || requires {
+		{
+			print_single_pass_bounded_obuffer_materialization_safe(
+				io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
+		} -> ::std::same_as<::std::true_type>;
+	});
+
 /// @brief Marks an output whose put area is safe for the compiler-constant materialization strategy.
 /// @details The general deferred-commit marker remains the default proof. An output may instead opt in only to this
 ///          narrower strategy when writing a fully materialized, statically bounded run into its current put area and

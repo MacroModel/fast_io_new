@@ -4617,6 +4617,21 @@ print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scala
 	}
 }
 
+/// @brief Exposes the type-static, non-throwing reserve contract of an integral scalar to semantic IO policy.
+/// @details For base b >= 2, an N-bit magnitude has at most ceil(N/log2(b)) digits; the existing reserve size adds the
+///          finite sign and prefix maxima encoded by `flags`. `print_reserve_define` above implements exactly that flag
+///          set and is noexcept, so its emitted length never exceeds the type-only reserve extent. This marker selects
+///          no strategy by itself; it merely lets IO combine the scalar with a separately proved width bound.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename T>
+	requires(::fast_io::details::my_integral<T> &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+inline constexpr ::std::true_type print_extended_bounded_passive_companion_safe(
+	::fast_io::io_reserve_type_t<
+		char_type, ::fast_io::manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
 /// @brief Reports whether the optimizer proves the complete integral scalar payload constant at this call site.
 /// @details The function is forced inline so `__builtin_constant_p` observes the public print/concat expression rather
 ///          than an out-of-line parameter.  Unsupported compilers conservatively retain the ordinary formatter.

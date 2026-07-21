@@ -609,11 +609,23 @@ template <static_argument_character char_type, ::std::size_t extent>
 static_argument_constant(char_type const (&)[extent])
 	-> static_argument_constant<basic_static_string<char_type, extent>>;
 
+/**
+ * Rejects address-bearing values from the type-owned static-argument API.
+ *
+ * A pointer NTTP identifies an object, function, or class member, not immutable
+ * printable content.  Treating it as a static argument would let an address or
+ * member locator escape into the core constant-materialization protocol and
+ * would make character pointers look like an alternate spelling for
+ * `basic_static_string`.  The dedicated structural string wrapper remains the
+ * only accepted string-literal route. `nullptr_t` is included because it
+ * denotes the same pointer-value domain even though the language trait does not
+ * classify it as a pointer type.
+ */
 template <typename T>
-inline constexpr bool is_static_argument_character_pointer_v{
-	::std::is_pointer_v<T> &&
-	static_argument_character<
-		::std::remove_cv_t<::std::remove_pointer_t<T>>>};
+inline constexpr bool is_static_argument_pointer_like_v{
+	::std::is_pointer_v<::std::remove_cv_t<T>> ||
+	::std::is_member_pointer_v<::std::remove_cv_t<T>> ||
+	::std::same_as<::std::remove_cv_t<T>, ::std::nullptr_t>};
 
 /** Stateless core node whose printable value is carried entirely by its type. */
 template <static_argument_constant value_literal>
@@ -690,7 +702,7 @@ namespace static_argument_details
 {
 
 template <static_argument_constant value_literal>
-	 requires (!is_static_argument_character_pointer_v<
+	 requires (!is_static_argument_pointer_like_v<
 		 ::std::remove_cv_t<decltype(value_literal.value)>>)
 [[nodiscard]] inline consteval auto make_static_argument() noexcept
 {
@@ -701,7 +713,7 @@ template <static_argument_constant name_literal,
 	static_argument_constant value_literal>
 	 requires (
 		 is_static_argument_string_value_v<decltype(name_literal.value)> &&
-		 !is_static_argument_character_pointer_v<
+		 !is_static_argument_pointer_like_v<
 			 ::std::remove_cv_t<decltype(value_literal.value)>>)
 [[nodiscard]] inline consteval auto make_static_argument() noexcept
 {

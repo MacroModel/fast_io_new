@@ -314,6 +314,19 @@ inline constexpr ::std::true_type print_compiler_constant_obuffer_materializatio
 	return {};
 }
 
+/// @brief Authorizes one capacity-proven non-throwing bounded run in the owned output buffer.
+/// @details `basic_io_buffer_ref` keeps its allocation and cursors stable until overflow or flush. Neither operation is
+///          reachable after a full-run capacity proof, and the admitted formatter chain is separately non-throwing;
+///          therefore publishing the final cursor is observationally equivalent to intermediate publications. This
+///          narrow marker does not authorize general scatter folding or a capacity-miss write.
+template <::std::integral char_type, typename io_buffer_type>
+	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
+inline constexpr ::std::true_type print_single_pass_bounded_obuffer_materialization_safe(
+	::fast_io::io_reserve_type_t<char_type, basic_io_buffer_ref<io_buffer_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename io_buffer_type>
 	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
 inline constexpr ::std::size_t
@@ -330,6 +343,21 @@ inline constexpr void obuffer_minimum_size_flush_prepare_define(basic_io_buffer_
 		typename io_buffer_type::output_char_type, typename io_buffer_type::traits_type::allocator_type,
 		io_buffer_type::traits_type::output_buffer_size>(
 		outref, iobref.iobptr->output_buffer);
+}
+
+/// @brief Publishes a pending buffered prefix and restores the owned output window for one bounded-run retry.
+/// @details The caller invokes this only after a read-only whole-run preflight misses the current tail and proves the
+///          same bound fits the full buffer. The ordinary flush-prepare operation preserves the pending prefix before
+///          resetting the cursors; a second preflight may then materialize the complete record once. This is a narrow
+///          retry CPO and does not authorize refresh after partial formatting or an unbounded source operation. Its
+///          exception contract is exactly the existing flush contract: if publishing the old prefix fails, the
+///          exception propagates before the new record is formatted or its cursor is committed. Core neither retries
+///          that failed publication nor starts a second write, so the sink retains its established partial-write state.
+template <typename io_buffer_type>
+inline constexpr void print_single_pass_bounded_put_area_refresh(
+	basic_io_buffer_ref<io_buffer_type> iobref)
+{
+	obuffer_minimum_size_flush_prepare_define(iobref);
 }
 
 } // namespace fast_io

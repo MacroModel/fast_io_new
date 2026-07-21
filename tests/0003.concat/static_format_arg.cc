@@ -157,8 +157,6 @@ static_assert(::fast_io::fmt::is_static_format_argument_holder_v<
 inline constexpr ::fast_io::fmt::basic_fixed_string mixed_format{
 	"user={} id={:08x} score={:.2f}"};
 
-inline constexpr int pointed_value{};
-
 inline constexpr ::fast_io::fmt::basic_fixed_string wchar_static_format{
 	L"{:☆^5}:{:04x}"};
 
@@ -273,11 +271,6 @@ static_assert(::std::u32string_view{u32_static_record.data(),
 	result = result && brace_matches_dynamic<"{:?}", '\n'>();
 	result = result && brace_matches_dynamic<"{}", true>();
 	result = result && brace_matches_dynamic<"{:d}", ::std::byte{255u}>();
-	result = result && brace_matches_dynamic<"{}", nullptr>();
-	// A structural pointer is a valid static_arg holder but intentionally has no
-	// compile-time textual replacement. Equality with the dynamic route verifies
-	// the fail-closed lowering without relying on a removed fmt grouping plan.
-	result = result && brace_matches_dynamic<"{:p}", &pointed_value>();
 	result = result && printf_matches_dynamic<"%d", -42>();
 	result = result && printf_matches_dynamic<"%+08d", 42>();
 	result = result && printf_matches_dynamic<"%#x", 42u>();
@@ -288,7 +281,6 @@ static_assert(::std::u32string_view{u32_static_record.data(),
 						   "%u", static_printf_enum::value>();
 	result = result && printf_parameter_matches_dynamic<"%.*d", 42, 8>();
 	result = result && printf_parameter_matches_dynamic<"%*d", 42, -12>();
-	result = result && printf_matches_dynamic<"%p", nullptr>();
 	return result;
 }
 

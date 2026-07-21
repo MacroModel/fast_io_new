@@ -739,21 +739,42 @@ template <format_specification specification, typename value_type>
 		constexpr auto flags{floating_scalar_flags<specification, false>()};
 		auto scalar{
 			::fast_io::details::make_floating_scalar_manip<flags>(value)};
-		constexpr ::std::size_t prefix_size{
-			flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
-		auto formatted{::fast_io::manipulators::format_scalar_t<
-			decltype(scalar), prefix_size, specification.sign == format_sign::space>{scalar}};
-		if constexpr (specification.alternate_form)
+		if constexpr (specification.presentation == presentation_type::none &&
+					  specification.width.kind == format_parameter_kind::none &&
+					  specification.sign == format_sign::default_sign &&
+					  !specification.has_fill &&
+					  specification.alignment == format_alignment::none &&
+					  !specification.alternate_form && !specification.zero_padding &&
+					  !specification.locale_specific)
 		{
-			// Decimal-shortest and precision-less hexadecimal output omit an
-			// otherwise redundant point; brace `#` makes it observable.
-			return ::fast_io::manipulators::printf_force_radix_t<decltype(formatted)>{
-				::std::move(formatted),
-				::fast_io::fmt::details::scalar_finite(value)};
+			// A plain `{}` floating field is exactly the core scalar protocol.  The
+			// format wrapper can only (1) add a base-prefix contribution to internal
+			// zero padding or (2) replace a leading plus by a space.  This branch has
+			// neither width/zero padding nor a space sign, and the default decimal
+			// presentation has a zero-size base prefix; therefore its reserve bound
+			// and every emitted code unit are identical to `scalar`.  Returning the
+			// native leaf also prevents a format-only forwarding CPO from becoming an
+			// inlining boundary for compiler-constant floating materialization.
+			return scalar;
 		}
 		else
 		{
-			return formatted;
+			constexpr ::std::size_t prefix_size{
+				flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
+			auto formatted{::fast_io::manipulators::format_scalar_t<
+				decltype(scalar), prefix_size, specification.sign == format_sign::space>{scalar}};
+			if constexpr (specification.alternate_form)
+			{
+				// Decimal-shortest and precision-less hexadecimal output omit an
+				// otherwise redundant point; brace `#` makes it observable.
+				return ::fast_io::manipulators::printf_force_radix_t<decltype(formatted)>{
+					::std::move(formatted),
+					::fast_io::fmt::details::scalar_finite(value)};
+			}
+			else
+			{
+				return formatted;
+			}
 		}
 	}
 }

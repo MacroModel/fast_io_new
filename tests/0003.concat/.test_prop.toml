@@ -34,6 +34,30 @@ will_fail = "compiletime"
 ["static_arg_wrong_namespace_fail.cc"]
 will_fail = "compiletime"
 
+["static_arg_object_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_named_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_function_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_character_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_member_object_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_member_function_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_typed_null_pointer_fail.cc"]
+will_fail = "compiletime"
+
+["static_arg_nullptr_fail.cc"]
+will_fail = "compiletime"
+
 ["format_brace_dynamic_width_type_fail.cc"]
 will_fail = "compiletime"
 

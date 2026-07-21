@@ -43,6 +43,32 @@ struct format_scalar_t
 namespace fast_io
 {
 
+/**
+ * Proves only the reserve semantics of an integral format scalar to IO.
+ *
+ * `format_scalar_t` changes sign and prefix spelling around a core integral scalar, while its
+ * reserve extent remains type-static and its reserve definition remains non-throwing. This ADL
+ * capability does not select an output strategy: IO core alone decides whether a sufficiently
+ * large semantic run should consume the proof for contiguous bounded materialization. Percentage
+ * output is intentionally excluded because it selects a separate suffix/ratio protocol rather
+ * than the ordinary integral reserve definition proved here.
+ */
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags, typename value_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires(::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+inline constexpr ::std::true_type
+	print_extended_bounded_passive_companion_safe(
+		::fast_io::io_reserve_type_t<
+			char_type,
+			::fast_io::manipulators::format_scalar_t<
+				::fast_io::manipulators::scalar_manip_t<flags, value_type>,
+				base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
 /// @brief Propagates the destination-neutral one-pass bounded marker through the format-specific scalar wrapper.
 /// @details The wrapper changes sign/prefix spelling but delegates conversion and its dynamic reserve bound to the
 ///          wrapped scalar. Only a child with the complete source protocol can select a consumer's bounded path.

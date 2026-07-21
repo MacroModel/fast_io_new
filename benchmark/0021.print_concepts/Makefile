@@ -15,6 +15,7 @@ CXXFLAGS ?= -O3 -march=native -std=c++20 -DNDEBUG
 
 .PHONY: all fmt runtime-float-scatter static-precision-float-width \
 	static-precision-float-width-asm compiler-constant-float-asm-gate \
+	format-plain-float-lowering-asm-gate \
 	compiler-constant-bridge-outline \
 	compiler-constant-integer-rodata-asm-gate \
 	compiler-constant-integer-facade-asm-gate \
@@ -63,6 +64,10 @@ $(STATIC_PRECISION_FLOAT_WIDTH_ASM_OUT): static_precision_float_width_asm.cc
 compiler-constant-float-asm-gate:
 	ROOT="$(abspath $(ROOT))" CXX="$${GCC15_CXX:-g++-15}" \
 		bash ./check_compiler_constant_float_posix_asm.sh
+
+format-plain-float-lowering-asm-gate:
+	ROOT="$(abspath $(ROOT))" \
+		bash ./check_format_plain_float_lowering_asm.sh
 
 compiler-constant-integer-rodata-asm-gate:
 	ROOT="$(abspath $(ROOT))" \
