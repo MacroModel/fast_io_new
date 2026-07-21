@@ -4,19 +4,48 @@ namespace fast_io::details
 {
 
 /*
-The compiler-constant protocol must not transport a native floating scalar
-through its private proxy.  In particular, Clang can lower an x86 __bf16
-by-value copy through a narrowing instruction and change subnormal or NaN
-payload bits before the formatter observes them.  Integer IEC 60559 fields are
-both representation-exact and small enough for the print/concat materializer.
+Clang's x86 bfloat16 lowering without AVX512-BF16 is the only audited scalar
+domain whose nested by-value copy can rematerialize through a narrowing
+operation. Borrowing that object until its bits become an integer carrier
+preserves subnormals and signaling-NaN payloads. AVX512-BF16, AArch64, and the
+ordinary binary16/binary32/binary64/binary80/binary128 domains use their native
+by-value ABI instead.
 */
+template <typename floating_type>
+inline constexpr bool compiler_constant_floating_capture_requires_object_reference{
+#if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
+	(defined(__x86_64__) || defined(_M_X64)) &&                     \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC)) &&               \
+	!defined(__AVX512BF16__)
+	::std::same_as<::std::remove_cvref_t<floating_type>, __bf16>
+#else
+	false
+#endif
+};
+
+template <typename floating_type>
+using compiler_constant_floating_capture_parameter_t = ::std::conditional_t<
+	::fast_io::details::
+		compiler_constant_floating_capture_requires_object_reference<floating_type>,
+	::std::remove_cvref_t<floating_type> const &,
+	::std::remove_cvref_t<floating_type>>;
+
+/// @brief Captures IEC 60559 fields at a target-specific native scalar ABI boundary.
+/// @details The explicit template argument makes the parameter policy visible at
+///          every call site. Register-safe scalars are intentionally passed by
+///          value, so float, double, native half/bfloat, binary80, and binary128
+///          remain in their target floating register class. Only the simulated
+///          Clang/x86 bfloat16 domain above is borrowed until its raw bits have
+///          been converted to the integer field carrier.
 template <typename floating_type>
 [[nodiscard]] inline constexpr
 	::fast_io::details::punning_result<
-	::std::remove_cv_t<floating_type>>
-compiler_constant_floating_capture_fields(floating_type const &value) noexcept
+	::std::remove_cvref_t<floating_type>>
+compiler_constant_floating_capture_fields(
+	::fast_io::details::compiler_constant_floating_capture_parameter_t<
+		floating_type> value) noexcept
 {
-	using clean_type = ::std::remove_cv_t<floating_type>;
+	using clean_type = ::std::remove_cvref_t<floating_type>;
 	using trait = ::fast_io::details::iec559_traits<clean_type>;
 	using mantissa_type = typename trait::mantissa_type;
 #if defined(__SIZEOF_FLOAT80__) ||                              \
@@ -218,10 +247,19 @@ compiler_constant_hex_precision_plan_digit(
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 		requires(::fast_io::details::compiler_constant_hex_precision_supported<
 			flags, floating_type>)
-// Constant-proxy planning leaf. Removing the attribute expands Clang 23's
-// direct/formatted literal symbols from 0x50/0x59 to 0x6c8/0x6c8; runtime value
-// and precision controls remain 0x6c/0x7e. No native scalar crosses this API.
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+// Constant-proxy planning leaf. An actual-emitter O3 A/B matrix keeps forced
+// inlining for GCC 11--16: total text improved or stayed identical in every
+// release, with GCC 16 saving 177 bytes, so later GCC versions inherit that
+// latest positive result. Clang 18--22 instead grew by 16--67 bytes; Clang 23
+// reversed the result and saved 366 bytes, so only Clang 23 and later inherit
+// the new policy. Clang 17 was byte-identical and needs no forced placement.
+// No native scalar crosses this integer-field planning API. GCC 11 and Clang
+// 17 are the oldest tested endpoints; older frontends are not extrapolated.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 23 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
 compiler_constant_hex_make_precision_plan(
 	::fast_io::details::punning_result<floating_type> fields,
 	::std::size_t precision) noexcept
@@ -333,9 +371,26 @@ compiler_constant_hex_make_precision_plan(
 					(fractional_hex_digits - retained_fractional_digits) * 4u)};
 				auto const increment{static_cast<mantissa_type>(
 					static_cast<mantissa_type>(1u) << increment_shift)};
-				constexpr auto maximum{static_cast<mantissa_type>(
-					~static_cast<mantissa_type>(0u))};
-				if (maximum - plan.fractional < increment)
+				constexpr auto fractional_bits{fractional_hex_digits * 4u};
+				constexpr auto fractional_maximum{[]() constexpr noexcept {
+					if constexpr (fractional_bits == static_cast<::std::size_t>(
+						::std::numeric_limits<mantissa_type>::digits))
+					{
+						return static_cast<mantissa_type>(
+							~static_cast<mantissa_type>(0u));
+					}
+					else
+					{
+						return static_cast<mantissa_type>(
+							(static_cast<mantissa_type>(1u) << fractional_bits) - 1u);
+					}
+				}()};
+				// The aligned hexadecimal fraction often occupies fewer bits than
+				// its uint16/32/128 carrier.  Overflow must therefore be measured
+				// against the fractional field, not the C++ integer maximum; bits
+				// above that field are ignored by digit extraction and previously
+				// lost the carry which normalizes 0xffff... to 1p(E+1).
+				if (fractional_maximum - plan.fractional < increment)
 				{
 					plan.fractional = 0u;
 					++plan.leading_digit;

@@ -27,8 +27,10 @@ template <::std::integral char_type, bool decorated>
 	constexpr auto maximum{(::std::numeric_limits<::std::size_t>::max)()};
 	char_type actual[128u]{};
 	char_type expected[128u]{};
-	auto const fields{
-		::fast_io::details::compiler_constant_floating_capture_fields(value)};
+	// The by-value ABI carrier alias is intentionally a nondeduced context;
+	// spell out the source type so this test also guards that contract.
+	auto const fields{::fast_io::details::
+		compiler_constant_floating_capture_fields<double>(value)};
 	auto const actual_end{
 		::fast_io::details::compiler_constant_hex_precision_fields_runtime_define<
 			selected_flags>(actual, fields, maximum)};

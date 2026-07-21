@@ -2252,15 +2252,63 @@ inline constexpr void dragonbox_copy_narrow_shortest_page(
 	}
 }
 
+#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
+/// Copies one bounded block of narrow shortest-carrier pages during constant
+/// table construction.
+///
+/// Clang 17--20 reject the equivalent 512-operand fold at their default
+/// expression-nesting limit of 256. Clang 21 is the first measured release
+/// whose default accepts that original expression, so newer Clang and every
+/// GCC release retain it below. A 64-page block stays conservatively below the
+/// affected limit while preserving page order and bytes. A pack-expanded
+/// initializer was also byte-identical, but made the Clang 17 probe compile
+/// 2.26 times more slowly than this bounded fold.
+template <typename flt, ::std::size_t first_page,
+	::std::size_t page_count, ::std::size_t page_size,
+	::std::size_t... offsets>
+inline constexpr void dragonbox_copy_narrow_shortest_page_block(
+	dragonbox_narrow_shortest_table<page_count, page_size> &table,
+	::std::index_sequence<offsets...>) noexcept
+{
+	static_assert(sizeof...(offsets) <= 64u);
+	(::fast_io::details::dragonbox_copy_narrow_shortest_page<
+		 first_page + offsets>(table,
+		 ::fast_io::details::dragonbox_narrow_shortest_page_cache<
+			 flt, first_page + offsets>), ...);
+}
+#endif
+
 template <typename flt, ::std::size_t... pages>
 [[nodiscard]] inline constexpr dragonbox_narrow_shortest_table<sizeof...(pages),
 															   dragonbox_narrow_shortest_page_size>
 	dragonbox_make_narrow_shortest_table(::std::index_sequence<pages...>) noexcept
 {
 	dragonbox_narrow_shortest_table<sizeof...(pages), dragonbox_narrow_shortest_page_size> result;
+#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
+	static_assert(sizeof...(pages) == dragonbox_narrow_shortest_page_count);
+	// Eight independent 64-page folds preserve the generated table byte for
+	// byte without requiring users to raise Clang 17--20's language limit.
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 0u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 64u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 128u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 192u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 256u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 320u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 384u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_shortest_page_block<flt, 448u>(
+		result, ::std::make_index_sequence<64u>{});
+#else
 	(::fast_io::details::dragonbox_copy_narrow_shortest_page<pages>(
 		 result, ::fast_io::details::dragonbox_narrow_shortest_page_cache<flt, pages>),
 	 ...);
+#endif
 	return result;
 }
 
@@ -10171,12 +10219,48 @@ inline constexpr char_type *exact_precision_window_print_positive_binary64_fixed
 }
 #endif
 
-template <typename flt, bool comma, bool json_float = false, ::std::integral char_type>
+/// Selects only the known-length integer digit writer used by fixed precision layout.
+/// Both policies consume the same mantissa/length and write the same code units. `optimized` preserves the platform's
+/// established jeaiii placement; `positional` uses division from the final position, which an enclosing constant-valued
+/// caller can reduce to immediate stores. The layout, rounding, punctuation, padding and endpoint logic are shared.
+/// A focused GCC 15 architecture A/B kept the target caller at 0x6f/zero calls,
+/// while duplicating this complete layout in the constant layer increased total
+/// text from 81,733 to 84,413 bytes and compile time from 4.67 s to 10.55 s.
+/// The default `optimized` specialization is the pre-change expression and its
+/// GCC 13/15 and Clang 23 run-time normalized instruction hashes are identical.
+enum class floating_fixed_precision_digit_writer : unsigned char
+{
+	optimized,
+	positional
+};
+
+template <typename flt, bool comma, bool json_float = false,
+	floating_fixed_precision_digit_writer digit_writer =
+		floating_fixed_precision_digit_writer::optimized,
+	::std::integral char_type>
 inline constexpr char_type *print_rsv_fp_fixed_precision_impl(char_type *iter,
 															  ::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10,
 															  ::std::int_least32_t e10,
 															  ::std::size_t precision) noexcept
 {
+	auto const print_digits{[] (char_type *destination,
+		::fast_io::details::dragonbox_decimal_mantissa_type<flt> value,
+		::std::uint_least32_t length) constexpr noexcept {
+		if constexpr (
+			digit_writer == floating_fixed_precision_digit_writer::positional)
+		{
+			for (auto index{length}; index != 0u; value /= 10u)
+			{
+				destination[--index] = static_cast<char_type>(
+					::fast_io::char_literal_v<u8'0', char_type> + value % 10u);
+			}
+		}
+		else
+		{
+			::fast_io::details::print_rsv_fp_digits_len<flt>(
+				destination, value, length);
+		}
+	}};
 	if (!m10)
 	{
 		*iter = char_literal_v<u8'0', char_type>;
@@ -10197,8 +10281,7 @@ inline constexpr char_type *print_rsv_fp_fixed_precision_impl(char_type *iter,
 		auto const integer_digits{static_cast<::std::int_least32_t>(real_exp + 1)};
 		if (olength <= integer_digits)
 		{
-			::fast_io::details::print_rsv_fp_digits_len<flt>(
-				iter, m10, static_cast<::std::uint_least32_t>(olength));
+			print_digits(iter, m10, static_cast<::std::uint_least32_t>(olength));
 			iter += olength;
 			iter = ::fast_io::details::fill_zeros_impl(
 				iter, static_cast<::std::size_t>(integer_digits - olength));
@@ -10212,8 +10295,8 @@ inline constexpr char_type *print_rsv_fp_fixed_precision_impl(char_type *iter,
 			return ::fast_io::details::print_rsv_fp_append_point_zeros<comma>(iter, precision);
 		}
 		auto tmp{iter};
-		::fast_io::details::print_rsv_fp_digits_len<flt>(
-			iter + 1, m10, static_cast<::std::uint_least32_t>(olength));
+		print_digits(iter + 1, m10,
+			static_cast<::std::uint_least32_t>(olength));
 		iter += olength + 1;
 		::fast_io::details::my_copy_n(tmp + 1, static_cast<::std::size_t>(integer_digits), tmp);
 		tmp[integer_digits] = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
@@ -10236,8 +10319,7 @@ inline constexpr char_type *print_rsv_fp_fixed_precision_impl(char_type *iter,
 	if (leading_zeroes < precision)
 	{
 		iter = ::fast_io::details::fill_zeros_impl(iter, leading_zeroes);
-		::fast_io::details::print_rsv_fp_digits_len<flt>(
-			iter, m10, static_cast<::std::uint_least32_t>(olength));
+		print_digits(iter, m10, static_cast<::std::uint_least32_t>(olength));
 		iter += olength;
 		auto const fractional_digits{leading_zeroes + static_cast<::std::size_t>(olength)};
 		if (fractional_digits < precision)
@@ -10847,15 +10929,57 @@ inline constexpr void dragonbox_copy_narrow_ascii_page(
 	}
 }
 
+#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
+/// Copies one bounded block of pre-rendered narrow ASCII pages during constant
+/// table construction.
+///
+/// This table has the same 512-page topology as the carrier table above and
+/// triggers the same Clang 17--20 default-depth rejection. Reusing the proved
+/// 64-page bound fixes that language-limit failure while leaving Clang 21 and
+/// later, GCC, the generated bytes, and all run-time lookup code unchanged.
+template <typename flt, ::std::size_t first_page, ::std::size_t size,
+	::std::size_t... offsets>
+inline constexpr void dragonbox_copy_narrow_ascii_page_block(
+	dragonbox_narrow_ascii_table<size> &table,
+	::std::index_sequence<offsets...>) noexcept
+{
+	static_assert(sizeof...(offsets) <= 64u);
+	(::fast_io::details::dragonbox_copy_narrow_ascii_page<
+		 first_page + offsets>(table,
+		 ::fast_io::details::dragonbox_narrow_ascii_page_cache<
+			 flt, first_page + offsets>), ...);
+}
+#endif
+
 template <typename flt, ::std::size_t... pages>
 [[nodiscard]] inline constexpr dragonbox_narrow_ascii_table<
 	dragonbox_narrow_shortest_page_size * sizeof...(pages)>
 	dragonbox_make_narrow_ascii_table(::std::index_sequence<pages...>) noexcept
 {
 	dragonbox_narrow_ascii_table<dragonbox_narrow_shortest_page_size * sizeof...(pages)> result;
+#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
+	static_assert(sizeof...(pages) == dragonbox_narrow_shortest_page_count);
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 0u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 64u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 128u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 192u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 256u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 320u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 384u>(
+		result, ::std::make_index_sequence<64u>{});
+	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 448u>(
+		result, ::std::make_index_sequence<64u>{});
+#else
 	(::fast_io::details::dragonbox_copy_narrow_ascii_page<pages>(
 		 result, ::fast_io::details::dragonbox_narrow_ascii_page_cache<flt, pages>),
 	 ...);
+#endif
 	return result;
 }
 

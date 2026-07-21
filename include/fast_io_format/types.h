@@ -69,15 +69,7 @@ struct static_named_arg
 	storage_type value;
 };
 
-/**
- * Carries a formatting value entirely in its type.
- *
- * An ordinary function argument such as `42u` remains a run-time argument in
- * the C++ abstract machine even when the call expression spells a literal.
- * This carrier is the explicit proof that the value may participate in format
- * lowering as an NTTP.  It has no run-time state; lowering reads
- * `stored_value` only while producing format-owned constant storage.
- */
+/** Recognizes the format grammar's structural fixed-string value type. */
 template <typename T>
 struct is_basic_fixed_string : ::std::false_type
 {};
@@ -112,10 +104,10 @@ template <::std::size_t index, auto value_literal>
 {
 	if constexpr (is_basic_fixed_string<
 					  ::std::remove_cv_t<decltype(static_tuple_value_slot<index,
-														  value_literal>::stored_value)>>::value ||
-		::fast_io::manipulators::is_basic_static_string_v<
-			decltype(static_tuple_value_slot<index,
-				value_literal>::stored_value)>)
+																		  value_literal>::stored_value)>>::value ||
+				  ::fast_io::manipulators::is_basic_static_string_v<
+					  decltype(static_tuple_value_slot<index,
+													   value_literal>::stored_value)>)
 	{
 		return (static_tuple_value_slot<index,
 										value_literal>::stored_value.elements);
@@ -192,7 +184,7 @@ struct is_static_format_argument_holder<static_named_arg<name_literal, storage_t
 {};
 
 template <::fast_io::manipulators::static_argument_constant name_literal,
-	::fast_io::manipulators::static_argument_constant value_literal>
+		  ::fast_io::manipulators::static_argument_constant value_literal>
 struct is_static_format_argument_holder<
 	::fast_io::manipulators::static_named_arg_t<
 		name_literal, value_literal>> : ::std::true_type
@@ -211,7 +203,7 @@ struct is_static_named_arg<static_named_arg<name_literal, storage_type>> : ::std
 {};
 
 template <::fast_io::manipulators::static_argument_constant name_literal,
-	::fast_io::manipulators::static_argument_constant value_literal>
+		  ::fast_io::manipulators::static_argument_constant value_literal>
 struct is_static_named_arg<
 	::fast_io::manipulators::static_named_arg_t<
 		name_literal, value_literal>> : ::std::true_type
@@ -260,7 +252,7 @@ template <basic_fixed_string name_literal, auto &array_literal,
 	return static_named_arg<
 		name_literal,
 		decltype(::fast_io::manipulators::static_arg<copied_literal>)>{
-			::fast_io::manipulators::static_arg<copied_literal>};
+		::fast_io::manipulators::static_arg<copied_literal>};
 }
 
 /** Creates a tuple-like argument whose elements are heterogeneous NTTPs. */

@@ -176,6 +176,17 @@ print_static_scatter_write_some_bytes_overflow_define(
 }
 
 template <::std::integral char_type>
+inline constexpr ::std::true_type print_synchronous_direct_scalar_output(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::basic_posix_io_observer<char_type>>) noexcept
+{
+	// A successful write copies the admitted scalar range before the syscall
+	// returns; a partial write is completed synchronously by the core all-write
+	// loop. The observer has no put area and never retains the source pointer.
+	return {};
+}
+
+template <::std::integral char_type>
 inline constexpr ::std::true_type print_synchronous_direct_scatter_output(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::basic_posix_io_observer<char_type>>) noexcept

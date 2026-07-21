@@ -458,7 +458,19 @@ template <typename unsigned_type>
 [[nodiscard]] inline constexpr ::std::size_t
 compiler_constant_floating_decimal_digits(unsigned_type value) noexcept;
 
+// Constant-materialization digit leaf. A pinned 32-callsite deletion A/B made
+// forced placement 336/288 text bytes smaller on GCC 11/12 with unchanged
+// callers. GCC 13 reversed that result, and GCC 14--16 grew by 22--25 KiB by
+// cloning this digit loop instead of sharing it. Clang 17 and 21--23 were
+// identical; Clang 18--20 also favored ordinary placement by 11--12 KiB. Every
+// unknown-value wrapper was instruction-identical. The closed GNU upper bound
+// therefore records a measured GCC 13 reversal, not an assumed future policy.
+// GCC 11 is the oldest tested GNU endpoint; no older frontend inherits this
+// placement rule without a new measurement.
 template <::std::integral char_type, typename unsigned_type>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__ && __GNUC__ < 13
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *
 compiler_constant_floating_write_decimal_digits(
 	char_type *iter, unsigned_type value) noexcept
@@ -1143,7 +1155,10 @@ inline constexpr auto
 compiler_constant_floating_trim_decimal(
 	::fast_io::details::m10_result<decimal_type> value) noexcept
 {
-	while (value.m10 % 10u == 0u)
+	// A failed wide-shortest probe is represented by a zero coefficient.  Keep
+	// that sentinel canonical instead of entering the trailing-zero loop; all
+	// successful carriers still remove every representation-only decimal zero.
+	while (value.m10 != 0u && value.m10 % 10u == 0u)
 	{
 		value.m10 = static_cast<decimal_type>(value.m10 / 10u);
 		++value.e10;
@@ -1507,7 +1522,8 @@ compiler_constant_floating_scalar_materialize(floating_type const &value) noexce
 		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
 			char_type, flags, clean_type>;
 	auto const [mantissa, exponent, negative]{
-		::fast_io::details::compiler_constant_floating_capture_fields(value)};
+		::fast_io::details::compiler_constant_floating_capture_fields<clean_type>(
+			value)};
 	result_type result{
 		.binary_mantissa = mantissa,
 		.binary_exponent = exponent,
@@ -1573,6 +1589,21 @@ struct compiler_constant_floating_decimal_precision_plan
 	bool success{};
 	bool rounding_discarded{};
 };
+
+/// @brief Selects the standard numeric-limits owner for a representation-equivalent IEC 559 scalar.
+/// @details GCC may normalize ordinary `float`/`double` manipulators to the distinct `_Float32`/`_Float64` language
+///          types. In C++20, libstdc++ reports `numeric_limits<_Float64>::digits10 == 0` even though the IEC layout is
+///          binary64, which made the constant precision planner reject a valid carrier on GCC 13. Only the two proved
+///          binary32/binary64 layouts borrow the canonical limits metadata; all other formats retain their own type.
+template <typename floating_type>
+using compiler_constant_floating_limits_type = ::std::conditional_t<
+	(::fast_io::details::iec559_traits<floating_type>::mbits == 23u &&
+	 ::fast_io::details::iec559_traits<floating_type>::ebits == 8u),
+	float,
+	::std::conditional_t<
+		(::fast_io::details::iec559_traits<floating_type>::mbits == 52u &&
+		 ::fast_io::details::iec559_traits<floating_type>::ebits == 11u),
+		double, floating_type>>;
 
 template <typename unsigned_type>
 [[nodiscard]] inline constexpr ::std::int_least32_t
@@ -1679,7 +1710,20 @@ compiler_constant_floating_decimal_carrier_is_binary_exact(
 	return decimal == binary && decimal_binary_exponent == binary_exponent;
 }
 
+/// @brief Produces the canonical nearest decimal carrier used by the
+///        compiler-constant precision planner.
+/// @details This leaf is not part of runtime ftoa. A pinned deletion A/B was
+///          neutral on GCC 11/12, while GCC 13--16 saved 1.2--14 KiB and avoided
+///          GCC 15/16 width-wrapper expansions from 44/54 to 2,909/2,489
+///          instructions. Clang 17--20 saved 62--64 KiB and Clang 21--23 saved
+///          about 5.2 KiB. Every unknown-value wrapper was instruction-identical.
+///          GCC 11 and Clang 17 are the oldest tested endpoints. Both positive
+///          policies remain future-open until a measured reversal.
 template <typename floating_type>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 17 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr auto
 compiler_constant_floating_nearest_decimal_from_fields(
 	::fast_io::details::punning_result<floating_type> fields) noexcept
@@ -1696,9 +1740,10 @@ compiler_constant_floating_nearest_decimal_from_fields(
 			::fast_io::manipulators::floating_rounding::nearest_to_even>(
 				fields.mantissa, fields.exponent,
 				static_cast<bool>(fields.sign))};
-		return result_type{wide.success ? static_cast<decimal_type>(wide.m10)
-									 : decimal_type{},
-			wide.success ? wide.e10 : 0};
+		return ::fast_io::details::compiler_constant_floating_trim_decimal(
+			result_type{wide.success ? static_cast<decimal_type>(wide.m10)
+									  : decimal_type{},
+				wide.success ? wide.e10 : 0});
 	}
 	else
 #endif
@@ -1709,11 +1754,31 @@ compiler_constant_floating_nearest_decimal_from_fields(
 				::fast_io::manipulators::floating_rounding::nearest_to_even>(
 					fields.mantissa, fields.exponent,
 					static_cast<bool>(fields.sign))};
-		return result_type{decimal.m10, decimal.e10};
+		// DA deliberately returns a fixed-width carrier with trailing zeroes.
+		// Runtime ftoa trims it before precision dispatch; the integer-field
+		// constant protocol must establish the same canonical invariant before
+		// deciding whether an exact carrier needs guard digits.
+		return ::fast_io::details::compiler_constant_floating_trim_decimal(
+			result_type{decimal.m10, decimal.e10});
 	}
 }
 
+/// @brief Checks whether a decimal carrier covers the requested rounding grid.
+/// @details This predicate is used only by compiler-constant precision
+///          planning. In a pinned 16-callsite deletion A/B, forcing this leaf
+///          reduced GCC 13--16 text by 304/320/320/768 bytes by eliminating
+///          out-of-line grid/exact-carrier clones; GCC 11/12 instead grew by
+///          64/96 bytes with no caller change. Clang 21--23 also need this first
+///          constant-only leaf exposed before the companion carrier-size leaf
+///          can eliminate unavailable precision branches. Every GCC 11--16
+///          unknown-value wrapper was instruction-identical. Both positive
+///          GCC 11 and Clang 17 are the oldest tested endpoints. Both positive
+///          policies remain future-open until a measured reversal.
 template <typename floating_type>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr bool
 compiler_constant_floating_carrier_grid_supported(
 	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
@@ -1721,8 +1786,8 @@ compiler_constant_floating_carrier_grid_supported(
 	::std::int_least32_t exponent, ::std::size_t requested,
 	::std::size_t precision, bool fractional_grid) noexcept
 {
-	auto const length{static_cast<::std::size_t>(
-		::fast_io::details::chars_len<10u, true>(mantissa))};
+	auto const length{::fast_io::details::
+		compiler_constant_floating_decimal_digits(mantissa)};
 	if (!fractional_grid)
 	{
 		return requested >= length || length - requested < 20u;
@@ -1738,6 +1803,127 @@ compiler_constant_floating_carrier_grid_supported(
 	return cut < 20;
 }
 
+#if defined(__clang__)
+/// @brief Tries the normal-value decimal-grid proof used by Clang's literal
+///        precision gate.
+/// @details This is only the `length <= requested <= digits10` sufficient
+///          condition; ambiguous, subnormal, directed-rounding and long-
+///          precision values return an empty plan to the complete planner.
+///          Keeping the precheck separate avoids cloning any exact-window
+///          algorithm into the caller.  The precheck deliberately stops at
+///          binary64: evaluating a second wide-shortest carrier for binary80
+///          or binary128 can exhaust Clang's constexpr step budget, while the
+///          complete planner already owns the wide-format fallback. In a pinned
+///          Clang 17--23 deletion matrix this marker saved 83--85 KiB on 17--20
+///          and about 5.2 KiB on 21--23; unknown wrappers were instruction-
+///          identical. The positive policy remains future-open.
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
+compiler_constant_floating_try_normal_decimal_grid_plan(
+	::fast_io::details::punning_result<floating_type> fields,
+	::std::size_t precision) noexcept
+{
+	using result_type =
+		::fast_io::details::compiler_constant_floating_decimal_precision_plan<
+			floating_type>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	if constexpr (!::fast_io::details::floating_rounding_is_nearest<
+			flags.rounding> ||
+		11u < trait::ebits || 52u < trait::mbits)
+	{
+		return result_type{};
+	}
+	else
+	{
+		constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+		if (!fields.exponent || fields.exponent == exponent_mask)
+		{
+			return result_type{};
+		}
+		auto const carrier{::fast_io::details::
+			compiler_constant_floating_nearest_decimal_from_fields(fields)};
+		if (!carrier.m10)
+		{
+			return result_type{};
+		}
+		auto const length{::fast_io::details::
+			compiler_constant_floating_decimal_digits(carrier.m10)};
+		auto const real_exponent{
+			carrier.e10 + static_cast<::std::int_least32_t>(length) - 1};
+		constexpr bool fractional{
+			::fast_io::details::floating_precision_is_fractional<flags.precision>};
+		constexpr bool fractional_grid{
+			fractional && flags.floating !=
+				::fast_io::manipulators::floating_format::scientific};
+		::std::size_t requested{};
+		if constexpr (fractional)
+		{
+			if constexpr (flags.floating ==
+				::fast_io::manipulators::floating_format::scientific)
+			{
+				requested = ::fast_io::details::exact_precision_saturating_add(
+					precision, 1u);
+			}
+			else if (0 <= real_exponent)
+			{
+				requested = ::fast_io::details::exact_precision_saturating_add(
+					::fast_io::details::exact_precision_saturating_add(
+						static_cast<::std::size_t>(real_exponent), precision),
+					1u);
+			}
+			else
+			{
+				auto const leading_zeroes{static_cast<::std::size_t>(
+					-static_cast<::std::int_least64_t>(real_exponent))};
+				requested = leading_zeroes <= precision
+					? precision - leading_zeroes + 1u
+					: 0u;
+			}
+		}
+		else
+		{
+			requested = precision ? precision : 1u;
+		}
+		if (requested < length ||
+			static_cast<::std::size_t>((::std::numeric_limits<
+				::fast_io::details::compiler_constant_floating_limits_type<
+					floating_type>>::digits10)) < requested ||
+			!::fast_io::details::
+				compiler_constant_floating_carrier_grid_supported<floating_type>(
+					carrier.m10, carrier.e10, requested, precision,
+					fractional_grid))
+		{
+			return result_type{};
+		}
+		if constexpr (flags.floating ==
+				::fast_io::manipulators::floating_format::general &&
+			flags.precision == ::fast_io::manipulators::floating_precision::
+				fractional_preserve_trailing_zero)
+		{
+			if (length != requested)
+			{
+				return result_type{};
+			}
+		}
+		auto const rounding_discarded{[&]() constexpr noexcept {
+			if constexpr (fractional_grid)
+			{
+				return carrier.e10 < 0 &&
+					precision < static_cast<::std::size_t>(
+						-static_cast<::std::int_least64_t>(carrier.e10));
+			}
+			else
+			{
+				return requested < length;
+			}
+		}()};
+		return result_type{carrier.m10, carrier.e10, true,
+			rounding_discarded};
+	}
+}
+#endif
+
 /// @brief Selects the compiler-friendly decimal precision carrier.
 /// @details Success is a numeric proof, not merely a shortest-format
 ///          heuristic.  Exact dyadics are complete carriers.  Other nearest
@@ -1747,15 +1933,17 @@ compiler_constant_floating_carrier_grid_supported(
 ///          requested fractional quantum.  Every miss retains the exact binary
 ///          expansion fallback.
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
-// GNU 13/15 at -O3 otherwise outlines this constant-proxy planning leaf and
-// leaves calls in a literal precision+width print (0x817/0x114d-byte callers).
-// Inlining reduces those callers to 0xc4/0xc8 bytes while their dynamic-value
-// controls remain byte-identical. Clang is intentionally excluded: it already
-// makes the better placement decision and forcing this body grows its literal
-// caller from 0x1e7 to 0x5db bytes. This function is reachable only from the
-// compiler-constant precision protocol and cannot alter the run-time ftoa ABI.
-#if defined(__GNUC__) && !defined(__clang__)
-[[__gnu__::__always_inline__]]
+// GCC 11--16 at -O3 otherwise outline this constant-proxy planning leaf. In a
+// pinned 16-callsite width+precision A/B, forced placement reduced aggregate
+// wrapper instructions from 10,688/8,848/6,368/6,816/18,543/18,927 to
+// 320/336/800/752/487/670 respectively; GCC 13--16 also saved 29--88 KiB of
+// text. Every unknown-value wrapper remained instruction-identical. Clang is
+// intentionally excluded: it already makes the better placement decision and
+// forcing this body grows its literal caller. This function is reachable only
+// from the compiler-constant precision protocol and cannot alter runtime ftoa.
+// GCC 11 is the oldest tested GNU endpoint; no older compiler is extrapolated.
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 [[nodiscard]] inline constexpr auto
 compiler_constant_floating_make_decimal_precision_plan(
@@ -1957,8 +2145,8 @@ compiler_constant_floating_make_decimal_precision_plan(
 	{
 		return result_type{};
 	}
-	auto const length{static_cast<::std::size_t>(
-		::fast_io::details::chars_len<10u, true>(carrier.m10))};
+	auto const length{::fast_io::details::
+		compiler_constant_floating_decimal_digits(carrier.m10)};
 	auto const real_exponent{
 		carrier.e10 + static_cast<::std::int_least32_t>(length) - 1};
 	auto const requested_for_real_exponent{
@@ -2013,6 +2201,57 @@ compiler_constant_floating_make_decimal_precision_plan(
 		::fast_io::details::compiler_constant_floating_carrier_grid_supported<
 			floating_type>(carrier.m10, carrier.e10, requested, precision,
 				fractional_grid)};
+
+	/*
+	 A nearest shortest carrier that is strictly separated from the decimal
+	 rounding midpoint already determines the requested result.  This is the
+	 same sufficient proof formerly performed after the exact-expansion
+	 fallbacks; testing it here avoids instantiating those much larger paths for
+	 ordinary constants without broadening the accepted numeric domain.
+	 */
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<
+		flags.rounding>)
+	{
+		bool exact_enough{};
+		if (requested && requested < length)
+		{
+			auto const cut{length - requested};
+			if (cut < 20u)
+			{
+				auto const divisor{
+					::fast_io::details::print_rsv_fp_pow10_0_to_19_table[cut]};
+				auto const remainder{static_cast<::std::uint_least64_t>(
+					carrier.m10 % divisor)};
+				auto const half{divisor / 2u};
+				auto const distance{remainder <= half
+					? divisor - remainder * 2u
+					: (remainder - half) * 2u};
+				exact_enough = 1u < distance;
+			}
+		}
+		else if (fields.exponent && length <= requested &&
+			requested <= static_cast<::std::size_t>((::std::numeric_limits<
+				::fast_io::details::compiler_constant_floating_limits_type<
+					floating_type>>::digits10)))
+		{
+			if constexpr (flags.floating ==
+					::fast_io::manipulators::floating_format::general &&
+				flags.precision == ::fast_io::manipulators::floating_precision::
+					fractional_preserve_trailing_zero)
+			{
+				exact_enough = length == requested;
+			}
+			else
+			{
+				exact_enough = true;
+			}
+		}
+		if (exact_enough && grid_supported)
+		{
+			return result_type{carrier.m10, carrier.e10, true,
+				rounding_discarded};
+		}
+	}
 	if (grid_supported &&
 		::fast_io::details::
 			compiler_constant_floating_decimal_carrier_is_binary_exact<
@@ -2270,49 +2509,6 @@ compiler_constant_floating_make_decimal_precision_plan(
 		}
 	}
 
-	if constexpr (::fast_io::details::floating_rounding_is_nearest<
-		flags.rounding>)
-	{
-		bool exact_enough{};
-		if (requested && requested < length)
-		{
-			auto const cut{length - requested};
-			if (cut < 20u)
-			{
-				auto const divisor{
-					::fast_io::details::print_rsv_fp_pow10_0_to_19_table[cut]};
-				auto const remainder{static_cast<::std::uint_least64_t>(
-					carrier.m10 % divisor)};
-				auto const half{divisor / 2u};
-				auto const distance{remainder <= half
-					? divisor - remainder * 2u
-					: (remainder - half) * 2u};
-				exact_enough = 1u < distance;
-			}
-		}
-		else if (fields.exponent && length <= requested &&
-			requested <= static_cast<::std::size_t>(
-				(::std::numeric_limits<floating_type>::digits10)))
-		{
-			if constexpr (flags.floating ==
-					::fast_io::manipulators::floating_format::general &&
-				flags.precision == ::fast_io::manipulators::floating_precision::
-					fractional_preserve_trailing_zero)
-			{
-				exact_enough = length == requested;
-			}
-			else
-			{
-				exact_enough = true;
-			}
-		}
-		if (exact_enough && grid_supported)
-		{
-			return result_type{carrier.m10, carrier.e10, true,
-				rounding_discarded};
-		}
-	}
-
 	if constexpr (fractional_grid)
 	{
 		constexpr auto int32_max{
@@ -2346,6 +2542,47 @@ struct compiler_constant_floating_rounded_carrier
 	::std::size_t significant{};
 };
 
+/// @brief Tests whether a constant precision carrier still satisfies the
+///        ordinary Dragonbox/DA coefficient-width invariant.
+/// @details The native rounding and digit writers use `chars_len<10,true>`;
+///          that Ryu-mode query intentionally omits decimal widths which a
+///          shortest binary32/binary64 carrier can never reach.  The constant
+///          exact-window planner may append a guard digit or retain an exact
+///          dyadic coefficient beyond that bound.  Such carriers must stay in
+///          the constant protocol's full-width integer routines or their
+///          length is undercounted before rounding and emission.
+// Constant native-emitter placement audit: this forced leaf and the two named
+// define leaves below (`compiler_constant_floating_native_precision_carrier_define`
+// and `compiler_constant_floating_decimal_precision_carrier_define`) form one
+// constant-only unit. With carrier sizing and width forwarding already exposed,
+// the focused GCC 15 O3 caller moved from 0x9a/one carrier call to 0x6f/zero
+// calls; forcing the outer define without this predicate instead produced
+// 0x103/four calls. GCC 13/15 and Clang 23 unknown-value bodies retained the
+// same normalized instruction hashes. No native run-time ftoa CPO uses this unit.
+template <typename floating_type, typename mantissa_type>
+#if defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr bool
+compiler_constant_floating_is_native_decimal_carrier(
+	mantissa_type mantissa) noexcept
+{
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
+		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		return ::fast_io::details::compiler_constant_floating_decimal_digits(
+			mantissa) <= static_cast<::std::size_t>(
+				::fast_io::details::iec559_traits<floating_type>::m10digits);
+	}
+	else
+	{
+		(void)mantissa;
+		return false;
+	}
+}
+
 template <typename floating_type,
 	::fast_io::manipulators::floating_rounding rounding,
 	typename mantissa_type>
@@ -2359,123 +2596,31 @@ compiler_constant_floating_round_to_significant(
 	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
 		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
 	{
-		::fast_io::details::print_rsv_fp_round_to_significant<
-			floating_type, rounding, false>(
-				mantissa, exponent, precision, negative);
-	}
-	else
-	{
-		if (!mantissa)
+		if (::fast_io::details::
+			compiler_constant_floating_is_native_decimal_carrier<floating_type>(
+				mantissa))
 		{
+			::fast_io::details::print_rsv_fp_round_to_significant<
+				floating_type, rounding, false>(
+					mantissa, exponent, precision, negative);
 			return;
 		}
-		if (!precision)
-		{
-			precision = 1u;
-		}
-		auto const length{static_cast<::std::size_t>(
-			::fast_io::details::chars_len<10u, true>(mantissa))};
-		if (precision < length)
-		{
-			auto const cut{length - precision};
-			mantissa_type divisor{1u};
-			for (::std::size_t index{}; index != cut; ++index)
-			{
-				divisor *= 10u;
-			}
-			auto quotient{static_cast<mantissa_type>(mantissa / divisor)};
-			auto const remainder{static_cast<mantissa_type>(
-				mantissa - quotient * divisor)};
-			bool round_up{};
-			if (remainder)
-			{
-				if constexpr (::fast_io::details::floating_rounding_is_nearest<
-					rounding>)
-				{
-					auto const half{static_cast<mantissa_type>(divisor >> 1u)};
-					if (half < remainder)
-					{
-						round_up = true;
-					}
-					else if (remainder == half)
-					{
-						round_up = ::fast_io::details::
-							print_rsv_fp_decimal_tie_round_up<rounding>(
-								negative,
-								static_cast<::std::uint_least64_t>(quotient));
-					}
-				}
-				else
-				{
-					round_up = ::fast_io::details::
-						floating_rounding_directed_round_up<rounding>(negative);
-				}
-			}
-			if (round_up)
-			{
-				++quotient;
-			}
-			mantissa = quotient;
-			exponent += static_cast<::std::int_least32_t>(cut);
-			if (precision < static_cast<::std::size_t>(
-					::std::numeric_limits<mantissa_type>::digits10) + 1u &&
-				static_cast<::std::size_t>(
-					::fast_io::details::chars_len<10u, true>(mantissa)) > precision)
-			{
-				mantissa /= 10u;
-				++exponent;
-			}
-		}
 	}
-}
-
-template <typename floating_type,
-	::fast_io::manipulators::floating_rounding rounding,
-	typename mantissa_type>
-inline constexpr void
-compiler_constant_floating_round_to_fractional(
-	mantissa_type &mantissa, ::std::int_least32_t &exponent,
-	::std::size_t precision, bool negative) noexcept
-{
-	using native_mantissa_type =
-		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
-	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
-		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
+	if (!mantissa)
 	{
-		::fast_io::details::print_rsv_fp_round_to_fractional<
-			floating_type, rounding>(
-				mantissa, exponent, precision, negative);
+		return;
 	}
-	else
+	if (!precision)
 	{
-		if (!mantissa || 0 <= exponent ||
-			precision >= static_cast<::std::size_t>(
-				-static_cast<::std::int_least64_t>(exponent)))
-		{
-			return;
-		}
-		auto const target_exponent{-static_cast<::std::int_least32_t>(precision)};
-		auto const cut{static_cast<::std::uint_least32_t>(
-			target_exponent - exponent)};
-		if (static_cast<::std::uint_least32_t>(
-				::std::numeric_limits<mantissa_type>::digits10) < cut)
-		{
-			if constexpr (::fast_io::details::floating_rounding_is_nearest<
-				rounding>)
-			{
-				mantissa = 0u;
-			}
-			else
-			{
-				mantissa = static_cast<mantissa_type>(
-					::fast_io::details::floating_rounding_directed_round_up<
-						rounding>(negative));
-			}
-			exponent = target_exponent;
-			return;
-		}
+		precision = 1u;
+	}
+	auto const length{::fast_io::details::
+		compiler_constant_floating_decimal_digits(mantissa)};
+	if (precision < length)
+	{
+		auto const cut{length - precision};
 		mantissa_type divisor{1u};
-		for (::std::uint_least32_t index{}; index != cut; ++index)
+		for (::std::size_t index{}; index != cut; ++index)
 		{
 			divisor *= 10u;
 		}
@@ -2512,8 +2657,126 @@ compiler_constant_floating_round_to_fractional(
 			++quotient;
 		}
 		mantissa = quotient;
-		exponent = target_exponent;
+		exponent += static_cast<::std::int_least32_t>(cut);
+		if (precision < static_cast<::std::size_t>(
+				::std::numeric_limits<mantissa_type>::digits10) + 1u &&
+			::fast_io::details::compiler_constant_floating_decimal_digits(
+				mantissa) > precision)
+		{
+			mantissa /= 10u;
+			++exponent;
+		}
 	}
+}
+
+/// @brief Rounds a decimal carrier without re-entering the native run-time ftoa leaf.
+/// @details Compiler-constant fixed formatting needs an integer-only expression graph that the optimizer can fold all
+///          the way to character stores. The native shortcut remains in the ordinary wrapper below; this helper is
+///          selected only after the compiler-constant protocol has proved both the value and precision constant. Tested
+///          GCC 13--16 need forced placement, and that positive policy remains open until a newer compiler reverses it.
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding,
+	typename mantissa_type>
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void
+compiler_constant_floating_round_to_fractional_portable(
+	mantissa_type &mantissa, ::std::int_least32_t &exponent,
+	::std::size_t precision, bool negative) noexcept
+{
+	if (!mantissa || 0 <= exponent ||
+		precision >= static_cast<::std::size_t>(
+			-static_cast<::std::int_least64_t>(exponent)))
+	{
+		return;
+	}
+	auto const target_exponent{-static_cast<::std::int_least32_t>(precision)};
+	auto const cut{static_cast<::std::uint_least32_t>(
+		target_exponent - exponent)};
+	if (static_cast<::std::uint_least32_t>(
+			::std::numeric_limits<mantissa_type>::digits10) < cut)
+	{
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<
+			rounding>)
+		{
+			mantissa = 0u;
+		}
+		else
+		{
+			mantissa = static_cast<mantissa_type>(
+				::fast_io::details::floating_rounding_directed_round_up<
+					rounding>(negative));
+		}
+		exponent = target_exponent;
+		return;
+	}
+	mantissa_type divisor{1u};
+	for (::std::uint_least32_t index{}; index != cut; ++index)
+	{
+		divisor *= 10u;
+	}
+	auto quotient{static_cast<mantissa_type>(mantissa / divisor)};
+	auto const remainder{static_cast<mantissa_type>(
+		mantissa - quotient * divisor)};
+	bool round_up{};
+	if (remainder)
+	{
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<
+			rounding>)
+		{
+			auto const half{static_cast<mantissa_type>(divisor >> 1u)};
+			if (half < remainder)
+			{
+				round_up = true;
+			}
+			else if (remainder == half)
+			{
+				round_up = ::fast_io::details::
+					print_rsv_fp_decimal_tie_round_up<rounding>(
+						negative,
+						static_cast<::std::uint_least64_t>(quotient));
+			}
+		}
+		else
+		{
+			round_up = ::fast_io::details::
+				floating_rounding_directed_round_up<rounding>(negative);
+		}
+	}
+	if (round_up)
+	{
+		++quotient;
+	}
+	mantissa = quotient;
+	exponent = target_exponent;
+}
+
+template <typename floating_type,
+	::fast_io::manipulators::floating_rounding rounding,
+	typename mantissa_type>
+inline constexpr void
+compiler_constant_floating_round_to_fractional(
+	mantissa_type &mantissa, ::std::int_least32_t &exponent,
+	::std::size_t precision, bool negative) noexcept
+{
+	using native_mantissa_type =
+		::fast_io::details::dragonbox_decimal_mantissa_type<floating_type>;
+	if constexpr (::std::same_as<mantissa_type, native_mantissa_type> &&
+		sizeof(mantissa_type) <= sizeof(::std::uint_least64_t))
+	{
+		if (::fast_io::details::
+			compiler_constant_floating_is_native_decimal_carrier<floating_type>(
+				mantissa))
+		{
+			::fast_io::details::print_rsv_fp_round_to_fractional<
+				floating_type, rounding>(
+					mantissa, exponent, precision, negative);
+			return;
+		}
+	}
+	::fast_io::details::compiler_constant_floating_round_to_fractional_portable<
+		floating_type, rounding>(mantissa, exponent, precision, negative);
 }
 
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
@@ -2598,7 +2861,18 @@ compiler_constant_floating_round_decimal_carrier(
 	return result;
 }
 
+// Carrier-size placement audit: changing only this compiler-constant size leaf reduced the focused GCC 15
+// width+precision caller from 0x457/10 calls to 0x13a/one call and `.text` from 31,767 to 29,562 bytes. Together with
+// the grid predicate above, pinned Clang 21--23 reduced a fixed-precision constant caller from 560 instructions and 43
+// calls to 340 and 17, and a 16-callsite executable from about 215 KiB to 45 KiB without a material compile-time or
+// peak-RSS increase. Unknown values cannot reach either constant-only leaf: the dedicated run-time ftoa translation
+// units were byte-identical before and after the change on all three Clang versions. Both positive policies remain
+// future-open; the ordinary fields-size fallback, exact planner and native by-value ftoa path remain unforced.
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr ::std::size_t
 compiler_constant_floating_decimal_precision_carrier_size(
 	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
@@ -2606,6 +2880,29 @@ compiler_constant_floating_decimal_precision_carrier_size(
 	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
 	bool rounding_discarded) noexcept
 {
+	if constexpr (
+		flags.floating == ::fast_io::manipulators::floating_format::fixed &&
+		::fast_io::details::floating_precision_is_fractional<flags.precision> &&
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>)
+	{
+		::fast_io::details::
+			compiler_constant_floating_round_to_fractional_portable<
+				floating_type, flags.rounding>(
+					mantissa, exponent, precision, negative);
+		auto const digits{
+			::fast_io::details::compiler_constant_floating_decimal_digits(
+				mantissa)};
+		auto const real_exponent{static_cast<::std::int_least64_t>(exponent) +
+			static_cast<::std::int_least64_t>(digits) - 1};
+		auto const integral_size{real_exponent < 0
+			? 1u
+			: static_cast<::std::size_t>(real_exponent) + 1u};
+		return integral_size +
+			(precision
+				? precision + 1u
+				: static_cast<::std::size_t>(flags.json_float) * 2u);
+	}
 	constexpr bool preserve{
 		::fast_io::details::floating_precision_preserves_trailing_zero<
 			flags.precision>};
@@ -2621,8 +2918,8 @@ compiler_constant_floating_decimal_precision_carrier_size(
 		else
 		{
 			auto const requested{precision ? precision : 1u};
-			auto const length{static_cast<::std::size_t>(
-				::fast_io::details::chars_len<10u, true>(mantissa))};
+			auto const length{::fast_io::details::
+				compiler_constant_floating_decimal_digits(mantissa)};
 			if (requested <= length)
 			{
 				return true;
@@ -2650,7 +2947,9 @@ compiler_constant_floating_decimal_precision_carrier_size(
 	if constexpr (::std::same_as<precision_mantissa_type, native_mantissa_type> &&
 		sizeof(precision_mantissa_type) <= sizeof(::std::uint_least64_t))
 	{
-		if (direct)
+		if (direct && ::fast_io::details::
+			compiler_constant_floating_is_native_decimal_carrier<floating_type>(
+				mantissa))
 		{
 			return ::fast_io::details::floating_precise_carrier_precision_size<
 				floating_type, flags.floating, flags.precision, flags.rounding,
@@ -2667,8 +2966,61 @@ compiler_constant_floating_decimal_precision_carrier_size(
 			rounded.decimal, precision, rounded.significant);
 }
 
+/// @brief Keeps the fixed fractional native-carrier decision inside a compiler-constant proxy.
+/// @details This is exactly the fixed/preserving arm of `print_rsv_fp_precision_decision_impl`: round to the requested
+///          decimal quantum, then render that carrier with the constant-digit terminal. All other modes retain the
+///          shared decision implementation. The strategy flag changes only integer digit placement; punctuation,
+///          rounding, JSON spelling and the returned endpoint remain owned by the same fixed-precision function.
+// Forced placement is the middle leaf of the constant native-emitter audit documented at
+// `compiler_constant_floating_is_native_decimal_carrier`. Tested GCC 13--16 benefit, so the policy remains open until
+// a newer compiler measures a reversal.
 template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
 	::std::integral char_type>
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr char_type *
+compiler_constant_floating_native_precision_carrier_define(
+	char_type *iter,
+	::fast_io::details::dragonbox_decimal_mantissa_type<floating_type> mantissa,
+	::std::int_least32_t exponent, ::std::size_t precision,
+	bool negative) noexcept
+{
+	if constexpr (
+		flags.floating == ::fast_io::manipulators::floating_format::fixed &&
+		::fast_io::details::floating_precision_is_fractional<flags.precision> &&
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>)
+	{
+		::fast_io::details::print_rsv_fp_round_to_fractional<
+			floating_type, flags.rounding>(
+				mantissa, exponent, precision, negative);
+		return ::fast_io::details::print_rsv_fp_fixed_precision_impl<
+			floating_type, flags.comma, flags.json_float,
+			::fast_io::details::floating_fixed_precision_digit_writer::positional>(
+				iter, mantissa, exponent, precision);
+	}
+	else
+	{
+		return ::fast_io::details::print_rsv_fp_precision_decision_impl<
+			floating_type, flags.comma, flags.uppercase_e, flags.floating,
+			flags.precision, flags.rounding, flags.json_float>(
+				iter, mantissa, exponent, precision, negative);
+	}
+}
+
+// Forced placement is the outer leaf of the constant native-emitter audit
+// documented at `compiler_constant_floating_is_native_decimal_carrier`.
+// Clang 21--23 additionally require this constant-only edge after prepared
+// output has selected its bounded contiguous representation; leaving it
+// outlined retains the complete carrier fallback in an otherwise short record.
+template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::integral char_type>
+#if defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#elif defined(__clang__) && 21 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *
 compiler_constant_floating_decimal_precision_carrier_define(
 	char_type *iter,
@@ -2677,6 +3029,47 @@ compiler_constant_floating_decimal_precision_carrier_define(
 	::std::int_least32_t exponent, ::std::size_t precision, bool negative,
 	bool rounding_discarded) noexcept
 {
+	if constexpr (
+		flags.floating == ::fast_io::manipulators::floating_format::fixed &&
+		::fast_io::details::floating_precision_is_fractional<flags.precision> &&
+		::fast_io::details::floating_precision_preserves_trailing_zero<
+			flags.precision>)
+	{
+		::fast_io::details::
+			compiler_constant_floating_round_to_fractional_portable<
+				floating_type, flags.rounding>(
+					mantissa, exponent, precision, negative);
+		constexpr auto spelling_flags{[]() consteval {
+			auto value{flags};
+			value.json_float = false;
+			return value;
+		}()};
+		iter = ::fast_io::details::compiler_constant_floating_write_fixed<
+			spelling_flags>(iter, mantissa, exponent);
+		auto const existing_fractional{exponent < 0
+			? static_cast<::std::size_t>(
+				-static_cast<::std::int_least64_t>(exponent))
+			: 0u};
+		if (precision)
+		{
+			if (!existing_fractional)
+			{
+				*iter++ = ::fast_io::char_literal_v<
+					(flags.comma ? u8',' : u8'.'), char_type>;
+			}
+			for (auto count{precision - existing_fractional}; count; --count)
+			{
+				*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+			}
+		}
+		else if constexpr (flags.json_float)
+		{
+			*iter++ = ::fast_io::char_literal_v<
+				(flags.comma ? u8',' : u8'.'), char_type>;
+			*iter++ = ::fast_io::char_literal_v<u8'0', char_type>;
+		}
+		return iter;
+	}
 	constexpr bool preserve{
 		::fast_io::details::floating_precision_preserves_trailing_zero<
 			flags.precision>};
@@ -2692,8 +3085,8 @@ compiler_constant_floating_decimal_precision_carrier_define(
 		else
 		{
 			auto const requested{precision ? precision : 1u};
-			auto const length{static_cast<::std::size_t>(
-				::fast_io::details::chars_len<10u, true>(mantissa))};
+			auto const length{::fast_io::details::
+				compiler_constant_floating_decimal_digits(mantissa)};
 			if (requested <= length)
 			{
 				return true;
@@ -2721,11 +3114,13 @@ compiler_constant_floating_decimal_precision_carrier_define(
 	if constexpr (::std::same_as<precision_mantissa_type, native_mantissa_type> &&
 		sizeof(precision_mantissa_type) <= sizeof(::std::uint_least64_t))
 	{
-		if (direct)
+		if (direct && ::fast_io::details::
+			compiler_constant_floating_is_native_decimal_carrier<floating_type>(
+				mantissa))
 		{
-			return ::fast_io::details::print_rsv_fp_precision_decision_impl<
-				floating_type, flags.comma, flags.uppercase_e, flags.floating,
-				flags.precision, flags.rounding, flags.json_float>(
+			return ::fast_io::details::
+				compiler_constant_floating_native_precision_carrier_define<
+					flags, floating_type>(
 					iter, mantissa, exponent, precision, negative);
 		}
 	}
@@ -4049,9 +4444,49 @@ print_compiler_constant_materialize(
 	floating_type const &value) noexcept
 {
 	using alias_type = ::fast_io::details::float_alias_type<floating_type>;
-	return ::fast_io::details::compiler_constant_floating_scalar_materialize<
-		char_type, ::fast_io::manipulators::floating_point_default_scalar_flags>(
-		static_cast<alias_type>(value));
+	if constexpr (
+		::fast_io::details::floating_scalar_requires_integer_proxy<alias_type>)
+	{
+		// The source reference is already the alias type.  Re-spelling this as
+		// `static_cast<__bf16>` makes Clang rematerialize a native narrowing
+		// operation even though the following materializer consumes only fields.
+		return ::fast_io::details::compiler_constant_floating_scalar_materialize<
+			char_type,
+			::fast_io::manipulators::floating_point_default_scalar_flags>(value);
+	}
+	else
+	{
+		return ::fast_io::details::compiler_constant_floating_scalar_materialize<
+			char_type,
+			::fast_io::manipulators::floating_point_default_scalar_flags>(
+				static_cast<alias_type>(value));
+	}
+}
+
+/// @brief Forwards a proved raw floating constant into its integer-field proxy.
+/// @details The generic proved-gate forwarding CPO deliberately does not force GCC 13, 14, or 16 because doing so at
+///          the type-agnostic boundary perturbs unrelated run-time wrappers. This overload is narrower: core can call
+///          it only after this floating source's side-effect-free `__builtin_constant_p` query has succeeded. Tested GCC
+///          13--16 otherwise outline the forwarding edge and lose the constant graph before compact emission. Tested
+///          Clang 21--23 must retain the placement of the generic CPO which this more-specialized overload supersedes;
+///          without it they reintroduce the same materializer call. The positive policy remains open for newer
+///          frontends until a measured reversal. The ordinary false arm retains the native floating formatter and ABI.
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::compiler_constant_printable<char_type, floating_type> &&
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type, floating_type> tag,
+	floating_type const &value) noexcept
+{
+	return print_compiler_constant_materialize(tag, value);
 }
 
 template <::std::integral char_type, typename floating_type>
@@ -4138,6 +4573,31 @@ print_compiler_constant_materialize(
 			value.reference);
 }
 
+/// @brief Preserves a proved constant scalar-manipulator graph through GCC's forwarding boundary.
+/// @details This source-specific overload is reachable only from the already-taken compiler-constant arm. Keeping the
+///          attribute here, instead of widening the generic CPO, prevents unknown scalar values from inheriting any
+///          extra inlining or code-size policy while allowing tested GCC 13--16 and Clang 21--23 to fold flags and
+///          captured fields completely. The positive policy remains open for newer frontends until a measured reversal.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>> tag,
+	::fast_io::manipulators::scalar_manip_t<flags, floating_type> const &value) noexcept
+{
+	return print_compiler_constant_materialize(tag, value);
+}
+
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
@@ -4147,13 +4607,34 @@ inline constexpr ::std::size_t print_reserve_size(
 		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
 			char_type, flags, floating_type>>) noexcept
 {
-	return ::fast_io::details::compiler_constant_floating_scalar_capacity;
+	// Reuse the native scalar formatter's proved type/format bound instead of
+	// reporting binary128 fixed's library-wide 5,006-character maximum for every
+	// proxy.  The proxy emitter has the same sign, special-value and notation
+	// grammar, so this remains a reserve contract; it merely lets the print layer
+	// prove that decimal/general/scientific/hex records cannot reach its large
+	// immutable-fragment continuation.  Fixed binary80/binary128 retain their
+	// full exponent-derived bound and therefore keep that continuation.
+	return print_reserve_size(
+		::fast_io::io_reserve_type<char_type,
+			::fast_io::manipulators::scalar_manip_t<flags, floating_type>>);
 }
 
+/// @brief Emits an already materialized constant-float proxy into caller-owned storage.
+/// @details This compiler-constant leaf is never runtime ftoa. Forced placement
+///          saved 5.8--6.4 KiB on every tested GCC 11--16. Clang 17--20 instead
+///          grew by about 66 KiB and expanded 16 default-field callers from 544
+///          to more than 17,000 instructions; Clang 21--23 reversed again,
+///          saving about 5.2 KiB and eliminating 16 residual calls. Every
+///          unknown-value wrapper was instruction-identical. GNU remains
+///          future-open; Clang resumes at 21 and remains open until a reversal.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
 		::fast_io::details::compiler_constant_floating_type_supported<floating_type>)
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
@@ -4467,7 +4948,8 @@ print_compiler_constant_materialization_eligible(
 	else
 	{
 		auto const fields{
-			::fast_io::details::compiler_constant_floating_capture_fields(
+			::fast_io::details::compiler_constant_floating_capture_fields<
+				floating_type>(
 				value.reference)};
 		using clean_type = ::std::remove_cv_t<floating_type>;
 		using trait = ::fast_io::details::iec559_traits<clean_type>;
@@ -4478,9 +4960,21 @@ print_compiler_constant_materialization_eligible(
 		if (fields.exponent != exponent_mask &&
 			(fields.mantissa != 0u || fields.exponent != 0u))
 		{
+#if defined(__clang__)
+			auto plan{::fast_io::details::
+				compiler_constant_floating_try_normal_decimal_grid_plan<
+					flags, clean_type>(fields, value.precision)};
+			if (!plan.success)
+			{
+				plan = ::fast_io::details::
+					compiler_constant_floating_make_decimal_precision_plan<
+						flags, clean_type>(fields, value.precision);
+			}
+#else
 			auto const plan{::fast_io::details::
 				compiler_constant_floating_make_decimal_precision_plan<
 					flags, clean_type>(fields, value.precision)};
+#endif
 			if (plan.success)
 			{
 				output_size = ::fast_io::details::floating_precise_sign_size<
@@ -4538,7 +5032,7 @@ print_compiler_constant_materialize(
 		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
 			char_type, flags, clean_type>;
 	auto const fields{
-		::fast_io::details::compiler_constant_floating_capture_fields(
+		::fast_io::details::compiler_constant_floating_capture_fields<clean_type>(
 			value.reference)};
 	result_type result{.fields = fields, .precision = value.precision};
 	if constexpr (flags.floating ==
@@ -4550,9 +5044,21 @@ print_compiler_constant_materialize(
 	}
 	else
 	{
+#if defined(__clang__)
+		auto plan{::fast_io::details::
+			compiler_constant_floating_try_normal_decimal_grid_plan<
+				flags, clean_type>(fields, value.precision)};
+		if (!plan.success)
+		{
+			plan = ::fast_io::details::
+				compiler_constant_floating_make_decimal_precision_plan<
+					flags, clean_type>(fields, value.precision);
+		}
+#else
 		auto const plan{::fast_io::details::
 			compiler_constant_floating_make_decimal_precision_plan<
 				flags, clean_type>(fields, value.precision)};
+#endif
 		result.decimal_mantissa = plan.mantissa;
 		result.decimal_exponent = plan.exponent;
 		result.decimal_carrier_available = plan.success;
@@ -4578,6 +5084,31 @@ print_compiler_constant_materialize(
 		}
 	}
 	return result;
+}
+
+/// @brief Preserves a proved constant precision-float graph through GCC's forwarding boundary.
+/// @details Precision materialization has a larger integer-only planning graph than the raw scalar form. Tested GCC
+///          13--16 and Clang 21--23 otherwise outline this final forwarding edge, preventing compact print/concat from
+///          seeing a completed proxy. The positive policy remains open for newer frontends until a measured reversal.
+///          The overload cannot be selected by the native run-time precision formatter because core invokes it only
+///          after this exact source object's compiler-constant eligibility query returned true.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, floating_type>> tag,
+	::fast_io::manipulators::scalar_manip_precision_t<
+		flags, floating_type> const &value) noexcept
+{
+	return print_compiler_constant_materialize(tag, value);
 }
 
 template <::std::integral char_type, ::std::integral proxy_char_type,

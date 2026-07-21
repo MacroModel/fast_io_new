@@ -1324,8 +1324,14 @@ inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f
 		::std::uint_least32_t trailing_zeros_digits_d4{trailing_zeros_digits >> 2};
 		::std::uint_least32_t trailing_zeros_digits_d4m4{trailing_zeros_digits_d4 << 2};
 
-		mantissa <<= makeup_bits;
-		mantissa >>= trailing_zeros_digits_d4m4;
+		// A narrow unsigned field carrier (binary16/bfloat16) is promoted to int by
+		// each shift.  The trait-masked mantissa and at most three alignment bits
+		// prove that both results fit the original carrier; the explicit casts only
+		// restore that carrier width after promotion.  The floating input remains
+		// by value above so native floating register passing is preserved.
+		mantissa = static_cast<mantissa_type>(mantissa << makeup_bits);
+		mantissa = static_cast<mantissa_type>(
+			mantissa >> trailing_zeros_digits_d4m4);
 		::std::uint_least32_t mantissa_len{trailing_zeros_mdigits_d4 - trailing_zeros_digits_d4};
 		if (exponent == 0)
 		{

@@ -43,18 +43,14 @@ struct format_scalar_t
 namespace fast_io
 {
 
-/// @brief Propagates concat's one-pass bounded cost marker through the format-specific scalar wrapper.
+/// @brief Propagates the destination-neutral one-pass bounded marker through the format-specific scalar wrapper.
 /// @details The wrapper changes sign/prefix spelling but delegates conversion and its dynamic reserve bound to the
-///          wrapped scalar. Only a child with the exact fast_io source opt-in can select concat's bounded stack path.
+///          wrapped scalar. Only a child with the complete source protocol can select a consumer's bounded path.
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
-	requires requires {
-		{
-			concat_single_pass_bounded_materialization_preferred(
-				::fast_io::io_reserve_type<char_type, scalar_type>)
-		} -> ::std::same_as<::std::true_type>;
-	}
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	requires ::fast_io::single_pass_bounded_materialization_source<
+		char_type, scalar_type>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<
 		char_type,
 		::fast_io::manipulators::format_scalar_t<
@@ -81,20 +77,15 @@ inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe
 	return {};
 }
 
-/// @brief Forwards concat's non-fatal candidate bound through the format scalar wrapper.
+/// @brief Forwards the non-fatal candidate bound through the format scalar wrapper.
 /// @details Prefix placement and space-sign spelling do not add code units; they only reinterpret bytes already
 ///          covered by the child scalar's reserve bound. Preserving the caller's limit lets an extreme dynamic
 ///          precision reject speculative materialization before the ordinary fatal-overflow reserve protocol runs.
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
-		requires requires(scalar_type value, ::std::size_t maximum_size) {
-			{
-				concat_single_pass_bounded_materialization_size(
-					::fast_io::io_reserve_type<char_type, scalar_type>, value,
-					maximum_size)
-			} noexcept -> ::std::same_as<::std::size_t>;
-		}
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	requires ::fast_io::single_pass_bounded_materialization_source<
+		char_type, scalar_type>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<
 		char_type,
 		::fast_io::manipulators::format_scalar_t<
@@ -103,30 +94,9 @@ inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
 		scalar_type, base_prefix_size, space_sign> value,
 	::std::size_t maximum_size) noexcept
 {
-	return concat_single_pass_bounded_materialization_size(
-		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar,
-		maximum_size);
+	return ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+		value.scalar, maximum_size);
 }
-
-#if defined(__clang__)
-/// Opts the library-owned run-time precision floating wrapper into bounded local materialization.
-///
-/// The core print entry uses this marker only when a fixed static prefix precedes exactly one such scalar and the
-/// destination already exposes a writable put area. Formatting into the local frame is observationally safe here:
-/// both sizing and emission are fast_io's non-throwing scalar operations, rather than arbitrary user customization.
-template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
-		  ::fast_io::details::my_floating_point value_type,
-		  ::std::size_t base_prefix_size, bool space_sign>
-inline constexpr bool print_format_scalar_local_buffer_eligible(
-	::fast_io::io_reserve_type_t<
-		char_type,
-		::fast_io::manipulators::format_scalar_t<
-			::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>,
-			base_prefix_size, space_sign>>) noexcept
-{
-	return true;
-}
-#endif
 
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 	requires requires {
@@ -190,15 +160,12 @@ inline constexpr char_type *print_reserve_define(
 	return end;
 }
 
-/// Keeps the optional compiler-constant floating proxy visible through format's
-/// spelling wrapper.
+/// Keeps the optional compiler-constant floating proxy visible through format's spelling wrapper.
 ///
-/// The generic wrapper above intentionally retains its established inlining
-/// policy.  A constant hexadecimal float has a larger independent formatter,
-/// however, and Clang otherwise outlines this one forwarding frame even though
-/// the value is already proven constant.  Restricting the force-inline overload
-/// to the replacement proxy exposes that value to its dedicated writer without
-/// changing the code shape of any ordinary run-time format leaf.
+/// This overload remains ordinary inline: independent GCC 13/15 and Clang 23
+/// `#a` assembly probes were byte-for-byte unchanged after removing its former
+/// forced attribute. The later precise-define leaf is the measured boundary
+/// that actually requires intervention.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type,
 	::std::size_t base_prefix_size, bool space_sign>
@@ -213,11 +180,6 @@ template <::std::integral char_type,
 					char_type, flags, floating_type>>,
 			iter, scalar);
 	}
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
-#endif
 inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<
 		char_type,
@@ -249,8 +211,9 @@ inline constexpr char_type *print_reserve_define(
 }
 
 /// Keeps the integer-fields hexadecimal precision proxy visible through the
-/// same format spelling wrapper.  This is the precision counterpart of the
-/// scalar overload above; format continues to translate syntax only, while
+/// same format spelling wrapper. This is the precision counterpart of the
+/// scalar overload above; it also remains ordinary inline after identical
+/// GCC/Clang O3 code-generation checks. Format translates syntax only, while
 /// print/concat owns constant recognition and materialization.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type,
@@ -266,11 +229,6 @@ template <::std::integral char_type,
 					char_type, flags, floating_type>>,
 			iter, scalar);
 	}
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
-#endif
 inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<
 		char_type,
@@ -359,10 +317,16 @@ print_compiler_constant_eligible_implies_compact_size(
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
 	 requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+// Tested GCC 13--16 otherwise outline this three-byte spelling query. That is not just
+// a call-cost difference: `__builtin_constant_p` then observes the callee's
+// parameter instead of the caller's expression, and the focused constant-fixed
+// benchmark regresses from 11.8 ns to 21.6 ns. Keep the query attached to the
+// source frame while leaving the underlying floating algorithm untouched. The
+// GCC 11--12 produce the same constant and unknown-value wrappers with or without the attribute, so forcing begins at
+// the first measured code-generation boundary. The positive GCC policy remains open until a newer compiler measures a
+// reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
@@ -380,10 +344,15 @@ print_compiler_constant_materialization_eligible(
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
 	 requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+// This construction leaf must share the source frame with the final materializer on tested GCC 13--16 and Clang 21--23.
+// Representative GCC 15 and Clang 23 A/B probes substantially reduce the constant caller and total text while every
+// audited dynamic object remains byte-identical. GCC 11--12 and Clang 17--20 produce byte-identical objects for this
+// leaf, establishing the lower boundaries. The eligibility query above has no corresponding Clang benefit and therefore
+// remains GCC-only. The positive policies remain open for newer frontends until a measured reversal; MSVC retains
+// ordinary placement.
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 [[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
@@ -400,6 +369,38 @@ print_compiler_constant_materialize(
 		materialized_scalar, base_prefix_size, space_sign>{
 		print_compiler_constant_materialize(
 			::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)};
+}
+
+/// Propagates core's already-observed eligibility proof through the spelling-only format wrapper.
+///
+/// The wrapper's eligibility query is exactly the child's query, so its true arm may use the child's optional
+/// gate-proven materializer. The ordinary ADL CPO above deliberately remains the independently callable checked path.
+/// Tested GCC 13--16 and Clang 21--23 need this bridge in the caller. GCC 11--12 and Clang 17--20 produce byte-identical
+/// objects with ordinary or forced placement, establishing the lower boundaries. The positive policies remain open for
+/// newer frontends until a measured reversal; MSVC retains ordinary placement.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		scalar_type, base_prefix_size, space_sign> const &value) noexcept
+{
+	using materialized_scalar =
+		::fast_io::details::compiler_constant_materialized_t<char_type, scalar_type>;
+	return ::fast_io::manipulators::format_scalar_t<
+		materialized_scalar, base_prefix_size, space_sign>{
+		print_compiler_constant_materialize_gate_proven(
+			::fast_io::io_reserve_type<char_type, scalar_type>,
+			value.scalar)};
 }
 
 /// Propagates the immutable-fragment representation through format's spelling-only scalar wrapper.
@@ -461,6 +462,54 @@ inline constexpr ::std::size_t print_reserve_static_stack_size(
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>) noexcept
 {
 	return print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, scalar_type>);
+}
+
+/// @brief Forwards exact-size queries for the already-materialized constant precision-float proxy.
+/// @details Tested GCC 13--16 otherwise outline this spelling-only wrapper after the IO gate has built the integer-field
+///          proxy. In the focused `{:.6f}` caller, retaining the boundary left 232 instructions and four calls on GCC
+///          16; forcing only this proxy overload reduced it to 44 instructions and one error-only call, while the
+///          unknown floating formatter cannot select this type. Clang 21--23 also require this forwarding leaf after
+///          the prepared-record dispatcher structurally isolates its bounded direct branch; otherwise the retained
+///          size call pulls the complete constant-precision fallback graph into a short literal record. Both positive
+///          policies remain open until a newer compiler measures a reversal. Format contributes no sizing policy: the
+///          core proxy owns the exact result.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires requires(
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			char_type, flags, floating_type> scalar) {
+		print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, decltype(scalar)>, scalar);
+	}
+// Clang 21--23 otherwise retain a precise-size call and two stack-pointer adjustments in the static-precision caller;
+// exposing this carrier leaf reduces it to 21 instructions, no calls, and no stack frame. Clang 17--20 produce the
+// same object with ordinary or forced placement, establishing the lower boundary. GCC 13--16 need the corresponding
+// source-frame visibility while GCC 11--12 are byte-identical. Both latest tested compilers are positive, so their
+// policies remain open until a measured reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#elif defined(__clang__) && 21 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr ::std::size_t print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				char_type, flags, floating_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+			char_type, flags, floating_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	return print_reserve_precise_size(
+		::fast_io::io_reserve_type<
+			char_type,
+			::fast_io::manipulators::compiler_constant_floating_precision_manip_t<
+				char_type, flags, floating_type>>,
+		value.scalar);
 }
 
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
@@ -531,7 +580,9 @@ inline constexpr decltype(auto) print_reserve_precise_define(
 /// @details Clang 23 otherwise outlined only this spelling wrapper for `fmt::print<"v={:.3a}">(out(), 1.25)`, leaving
 ///          a 120-byte frame and a call after the core proxy had already become fully constant.  The overload is
 ///          intentionally limited to that replacement type; ordinary run-time scalar and format lowering paths keep
-///          the generic compiler-selected inlining policy above.
+///          the generic compiler-selected inlining policy above. It is also the format half of width.h's measured
+///          constant width-forwarding pair: GCC 15 reduced 0x13a/one width call to 0x9a/one carrier call, while the
+///          GCC 13/15 and Clang 23 unknown-value normalized instruction hashes stayed identical.
 template <::std::integral char_type, ::std::random_access_iterator iterator,
 	::fast_io::manipulators::scalar_flags flags,
 	::std::integral proxy_char_type, typename floating_type,
@@ -549,7 +600,15 @@ template <::std::integral char_type, ::std::random_access_iterator iterator,
 							proxy_char_type, flags, floating_type>>,
 				iter, size, scalar);
 		}
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+// Tested GCC 15--16 and Clang 21--23 need this precise emitter exposed to its caller at `-O3`. GCC 11--14 and
+// Clang 17--20 leave the constant and unknown-value wrappers instruction-identical; older GCC only suppresses 405--529
+// bytes of incidental template emission. The positive policies therefore begin at the first caller-code boundary and
+// remain open for newer frontends until a measured reversal; MSVC retains ordinary placement.
+#if (defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr decltype(auto)
 print_reserve_precise_define(
 	::fast_io::io_reserve_type_t<
 		char_type,
@@ -631,7 +690,7 @@ template <::std::integral char_type, typename scalar_type,
 		} noexcept -> ::std::same_as<
 			::fast_io::basic_io_scatter_t<char_type>>;
 	}
-[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+[[nodiscard]] inline constexpr
 	::fast_io::basic_io_scatter_t<char_type>
 print_compiler_constant_single_static_fragment(
 	::fast_io::io_reserve_type_t<
@@ -709,17 +768,40 @@ inline constexpr char_type *emit_repeated_code_unit_pattern(
 	}
 }
 
+/**
+ * Classifies a scalar sign without changing the runtime floating ABI.
+ *
+ * Clang 17--19 do not accept `__builtin_signbit` while constant-evaluating the
+ * IO-owned static provider.  Only that evaluation reads the IEC 60559 sign
+ * field, preserving negative zero and signed NaNs.  Runtime calls deliberately
+ * retain the established builtin path and its target-specific code generation.
+ * The argument stays by value so native floating scalars use their register ABI.
+ */
 template <typename value_type>
 [[nodiscard]] inline constexpr bool scalar_negative(value_type value) noexcept
 {
 	using clean_type = ::std::remove_cvref_t<value_type>;
-	if constexpr (::fast_io::details::my_floating_point<clean_type>)
+	if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
+		clean_type>)
 	{
+		return (::fast_io::bit_cast<::std::uint_least16_t>(value) & 0x8000u) != 0u;
+	}
+	else if constexpr (::fast_io::details::my_floating_point<clean_type>)
+	{
+		FAST_IO_IF_CONSTEVAL
+		{
+			return static_cast<bool>(
+				::fast_io::details::compiler_constant_floating_capture_fields<
+					clean_type>(value).sign);
+		}
+		else
+		{
 #if FAST_IO_HAS_BUILTIN(__builtin_signbit)
-		return __builtin_signbit(value);
+			return __builtin_signbit(value);
 #else
-		return ::std::signbit(value);
+			return ::std::signbit(value);
 #endif
+		}
 	}
 	else if constexpr (::fast_io::details::my_signed_integral<clean_type>)
 	{
@@ -731,17 +813,61 @@ template <typename value_type>
 	}
 }
 
+/**
+ * Classifies constant-evaluated finiteness from the stored exponent field.
+ *
+ * The representation branch lets old Clang initialize a static formatted
+ * provider without evaluating or quieting a signaling NaN.  Runtime calls keep
+ * the pre-existing builtin implementation byte-for-byte, including its native
+ * floating argument ABI and target-specific classification instruction choice.
+ */
 template <typename value_type>
 [[nodiscard]] inline constexpr bool scalar_finite(value_type value) noexcept
 {
 	using clean_type = ::std::remove_cvref_t<value_type>;
-	if constexpr (::fast_io::details::my_floating_point<clean_type>)
+	if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
+		clean_type>)
 	{
-#if FAST_IO_HAS_BUILTIN(__builtin_isfinite)
-		return __builtin_isfinite(value);
-#else
-		return ::std::isfinite(value);
+		auto const representation{
+			::fast_io::bit_cast<::std::uint_least16_t>(value)};
+		return ((representation >> 7u) & 0xffu) != 0xffu;
+	}
+	else if constexpr (::fast_io::details::my_floating_point<clean_type>)
+	{
+		FAST_IO_IF_CONSTEVAL
+		{
+			using trait = ::fast_io::details::iec559_traits<clean_type>;
+			constexpr auto maximum_exponent{
+				(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+			return ::fast_io::details::compiler_constant_floating_capture_fields<
+				clean_type>(value).exponent != maximum_exponent;
+		}
+		else
+		{
+#if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
+	__clang_major__ == 18 &&                                           \
+	(defined(__aarch64__) || defined(_M_ARM64))
+			if constexpr (::std::same_as<clean_type, __bf16>)
+			{
+				// Clang 18/AArch64 cannot select __builtin_isfinite(__bf16),
+				// with or without +bf16. Clang 17 and Clang 19--23 were
+				// audited successfully, so keep this backend workaround closed.
+				using trait = ::fast_io::details::iec559_traits<clean_type>;
+				constexpr auto maximum_exponent{
+					(static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u};
+				return ::fast_io::details::compiler_constant_floating_capture_fields<
+					clean_type>(value).exponent != maximum_exponent;
+			}
+			else
 #endif
+			{
+#if FAST_IO_HAS_BUILTIN(__builtin_isfinite)
+				return __builtin_isfinite(value);
+#else
+				return ::std::isfinite(value);
+#endif
+			}
+		}
 	}
 	else
 	{
@@ -776,6 +902,54 @@ inline constexpr ::std::size_t print_define_internal_shift(
 {
 	return ::fast_io::fmt::details::formatted_scalar_internal_shift<flags>(
 		value.scalar.reference, base_prefix_size);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename value_type,
+	::std::size_t base_prefix_size, bool space_sign>
+inline constexpr ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::floating_scalar_field_manip_t<
+				flags, value_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::floating_scalar_field_manip_t<
+			flags, value_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<value_type>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<value_type>(
+			value.scalar.representation)};
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	return static_cast<::std::size_t>(flags.showpos || fields.sign) +
+		(fields.exponent == exponent_mask ? 0u : base_prefix_size);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename value_type,
+	::std::size_t base_prefix_size, bool space_sign>
+inline constexpr ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::format_scalar_t<
+			::fast_io::manipulators::floating_scalar_field_manip_precision_t<
+				flags, value_type>,
+			base_prefix_size, space_sign>>,
+	::fast_io::manipulators::format_scalar_t<
+		::fast_io::manipulators::floating_scalar_field_manip_precision_t<
+			flags, value_type>,
+		base_prefix_size, space_sign> value) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<value_type>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<value_type>(
+			value.scalar.representation)};
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	return static_cast<::std::size_t>(flags.showpos || fields.sign) +
+		(fields.exponent == exponent_mask ? 0u : base_prefix_size);
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,

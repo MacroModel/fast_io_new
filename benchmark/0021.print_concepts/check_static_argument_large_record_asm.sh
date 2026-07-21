@@ -23,7 +23,7 @@ add_compiler()
 	fi
 }
 
-for version in 13 14 15 16; do
+for version in 11 12 13 14 15 16; do
 	variable="GCC${version}_CXX"
 	[[ -z ${!variable:-} ]] || add_compiler "${!variable}"
 	add_compiler "g++-$version"
@@ -67,8 +67,8 @@ check_body()
 	if [[ $(rg -c 'syscall' "$body") -ne 1 ]]; then
 		fail "$version_line does not give $symbol exactly one scalar syscall loop"
 	fi
-	if ! rg -q 'compiled_static_format_program.*storage' "$body"; then
-		fail "$version_line does not address $symbol's merged DSAL provider"
+	if ! rg -q 'static_provider_storage_t.*compiled_static_replacement_provider.*storage' "$body"; then
+		fail "$version_line does not address $symbol's core replacement provider"
 	fi
 }
 
@@ -99,7 +99,7 @@ for compiler in "${compilers[@]}"; do
 		family=clang
 	else
 		major=$($compiler -dumpversion | sed -E 's/^([0-9]+).*/\1/')
-		[[ -n $major && $major -ge 13 && $major -le 16 ]] || continue
+		[[ -n $major && $major -ge 11 && $major -le 16 ]] || continue
 		family=gcc
 	fi
 
@@ -156,10 +156,10 @@ for compiler in "${compilers[@]}"; do
 	objcopy --dump-section .rodata="$rodata" "$executable"
 	check_byte_run "$rodata" 97 65
 	check_byte_run "$rodata" 98 4096
-	check_byte_run "$rodata" 99 16384
+	check_byte_run "$rodata" 99 65536
 
 	printf 'static-argument large-record asm gate: PASS (%s, max RSS %s KiB)\n' \
 		"$version_line" "$rss_kib"
 done
 
-(( compiler_count != 0 )) || fail 'no GCC 13-16 or Clang 17-23 compiler was found'
+(( compiler_count != 0 )) || fail 'no GCC 11-16 or Clang 17-23 compiler was found'

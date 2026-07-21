@@ -150,10 +150,15 @@ inline namespace io
 {
 
 template <typename T, typename... Args>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+// Tested GCC 13-16 leave this facade outlined at -O3. That boundary hides source-expression
+// constants from the core __builtin_constant_p gate and selects the full runtime
+// formatter. In a mixed integer/floating probe, removing only this marker grew GCC 16
+// object text from 55,936 to 63,053 bytes and changed both constant wrappers into calls;
+// the constant-double obuffer benchmark regressed from 0.984 ns to 17.6 ns. Clang
+// performs the required inlining unaided. The positive GCC policy remains open until
+// a newer compiler measures a reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void print(T &&t, Args &&...args)
 {
@@ -220,10 +225,12 @@ static_assert(device_and_type_ok, "some types are not printable for print");
 }
 
 template <typename T, typename... Args>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+// As with print above, tested GCC 13-16 otherwise outline this facade and erase the
+// source-expression visibility required by the compiler-constant gate. The same
+// A/B probe turns a constant println into a call when this marker is removed; the
+// positive GCC policy remains open until a newer compiler measures a reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void println(T &&t, Args &&...args)
 {
@@ -514,7 +521,13 @@ template <typename... Args>
 // Allow debug print
 #ifndef FAST_IO_DISABLE_DEBUG_PRINT
 // With debugging. We output to POSIX fd or Win32 Handle directly instead of C's stdout.
+/// GCC 11--16 need the public default-sink facade inlined so caller literals reach the narrowly forced constant
+/// prescan; the false arm still enters the ordinary bridge. Clang 17--23 need no override. See the prescan's measured
+/// comment for the full compile and unknown-value A/B results.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void debug_print(T &&t, Args &&...args)
 {
 	constexpr bool device_and_type_ok{
@@ -550,6 +563,11 @@ inline constexpr void debug_print(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
+				if (::fast_io::details::debug_print_try_default_compiler_constant<false>(
+						t, args...))
+				{
+					return;
+				}
 				fast_io::details::debug_print_after_source_pre_normalization<false>(
 					t, args...);
 			}
@@ -579,6 +597,9 @@ static_assert(device_and_type_ok, "some types are not printable for debug_print 
 }
 
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void debug_println(T &&t, Args &&...args)
 {
 	constexpr bool device_and_type_ok{
@@ -614,6 +635,11 @@ inline constexpr void debug_println(T &&t, Args &&...args)
 			constexpr bool type_ok{::fast_io::operations::defines::print_freestanding_params_okay<char, T, Args...>};
 			if constexpr (type_ok)
 			{
+				if (::fast_io::details::debug_print_try_default_compiler_constant<true>(
+						t, args...))
+				{
+					return;
+				}
 				fast_io::details::debug_print_after_source_pre_normalization<true>(
 					t, args...);
 			}

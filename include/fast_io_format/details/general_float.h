@@ -69,10 +69,46 @@ general_float_scalar_reference(leaf_type const &leaf) noexcept
 	{
 		return (leaf.reference);
 	}
+	else if constexpr (requires { leaf.representation; })
+	{
+		// The only field proxy is IEC 60559 bfloat16.  Widen its preserved
+		// representation into the high half of binary32 by integer bit-cast;
+		// this is exact and cannot quiet a signaling NaN.
+		return ::fast_io::bit_cast<float>(
+			static_cast<::std::uint_least32_t>(leaf.representation) << 16u);
+	}
 	else
 	{
 		static_assert(general_float_dependent_false_v<leaf_type>,
 			"fast_io format: a general-float child must be a fast_io scalar leaf");
+	}
+}
+
+template <typename leaf_type>
+inline constexpr bool general_float_has_field_representation = []() constexpr {
+	if constexpr (requires(leaf_type const &leaf) { leaf.scalar; })
+	{
+		return general_float_has_field_representation<
+			::std::remove_cvref_t<decltype(::std::declval<leaf_type const &>().scalar)>>;
+	}
+	else
+	{
+		return requires(leaf_type const &leaf) { leaf.representation; };
+	}
+}();
+
+template <typename leaf_type>
+	requires general_float_has_field_representation<leaf_type>
+[[nodiscard]] inline constexpr ::std::uint_least16_t
+general_float_field_representation(leaf_type const &leaf) noexcept
+{
+	if constexpr (requires { leaf.scalar; })
+	{
+		return general_float_field_representation(leaf.scalar);
+	}
+	else
+	{
+		return leaf.representation;
 	}
 }
 
@@ -293,18 +329,45 @@ template <typename fixed_type>
 general_float_initial_selection(
 	fixed_type const &fixed, ::std::size_t precision) noexcept
 {
+	if constexpr (general_float_has_field_representation<fixed_type>)
+	{
+		auto const representation{general_float_field_representation(fixed)};
+		// Classify NaN and infinity before forming a binary32 value.  In
+		// particular, never compare a signaling-NaN carrier in floating
+		// arithmetic merely to choose a formatting child.
+		if (((representation >> 7u) & 0xffu) == 0xffu)
+		{
+			return {};
+		}
+		auto const transported{::fast_io::bit_cast<float>(
+			static_cast<::std::uint_least32_t>(representation) << 16u)};
+		auto const magnitude{transported < 0.0f ? -transported : transported};
+		if (magnitude == 0.0f) return {};
+		constexpr float lower_boundary{1.0f / 10000.0f};
+		if (magnitude < lower_boundary)
+		{
+			return {true, !(magnitude < lower_boundary / 2.0f)};
+		}
+		auto const upper{general_float_pow10<float>(precision)};
+		if (magnitude >= upper) return {true, false};
+		return {false, !(magnitude < upper / 2.0f)};
+	}
+	else
+	{
 	decltype(auto) transported{general_float_scalar_reference(fixed)};
 	using floating_type = ::std::remove_cvref_t<decltype(transported)>;
 	static_assert(::fast_io::details::my_floating_point<floating_type>,
 		"fast_io format: general-float children must transport a floating value");
-	if (!(transported == transported)) return {}; // NaN
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	auto const fields{::fast_io::details::get_punned_result(transported)};
+	constexpr auto exponent_mask{static_cast<decltype(fields.exponent)>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	// Classify both NaN and infinity from the representation before the first
+	// floating comparison.  A signaling NaN must be printable without raising
+	// FE_INVALID merely because the frontend needs a tentative g/G child.
+	if (fields.exponent == exponent_mask) return {};
 	auto const magnitude{transported < floating_type{} ? -transported : transported};
 	if (magnitude == floating_type{}) return {};
-	if constexpr (::std::numeric_limits<floating_type>::has_infinity)
-	{
-		if (magnitude == ::std::numeric_limits<floating_type>::infinity())
-			return {};
-	}
 	constexpr auto lower_boundary{
 		floating_type{1} / floating_type{10000}};
 	if (magnitude < lower_boundary)
@@ -314,6 +377,7 @@ general_float_initial_selection(
 	auto const upper{general_float_pow10<floating_type>(precision)};
 	if (magnitude >= upper) return {true, false};
 	return {false, !(magnitude < upper / floating_type{2})};
+	}
 }
 
 template <typename fixed_type>

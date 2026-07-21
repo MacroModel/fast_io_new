@@ -653,63 +653,97 @@ static_assert(rich_context_round_trip());
 
 inline constexpr ::fast_io::fmt::basic_fixed_string static_custom_format{
 	"A{}B{:x}C"};
-using static_format_as_argument = decltype(::fast_io::mnp::static_arg<
-										   static_custom_probe::format_as_value{42u}>);
-using static_custom_argument = decltype(::fast_io::mnp::static_arg<
-										static_custom_probe::custom_value{7u}>);
-using static_custom_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		static_custom_format, ::fast_io::fmt::brace_fmt_t,
-		static_format_as_argument, static_custom_argument>;
-static_assert(::std::string_view{
-				  static_custom_program::storage.data(), static_custom_program::size} ==
-			  "A42Bx07C");
+
+consteval auto render_static_custom_record()
+{
+	::std::array<char, 8u> result{};
+	::fast_io::obuffer_view buffer{result};
+	::fast_io::fmt::print<static_custom_format>(
+		buffer,
+		::fast_io::mnp::static_arg<
+			static_custom_probe::format_as_value{42u}>,
+		::fast_io::mnp::static_arg<static_custom_probe::custom_value{7u}>);
+	return result;
+}
+
+// Custom static formatting is an IO endpoint contract. The format layer only
+// lowers the grammar into core provider nodes and owns no rendered object.
+inline constexpr auto static_custom_record{render_static_custom_record()};
+static_assert(::std::string_view{static_custom_record.data(),
+								 static_custom_record.size()} == "A42Bx07C");
 
 inline constexpr ::fast_io::fmt::basic_fixed_string empty_static_format{
 	"A{}B"};
-using empty_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		empty_static_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<
-				 static_custom_probe::empty_value{}>)>;
-static_assert(::std::string_view{
-	empty_static_program::storage.data(), empty_static_program::size} ==
-	"AB");
+
+consteval auto render_empty_static_record()
+{
+	::std::array<char, 2u> result{};
+	::fast_io::obuffer_view buffer{result};
+	::fast_io::fmt::print<empty_static_format>(
+		buffer,
+		::fast_io::mnp::static_arg<static_custom_probe::empty_value{}>);
+	return result;
+}
+
+inline constexpr auto empty_static_record{render_empty_static_record()};
+static_assert(::std::string_view{empty_static_record.data(),
+								 empty_static_record.size()} == "AB");
 
 inline constexpr ::fast_io::fmt::basic_fixed_string automatic_static_format{
 	"auto={} text={}"};
-using automatic_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		automatic_static_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<
-			static_custom_probe::automatic_format_as_value{42u}>),
-		decltype(::fast_io::mnp::static_arg<
-			static_custom_probe::automatic_text_value{}>)>;
-static_assert(::std::string_view{
-				  automatic_static_program::storage.data(),
-				  automatic_static_program::size} == "auto=42 text=view");
+
+consteval auto render_automatic_static_record()
+{
+	::std::array<char, 17u> result{};
+	::fast_io::obuffer_view buffer{result};
+	::fast_io::fmt::print<automatic_static_format>(
+		buffer,
+		::fast_io::mnp::static_arg<
+			static_custom_probe::automatic_format_as_value{42u}>,
+		::fast_io::mnp::static_arg<
+			static_custom_probe::automatic_text_value{}>);
+	return result;
+}
+
+inline constexpr auto automatic_static_record{
+	render_automatic_static_record()};
+static_assert(::std::string_view{automatic_static_record.data(),
+								 automatic_static_record.size()} ==
+			  "auto=42 text=view");
 
 inline constexpr custom_tuple_fallback_probe::value_type
 	custom_tuple_value{7u};
 inline constexpr custom_tuple_fallback_probe::leaf_type
 	custom_leaf_value{8u};
+
+template <typename argument_type>
+[[nodiscard]] consteval bool single_replacement_is_static()
+{
+	constexpr auto format_literal{
+		::fast_io::fmt::basic_fixed_string{"{}"}};
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<
+			format_literal, ::fast_io::fmt::brace_fmt_t>};
+	constexpr auto operation{program.operations[0u]};
+	static_assert(operation.kind ==
+				  ::fast_io::fmt::details::format_operation_kind::replacement);
+	constexpr auto field{program.fields[operation.payload_index]};
+	return ::fast_io::fmt::details::static_format_replacement<
+		format_literal, field, ::fast_io::fmt::brace_fmt_t,
+		argument_type>();
+}
+
 using custom_tuple_argument = decltype(::fast_io::mnp::static_arg<
 									   custom_tuple_value>);
-static_assert(!::fast_io::fmt::details::static_format_program<
-			  ::fast_io::fmt::basic_fixed_string{"{}"},
-			  ::fast_io::fmt::brace_fmt_t, custom_tuple_argument>());
+static_assert(!single_replacement_is_static<custom_tuple_argument>());
 using custom_element_tuple_argument = decltype(::fast_io::fmt::static_tuple_arg<custom_tuple_value>());
-static_assert(!::fast_io::fmt::details::static_format_program<
-			  ::fast_io::fmt::basic_fixed_string{"{}"},
-			  ::fast_io::fmt::brace_fmt_t, custom_element_tuple_argument>());
+static_assert(!single_replacement_is_static<custom_element_tuple_argument>());
 static_assert(!::fast_io::fmt::details::
 				  automatic_static_format_output_budget_exceeded<
 					  ::fast_io::fmt::basic_fixed_string{"{}"},
 					  ::fast_io::fmt::brace_fmt_t, custom_element_tuple_argument>());
 using custom_leaf_tuple_argument = decltype(::fast_io::fmt::static_tuple_arg<custom_leaf_value>());
-static_assert(!::fast_io::fmt::details::static_format_program<
-			  ::fast_io::fmt::basic_fixed_string{"{}"},
-			  ::fast_io::fmt::brace_fmt_t, custom_leaf_tuple_argument>());
+static_assert(!single_replacement_is_static<custom_leaf_tuple_argument>());
 inline constexpr recursive_tuple_fallback_probe::value_type
 	recursive_tuple_value{7u};
 using recursive_tuple_argument = decltype(::fast_io::mnp::static_arg<
@@ -718,9 +752,7 @@ static_assert(!::fast_io::fmt::details::
 				   make_static_format_aggregate_shape<
 					   char, recursive_tuple_fallback_probe::value_type>()
 					   .supported);
-static_assert(!::fast_io::fmt::details::static_format_program<
-	::fast_io::fmt::basic_fixed_string{"{}"},
-	::fast_io::fmt::brace_fmt_t, recursive_tuple_argument>());
+static_assert(!single_replacement_is_static<recursive_tuple_argument>());
 
 template <typename string_type, typename char_type>
 [[nodiscard]] bool text_equal(
@@ -802,7 +834,7 @@ template <typename string_type, typename char_type>
 	auto const dynamic{::fast_io::fmt::concat_std<"A{}B">(
 		static_custom_probe::automatic_format_as_value{7u})};
 	return dynamic == "A7B" &&
-		static_custom_probe::automatic_format_as_runtime_calls == 1u;
+		   static_custom_probe::automatic_format_as_runtime_calls == 1u;
 }
 
 [[nodiscard]] bool dynamic_and_fail_closed_paths()

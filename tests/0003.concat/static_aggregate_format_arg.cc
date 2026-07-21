@@ -99,56 +99,82 @@ inline constexpr ::fast_io::fmt::basic_fixed_string partial_format{
 inline constexpr ::fast_io::fmt::basic_fixed_string named_sequence_format{
 	"{values}"};
 inline constexpr ::fast_io::fmt::basic_fixed_string
-	output_boundary_format{"{::062}"};
+	output_boundary_format{"{::0254}"};
 inline constexpr ::fast_io::fmt::basic_fixed_string
-	output_over_budget_format{"{::064}"};
+	output_over_budget_format{"{::0256}"};
 inline constexpr ::fast_io::fmt::basic_fixed_string
-	output_parameter_over_budget_format{"{::065}"};
+	output_parameter_over_budget_format{"{::0257}"};
+inline constexpr ::fast_io::fmt::basic_fixed_string
+	output_public_endpoint_format{"{::062}"};
 inline constexpr ::fast_io::fmt::basic_fixed_string
 	empty_large_element_width_format{"{::20000}"};
 
-using static_std_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type>;
-using static_c_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_c_array_type>;
-using static_nested_c_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_array_arg<nested_c_values>())>;
-using static_tuple_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_tuple_type>;
 using output_boundary_argument = decltype(::fast_io::mnp::static_arg<output_boundary_values>);
-using output_boundary_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		output_boundary_format, ::fast_io::fmt::brace_fmt_t,
-		output_boundary_argument>;
 using empty_large_element_width_argument = decltype(::fast_io::mnp::static_arg<empty_values>);
-using empty_large_element_width_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		empty_large_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		empty_large_element_width_argument>;
 
-static_assert(::std::string_view{
-				  static_std_array_program::storage.data(), static_std_array_program::size} ==
-			  "[1, 15, 255]");
-static_assert(::std::string_view{
-				  static_c_array_program::storage.data(), static_c_array_program::size} ==
-			  "[-2, 0, 7]");
-static_assert(::std::string_view{
-				  static_nested_c_array_program::storage.data(),
-				  static_nested_c_array_program::size} == "[[1, 2], [3, 4]]");
-static_assert(::std::string_view{
-				  static_tuple_program::storage.data(), static_tuple_program::size} ==
-			  "(7, 1, [2, 3])");
-static_assert(::fast_io::fmt::details::static_format_program<
-			  output_boundary_format, ::fast_io::fmt::brace_fmt_t,
-			  output_boundary_argument>());
+/**
+ * Verifies static lowering through the public constexpr output endpoint.
+ *
+ * Format syntax owns no rendered array: the fixed obuffer is the observable IO
+ * destination, while the semantic predicate below separately audits whether a
+ * replacement is eligible for type-owned provider lowering.
+ */
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::fast_io::fmt::basic_fixed_string expected_literal,
+		  typename... argument_types>
+[[nodiscard]] consteval bool public_consteval_format_matches(
+	argument_types... arguments)
+{
+	using char_type = typename decltype(format_literal)::value_type;
+	static_assert(::std::same_as<
+				  char_type, typename decltype(expected_literal)::value_type>);
+	::std::array<char_type, expected_literal.size()> storage{};
+	::fast_io::basic_obuffer_view<char_type> output{storage};
+	::fast_io::fmt::print<format_literal>(output, arguments...);
+	return output.size() == expected_literal.size() &&
+		   ::std::basic_string_view<char_type>{storage.data(), output.size()} ==
+			   ::std::basic_string_view<char_type>{
+				   expected_literal.data(), expected_literal.size()};
+}
+
+template <::std::size_t capacity,
+		  ::fast_io::fmt::basic_fixed_string format_literal,
+		  typename... argument_types>
+[[nodiscard]] consteval ::std::size_t public_consteval_format_size(
+	argument_types... arguments)
+{
+	using char_type = typename decltype(format_literal)::value_type;
+	::std::array<char_type, capacity> storage{};
+	::fast_io::basic_obuffer_view<char_type> output{storage};
+	::fast_io::fmt::print<format_literal>(output, arguments...);
+	return output.size();
+}
+
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::std::size_t field_index, typename... argument_types>
+[[nodiscard]] consteval bool replacement_is_static() noexcept
+{
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<
+			format_literal, ::fast_io::fmt::brace_fmt_t>};
+	static_assert(field_index < program.field_count);
+	return ::fast_io::fmt::details::static_format_replacement<
+		format_literal, program.fields[field_index],
+		::fast_io::fmt::brace_fmt_t, argument_types...>();
+}
+
+static_assert(public_consteval_format_matches<sequence_format, "[1, 15, 255]">(
+	::fast_io::mnp::static_arg<unsigned_values>));
+static_assert(public_consteval_format_matches<sequence_format, "[-2, 0, 7]">(
+	::fast_io::fmt::static_array_arg<c_values>()));
+static_assert(public_consteval_format_matches<
+			  sequence_format, "[[1, 2], [3, 4]]">(
+	::fast_io::fmt::static_array_arg<nested_c_values>()));
+static_assert(public_consteval_format_matches<
+			  sequence_format, "(7, 1, [2, 3])">(
+	::fast_io::fmt::static_tuple_arg<7, true, ::std::array{2u, 3u}>()));
+static_assert(replacement_is_static<
+			  output_boundary_format, 0u, output_boundary_argument>());
 static_assert(!::fast_io::fmt::details::
 				  automatic_static_format_output_budget_exceeded<
 					  output_boundary_format, ::fast_io::fmt::brace_fmt_t,
@@ -165,20 +191,20 @@ static_assert(!::fast_io::fmt::details::
 				  automatic_static_format_output_budget_exceeded<
 					  empty_large_element_width_format, ::fast_io::fmt::brace_fmt_t,
 					  empty_large_element_width_argument>());
-static_assert(::fast_io::fmt::details::static_format_program<
-			  empty_large_element_width_format, ::fast_io::fmt::brace_fmt_t,
+static_assert(replacement_is_static<
+			  empty_large_element_width_format, 0u,
 			  empty_large_element_width_argument>());
-static_assert(::std::string_view{
-				  empty_large_element_width_program::storage.data(),
-				  empty_large_element_width_program::size} == "[]");
-static_assert(output_boundary_program::size ==
-			  ::fast_io::fmt::details::static_format_output_code_unit_limit);
-
-using static_tuple_64_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_tuple_64_type>;
-static_assert(static_tuple_64_program::size == 246u);
+static_assert(public_consteval_format_matches<
+			  empty_large_element_width_format, "[]">(
+	::fast_io::mnp::static_arg<empty_values>));
+// Keep the public endpoint probe below the compiler's default constexpr-step
+// ceiling. The semantic budget assertions above independently cover the exact
+// 64 KiB boundary and its first rejected tiers.
+static_assert(public_consteval_format_size<16384u,
+										   output_public_endpoint_format>(
+				  ::fast_io::mnp::static_arg<output_boundary_values>) == 16384u);
+static_assert(public_consteval_format_size<246u, sequence_format>(
+				  static_tuple_64_type{}) == 246u);
 static_assert(!::fast_io::fmt::details::
 				   make_static_format_aggregate_shape<
 					   char, static_tuple_65_source_type>()
@@ -188,170 +214,86 @@ static_assert(!::fast_io::fmt::details::
 					   char, ::std::array<static_tuple_65_source_type, 1u>>()
 					   .tuple_budget);
 
-using static_hex_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		hex_sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type>;
-static_assert(::std::string_view{
-				  static_hex_array_program::storage.data(), static_hex_array_program::size} ==
-			  "[0001, 000f, 00ff]");
+static_assert(public_consteval_format_matches<
+			  hex_sequence_format, "[0001, 000f, 00ff]">(
+	::fast_io::mnp::static_arg<unsigned_values>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string floating_sequence_format{
 	"{::.2f}"};
-using static_floating_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		floating_sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<floating_values>)>;
-static_assert(::std::string_view{
-	static_floating_array_program::storage.data(),
-	static_floating_array_program::size} == "[1.25, -0.00, 3.50]");
-
-using static_nested_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<nested_values>)>;
-static_assert(::std::string_view{
-				  static_nested_program::storage.data(), static_nested_program::size} ==
-			  "[[1, 2], [3, 4]]");
-
-using static_character_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<character_values>)>;
-static_assert(::std::string_view{
-				  static_character_program::storage.data(), static_character_program::size} ==
-			  "['a', '\\n', '\\'']");
-
-using static_empty_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<empty_values>)>;
-static_assert(::std::string_view{
-				  static_empty_program::storage.data(), static_empty_program::size} == "[]");
-
-using static_pair_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<pair_value>)>;
-static_assert(::std::string_view{
-				  static_pair_program::storage.data(), static_pair_program::size} ==
-			  "(9, 0)");
-
-using static_string_tuple_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		sequence_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::fmt::static_tuple_arg<
-				 7, ::fast_io::fmt::basic_fixed_string{"hi"}>())>;
-static_assert(::std::string_view{
-				  static_string_tuple_program::storage.data(),
-				  static_string_tuple_program::size} == "(7, \"hi\")");
-
-using static_named_array_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		named_sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_named_array_type>;
-static_assert(::std::string_view{
-				  static_named_array_program::storage.data(),
-				  static_named_array_program::size} == "[-2, 0, 7]");
-
-using static_named_tuple_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		named_sequence_format, ::fast_io::fmt::brace_fmt_t,
-		static_named_tuple_type>;
-static_assert(::std::string_view{
-				  static_named_tuple_program::storage.data(),
-				  static_named_tuple_program::size} == "(7, 1)");
+static_assert(public_consteval_format_matches<
+			  floating_sequence_format, "[1.25, -0.00, 3.50]">(
+	::fast_io::mnp::static_arg<floating_values>));
+static_assert(public_consteval_format_matches<
+			  sequence_format, "[[1, 2], [3, 4]]">(
+	::fast_io::mnp::static_arg<nested_values>));
+static_assert(public_consteval_format_matches<
+			  sequence_format, "['a', '\\n', '\\'']">(
+	::fast_io::mnp::static_arg<character_values>));
+static_assert(public_consteval_format_matches<sequence_format, "[]">(
+	::fast_io::mnp::static_arg<empty_values>));
+static_assert(public_consteval_format_matches<sequence_format, "(9, 0)">(
+	::fast_io::mnp::static_arg<pair_value>));
+static_assert(public_consteval_format_matches<sequence_format, "(7, \"hi\")">(
+	::fast_io::fmt::static_tuple_arg<
+		7, ::fast_io::fmt::basic_fixed_string{"hi"}>()));
+static_assert(public_consteval_format_matches<
+			  named_sequence_format, "[-2, 0, 7]">(
+	::fast_io::fmt::static_named_array_arg<"values", c_values>()));
+static_assert(public_consteval_format_matches<named_sequence_format, "(7, 1)">(
+	::fast_io::fmt::static_named_tuple_arg<"values", 7, true>()));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string no_delimiter_format{
 	"{:n}"};
-using static_no_delimiter_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		no_delimiter_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type>;
-static_assert(::std::string_view{
-				  static_no_delimiter_program::storage.data(),
-				  static_no_delimiter_program::size} == "1, 15, 255");
+static_assert(public_consteval_format_matches<
+			  no_delimiter_format, "1, 15, 255">(
+	::fast_io::mnp::static_arg<unsigned_values>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string debug_string_format{
 	"{:?s}"};
-using static_debug_string_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		debug_string_format, ::fast_io::fmt::brace_fmt_t,
-		decltype(::fast_io::mnp::static_arg<character_values>)>;
-static_assert(::std::string_view{
-				  static_debug_string_program::storage.data(),
-				  static_debug_string_program::size} == "\"a\\n'\"");
+static_assert(public_consteval_format_matches<debug_string_format, "\"a\\n'\"">(
+	::fast_io::mnp::static_arg<character_values>));
 
-inline constexpr auto partial_plan{
-	::fast_io::fmt::details::static_format_groups<
-		partial_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type, unsigned>};
-static_assert(partial_plan.has_static_replacement);
-static_assert(partial_plan.group_count == 2u);
-static_assert(partial_plan.is_static[0u]);
-static_assert(!partial_plan.is_static[1u]);
+static_assert(replacement_is_static<
+			  partial_format, 0u, static_std_array_type, unsigned>());
+static_assert(!replacement_is_static<
+			  partial_format, 1u, static_std_array_type, unsigned>());
 
 inline constexpr ::fast_io::fmt::basic_fixed_string dynamic_element_width_format{
 	"{0::0{1}x}"};
-inline constexpr auto dynamic_element_width_plan{
-	::fast_io::fmt::details::static_format_groups<
-		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type, unsigned>};
-static_assert(!dynamic_element_width_plan.has_static_replacement);
-
-using static_element_width_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_std_array_type,
-		decltype(::fast_io::mnp::static_arg<4u>)>;
-static_assert(::std::string_view{
-				  static_element_width_program::storage.data(),
-				  static_element_width_program::size} == "[0001, 000f, 00ff]");
+static_assert(!replacement_is_static<
+			  dynamic_element_width_format, 0u, static_std_array_type, unsigned>());
+static_assert(public_consteval_format_matches<
+			  dynamic_element_width_format, "[0001, 000f, 00ff]">(
+	::fast_io::mnp::static_arg<unsigned_values>,
+	::fast_io::mnp::static_arg<4u>));
 
 using static_narrow_element_width_type =
 	decltype(::fast_io::mnp::static_arg<::std::uint8_t{4u}>);
 using static_narrow_width_array_type =
 	decltype(::fast_io::mnp::static_arg<narrow_width_values>);
-inline constexpr auto static_narrow_element_width_plan{
-	::fast_io::fmt::details::static_format_groups<
-		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_narrow_width_array_type, static_narrow_element_width_type>};
-static_assert(static_narrow_element_width_plan.has_static_replacement);
-using static_narrow_element_width_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_narrow_width_array_type, static_narrow_element_width_type>;
-static_assert(::std::string_view{
-				  static_narrow_element_width_program::storage.data(),
-				  static_narrow_element_width_program::size} ==
-			  "[0001]");
-
-inline constexpr auto runtime_narrow_element_width_plan{
-	::fast_io::fmt::details::static_format_groups<
-		dynamic_element_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_narrow_width_array_type, ::std::uint8_t>};
-static_assert(!runtime_narrow_element_width_plan.has_static_replacement);
+static_assert(replacement_is_static<
+			  dynamic_element_width_format, 0u, static_narrow_width_array_type,
+			  static_narrow_element_width_type>());
+static_assert(public_consteval_format_matches<
+			  dynamic_element_width_format, "[0001]">(
+	::fast_io::mnp::static_arg<narrow_width_values>,
+	::fast_io::mnp::static_arg<::std::uint8_t{4u}>));
+static_assert(!replacement_is_static<
+			  dynamic_element_width_format, 0u, static_narrow_width_array_type,
+			  ::std::uint8_t>());
 
 using runtime_array_type = ::std::array<unsigned, 3u>;
 using runtime_vector_type = ::std::vector<unsigned>;
 using runtime_span_type = ::std::span<unsigned const>;
 using runtime_string_view_type = ::std::string_view;
-static_assert(!::fast_io::fmt::details::static_format_groups<
-				   sequence_format, ::fast_io::fmt::brace_fmt_t,
-				   runtime_array_type>
-				   .has_static_replacement);
-static_assert(!::fast_io::fmt::details::static_format_groups<
-				   sequence_format, ::fast_io::fmt::brace_fmt_t,
-				   runtime_vector_type>
-				   .has_static_replacement);
-static_assert(!::fast_io::fmt::details::static_format_groups<
-				   sequence_format, ::fast_io::fmt::brace_fmt_t,
-				   runtime_span_type>
-				   .has_static_replacement);
-static_assert(!::fast_io::fmt::details::static_format_groups<
-				   sequence_format, ::fast_io::fmt::brace_fmt_t,
-				   runtime_string_view_type>
-				   .has_static_replacement);
+static_assert(!replacement_is_static<
+			  sequence_format, 0u, runtime_array_type>());
+static_assert(!replacement_is_static<
+			  sequence_format, 0u, runtime_vector_type>());
+static_assert(!replacement_is_static<
+			  sequence_format, 0u, runtime_span_type>());
+static_assert(!replacement_is_static<
+			  sequence_format, 0u, runtime_string_view_type>());
 
 [[nodiscard]] bool runtime_matches()
 {

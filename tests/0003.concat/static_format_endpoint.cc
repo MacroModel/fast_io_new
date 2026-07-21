@@ -1,13 +1,157 @@
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC 15 diagnoses its own inlined memcpy expansion as overlapping after it
+// loses the test sink's finite put-area invariant. Sanitizers exercise the
+// same reserve path below; suppress only this optimizer false positive.
+#pragma GCC diagnostic ignored "-Wrestrict"
+#endif
+
 #include <fast_io_device.h>
 #include <fast_io_format.h>
 
 #include <array>
 #include <cstddef>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 
 namespace static_format_endpoint_test
 {
+
+inline constexpr ::fast_io::fmt::basic_fixed_string format_literal{"a{1}c{0}"};
+inline constexpr ::fast_io::fmt::basic_fixed_string partial_format_literal{
+	"A{}B{}C"};
+inline constexpr ::std::array aggregate_values{1u, 15u, 255u};
+inline constexpr ::fast_io::fmt::basic_fixed_string aggregate_format{
+	"values={}"};
+inline constexpr ::fast_io::fmt::basic_fixed_string precision_format_literal{
+	"user={} id={:08x} score={:.2f}"};
+inline constexpr ::std::string_view precision_expected{
+	"user=xxx id=0000002a score=3.14"};
+inline constexpr char precision_prefix[]{
+	"user=xxx id=0000002a score="};
+
+template <typename... operation_types>
+struct lowered_operation_pack
+{
+	static inline constexpr ::std::size_t size{sizeof...(operation_types)};
+
+	template <::std::size_t index>
+	using operation_type = ::std::tuple_element_t<
+		index, ::std::tuple<operation_types...>>;
+
+	template <typename... actual_types>
+	static inline constexpr bool matches{
+		::std::same_as<
+			::std::tuple<::std::remove_cvref_t<actual_types>...>,
+			::std::tuple<operation_types...>>};
+};
+
+struct observe_lowered_operations
+{
+	template <typename... operation_types>
+	[[nodiscard]] inline constexpr auto operator()(
+		operation_types &&...) const noexcept
+		-> lowered_operation_pack<::std::remove_cvref_t<operation_types>...>
+	{
+		return {};
+	}
+};
+
+using static_lowering = decltype([] {
+	auto const &first{::fast_io::mnp::static_arg<"d">};
+	auto const &second{::fast_io::mnp::static_arg<"b">};
+	return ::fast_io::fmt::details::lower_format_program<
+		format_literal, ::fast_io::fmt::brace_fmt_t>(
+		observe_lowered_operations{}, first, second);
+}());
+
+using partial_lowering = decltype([] {
+	auto const &fixed{::fast_io::mnp::static_arg<42u>};
+	::std::string_view dynamic{};
+	return ::fast_io::fmt::details::lower_format_program<
+		partial_format_literal, ::fast_io::fmt::brace_fmt_t>(
+		observe_lowered_operations{}, fixed, dynamic);
+}());
+
+using aggregate_lowering = decltype([] {
+	auto const &values{::fast_io::mnp::static_arg<aggregate_values>};
+	return ::fast_io::fmt::details::lower_format_program<
+		aggregate_format, ::fast_io::fmt::brace_fmt_t>(
+		observe_lowered_operations{}, values);
+}());
+
+using precision_lowering = decltype([] {
+	auto const &name{::fast_io::mnp::static_arg<"xxx">};
+	auto const &identifier{::fast_io::mnp::static_arg<42u>};
+	double score{};
+	return ::fast_io::fmt::details::lower_format_program<
+		precision_format_literal, ::fast_io::fmt::brace_fmt_t>(
+		observe_lowered_operations{}, name, identifier, score);
+}());
+
+template <typename lowering_type>
+struct merged_provider_from_lowering;
+
+template <typename... operation_types>
+struct merged_provider_from_lowering<
+	lowered_operation_pack<operation_types...>>
+{
+	using type = ::fast_io::operations::decay::
+		print_static_provider_merged_run_provider<
+			false, char, operation_types...>;
+};
+
+using static_merged_provider =
+	typename merged_provider_from_lowering<static_lowering>::type;
+using aggregate_merged_provider =
+	typename merged_provider_from_lowering<aggregate_lowering>::type;
+using partial_prefix_provider = ::fast_io::operations::decay::
+	print_static_provider_merged_run_provider<
+		false, char,
+		partial_lowering::operation_type<0u>,
+		partial_lowering::operation_type<1u>,
+		partial_lowering::operation_type<2u>>;
+
+static_assert(static_lowering::size == 4u);
+static_assert(aggregate_lowering::size == 2u);
+static_assert(partial_lowering::size == 5u);
+static_assert(precision_lowering::size == 6u);
+static_assert(::fast_io::manipulators::is_static_provider_node_v<
+			  partial_lowering::operation_type<0u>>);
+static_assert(::fast_io::manipulators::is_static_provider_node_v<
+			  partial_lowering::operation_type<1u>>);
+static_assert(::fast_io::manipulators::is_static_provider_node_v<
+			  partial_lowering::operation_type<2u>>);
+static_assert(!::fast_io::manipulators::is_static_provider_node_v<
+			  partial_lowering::operation_type<3u>>);
+static_assert(::fast_io::manipulators::is_static_provider_node_v<
+			  partial_lowering::operation_type<4u>>);
+
+template <typename operation_type>
+[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char>
+observe_lowered_fragment(operation_type const &operation) noexcept
+{
+	using clean_type = ::std::remove_cvref_t<operation_type>;
+	if constexpr (::fast_io::details::decay::
+					  print_static_scatter_traits<char, clean_type>::available)
+	{
+		return ::fast_io::details::decay::
+			print_static_scatter_traits<char, clean_type>::define(operation);
+	}
+	else
+	{
+		if constexpr (::std::same_as<
+						  clean_type, ::fast_io::basic_io_scatter_t<char>>)
+		{
+			return operation;
+		}
+		else
+		{
+			static_assert(::std::same_as<clean_type, ::std::string_view>);
+			return {operation.data(), operation.size()};
+		}
+	}
+}
 
 struct dynamic_text
 {
@@ -78,8 +222,8 @@ inline constexpr ::std::true_type print_borrowed_reserve_scatters_source(
 struct write_state
 {
 	::std::array<char, 64u> bytes{};
-	::std::array<char const *, 4u> sources{};
-	::std::array<::std::size_t, 4u> sizes{};
+	::std::array<char const *, 8u> sources{};
+	::std::array<::std::size_t, 8u> sizes{};
 	char const *source{};
 	::std::size_t size{};
 	::std::size_t calls{};
@@ -94,8 +238,8 @@ struct write_sink
 struct scatter_state
 {
 	::std::array<char, 64u> bytes{};
-	::std::array<char const *, 4u> sources{};
-	::std::array<::std::size_t, 4u> sizes{};
+	::std::array<char const *, 8u> sources{};
+	::std::array<::std::size_t, 8u> sizes{};
 	::std::size_t size{};
 	::std::size_t count{};
 	::std::size_t calls{};
@@ -173,7 +317,7 @@ inline void scatter_write_all_overflow_define(
 		state.sources[index] = scatters[index].base;
 		state.sizes[index] = scatters[index].len;
 		for (auto first{scatters[index].base},
-			  last{first + scatters[index].len};
+			 last{first + scatters[index].len};
 			 first != last; ++first)
 		{
 			state.bytes[state.size++] = *first;
@@ -212,10 +356,9 @@ struct status_sink
 
 struct partial_status_state
 {
-	char const *prefix{};
-	char const *dynamic{};
-	char const *suffix{};
-	::std::size_t dynamic_size{};
+	::std::array<char const *, 5u> sources{};
+	::std::array<::std::size_t, 5u> sizes{};
+	::std::size_t count{};
 	::std::size_t calls{};
 };
 
@@ -236,10 +379,10 @@ inline constexpr partial_status_sink output_stream_ref_define(
 	return sink;
 }
 
-template <bool line>
-inline void status_print_define(
-	status_sink sink,
-	::fast_io::manipulators::static_scatter_t<char, 4u>) noexcept
+template <bool line, typename... operation_types>
+	requires static_lowering::template
+matches<operation_types...> inline void status_print_define(
+	status_sink sink, operation_types const &...) noexcept
 {
 	static_assert(!line);
 	++sink.state->calls;
@@ -254,18 +397,19 @@ inline void status_print_define(
 	++sink.state->calls;
 }
 
-template <bool line>
+template <bool line, typename... operation_types>
+	requires(sizeof...(operation_types) == partial_lowering::size)
 inline void status_print_define(
-	partial_status_sink sink,
-	::fast_io::manipulators::static_scatter_t<char, 4u> prefix,
-	::fast_io::basic_io_scatter_t<char> dynamic,
-	::fast_io::manipulators::static_scatter_t<char, 1u> suffix) noexcept
+	partial_status_sink sink, operation_types const &...operations) noexcept
 {
 	static_assert(!line);
-	sink.state->prefix = prefix.base;
-	sink.state->dynamic = dynamic.base;
-	sink.state->suffix = suffix.base;
-	sink.state->dynamic_size = dynamic.len;
+	(([](::fast_io::basic_io_scatter_t<char> scatter,
+		 partial_status_state &state) constexpr noexcept {
+		 state.sources[state.count] = scatter.base;
+		 state.sizes[state.count] = scatter.len;
+		 ++state.count;
+	 })(observe_lowered_fragment(operations), *sink.state),
+	 ...);
 	++sink.state->calls;
 }
 
@@ -347,10 +491,10 @@ inline void write_all_overflow_define(
 		write_sink{__builtin_addressof(sink.state->write)}, first, last);
 }
 
-template <bool line>
-inline void status_print_define(
-	locked_sink sink,
-	::fast_io::manipulators::static_scatter_t<char, 4u>) noexcept
+template <bool line, typename... operation_types>
+	requires static_lowering::template
+matches<operation_types...> inline void status_print_define(
+	locked_sink sink, operation_types const &...) noexcept
 {
 	static_assert(!line);
 	++sink.state->outer_status_calls;
@@ -396,16 +540,12 @@ inline constexpr void obuffer_set_curr(
 	sink.state->current = current;
 }
 
-template <bool line, ::std::size_t extent, typename scalar_type,
-		  ::std::size_t base_prefix_size, bool space_sign>
-inline void status_print_define(
-	precision_status_sink sink,
-	::fast_io::manipulators::static_scatter_t<char, extent>,
-	::fast_io::manipulators::format_scalar_t<
-		scalar_type, base_prefix_size, space_sign>) noexcept
+template <bool line, typename... operation_types>
+	requires precision_lowering::template
+matches<operation_types...> inline void status_print_define(
+	precision_status_sink sink, operation_types const &...) noexcept
 {
 	static_assert(!line);
-	static_assert(extent == 27u);
 	++sink.state->calls;
 }
 
@@ -478,56 +618,14 @@ inline void write_all_overflow_define(
 	}
 }
 
-inline constexpr ::fast_io::fmt::basic_fixed_string format_literal{"a{1}c{0}"};
-using first_static_type = decltype(::fast_io::mnp::static_arg<"d">);
-using second_static_type = decltype(::fast_io::mnp::static_arg<"b">);
-using static_program = ::fast_io::fmt::details::compiled_static_format_program<
-	format_literal, ::fast_io::fmt::brace_fmt_t,
-	first_static_type, second_static_type>;
-static_assert(static_program::size == 4u);
-
-inline constexpr ::fast_io::fmt::basic_fixed_string partial_format_literal{
-	"A{}B{}C"};
-using partial_static_type = decltype(::fast_io::mnp::static_arg<42u>);
-using partial_prefix = ::fast_io::fmt::details::compiled_static_format_run<
-	partial_format_literal, ::fast_io::fmt::brace_fmt_t, 0u, 3u,
-	partial_static_type, ::std::string_view>;
-using partial_suffix = ::fast_io::fmt::details::compiled_static_format_run<
-	partial_format_literal, ::fast_io::fmt::brace_fmt_t, 4u, 1u,
-	partial_static_type, ::std::string_view>;
-static_assert(partial_prefix::size == 4u);
-static_assert(partial_suffix::size == 1u);
-static_assert(::std::string_view{partial_prefix::storage.data(),
-								partial_prefix::size} == "A42B");
-static_assert(::std::string_view{partial_suffix::storage.data(),
-								partial_suffix::size} == "C");
-
-inline constexpr ::fast_io::fmt::basic_fixed_string precision_format_literal{
-	"user={} id={:08x} score={:.2f}"};
-inline constexpr ::std::string_view precision_expected{
-	"user=xxx id=0000002a score=3.14"};
-inline constexpr char precision_prefix[]{
-	"user=xxx id=0000002a score="};
-
-inline constexpr ::std::array aggregate_values{1u, 15u, 255u};
-inline constexpr ::fast_io::fmt::basic_fixed_string aggregate_format{
-	"values={}"};
-using aggregate_static_type =
-	decltype(::fast_io::mnp::static_arg<aggregate_values>);
-using aggregate_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		aggregate_format, ::fast_io::fmt::brace_fmt_t,
-		aggregate_static_type>;
-static_assert(::std::string_view{
-				  aggregate_static_program::storage.data(),
-				  aggregate_static_program::size} == "values=[1, 15, 255]");
-
 } // namespace static_format_endpoint_test
 
 int main()
 {
 	using namespace static_format_endpoint_test;
-	auto const expected_source{static_program::storage.data()};
+	// IO owns the only merged immutable record. The format layer exposes typed
+	// provider operations and deliberately has no program/run storage object.
+	auto const expected_source{static_merged_provider::storage.data()};
 
 	char output[32u]{};
 	::fast_io::obuffer_view buffer{output, output + 32u};
@@ -639,7 +737,7 @@ int main()
 		write_sink{__builtin_addressof(aggregate_write)},
 		::fast_io::mnp::static_arg<aggregate_values>);
 	if (aggregate_write.calls != 1u ||
-		aggregate_write.source != aggregate_static_program::storage.data() ||
+		aggregate_write.source != aggregate_merged_provider::storage.data() ||
 		::std::string_view{
 			aggregate_write.bytes.data(), aggregate_write.size} !=
 			"values=[1, 15, 255]")
@@ -665,11 +763,28 @@ int main()
 		partial_status_sink{__builtin_addressof(partial_status)},
 		::fast_io::mnp::static_arg<42u>,
 		::std::string_view{partial_dynamic});
-	if (partial_status.calls != 1u ||
-		partial_status.prefix != partial_prefix::storage.data() ||
-		partial_status.dynamic != partial_dynamic.data() ||
-		partial_status.dynamic_size != partial_dynamic.size() ||
-		partial_status.suffix != partial_suffix::storage.data())
+	// The grammar lowers A, 42, B, the runtime view, and C independently.
+	// Static operands must expose their core provider pointers; fmt no longer
+	// manufactures a prefix/suffix storage object merely for this program.
+	constexpr auto partial_fragment_0{observe_lowered_fragment(
+		partial_lowering::operation_type<0u>{})};
+	constexpr auto partial_fragment_1{observe_lowered_fragment(
+		partial_lowering::operation_type<1u>{})};
+	constexpr auto partial_fragment_2{observe_lowered_fragment(
+		partial_lowering::operation_type<2u>{})};
+	constexpr auto partial_fragment_4{observe_lowered_fragment(
+		partial_lowering::operation_type<4u>{})};
+	if (partial_status.calls != 1u || partial_status.count != 5u ||
+		partial_status.sources[0u] != partial_fragment_0.base ||
+		partial_status.sources[1u] != partial_fragment_1.base ||
+		partial_status.sources[2u] != partial_fragment_2.base ||
+		partial_status.sources[3u] != partial_dynamic.data() ||
+		partial_status.sources[4u] != partial_fragment_4.base ||
+		partial_status.sizes[0u] != partial_fragment_0.len ||
+		partial_status.sizes[1u] != partial_fragment_1.len ||
+		partial_status.sizes[2u] != partial_fragment_2.len ||
+		partial_status.sizes[3u] != partial_dynamic.size() ||
+		partial_status.sizes[4u] != partial_fragment_4.len)
 	{
 		return 13;
 	}
@@ -680,12 +795,13 @@ int main()
 		::fast_io::mnp::static_arg<42u>,
 		::std::string_view{partial_dynamic});
 	if (partial_scatter.calls != 1u || partial_scatter.count != 3u ||
-		partial_scatter.sources[0] != partial_prefix::storage.data() ||
-		partial_scatter.sources[1] != partial_dynamic.data() ||
-		partial_scatter.sources[2] != partial_suffix::storage.data() ||
-		partial_scatter.sizes[0] != partial_prefix::size ||
-		partial_scatter.sizes[1] != partial_dynamic.size() ||
-		partial_scatter.sizes[2] != partial_suffix::size ||
+		partial_scatter.sources[0u] !=
+			partial_prefix_provider::storage.data() ||
+		partial_scatter.sources[1u] != partial_dynamic.data() ||
+		partial_scatter.sources[2u] != partial_fragment_4.base ||
+		partial_scatter.sizes[0u] != partial_prefix_provider::size ||
+		partial_scatter.sizes[1u] != partial_dynamic.size() ||
+		partial_scatter.sizes[2u] != partial_fragment_4.len ||
 		::std::string_view{partial_scatter.bytes.data(),
 						   partial_scatter.size} != "A42BrunC")
 	{
@@ -858,7 +974,7 @@ int main()
 		short_precision.current != short_precision.put_area.data() ||
 		short_precision.write.size != precision_expected.size() ||
 		::std::string_view{short_precision.write.bytes.data(),
-						  short_precision.write.size} != precision_expected)
+						   short_precision.write.size} != precision_expected)
 	{
 		return 25;
 	}
@@ -871,7 +987,7 @@ int main()
 	if (precision_locked.locks != 1u || precision_locked.unlocks != 1u ||
 		precision_locked.locked || precision_locked.outer_status_calls != 0u ||
 		::std::string_view{precision_locked.write.bytes.data(),
-						  precision_locked.write.size} != precision_expected)
+						   precision_locked.write.size} != precision_expected)
 	{
 		return 26;
 	}
@@ -889,7 +1005,7 @@ int main()
 			precision_scalar_type, 0u, false>{
 			::fast_io::mnp::fixed(3.14, 2u)});
 	if (::std::string_view{precision_line_storage,
-						  precision_line_buffer.size()} !=
+						   precision_line_buffer.size()} !=
 		"user=xxx id=0000002a score=3.14\n")
 	{
 		return 27;

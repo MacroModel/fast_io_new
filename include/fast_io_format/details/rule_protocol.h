@@ -26,6 +26,28 @@ struct basic_format_replacement_context
 	using char_type = typename decltype(format_literal)::value_type;
 	static inline constexpr auto literal{format_literal};
 	static inline constexpr auto replacement{field};
+
+	/*
+	 * Keep the poison pills inside the associated context instead of ordinary
+	 * namespace lookup. GCC 11 otherwise stops at an earlier zero-argument
+	 * declaration and misses rule providers which ADL must add at instantiation.
+	 * The conversion wrapper makes every typed provider a better overload; when
+	 * no provider exists, the deleted hidden friend still closes the capability.
+	 */
+	struct adl_fallback_argument
+	{
+		template <typename value_type>
+		constexpr adl_fallback_argument(value_type &&) noexcept;
+	};
+
+	friend void format_replacement_rule_type(
+		adl_fallback_argument, basic_format_replacement_context,
+		adl_fallback_argument) = delete;
+
+	friend void format_replacement_rule_define(
+		adl_fallback_argument, adl_fallback_argument,
+		basic_format_replacement_context, adl_fallback_argument,
+		adl_fallback_argument) = delete;
 };
 
 /**
@@ -97,10 +119,6 @@ concept format_replacement_rule_advertisement =
 
 namespace format_replacement_rule_type_adl
 {
-
-// Ordinary lookup deliberately finds no viable fallback.  A valid provider
-// must be associated with the grammar, context, or source type.
-void format_replacement_rule_type() = delete;
 
 /**
  * The result of phase-one rule selection.
@@ -181,10 +199,6 @@ using selected_rule_t =
 
 namespace format_replacement_rule_adl
 {
-
-// As in phase one, this poison pill prevents accidental ordinary lookup while
-// preserving ADL for the selected rule, grammar, context, and value namespaces.
-void format_replacement_rule_define() = delete;
 
 template <typename grammar_type, auto format_literal, auto field,
 		  typename value_type, typename argument_pack_type>

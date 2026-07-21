@@ -286,10 +286,15 @@ inline constexpr char_type range_ascii_storage[]{
 	::fast_io::char_literal_v<values, char_type>...};
 
 template <::fast_io::fmt::format_character char_type, char8_t... values>
-[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char_type>
+[[nodiscard]] inline constexpr ::fast_io::manipulators::static_scatter_t<
+	char_type, sizeof...(values)>
 range_ascii_scatter() noexcept
 {
-	return {range_ascii_storage<char_type, values...>, sizeof...(values)};
+	// Range punctuation has a language-static extent and lifetime. Preserve that
+	// fact in its semantic type so the IO layer may retain the immutable pointer
+	// for an unbuffered scatter run; this does not classify any adjacent dynamic
+	// element, or the complete range record, as static data.
+	return {range_ascii_storage<char_type, values...>};
 }
 
 template <auto specification>
@@ -455,6 +460,93 @@ struct basic_brace_range_view
 	argument_pack_type *arguments{};
 };
 
+template <::fast_io::fmt::format_character char_type, typename source_type,
+		  ::std::size_t depth = 0u>
+inline consteval bool brace_range_default_staging_safe_source() noexcept;
+
+template <::fast_io::fmt::format_character char_type, typename source_type,
+		  ::std::size_t depth>
+inline consteval bool brace_range_default_staging_safe_element() noexcept
+{
+	using clean_type = ::std::remove_cvref_t<source_type>;
+	if constexpr (adl_brace_range_element<
+			  char_type, default_range_format_specification<char_type>, source_type>)
+	{
+		// An ADL replacement may deliberately depend on the concrete endpoint.
+		return false;
+	}
+	else if constexpr (::fast_io::details::character_integral<clean_type>)
+	{
+		return ::std::same_as<clean_type, char_type>;
+	}
+	else if constexpr (format_string_like<char_type, source_type>)
+	{
+		return true;
+	}
+	else if constexpr (::std::ranges::input_range<clean_type &> ||
+					   tuple_format_source<clean_type>)
+	{
+		if constexpr (depth == 8u)
+		{
+			// Bound concept recursion for self-similar user ranges and pathological
+			// nesting; deeper sources retain the ordinary correct direct path.
+			return false;
+		}
+		else
+		{
+			return brace_range_default_staging_safe_source<
+				char_type, clean_type, depth>();
+		}
+	}
+	else
+	{
+		// These built-in scalar categories lower to core semantic nodes whose
+		// spelling is independent of the eventual output observer.
+		return ::fast_io::details::my_integral<clean_type> ||
+			   ::fast_io::details::my_floating_point<clean_type> ||
+			   ::std::is_pointer_v<clean_type> ||
+			   ::std::same_as<clean_type, ::std::nullptr_t>;
+	}
+}
+
+template <::fast_io::fmt::format_character char_type, typename tuple_type,
+		  ::std::size_t depth, ::std::size_t... index>
+inline consteval bool brace_tuple_default_staging_safe_impl(
+	::std::index_sequence<index...>) noexcept
+{
+	return (brace_range_default_staging_safe_element<
+				 char_type,
+				 decltype(brace_tuple_get<index>(::std::declval<tuple_type &>())),
+				 depth + 1u>() &&
+			...);
+}
+
+template <::fast_io::fmt::format_character char_type, typename source_type,
+		  ::std::size_t depth>
+inline consteval bool brace_range_default_staging_safe_source() noexcept
+{
+	using clean_type = ::std::remove_cvref_t<source_type>;
+	if constexpr (tuple_format_source<clean_type>)
+	{
+		return brace_tuple_default_staging_safe_impl<
+			char_type, clean_type, depth>(
+			::std::make_index_sequence<::std::tuple_size_v<clean_type>>{});
+	}
+	else if constexpr (::std::ranges::input_range<clean_type &>)
+	{
+		// Audit the expression actually observed by the formatter, not merely
+		// `range_value_t`. A proxy reference may provide an ADL element formatter
+		// even when its nominal value type is an otherwise admitted scalar.
+		using reference_type = ::std::ranges::range_reference_t<clean_type>;
+		return brace_range_default_staging_safe_element<
+			char_type, reference_type, depth + 1u>();
+	}
+	else
+	{
+		return false;
+	}
+}
+
 template <::fast_io::fmt::format_character char_type, auto specification,
 		  typename source_type, typename argument_pack_type>
 	requires(::std::ranges::input_range<source_type &> ||
@@ -502,64 +594,6 @@ inline constexpr void emit_range_components(
 		output, ::std::forward<argument_types>(arguments)...);
 }
 
-template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] inline constexpr bool emit_default_debug_string_to_obuffer(
-	::fast_io::basic_obuffer_view_ref<char_type> output,
-	::fast_io::fmt::details::basic_debug_string_field<char_type> const &field) noexcept
-{
-	if (field.options.maximum_display_width != SIZE_MAX ||
-		field.options.minimum_width != 0u)
-	{
-		return false;
-	}
-	auto current{::fast_io::obuffer_curr(output)};
-	auto const end{::fast_io::obuffer_end(output)};
-	if (current == nullptr || end == nullptr || end < current)
-	{
-		return false;
-	}
-	auto const remaining{static_cast<::std::size_t>(end - current)};
-	// One input code unit can expand to at most `\U0010ffff` (ten output
-	// units), plus the two quotes.  Proving that bound before the first store
-	// preserves the fixed-view overflow contract while the common case formats
-	// the field in one classification pass.
-	if (remaining < 2u || field.source.len > (remaining - 2u) / 10u)
-	{
-		return false;
-	}
-	current = ::fast_io::fmt::details::emit_debug_text_payload<
-		::fast_io::fmt::details::debug_text_kind::string>(
-		current, field.source.base, field.source.len, SIZE_MAX);
-	::fast_io::obuffer_set_curr(output, current);
-	return true;
-}
-
-#if defined(__clang__)
-template <::fast_io::fmt::format_character char_type>
-inline constexpr void emit_range_components(
-	::fast_io::basic_obuffer_view_ref<char_type> &output,
-	::fast_io::fmt::details::basic_debug_string_field<char_type> &&field)
-{
-	if (!emit_default_debug_string_to_obuffer(output, field))
-	{
-		::fast_io::operations::decay::print_freestanding_decay_unforwarded<false>(
-			output, field);
-	}
-}
-
-template <::fast_io::fmt::format_character char_type>
-inline constexpr void emit_range_components(
-	::fast_io::basic_obuffer_view_ref<char_type> &output,
-	::fast_io::fmt::details::basic_debug_string_field<char_type> const &field)
-{
-	if (!emit_default_debug_string_to_obuffer(output, field))
-	{
-		::fast_io::operations::decay::print_freestanding_decay_unforwarded<false>(
-			output, field);
-	}
-}
-#endif
-
 template <::fast_io::fmt::format_character char_type, auto specification,
 		  typename source_type, typename argument_pack_type>
 [[nodiscard]] inline constexpr auto make_brace_range_element(
@@ -590,8 +624,7 @@ template <::fast_io::fmt::format_character char_type, typename source_type,
 		auto &&named_source{source};
 		auto const source_scatter{static_cast<::fast_io::basic_io_scatter_t<char_type>>(
 			make_string_scatter<char_type>(named_source))};
-		return make_debug_string_field(
-			source_scatter, {});
+		return make_default_debug_string_field(source_scatter);
 	}
 	else if constexpr (::std::ranges::input_range<clean_type &> ||
 					   tuple_format_source<clean_type>)
@@ -778,27 +811,9 @@ inline constexpr void emit_brace_map(
 		decltype(auto) mapped{brace_tuple_get<1u>(entry)};
 		decltype(auto) formatted_key{
 			make_default_brace_range_element<char_type>(key, arguments)};
-#if defined(__clang__)
-		if constexpr (::std::same_as<
-					  ::std::remove_cvref_t<decltype(formatted_key)>,
-					  basic_debug_string_field<char_type>>)
-		{
-			emit_range_components(output,
-				::std::forward<decltype(formatted_key)>(formatted_key));
-			emit_range_components(output,
-				range_ascii_scatter<char_type, u8':', u8' '>());
-		}
-		else
-		{
-			emit_range_components(
-				output, ::std::forward<decltype(formatted_key)>(formatted_key),
-				range_ascii_scatter<char_type, u8':', u8' '>());
-		}
-#else
 		emit_range_components(
 			output, ::std::forward<decltype(formatted_key)>(formatted_key),
 			range_ascii_scatter<char_type, u8':', u8' '>());
-#endif
 		decltype(auto) formatted_mapped{
 			make_default_brace_range_element<char_type>(mapped, arguments)};
 		emit_range_components(output,
@@ -921,6 +936,29 @@ inline constexpr output_char_type *print_reserve_define(
 {
 	return ::fast_io::fmt::details::emit_debug_scalar(
 		output, value.source, value.rendering, value.rendering.storage_size);
+}
+
+/// @brief Declares that a brace range view may emit through a bounded core staging put area.
+/// @details Admission is deliberately limited to recursively known built-in scalar, string, tuple, and range elements;
+///          an ADL/custom element remains on the ordinary endpoint so its output-dependent behavior cannot be hidden.
+///          The admitted emitter performs one forward traversal and lowers each component to the ordinary IO protocol.
+///          Core may therefore coalesce a short unbuffered record without measuring or replaying an input range;
+///          capacity overflow continues through the same adapter, preserving one-pass iterator and formatter effects.
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type, auto specification,
+		  typename source_type, typename argument_pack_type>
+	requires(
+		::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type> &&
+		!specification.has_element_specification &&
+		::fast_io::fmt::details::brace_range_default_staging_safe_source<
+			source_char_type, source_type>())
+[[nodiscard]] inline constexpr ::std::true_type
+print_single_pass_staging_safe(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_brace_range_view<
+			source_char_type, specification, source_type, argument_pack_type>>) noexcept
+{
+	return {};
 }
 
 /**

@@ -217,7 +217,11 @@ struct iec559_traits<decltype(0.0bf16)>
 	inline static constexpr ::std::size_t mbits{7};
 	inline static constexpr ::std::size_t ebits{8};
 	inline static constexpr ::std::uint_least32_t m10digits{4};
-	inline static constexpr ::std::uint_least32_t m2hexdigits{3};
+	// Bfloat16 has seven explicit fraction bits, so ceil(7 / 4) is exactly
+	// two hexadecimal fraction digits.  Keep this representation invariant
+	// accurate even though today's hexadecimal emitter derives its width from
+	// mbits directly rather than consuming m2hexdigits.
+	inline static constexpr ::std::uint_least32_t m2hexdigits{2};
 	inline static constexpr ::std::uint_least32_t e10digits{2};
 	inline static constexpr ::std::uint_least32_t e2hexdigits{3};
 	inline static constexpr ::std::uint_least32_t e10max{38};
@@ -239,7 +243,11 @@ struct iec559_traits<__bf16>
 	inline static constexpr ::std::size_t mbits{7};
 	inline static constexpr ::std::size_t ebits{8};
 	inline static constexpr ::std::uint_least32_t m10digits{4};
-	inline static constexpr ::std::uint_least32_t m2hexdigits{3};
+	// Bfloat16 has seven explicit fraction bits, so ceil(7 / 4) is exactly
+	// two hexadecimal fraction digits.  Keep this representation invariant
+	// accurate even though today's hexadecimal emitter derives its width from
+	// mbits directly rather than consuming m2hexdigits.
+	inline static constexpr ::std::uint_least32_t m2hexdigits{2};
 	inline static constexpr ::std::uint_least32_t e10digits{2};
 	inline static constexpr ::std::uint_least32_t e2hexdigits{3};
 	inline static constexpr ::std::uint_least32_t e10max{38};

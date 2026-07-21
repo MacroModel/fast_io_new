@@ -6,3 +6,6 @@ ignore = true
 
 ["scientific_0.cc"] # TODO: locale unfinished
 ignore = true
+
+["compiler_constant_precision_regressions.cc"]
+asan = true

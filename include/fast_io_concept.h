@@ -12,6 +12,8 @@
 #include <type_traits>
 #include <concepts>
 #include <cstdint>
+// Public protocol concepts form numeric capacity constants without relying on a higher-level umbrella header.
+#include <limits>
 
 #include "fast_io_dsal/impl/misc/push_macros.h"
 #include "fast_io_dsal/impl/misc/push_warnings.h"

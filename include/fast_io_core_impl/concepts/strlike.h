@@ -194,6 +194,25 @@ concept precise_resize_writable_strlike = strlike<char_type, T> && requires(T &s
 	} -> ::std::same_as<char_type *>;
 };
 
+/// @brief Opts a precise-resize result into concat's borrowed-scatter exact-copy strategy.
+/// @details Structural resize capability does not prove independence from source descriptors: a user string-like CPO
+///          may consult external state, reuse externally supplied storage, or mutate a borrowed source while resizing.
+///          This exact-`true_type` marker promises that default construction followed by precise resize produces result-
+///          owned storage disjoint from every live input scatter, and that the resize operation neither reads nor
+///          mutates those scatter descriptors or their character ranges. Concat still separately proves the concrete
+///          resize expression and every source extent. Keeping this destination opt-in explicit prevents a custom
+///          string-like type from inheriting standard-string alias and lifetime semantics from matching syntax alone.
+/// @fn      strlike_concat_borrowed_scatter_precise_resize_safe
+/// @return  std::true_type
+template <typename char_type, typename T>
+concept concat_borrowed_scatter_precise_resize_safe_strlike =
+	precise_resize_writable_strlike<char_type, T> && requires {
+		{
+			strlike_concat_borrowed_scatter_precise_resize_safe(
+				io_strlike_type<char_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Proves that exact resize creates writable characters without first initializing the overwritten range.
 /// @details `precise_resize_writable_strlike` is a lifetime/capability contract and intentionally permits portable
 ///          `std::basic_string::resize`, which value-initializes every new character. This refinement is only a cost

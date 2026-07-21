@@ -152,6 +152,60 @@ template <typename T>
 inline constexpr bool print_floating_decimal_requires_integer_transport{};
 #endif
 
+/*
+The representation-sensitive x86 Clang bfloat16 domain must become integer
+fields before an owning manipulator crosses a second formatter boundary.
+Without AVX512-BF16 the public scalar CPO remains borrowed. With AVX512-BF16
+the public CPO receives this compact owning carrier by value: its converting
+constructor reads the caller's object bits directly, while the lower formatter
+never rematerializes a signaling NaN through __truncsfbf2/VCVTNEPS2BF16.
+Every other floating domain keeps its native by-value manipulator ABI.
+*/
+template <typename manipulator, typename flt>
+struct floating_precise_field_parameter
+{
+	::fast_io::details::punning_result<::std::remove_cvref_t<flt>> fields{};
+	::std::size_t precision{};
+
+	inline constexpr
+	floating_precise_field_parameter(manipulator const &value) noexcept
+		: fields{::fast_io::details::compiler_constant_floating_capture_fields<
+			  ::std::remove_cvref_t<flt>>(value.reference)}
+	{
+		if constexpr (requires { value.precision; })
+		{
+			precision = value.precision;
+		}
+	}
+};
+
+template <typename manipulator, typename flt>
+using floating_value_or_field_parameter_t = ::std::conditional_t<
+	::fast_io::details::print_floating_requires_object_field_capture<flt>,
+	::fast_io::details::floating_precise_field_parameter<manipulator, flt>,
+	manipulator>;
+
+/// Decodes the integer-owned narrow floating proxy without ever reconstructing
+/// a native bfloat16 object.  The representation layout is the same IEC 60559
+/// layout already described by `iec559_traits`.
+template <typename floating_type>
+[[nodiscard]] inline constexpr auto
+floating_scalar_proxy_fields(::std::uint_least16_t representation) noexcept
+{
+	using clean_type = ::std::remove_cvref_t<floating_type>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr auto mantissa_mask{
+		(static_cast<::std::uint_least16_t>(1u) << trait::mbits) - 1u};
+	constexpr auto exponent_mask{
+		(static_cast<::std::uint_least16_t>(1u) << trait::ebits) - 1u};
+	return ::fast_io::details::punning_result<clean_type>{
+		static_cast<mantissa_type>(representation & mantissa_mask),
+		static_cast<::std::uint_least32_t>(
+			(representation >> trait::mbits) & exponent_mask),
+		static_cast<bool>(representation >> (trait::mbits + trait::ebits))};
+}
+
 template <::fast_io::manipulators::floating_format format>
 inline constexpr bool print_floating_format_valid{
 	format == ::fast_io::manipulators::floating_format::general ||
@@ -620,7 +674,9 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 	requires(::fast_io::details::print_floating_scalar_supported<flags, flt> &&
 			 !::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
-											 char_type *iter, manipulators::scalar_manip_t<flags, flt> f) noexcept
+											 char_type *iter,
+	::fast_io::details::floating_value_or_field_parameter_t<
+		manipulators::scalar_manip_t<flags, flt>, flt> f) noexcept
 {
 	static_assert(manipulators::floating_format::general == flags.floating ||
 				  manipulators::floating_format::scientific == flags.floating ||
@@ -630,9 +686,7 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, ma
 	using floating_type = ::std::remove_cvref_t<flt>;
 	if constexpr (::fast_io::details::print_floating_requires_object_field_capture<flt>)
 	{
-		auto const fields{
-			::fast_io::details::compiler_constant_floating_capture_fields(
-				f.reference)};
+		auto const fields{f.fields};
 		if constexpr (flags.floating ==
 			manipulators::floating_format::hexfloat)
 		{
@@ -757,7 +811,8 @@ inline constexpr char_type *print_reserve_define(
 		::fast_io::manipulators::floating_format::hexfloat)
 	{
 		auto const fields{
-			::fast_io::details::compiler_constant_floating_capture_fields(
+			::fast_io::details::compiler_constant_floating_capture_fields<
+				floating_type>(
 				f.reference)};
 		return ::fast_io::details::compiler_constant_hex_scalar_fields_define<flags>(
 			iter, fields);
@@ -765,13 +820,62 @@ inline constexpr char_type *print_reserve_define(
 	else
 	{
 		auto const [mantissa, exponent, sign]{
-			::fast_io::details::compiler_constant_floating_capture_fields(
+			::fast_io::details::compiler_constant_floating_capture_fields<
+				floating_type>(
 				f.reference)};
 		return details::print_rsvflt_fields_define_impl<
 			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
 			flags.floating, flags.rounding, flags.nan_show_sign,
 			flags.nan_show_type, flags.json_float, floating_type>(
 				iter, mantissa, exponent, sign);
+	}
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_scalar_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr ::std::size_t print_reserve_size(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_t<flags, flt>>) noexcept
+{
+	return print_reserve_size(
+		::fast_io::io_reserve_type<char_type,
+			manipulators::scalar_manip_t<flags, flt>>);
+}
+
+/// The proxy is already integer-owned, so this lower leaf receives it by value
+/// and feeds the established field formatter directly.  No native bfloat16
+/// aggregate or floating conversion is formed at this boundary.
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_scalar_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_t<flags, flt>>,
+	char_type *iter,
+	manipulators::floating_scalar_field_manip_t<flags, flt> value) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::compiler_constant_hex_scalar_fields_define<
+			flags>(iter, fields);
+	}
+	else
+	{
+		return ::fast_io::details::print_rsvflt_fields_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float, floating_type>(
+				iter, fields.mantissa, fields.exponent, fields.sign);
 	}
 }
 
@@ -904,9 +1008,40 @@ inline consteval ::std::size_t print_floating_precision_reserve_suffix_size() no
 
 } // namespace details
 
+/// @brief Marks a run-time precision floating scalar as profitable for bounded one-pass materialization.
+/// @details Computing this scalar's exact size performs the floating conversion which emission would otherwise repeat.
+///          The marker is a source capability only: print and string construction independently decide whether their
+///          destination can profit from a contiguous temporary or put area.
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  ::fast_io::details::my_floating_point value_type>
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Authorizes direct put-area emission for a run-time precision floating scalar.
+/// @details A cheap bounded-size query alone says nothing about exceptions or observable output state. Print therefore
+///          requires this independent opt-in together with its structural noexcept proof and the destination's
+///          deferred-cursor contract.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Returns the scalar's non-fatal upper bound when it fits `maximum_size`, or `SIZE_MAX` otherwise.
+/// @details This definition lives with the floating formatter because it depends on representation-specific fixed
+///          overhead. It never invokes the ordinary reserve-size CPO, whose overflow policy is termination.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point value_type>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<
 		char_type,
 		::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>,
@@ -937,7 +1072,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
-				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
+	::fast_io::details::floating_value_or_field_parameter_t<
+		manipulators::scalar_manip_precision_t<flags, flt>, flt> f) noexcept
 {
 	auto const base_size{
 		::fast_io::details::print_floating_precision_reserve_base_size<flags, flt>()};
@@ -953,16 +1089,16 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 			 !::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
 inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
-	char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
+	char_type *iter,
+	::fast_io::details::floating_value_or_field_parameter_t<
+		manipulators::scalar_manip_precision_t<flags, flt>, flt> f) noexcept
 {
 	static_assert(::fast_io::details::floating_precision_is_significant<flags.precision> ||
 					  ::fast_io::details::floating_precision_is_fractional<flags.precision>,
 				  "fast_io hexfloat precision supports significant and fractional hexadecimal digit precision");
 	if constexpr (::fast_io::details::print_floating_requires_object_field_capture<flt>)
 	{
-		auto const fields{
-			::fast_io::details::compiler_constant_floating_capture_fields(
-				f.reference)};
+		auto const fields{f.fields};
 		return ::fast_io::details::compiler_constant_hex_precision_fields_runtime_define<
 			flags>(iter, fields, f.precision);
 	}
@@ -1010,7 +1146,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 			 ::fast_io::details::print_floating_precision_valid<flags.precision>)
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
-				   manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
+	::fast_io::details::floating_value_or_field_parameter_t<
+		manipulators::scalar_manip_precision_t<flags, flt>, flt> f) noexcept
 {
 	auto const base_size{
 		::fast_io::details::print_floating_precision_reserve_base_size<flags, flt>()};
@@ -1026,7 +1163,9 @@ template <::std::integral char_type, manipulators::scalar_flags flags, details::
 			 !::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
 inline constexpr char_type *print_reserve_define(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_precision_t<flags, flt>>,
-	char_type *iter, manipulators::scalar_manip_precision_t<flags, flt> f) noexcept
+	char_type *iter,
+	::fast_io::details::floating_value_or_field_parameter_t<
+		manipulators::scalar_manip_precision_t<flags, flt>, flt> f) noexcept
 {
 	static_assert(manipulators::floating_format::general == flags.floating ||
 				  manipulators::floating_format::scientific == flags.floating ||
@@ -1036,9 +1175,7 @@ inline constexpr char_type *print_reserve_define(
 	if constexpr (::fast_io::details::print_floating_requires_object_field_capture<flt>)
 	{
 		using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
-		auto const [mantissa, exponent, sign]{
-			::fast_io::details::compiler_constant_floating_capture_fields(
-				f.reference)};
+		auto const [mantissa, exponent, sign]{f.fields};
 		constexpr auto exponent_mask{
 			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
 		if (exponent == static_cast<::std::uint_least32_t>(exponent_mask))
@@ -1142,7 +1279,8 @@ inline constexpr char_type *print_reserve_define(
 		::fast_io::manipulators::floating_format::hexfloat)
 	{
 		auto const fields{
-			::fast_io::details::compiler_constant_floating_capture_fields(
+			::fast_io::details::compiler_constant_floating_capture_fields<
+				floating_type>(
 				f.reference)};
 		return ::fast_io::details::compiler_constant_hex_precision_fields_runtime_define<
 			flags>(iter, fields, f.precision);
@@ -1151,7 +1289,8 @@ inline constexpr char_type *print_reserve_define(
 	{
 		using trait = ::fast_io::details::iec559_traits<floating_type>;
 		auto const [mantissa, exponent, sign]{
-			::fast_io::details::compiler_constant_floating_capture_fields(
+			::fast_io::details::compiler_constant_floating_capture_fields<
+				floating_type>(
 				f.reference)};
 		constexpr auto exponent_mask{
 			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
@@ -1169,6 +1308,118 @@ inline constexpr char_type *print_reserve_define(
 			flags.floating, flags.precision, flags.rounding, flags.nan_show_sign,
 			flags.nan_show_type, flags.json_float>(iter, widened, f.precision);
 	}
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_precision_supported<flags, flt> &&
+		::fast_io::details::print_floating_precision_valid<flags.precision> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr ::std::size_t print_reserve_size(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_precision_t<flags, flt>>,
+	manipulators::floating_scalar_field_manip_precision_t<flags, flt> value) noexcept
+{
+	auto const base_size{
+		::fast_io::details::print_floating_precision_reserve_base_size<
+			flags, flt>()};
+	return ::fast_io::details::intrinsics::add_or_overflow_die(
+		::fast_io::details::intrinsics::add_or_overflow_die(
+			base_size, value.precision),
+		::fast_io::details::print_floating_precision_reserve_suffix_size<flags>());
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_precision_supported<flags, flt> &&
+		::fast_io::details::print_floating_precision_valid<flags.precision> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_precision_t<flags, flt>>,
+	char_type *iter,
+	manipulators::floating_scalar_field_manip_precision_t<flags, flt> value) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::hexfloat)
+	{
+		return ::fast_io::details::
+			compiler_constant_hex_precision_fields_runtime_define<flags>(
+				iter, fields, value.precision);
+	}
+	else
+	{
+		constexpr auto exponent_mask{
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u};
+		if (fields.exponent ==
+			static_cast<::std::uint_least32_t>(exponent_mask))
+		{
+			return ::fast_io::details::prsv_fp_nan_impl<
+				flags.showpos, flags.uppercase, flags.nan_show_sign,
+				flags.nan_show_type, trait::mbits>(
+					iter, fields.mantissa, fields.sign);
+		}
+		auto const widened{
+			::fast_io::details::dragonbox_narrow_float_from_fields<
+				floating_type>(fields.mantissa, fields.exponent, fields.sign)};
+		return ::fast_io::details::print_rsvflt_precision_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.precision, flags.rounding,
+			flags.nan_show_sign, flags.nan_show_type, flags.json_float>(
+				iter, widened, value.precision);
+	}
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_precision_t<flags, flt>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_precision_t<flags, flt>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+	manipulators::scalar_flags flags, details::my_floating_point flt>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
+	io_reserve_type_t<char_type,
+		manipulators::floating_scalar_field_manip_precision_t<flags, flt>>,
+	manipulators::floating_scalar_field_manip_precision_t<flags, flt> value,
+	::std::size_t maximum_size) noexcept
+{
+	(void)sizeof(char_type);
+	auto const base_size{
+		::fast_io::details::print_floating_precision_reserve_base_size<
+			flags, flt>()};
+	if (maximum_size < base_size ||
+		maximum_size - base_size < value.precision)
+	{
+		return SIZE_MAX;
+	}
+	auto const precision_size{base_size + value.precision};
+	constexpr auto suffix_size{
+		::fast_io::details::print_floating_precision_reserve_suffix_size<flags>()};
+	if (maximum_size - precision_size < suffix_size)
+	{
+		return SIZE_MAX;
+	}
+	return precision_size + suffix_size;
 }
 } // namespace fast_io
 

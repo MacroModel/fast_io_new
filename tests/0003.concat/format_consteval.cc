@@ -65,7 +65,6 @@ template <typename char_type, ::std::size_t extent>
 			   U"abcd");
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
 [[nodiscard]] consteval bool fast_io_concat_is_constant_evaluated()
 {
 	return equals_literal(
@@ -98,7 +97,6 @@ template <typename char_type, ::std::size_t extent>
 			   ::fast_io::fmt::u32concatf_fast_io<U"a%2$sc%1$s">(U"d", U"b"),
 			   U"abcd");
 }
-#endif
 
 template <typename char_type>
 [[nodiscard]] consteval bool print_domain_is_constant_evaluated()
@@ -148,7 +146,6 @@ template <typename char_type>
 			   "    3.12");
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
 [[nodiscard]] consteval bool
 fast_io_dynamic_width_precision_is_constant_evaluated()
 {
@@ -159,7 +156,6 @@ fast_io_dynamic_width_precision_is_constant_evaluated()
 			   ::fast_io::fmt::concatf_fast_io<"%3$*1$.*2$f">(8, 2, 3.125),
 			   "    3.12");
 }
-#endif
 
 template <typename char_type>
 [[nodiscard]] consteval bool numeric_print_is_constant_evaluated()
@@ -208,21 +204,14 @@ template <typename char_type>
 }
 
 static_assert(std_concat_is_constant_evaluated());
-#if defined(__GNUC__) && !defined(__clang__)
-// GCC 15 starts the character-array lifetime in fast_io::string's constexpr
-// allocation path. Clang 23 currently diagnoses writes into that allocation
-// as writes outside the array lifetime, so it cannot evaluate this destination.
 static_assert(fast_io_concat_is_constant_evaluated());
-#endif
 static_assert(print_domain_is_constant_evaluated<char>());
 static_assert(print_domain_is_constant_evaluated<wchar_t>());
 static_assert(print_domain_is_constant_evaluated<char8_t>());
 static_assert(print_domain_is_constant_evaluated<char16_t>());
 static_assert(print_domain_is_constant_evaluated<char32_t>());
 static_assert(std_dynamic_width_precision_is_constant_evaluated());
-#if defined(__GNUC__) && !defined(__clang__)
 static_assert(fast_io_dynamic_width_precision_is_constant_evaluated());
-#endif
 static_assert(numeric_print_is_constant_evaluated<char>());
 static_assert(numeric_print_is_constant_evaluated<wchar_t>());
 static_assert(numeric_print_is_constant_evaluated<char8_t>());

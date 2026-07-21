@@ -70,7 +70,7 @@ inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
 			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+inline constexpr ::std::true_type concat_single_pass_bounded_destination_preferred(
 	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
 {
 	return {};
@@ -130,6 +130,17 @@ inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
 	// The view's complete print semantics are the characters in its stored pointer/length pair.
 	return {};
 }
+
+template <::std::integral char_type, typename traits_type>
+	requires ::std::same_as<traits_type, ::std::char_traits<char_type>>
+inline constexpr ::std::true_type print_copy_stable_borrowed_source(
+	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
+{
+	// Moving or destroying the standard view never changes the lifetime of its externally owned character range. This
+	// stronger proof lets normalization copy the two-word view before retaining its alias. Custom traits remain excluded:
+	// their associated namespace may replace alias/status forwarding with an identity-sensitive representation.
+	return {};
+}
 #endif
 
 template <::std::integral char_type, typename traits_type, typename allocator_type>
@@ -161,6 +172,21 @@ inline constexpr char_type *strlike_precise_resize_and_get_begin(
 {
 	str.resize(n);
 	return str.data();
+}
+
+/// @brief Certifies the default standard string for concat's borrowed-scatter exact-resize path.
+/// @details A default-constructed standard string owns its eventual allocation; allocator requirements forbid that
+///          live allocation from overlapping any separately live source string. Its resize operation observes only the
+///          destination and requested extent, so borrowed descriptors remain valid until concat copies them. Custom
+///          traits and allocators are excluded because their associated ADL and allocation state were not audited.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type strlike_concat_borrowed_scatter_precise_resize_safe(
+	io_strlike_type_t<char_type,
+		::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
 }
 
 #if __cpp_lib_string_resize_and_overwrite >= 202110L

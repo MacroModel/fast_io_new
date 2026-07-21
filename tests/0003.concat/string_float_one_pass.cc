@@ -71,26 +71,28 @@ template <::std::integral char_type>
 	static_assert(
 		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
 			char_type, value_type, value_type>() * sizeof(char_type) <= 512u);
-	auto const base_size{::fast_io::concat_single_pass_bounded_materialization_size(
-		::fast_io::io_reserve_type<char_type, value_type>, value, SIZE_MAX)};
+	// Exercise the public destination-neutral accessor rather than reaching into a consumer-specific CPO.
+	auto const base_size{
+		::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+			value, SIZE_MAX)};
 	if (base_size == SIZE_MAX)
 	{
 		return false;
 	}
 	if (budget < base_size)
 	{
-		return ::fast_io::concat_single_pass_bounded_materialization_size(
-			::fast_io::io_reserve_type<char_type, value_type>, value, budget) == SIZE_MAX;
+		return ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+			value, budget) == SIZE_MAX;
 	}
 	value.precision = budget - base_size;
-	if (::fast_io::concat_single_pass_bounded_materialization_size(
-			::fast_io::io_reserve_type<char_type, value_type>, value, budget) != budget)
+	if (::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+			value, budget) != budget)
 	{
 		return false;
 	}
 	++value.precision;
-	return ::fast_io::concat_single_pass_bounded_materialization_size(
-		::fast_io::io_reserve_type<char_type, value_type>, value, budget) == SIZE_MAX;
+	return ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+		value, budget) == SIZE_MAX;
 }
 
 struct stateful_dynamic_leaf
@@ -149,14 +151,14 @@ inline char *print_reserve_define(
 }
 
 [[nodiscard]] inline constexpr ::std::true_type
-concat_single_pass_bounded_materialization_preferred(
+single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char, rvalue_only_candidate_leaf>) noexcept
 {
 	return {};
 }
 
 [[nodiscard]] inline constexpr ::std::size_t
-concat_single_pass_bounded_materialization_size(
+single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char, rvalue_only_candidate_leaf>,
 	rvalue_only_candidate_leaf &&, ::std::size_t) noexcept
 {
@@ -234,13 +236,13 @@ inline char *print_reserve_define(
 }
 
 [[nodiscard]] inline constexpr ::std::true_type
-concat_single_pass_bounded_materialization_preferred(
+single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char, observed_candidate_leaf>) noexcept
 {
 	return {};
 }
 
-[[nodiscard]] inline ::std::size_t concat_single_pass_bounded_materialization_size(
+[[nodiscard]] inline ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char, observed_candidate_leaf>,
 	observed_candidate_leaf value, ::std::size_t maximum_size) noexcept
 {
@@ -429,8 +431,8 @@ static_assert(constexpr_float_wrappers_are_correct());
 	auto width{::fast_io::mnp::right(
 		observed_candidate_leaf{&width_candidate_calls}, SIZE_MAX)};
 	auto const width_size{
-		::fast_io::concat_single_pass_bounded_materialization_size(
-			::fast_io::io_reserve_type<char, decltype(width)>, width, 1024u)};
+		::fast_io::single_pass_bounded_materialization_size_invoke<char>(
+			width, 1024u)};
 	if (width_size != SIZE_MAX || width_candidate_calls != 0u)
 	{
 		return false;
@@ -440,8 +442,8 @@ static_assert(constexpr_float_wrappers_are_correct());
 	auto force{::fast_io::manipulators::printf_force_radix_t{
 		observed_candidate_leaf{&force_candidate_calls}, true}};
 	auto const force_size{
-		::fast_io::concat_single_pass_bounded_materialization_size(
-			::fast_io::io_reserve_type<char, decltype(force)>, force, 0u)};
+		::fast_io::single_pass_bounded_materialization_size_invoke<char>(
+			force, 0u)};
 	if (force_size != SIZE_MAX || force_candidate_calls != 0u)
 	{
 		return false;

@@ -11,34 +11,34 @@
 namespace dynamic_float_put_area_test
 {
 
-struct legacy_cost_marker_source
+struct bounded_cost_marker_source
 {};
 
 inline constexpr ::std::true_type
-	concat_single_pass_bounded_materialization_preferred(
-		::fast_io::io_reserve_type_t<char, legacy_cost_marker_source>) noexcept
+	single_pass_bounded_materialization_preferred(
+		::fast_io::io_reserve_type_t<char, bounded_cost_marker_source>) noexcept
 {
 	return {};
 }
 
 inline constexpr ::std::size_t
-concat_single_pass_bounded_materialization_size(
-	::fast_io::io_reserve_type_t<char, legacy_cost_marker_source>,
-	legacy_cost_marker_source, ::std::size_t maximum_size) noexcept
+single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<char, bounded_cost_marker_source>,
+	bounded_cost_marker_source, ::std::size_t maximum_size) noexcept
 {
 	return maximum_size == 0u ? SIZE_MAX : 1u;
 }
 
 inline constexpr ::std::size_t print_reserve_size(
-	::fast_io::io_reserve_type_t<char, legacy_cost_marker_source>,
-	legacy_cost_marker_source) noexcept
+	::fast_io::io_reserve_type_t<char, bounded_cost_marker_source>,
+	bounded_cost_marker_source) noexcept
 {
 	return 1u;
 }
 
 inline constexpr char *print_reserve_define(
-	::fast_io::io_reserve_type_t<char, legacy_cost_marker_source>,
-	char *iter, legacy_cost_marker_source) noexcept
+	::fast_io::io_reserve_type_t<char, bounded_cost_marker_source>,
+	char *iter, bounded_cost_marker_source) noexcept
 {
 	*iter++ = 'x';
 	return iter;
@@ -91,13 +91,13 @@ struct dynamic_format_direct_path_probe
 
 static_assert(dynamic_format_direct_path_available());
 static_assert(::fast_io::dynamic_reserve_printable<
-			  char, legacy_cost_marker_source>);
+			  char, bounded_cost_marker_source>);
 static_assert(::fast_io::operations::decay::
 				  print_semantic_single_pass_bounded_define_nothrow<
-					  char, legacy_cost_marker_source &>());
+					  char, bounded_cost_marker_source &>());
 static_assert(!::fast_io::operations::decay::
 				  print_semantic_single_pass_bounded_source<
-					  char, legacy_cost_marker_source>);
+					  char, bounded_cost_marker_source>);
 static_assert(::fast_io::reserve_printable<
 			  char, potentially_throwing_companion>);
 static_assert(!::fast_io::operations::decay::

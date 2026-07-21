@@ -343,7 +343,9 @@ inline bool gen_cmake_file(fast_io::native_io_observer nio, std::u8string_view p
 	fast_io::u8obuf_file cmake_file;
 	try
 	{
-		cmake_file = std::move(fast_io::u8obuf_file{at(nio), R"(CMakeLists.txt)", fast_io::open_mode::creat | fast_io::open_mode::excl});
+		// Assign the prvalue directly: an explicit move inhibits C++20's
+		// guaranteed prvalue elision and is rejected by Clang under -Werror.
+		cmake_file = fast_io::u8obuf_file{at(nio), R"(CMakeLists.txt)", fast_io::open_mode::creat | fast_io::open_mode::excl};
 	}
 	catch (fast_io::error)
 	{
@@ -360,7 +362,12 @@ inline bool gen_cmake_file(fast_io::native_io_observer nio, std::u8string_view p
 	{}
 	for (auto const &entry : current(at(nio)))
 	{
-		auto filename{std::u8string_view{u8filename(entry)}};
+		// The directory API returns a non-owning C-string adapter whose extent is
+		// already known.  Build the standard view explicitly from that extent so
+		// test discovery does not depend on an implicit adapter conversion.
+		auto const filename_c_str{u8filename(entry)};
+		auto const filename{std::u8string_view{
+			filename_c_str.data(), filename_c_str.size()}};
 		if (is_dot(entry))
 		{
 			continue;
@@ -382,7 +389,8 @@ inline bool gen_cmake_file(fast_io::native_io_observer nio, std::u8string_view p
 			generated = true;
 			break;
 		default:
-			std::u8string_view ext{u8extension(entry)};
+			auto const extension_c_str{u8extension(entry)};
+			std::u8string_view ext{extension_c_str.data(), extension_c_str.size()};
 			if (ext == u8".cpp" || ext == u8".cc")
 			{
 				cmake_gen_file_def(cmake_file, fast_io::u8concat_std(prefix, u8stem(entry)), filename, curr_prop, test);

@@ -106,10 +106,13 @@ namespace details
 ///          admitted here are pure by the stronger source marker; a C stdout mutex is still acquired by the historical
 ///          dispatcher after that local value transformation, and an unlocked status-print owner disables the strategy.
 template <bool line, typename... Args>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+// Tested GCC 13-16 do not inline this bridge at -O3 even when the public facade is
+// inlined. Keeping it outlined loses __builtin_constant_p evidence and turns
+// default-output constant integer/floating probes into calls to the runtime print
+// instance; the measured forced chain is also smaller in aggregate. The positive
+// GCC policy remains open until a newer compiler measures a reversal; Clang remains ordinary.
+#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void print_after_source_pre_normalization(Args &&...args)
 {
@@ -252,16 +255,62 @@ inline constexpr void debug_print_after_io_print_forward(Args... args)
 #endif
 }
 
-/// @brief Sends default debug-output sources through the compiler-constant gate before the cold continuation.
-/// @details This mirrors `debug_print_after_io_print_forward`'s AVR/native sink choice. The helper is forced inline so
-///          an outer debug wrapper does not hide literal evidence, while its named arguments preserve the legacy
-///          alias/status category and an unknown run still enters that exact pre-existing cold helper.
+/// @brief Attempts the caller-visible compiler-constant arm for the native debug sink.
+/// @details GCC 11--16 otherwise outline the ordinary source-normalization bridge before it can inspect a caller
+///          literal. Only this query-and-emit leaf is forced into the public facade; a false query returns without
+///          normalizing the pack, so the established ordinary runtime continuation remains available. The complete
+///          GCC 11--16 A/B matrix recovered default-sink literal floating output. On GCC 16 the unknown-double path kept
+///          the same instruction, call, and stack topology, while 400 serial ABBA samples were neutral (232.34 ns versus
+///          232.29 ns median). GCC 16 is the newest tested positive endpoint, so the upper bound remains open; untested
+///          GCC 10 and earlier retain ordinary inline. Clang 17--23 propagated the same evidence without an attribute
+///          and produced identical objects, so their inliner remains unconstrained.
 template <bool line, typename... Args>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
 #endif
+inline constexpr bool debug_print_try_default_compiler_constant(Args &...args)
+{
+#if defined(__AVR__)
+	using output_owner = decltype(c_stdout());
+#else
+	using output_owner = decltype(out());
+#endif
+	using output_type = ::std::remove_cvref_t<decltype(
+		::fast_io::operations::output_stream_ref(
+			::std::declval<output_owner &>()))>;
+	using char_type = typename output_type::output_char_type;
+	if constexpr (
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_available<
+				line, output_type, decltype((args))...>())
+	{
+		if (::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_gate<char_type>(args...))
+		{
+#if defined(__AVR__)
+			auto output{c_stdout()};
+#else
+			auto output{out()};
+#endif
+			decltype(auto) outref{
+				::fast_io::operations::output_stream_ref(output)};
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
+					outref, args...);
+			return true;
+		}
+	}
+	return false;
+}
+
+/// @brief Sends default debug-output sources through the compiler-constant gate before the cold continuation.
+/// @details This mirrors `debug_print_after_io_print_forward`'s AVR/native sink choice. Its named arguments preserve the
+///          legacy alias/status category, and an unknown run still enters that exact pre-existing cold helper. Optimized
+///          callers inline the small constant query naturally; keeping an ordinary inline boundary avoids imposing a
+///          code-size policy on diagnostic call sites. A proven constant is emitted only after acquiring a complete
+///          output mutex, matching ordinary print and panic; explicitly unlocked observers retain caller-managed
+///          synchronization.
+template <bool line, typename... Args>
 inline constexpr void debug_print_after_source_pre_normalization(Args &&...args)
 {
 #if defined(__AVR__)
@@ -289,7 +338,7 @@ inline constexpr void debug_print_after_source_pre_normalization(Args &&...args)
 			decltype(auto) outref{
 				::fast_io::operations::output_stream_ref(output)};
 			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_true_emit<line>(
+				print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
 					outref, args...);
 			return;
 		}

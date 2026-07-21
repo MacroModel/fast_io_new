@@ -238,6 +238,70 @@ concept dynamic_reserve_printable = ::std::integral<char_type> && requires(T t, 
 	} -> ::std::same_as<char_type *>;
 };
 
+namespace details::single_pass_bounded_materialization_adl
+{
+
+// The dependent tag arguments defer these unqualified names to ADL at template
+// instantiation. Do not add deleted poison pills here: GCC 11 fixes that deleted
+// overload set too early and then cannot discover formatter CPOs declared by
+// later headers. The public accessor has a distinct `_invoke` name, so leaving
+// these names unbound cannot recurse through ordinary lookup.
+
+/// @brief Recognizes the destination-neutral spelling of the bounded one-pass source protocol.
+/// @details Marker and size are deliberately validated as one indivisible protocol, so a partial customization can
+///          never select a materialization strategy whose complete contract the source did not provide.
+template <typename char_type, typename T>
+concept protocol = ::std::integral<char_type> && requires(
+	::std::remove_cvref_t<T> const &value, ::std::size_t maximum_size) {
+	{
+		single_pass_bounded_materialization_preferred(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+	{
+		single_pass_bounded_materialization_size(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+			value, maximum_size)
+	} noexcept -> ::std::same_as<::std::size_t>;
+};
+
+template <typename char_type, typename T>
+	requires protocol<char_type, T>
+[[nodiscard]] inline constexpr ::std::size_t size(
+	T const &value, ::std::size_t maximum_size) noexcept
+{
+	return single_pass_bounded_materialization_size(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		value, maximum_size);
+}
+
+} // namespace details::single_pass_bounded_materialization_adl
+
+/// @brief Marks a source with a cheap, non-fatal bound suitable for one-pass contiguous materialization.
+/// @details This is a destination-neutral source capability. The selected size CPO observes a cvref-normalized const
+///          source and must return SIZE_MAX when the representation cannot fit `maximum_size`; it must not consume or
+///          modify the source, terminate, allocate destination storage, or infer a print/concat policy. Emission follows
+///          as a separate operation. The exact `true_type`, `size_t`, and noexcept requirements make the protocol usable
+///          by both print and concat. This development API intentionally has one spelling; retaining an older concat-
+///          specific alias would let the two consumers silently recognize different source contracts.
+template <typename char_type, typename T>
+concept single_pass_bounded_materialization_source =
+	::fast_io::details::single_pass_bounded_materialization_adl::protocol<
+		char_type, T>;
+
+/// @brief Calls the size member of the selected destination-neutral source protocol.
+/// @details Protocol selection occurs once for the complete marker/size pair. This generic accessor is the only
+///          operation used by print and concat algorithms, preventing either layer from depending on the other's CPO
+///          name or header order.
+template <typename char_type, typename T>
+	requires ::fast_io::single_pass_bounded_materialization_source<char_type, T>
+[[nodiscard]] inline constexpr ::std::size_t
+single_pass_bounded_materialization_size_invoke(
+	T const &value, ::std::size_t maximum_size) noexcept
+{
+	return ::fast_io::details::single_pass_bounded_materialization_adl::size<
+		char_type>(value, maximum_size);
+}
+
 namespace details
 {
 
@@ -306,6 +370,24 @@ concept compiler_constant_printable =
 				iter, materialized)
 		} noexcept -> ::std::same_as<char_type *>;
 	};
+
+/// @brief Default materializer for a compiler-constant eligibility gate which core has already observed as true.
+/// @details Core print/concat call this internal protocol CPO only inside the matching true arm. Most sources need no
+///          additional proof-sensitive work and forward directly to their ordinary materializer. A semantic source may
+///          provide a more specialized overload when its ordinary, independently callable materializer must retain a
+///          defensive value check. Keep this default forwarding leaf at ordinary placement: GCC 11--16 and Clang 17--23
+///          produce identical print/concat wrappers and section sizes with or without forced inlining for integer,
+///          floating, width, and ISO sources. `-O3` therefore already places this trivial leaf correctly; an attribute
+///          would constrain newer optimizers without a measured code-generation benefit.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::compiler_constant_printable<char_type, T>
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type, T>, T const &value) noexcept
+{
+	return print_compiler_constant_materialize(
+		::fast_io::io_reserve_type<char_type, T>, value);
+}
 
 /// @brief Marks an eligibility query as safe for direct optimizer evaluation.
 /// @details `__builtin_constant_p` does not generally look through an arbitrary
@@ -383,6 +465,30 @@ concept compiler_constant_static_fragment_printable =
 	(print_compiler_constant_static_fragments_size(
 		 ::fast_io::io_reserve_type<char_type,
 			 ::std::remove_cvref_t<T>>) != 0u);
+
+/// @brief Opts an output into synchronous, direct consumption of one immutable scalar range.
+/// @details A scalar write customization proves only that an output accepts a pointer range. It does not prove that
+///          the output is unbuffered or that the pointed-to storage is no longer observed after the customization
+///          returns. Buffered streams, converting decorators, deferred/asynchronous adapters, and type-erased wrappers
+///          therefore remain outside this concept unless the concrete normalized output explicitly supplies this
+///          stronger marker.
+///
+///          An opt-in promises that the matching native typed- or byte-write operation consumes the complete source
+///          range synchronously during the call and does not retain its pointer after returning. It also promises that
+///          bypassing an intermediate character copy is observationally equivalent to the ordinary print path. A
+///          transparent wrapper may forward the marker only when it preserves all of those properties; merely
+///          forwarding `write_*` is insufficient.
+/// @fn print_synchronous_direct_scalar_output
+/// @return std::true_type
+template <typename char_type, typename output>
+concept synchronous_direct_scalar_output =
+	::std::integral<char_type> && requires {
+		{
+			print_synchronous_direct_scalar_output(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<output>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
 
 /// @brief Opts an output into synchronous, direct consumption of immutable scatter payloads.
 /// @details A scatter-write customization proves only that an output accepts a descriptor array.  It does not prove
@@ -1261,6 +1367,23 @@ concept one_pass_printable_preferred =
 	::std::integral<char_type> && dynamic_reserve_printable<char_type, T> && printable<char_type, T> && requires {
 		{
 			print_one_pass_preferred(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Marks a direct-print producer which may be redirected through one bounded staging put area.
+/// @details The producer promises a single forward traversal and endpoint-independent byte semantics. Core may delay
+///          intermediate writes until its bounded window fills, but it must never size by replaying the source. A
+///          capacity overflow continues through the same staging stream, and an exceptional exit flushes the prefix
+///          produced before the exception. The marker alone selects no storage: dispatch additionally requires an
+///          unbuffered destination with an explicit whole-output coalescing threshold.
+/// @fn         print_single_pass_staging_safe
+/// @return     std::true_type
+template <typename char_type, typename T>
+concept single_pass_staging_printable =
+	::std::integral<char_type> && printable<char_type, T> && requires {
+		{
+			print_single_pass_staging_safe(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::true_type>;
 	};
 

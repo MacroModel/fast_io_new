@@ -122,28 +122,28 @@ on the same pinned core.
 `static_argument_fixed_width_asm.cc` verifies the variable-template spelling
 `mnp::static_arg<12.44>` through both brace and printf programs.  The matrix
 contains zero-filled internal placement and center placement, plus an ordinary
-run-time `double` control.  Every static wrapper must pass one complete 24-byte
-record from `compiled_static_format_program::storage` in `.rodata` to exactly
-one direct syscall, with no stack allocation, formatter call, or scatter path.
-The run-time control must not acquire either the compiled-static-program or
-compiler-constant machinery.
+run-time `double` control. Every static wrapper must pass one complete 24-byte
+record from the IO planner's `print_static_provider_merged_run_provider`
+storage in `.rodata` to exactly one direct syscall, with no stack allocation,
+formatter call, or scatter path. The run-time control must not acquire either
+the merged-static-provider or compiler-constant machinery.
 
-The gate checks every available GCC 13--16 and Clang 17--23 executable, compares
+The gate checks every available GCC 11--16 and Clang 17--23 executable, compares
 the complete output bytes, and inspects the linked code and symbol table:
 
 ```sh
-TASKSET_CPU=16 \
+TASKSET_CPU=26 \
 CLANG23_CXX=/path/to/clang++-23 \
 make -C benchmark/0021.print_concepts static-argument-fixed-width-asm-gate
 ```
 
 ## Static-argument large records and the storage boundary
 
-`static_argument_large_record_asm.cc` checks 65-byte, 4-KiB, and 16-KiB
-`mnp::static_arg` strings.  The last case is the current static-format semantic
-budget, not an unbuffered transport threshold.  Each complete format program
-owns its final code units in one provider-owned core freestanding array in
-`.rodata`; all three sizes pass
+`static_argument_large_record_asm.cc` checks 65-byte, 4-KiB, and 64-KiB
+`mnp::static_arg` strings. The last case is the current core static-provider
+semantic budget, not an unbuffered transport threshold. Each complete static
+replacement owns its final code units in one provider-owned core freestanding
+array in `.rodata`; all three sizes pass
 that provider directly to one scalar write retry loop with no stack record,
 formatter call, or scatter metadata.  A complete type-level static provider is
 therefore not capped by the 64-byte automatic-record policy or the 4-KiB
@@ -152,7 +152,7 @@ run-time copy/writev crossover.
 The corresponding limit probe is intentionally also a compiler-resource gate.
 On this tree its measured peak front-end RSS was 347,916 KiB for GCC 13,
 356,040 KiB for GCC 15, and 317,996 KiB for Clang 23.  The script checks all
-available GCC 13--16 and Clang 17--23 executables and allows 768 MiB by default;
+available GCC 11--16 and Clang 17--23 executables and allows 768 MiB by default;
 `FAST_IO_STATIC_ARGUMENT_MAX_RSS_KIB` can select a stricter build-machine
 budget.
 

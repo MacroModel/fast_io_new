@@ -23,6 +23,22 @@ void fast_io_compiler_constant_posix_fmt_int32()
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
+void fast_io_compiler_constant_default_fmt_float64()
+{
+	::fast_io::fmt::print<"i = {}">(3.14);
+}
+
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+void fast_io_compiler_constant_posix_fmt_float64()
+{
+	::fast_io::fmt::print<"i = {}">(::fast_io::out(), 3.14);
+}
+
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
 void fast_io_static_argument_posix_fmt_int32()
 {
 	::fast_io::fmt::print<"i = {}">(
@@ -80,6 +96,14 @@ void fast_io_compiler_constant_posix_timestamp()
 [[__gnu__::__noinline__]]
 #endif
 void fast_io_compiler_constant_posix_fmt_runtime_int(int value)
+{
+	::fast_io::fmt::print<"i = {}">(::fast_io::out(), value);
+}
+
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+void fast_io_compiler_constant_posix_fmt_runtime_float(double value)
 {
 	::fast_io::fmt::print<"i = {}">(::fast_io::out(), value);
 }

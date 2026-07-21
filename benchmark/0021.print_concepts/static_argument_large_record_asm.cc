@@ -40,11 +40,11 @@ void fast_io_static_argument_record_4k(int fd)
 #endif
 void fast_io_static_argument_record_limit(int fd)
 {
-	// 16 KiB is the public static-format code-unit budget.  This probe
+	// 64 KiB is the public static-provider code-unit budget. This probe
 	// deliberately reaches that semantic limit rather than a transport cutoff.
 	::fast_io::fmt::print<"{}">(
 		::fast_io::posix_io_observer{fd},
-		::fast_io::mnp::static_arg<make_repeated_static_text<16384u>('c')>);
+		::fast_io::mnp::static_arg<make_repeated_static_text<65536u>('c')>);
 }
 
 } // extern "C"

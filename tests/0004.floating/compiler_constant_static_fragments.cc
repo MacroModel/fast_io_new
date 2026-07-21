@@ -143,8 +143,11 @@ template <::std::integral char_type,
 	char_type proxy_text[128u]{};
 	char_type ordinary_text[128u]{};
 	::fast_io::basic_io_scatter_t<char_type> fragments[32u]{};
+	// The by-value ABI carrier alias is intentionally a nondeduced context;
+	// spell out the source type so this test also guards that contract.
 	auto const proxy{proxy_type{
-		::fast_io::details::compiler_constant_floating_capture_fields(value),
+		::fast_io::details::
+			compiler_constant_floating_capture_fields<floating_type>(value),
 		precision}};
 	auto const proxy_end{
 		::fast_io::print_reserve_define(proxy_tag{}, proxy_text, proxy)};

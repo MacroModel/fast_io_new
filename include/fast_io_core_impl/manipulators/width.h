@@ -245,20 +245,11 @@ inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
 namespace details
 {
 
-/// @brief Recognizes a child whose cheap non-fatal concat bound can pass through width layout.
+/// @brief Recognizes a child whose cheap non-fatal materialization bound can pass through width layout.
 template <typename char_type, typename T>
-concept concat_single_pass_bounded_width_child = ::std::integral<char_type> && requires(
-	T &value, ::std::size_t maximum_size) {
-	{
-		concat_single_pass_bounded_materialization_preferred(
-			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
-	} -> ::std::same_as<::std::true_type>;
-	{
-		concat_single_pass_bounded_materialization_size(
-			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
-			value, maximum_size)
-	} noexcept -> ::std::same_as<::std::size_t>;
-};
+concept single_pass_bounded_width_child =
+	::std::integral<char_type> &&
+	::fast_io::single_pass_bounded_materialization_source<char_type, T>;
 
 /// @brief Recognizes a child explicitly authorized for print's direct bounded put-area strategy.
 template <typename char_type, typename T>
@@ -272,18 +263,18 @@ concept print_single_pass_bounded_direct_put_area_width_child =
 
 /// @brief Computes `max(child bound, width)` without observing the child after width already rejects the frame.
 template <::std::integral char_type, typename T>
-	requires concat_single_pass_bounded_width_child<char_type, T>
+	requires single_pass_bounded_width_child<char_type, T>
 [[nodiscard]] inline constexpr ::std::size_t
-concat_single_pass_bounded_width_size(
+single_pass_bounded_width_size(
 	T &child, ::std::size_t width, ::std::size_t maximum_size) noexcept
 {
 	if (maximum_size < width)
 	{
 		return SIZE_MAX;
 	}
-	auto const child_size{concat_single_pass_bounded_materialization_size(
-		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
-		child, maximum_size)};
+	auto const child_size{
+		::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+			child, maximum_size)};
 	if (child_size == SIZE_MAX || maximum_size < child_size)
 	{
 		return SIZE_MAX;
@@ -338,16 +329,55 @@ compiler_constant_width_materialize(T const &child, ::std::size_t width,
 	char_type fill,
 	::fast_io::manipulators::scalar_placement runtime_placement = placement) noexcept
 {
-	auto materialized{print_compiler_constant_materialize(
-		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, child)};
+	// Core calls this unchecked leaf only after this width node's eligibility returned true. That result proves the
+	// child's eligibility and the child's compact-size marker proves its exact materialized spelling is at most the
+	// common capacity. The internal gate CPO propagates that proof recursively; its default forwarding overload adds no
+	// placement requirement to a floating size or formatting implementation.
+	auto materialized{print_compiler_constant_materialize_gate_proven(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		child)};
 	auto const child_size{print_reserve_precise_size(
 		::fast_io::io_reserve_type<char_type,
 			::std::remove_cvref_t<decltype(materialized)>>,
 		materialized)};
 	constexpr auto capacity{
 		::fast_io::details::compiler_constant_width_capacity<char_type>};
-	// Direct calls to the materializer outside its eligibility arm remain memory-safe. Such calls have no replacement
-	// semantics contract, but clamping the layout metadata preserves the proxy's type-level reserve invariant.
+	auto const bounded_width{width < capacity ? width : capacity};
+	auto const normalized_placement{
+		static_cast<::std::size_t>(runtime_placement) - 1u < 4u
+			? runtime_placement
+			: ::fast_io::manipulators::scalar_placement::right};
+	using materialized_type = ::std::remove_cvref_t<decltype(materialized)>;
+	return ::fast_io::manipulators::compiler_constant_width_t<
+		placement, materialized_type, char_type>{
+		::std::move(materialized), child_size,
+		static_cast<::std::uint_least16_t>(bounded_width), fill,
+		normalized_placement};
+}
+
+template <::fast_io::manipulators::scalar_placement placement,
+	::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+[[nodiscard]] inline constexpr auto
+compiler_constant_width_materialize_checked(T const &child,
+	::std::size_t width, char_type fill,
+	::fast_io::manipulators::scalar_placement runtime_placement = placement) noexcept
+{
+	auto materialized{print_compiler_constant_materialize(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+		child)};
+	auto const child_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type,
+			::std::remove_cvref_t<decltype(materialized)>>,
+		materialized)};
+	constexpr auto capacity{
+		::fast_io::details::compiler_constant_width_capacity<char_type>};
+	// The ordinary ADL materializer is intentionally callable without first asking eligibility. An oversized child
+	// cannot fit this proxy's type-level reserve extent, so direct misuse terminates before inconsistent metadata escapes.
+	if (capacity < child_size) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
 	auto const bounded_width{width < capacity ? width : capacity};
 	auto const normalized_placement{
 		static_cast<::std::size_t>(runtime_placement) - 1u < 4u
@@ -363,12 +393,13 @@ compiler_constant_width_materialize(T const &child, ::std::size_t width,
 
 } // namespace details
 
-/// @brief Propagates an audited one-pass concat bound through fixed-placement width layout.
+/// @brief Propagates an audited one-pass materialization bound through fixed-placement width layout.
+/// @details Sizing observes the wrapper through const access so its child remains intact for emission.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T>
-	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+	requires ::fast_io::details::single_pass_bounded_width_child<
 		char_type, T>
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_t<placement, T>>) noexcept
 {
@@ -388,25 +419,26 @@ inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe
 
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T>
-	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+	requires ::fast_io::details::single_pass_bounded_width_child<
 		char_type, T>
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_t<placement, T>>,
-	::fast_io::manipulators::width_t<placement, T> &value,
+	::fast_io::manipulators::width_t<placement, T> const &value,
 	::std::size_t maximum_size) noexcept
 {
-	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+	return ::fast_io::details::single_pass_bounded_width_size<char_type>(
 		value.reference, value.width, maximum_size);
 }
 
 /// @brief Propagates the same bound when width uses one explicit output code unit as fill.
+/// @details The fill and child are queried without consuming or mutating the wrapper.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
-		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+		::fast_io::details::single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>) noexcept
 {
@@ -430,22 +462,23 @@ template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
-		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+		::fast_io::details::single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
-	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> &value,
+	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> const &value,
 	::std::size_t maximum_size) noexcept
 {
-	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+	return ::fast_io::details::single_pass_bounded_width_size<char_type>(
 		value.reference, value.width, maximum_size);
 }
 
 /// @brief Propagates the bound through a run-time placement selector.
+/// @details Placement inspection is read-only and precedes a distinct emission operation.
 template <::std::integral char_type, typename T>
-	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+	requires ::fast_io::details::single_pass_bounded_width_child<
 		char_type, T>
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>) noexcept
 {
@@ -463,24 +496,25 @@ inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe
 }
 
 template <::std::integral char_type, typename T>
-	requires ::fast_io::details::concat_single_pass_bounded_width_child<
+	requires ::fast_io::details::single_pass_bounded_width_child<
 		char_type, T>
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>,
-	::fast_io::manipulators::width_runtime_t<T> &value,
+	::fast_io::manipulators::width_runtime_t<T> const &value,
 	::std::size_t maximum_size) noexcept
 {
-	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+	return ::fast_io::details::single_pass_bounded_width_size<char_type>(
 		value.reference, value.width, maximum_size);
 }
 
 /// @brief Propagates the bound through run-time placement with one explicit fill code unit.
+/// @details Both placement and fill are inspected through const access before the separate emission pass.
 template <::std::integral char_type, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
-		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+		::fast_io::details::single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
 {
@@ -502,14 +536,14 @@ inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe
 template <::std::integral char_type, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
-		::fast_io::details::concat_single_pass_bounded_width_child<char_type, T>
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+		::fast_io::details::single_pass_bounded_width_child<char_type, T>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
-	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> &value,
+	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> const &value,
 	::std::size_t maximum_size) noexcept
 {
-	return ::fast_io::details::concat_single_pass_bounded_width_size<char_type>(
+	return ::fast_io::details::single_pass_bounded_width_size<char_type>(
 		value.reference, value.width, maximum_size);
 }
 
@@ -569,8 +603,33 @@ print_compiler_constant_materialize(
 		::fast_io::manipulators::width_t<placement, T>>,
 	::fast_io::manipulators::width_t<placement, T> const &value) noexcept
 {
-	return ::fast_io::details::compiler_constant_width_materialize<placement>(
+	return ::fast_io::details::compiler_constant_width_materialize_checked<placement>(
 		value.reference, value.width,
+		::fast_io::char_literal_v<u8' ', char_type>);
+}
+
+/// @brief Materializes fixed-placement width after core has observed the matching eligibility query as true.
+/// @details The true query proves both the width capacity and the child's compact-size contract. This internal CPO is
+///          discovered only by core's post-gate helper; the ordinary ADL materializer above retains its defensive check.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+// The four width gate-proven overloads need forced placement on tested GCC 13--16 and Clang 21--23 to preserve the
+// caller's constant proof. GCC 11--12 and Clang 17--20 produce byte-identical objects with or without the attribute;
+// every audited unknown-value wrapper is also unchanged. The positive policies therefore begin at the first measured
+// code-generation boundary and remain open for newer frontends until a measured reversal; MSVC remains unforced.
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>,
+	::fast_io::manipulators::width_t<placement, T> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<
+		placement>(value.reference, value.width,
 		::fast_io::char_literal_v<u8' ', char_type>);
 }
 
@@ -635,8 +694,27 @@ print_compiler_constant_materialize(
 		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
 	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> const &value) noexcept
 {
-	return ::fast_io::details::compiler_constant_width_materialize<placement>(
+	return ::fast_io::details::compiler_constant_width_materialize_checked<placement>(
 		value.reference, value.width, value.ch);
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<placement, T, width_char_type>>,
+	::fast_io::manipulators::width_ch_t<placement, T, width_char_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize<
+		placement>(value.reference, value.width, value.ch);
 }
 
 template <::std::integral char_type, typename T>
@@ -686,6 +764,24 @@ template <::std::integral char_type, typename T>
 // boundary to finish materialization instead of reconnecting to the generic formatter; the fully unknown caller is identical.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>,
+	::fast_io::manipulators::width_runtime_t<T> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize_checked<
+		::fast_io::manipulators::scalar_placement::none>(
+		value.reference, value.width,
+		::fast_io::char_literal_v<u8' ', char_type>, value.placement);
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>,
 	::fast_io::manipulators::width_runtime_t<T> const &value) noexcept
@@ -751,6 +847,25 @@ template <::std::integral char_type, typename T,
 // GCC 13/15 and Clang 23 reconnect its constant caller to the generic formatter; the fully unknown caller is identical.
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto
 print_compiler_constant_materialize(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
+	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> const &value) noexcept
+{
+	return ::fast_io::details::compiler_constant_width_materialize_checked<
+		::fast_io::manipulators::scalar_placement::none>(
+		value.reference, value.width, value.ch, value.placement);
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T>
+#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr auto
+print_compiler_constant_materialize_gate_proven(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>,
 	::fast_io::manipulators::width_runtime_ch_t<T, width_char_type> const &value) noexcept
@@ -901,6 +1016,17 @@ print_reserve_precise_size(
 
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T>
+// Constant width-forwarding placement audit covers this proxy leaf and format's
+// compiler-constant precision forwarding overload. With carrier sizing already
+// available, exposing this leaf changes the focused GCC 15 O3 caller from
+// 0x13a/one width call to 0x9a/one constant-carrier call;
+// GCC 16 shows the same reduction. GCC 11--14 and Clang 17--23 leave both constant and unknown-value wrappers
+// instruction-identical, so they deliberately retain ordinary placement even though older GCC suppresses 146--188
+// bytes of incidental template emission. The positive GCC policy remains open until a newer compiler measures a
+// reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *print_reserve_precise_define(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::compiler_constant_width_t<

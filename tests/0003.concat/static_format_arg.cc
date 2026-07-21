@@ -21,13 +21,22 @@ enum class static_printf_enum : unsigned
 	value = 42u
 };
 
-using static_printf_enum_argument = decltype(
-	::fast_io::mnp::static_arg<static_printf_enum::value>);
-inline constexpr ::fast_io::fmt::basic_fixed_string
-	static_printf_enum_format{"%u"};
-static_assert(::fast_io::fmt::details::static_format_groups<
-	static_printf_enum_format, ::fast_io::fmt::printf_fmt_t,
-	static_printf_enum_argument>.has_static_replacement);
+using static_printf_enum_argument = decltype(::fast_io::mnp::static_arg<static_printf_enum::value>);
+
+consteval auto render_static_printf_enum()
+{
+	::std::array<char, 2u> result{};
+	::fast_io::obuffer_view buffer{result};
+	::fast_io::fmt::printf<"%u">(
+		buffer, ::fast_io::mnp::static_arg<static_printf_enum::value>);
+	return result;
+}
+
+// Static-format support is an endpoint contract, not a fmt-owned storage type.
+// Exercise the compiled printf grammar through a constexpr IO destination.
+inline constexpr auto static_printf_enum_record{render_static_printf_enum()};
+static_assert(::std::string_view{static_printf_enum_record.data(),
+								 static_printf_enum_record.size()} == "42");
 
 template <::fast_io::fmt::basic_fixed_string format_literal, auto value>
 [[nodiscard]] bool brace_matches_dynamic()
@@ -147,92 +156,45 @@ static_assert(::fast_io::fmt::is_static_format_argument_holder_v<
 
 inline constexpr ::fast_io::fmt::basic_fixed_string mixed_format{
 	"user={} id={:08x} score={:.2f}"};
-using static_name_type = decltype(::fast_io::mnp::static_arg<"xxx">);
-using static_id_type = decltype(::fast_io::mnp::static_arg<42u>);
-inline constexpr auto mixed_plan{
-	::fast_io::fmt::details::static_format_groups<
-		mixed_format, ::fast_io::fmt::brace_fmt_t,
-		static_name_type, static_id_type, double>};
-static_assert(mixed_plan.has_static_replacement);
-static_assert(mixed_plan.group_count == 2u);
-static_assert(mixed_plan.is_static[0u] && mixed_plan.begin[0u] == 0u &&
-			  mixed_plan.count[0u] == 5u);
-static_assert(!mixed_plan.is_static[1u] && mixed_plan.begin[1u] == 5u &&
-			  mixed_plan.count[1u] == 1u);
-static_assert(::fast_io::fmt::details::static_format_output_bound<
-				  mixed_format, ::fast_io::fmt::brace_fmt_t,
-				  static_name_type, static_id_type, double>() == 27u);
-
-using mixed_prefix_type =
-	::fast_io::fmt::details::compiled_static_format_run<
-		mixed_format, ::fast_io::fmt::brace_fmt_t, 0u, 5u,
-		static_name_type, static_id_type, double>;
-static_assert(mixed_prefix_type::size == 27u);
-static_assert(::std::string_view{mixed_prefix_type::storage.data(),
-								 mixed_prefix_type::size} == "user=xxx id=0000002a score=");
-
-inline constexpr ::fast_io::fmt::basic_fixed_string runtime_width_format{
-	"{:0{}x}"};
-inline constexpr auto runtime_width_plan{
-	::fast_io::fmt::details::static_format_groups<
-		runtime_width_format, ::fast_io::fmt::brace_fmt_t,
-		static_id_type, unsigned>};
-static_assert(!runtime_width_plan.has_static_replacement);
 
 inline constexpr int pointed_value{};
-using static_pointer_type =
-	decltype(::fast_io::mnp::static_arg<&pointed_value>);
-inline constexpr ::fast_io::fmt::basic_fixed_string pointer_format{"{}"};
-inline constexpr auto pointer_plan{
-	::fast_io::fmt::details::static_format_groups<
-		pointer_format, ::fast_io::fmt::brace_fmt_t,
-		static_pointer_type>};
-static_assert(!pointer_plan.has_static_replacement);
-
-using runtime_named_type =
-	decltype(::fast_io::fmt::arg<"value">(42u));
-inline constexpr ::fast_io::fmt::basic_fixed_string named_format{"{value}"};
-inline constexpr auto runtime_named_plan{
-	::fast_io::fmt::details::static_format_groups<
-		named_format, ::fast_io::fmt::brace_fmt_t,
-		runtime_named_type>};
-static_assert(!runtime_named_plan.has_static_replacement);
 
 inline constexpr ::fast_io::fmt::basic_fixed_string wchar_static_format{
 	L"{:☆^5}:{:04x}"};
-using wchar_text_type = decltype(::fast_io::mnp::static_arg<L"猫">);
-using wchar_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		wchar_static_format, ::fast_io::fmt::brace_fmt_t,
-		wchar_text_type, static_id_type>;
-static_assert(::std::same_as<typename wchar_static_program::char_type, wchar_t>);
-static_assert(wchar_static_program::size == 9u);
-static_assert(::std::wstring_view{wchar_static_program::storage.data(),
-								  wchar_static_program::size} == L"☆猫☆☆:002a");
 
 inline constexpr ::fast_io::fmt::basic_fixed_string u16_static_format{
 	u"{:☆^5}:{:04x}"};
-using u16_text_type = decltype(::fast_io::mnp::static_arg<u"猫">);
-using u16_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		u16_static_format, ::fast_io::fmt::brace_fmt_t,
-		u16_text_type, static_id_type>;
-static_assert(::std::same_as<typename u16_static_program::char_type, char16_t>);
-static_assert(u16_static_program::size == 9u);
-static_assert(::std::u16string_view{u16_static_program::storage.data(),
-									u16_static_program::size} == u"☆猫☆☆:002a");
 
 inline constexpr ::fast_io::fmt::basic_fixed_string u32_static_format{
 	U"{:☆^5}:{:04x}"};
-using u32_text_type = decltype(::fast_io::mnp::static_arg<U"猫">);
-using u32_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		u32_static_format, ::fast_io::fmt::brace_fmt_t,
-		u32_text_type, static_id_type>;
-static_assert(::std::same_as<typename u32_static_program::char_type, char32_t>);
-static_assert(u32_static_program::size == 9u);
-static_assert(::std::u32string_view{u32_static_program::storage.data(),
-									u32_static_program::size} == U"☆猫☆☆:002a");
+
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::fast_io::manipulators::static_argument_constant text_literal>
+consteval auto render_static_character_domain()
+{
+	using char_type = typename decltype(format_literal)::value_type;
+	::std::array<char_type, 9u> result{};
+	::fast_io::basic_obuffer_view<char_type> buffer{result};
+	::fast_io::fmt::print<format_literal>(
+		buffer, ::fast_io::mnp::static_arg<text_literal>,
+		::fast_io::mnp::static_arg<42u>);
+	return result;
+}
+
+// Character-domain spelling is verified through the public consteval endpoint;
+// fmt lowering now returns core provider nodes and deliberately owns no array.
+inline constexpr auto wchar_static_record{
+	render_static_character_domain<wchar_static_format, L"猫">()};
+inline constexpr auto u16_static_record{
+	render_static_character_domain<u16_static_format, u"猫">()};
+inline constexpr auto u32_static_record{
+	render_static_character_domain<u32_static_format, U"猫">()};
+static_assert(::std::wstring_view{wchar_static_record.data(),
+								  wchar_static_record.size()} == L"☆猫☆☆:002a");
+static_assert(::std::u16string_view{u16_static_record.data(),
+									u16_static_record.size()} == u"☆猫☆☆:002a");
+static_assert(::std::u32string_view{u32_static_record.data(),
+									u32_static_record.size()} == U"☆猫☆☆:002a");
 
 [[nodiscard]] bool named_and_mixed_records()
 {
@@ -312,6 +274,10 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && brace_matches_dynamic<"{}", true>();
 	result = result && brace_matches_dynamic<"{:d}", ::std::byte{255u}>();
 	result = result && brace_matches_dynamic<"{}", nullptr>();
+	// A structural pointer is a valid static_arg holder but intentionally has no
+	// compile-time textual replacement. Equality with the dynamic route verifies
+	// the fail-closed lowering without relying on a removed fmt grouping plan.
+	result = result && brace_matches_dynamic<"{:p}", &pointed_value>();
 	result = result && printf_matches_dynamic<"%d", -42>();
 	result = result && printf_matches_dynamic<"%+08d", 42>();
 	result = result && printf_matches_dynamic<"%#x", 42u>();
@@ -319,7 +285,7 @@ static_assert(::std::u32string_view{u32_static_program::storage.data(),
 	result = result && printf_matches_dynamic<"%.0d", 0>();
 	result = result && printf_matches_dynamic<"%.8x", 42u>();
 	result = result && printf_matches_dynamic<
-		"%u", static_printf_enum::value>();
+						   "%u", static_printf_enum::value>();
 	result = result && printf_parameter_matches_dynamic<"%.*d", 42, 8>();
 	result = result && printf_parameter_matches_dynamic<"%*d", 42, -12>();
 	result = result && printf_matches_dynamic<"%p", nullptr>();

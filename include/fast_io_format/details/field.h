@@ -77,15 +77,11 @@ struct printf_force_radix_t
 namespace fast_io
 {
 
-/// @brief Propagates a one-pass concat bound through printf's conditional radix-point insertion.
+/// @brief Propagates a destination-neutral one-pass bound through printf's conditional radix-point insertion.
 template <::std::integral char_type, typename value_type>
-	requires requires {
-		{
-			concat_single_pass_bounded_materialization_preferred(
-				::fast_io::io_reserve_type<char_type, value_type>)
-		} -> ::std::same_as<::std::true_type>;
-	}
-inline constexpr ::std::true_type concat_single_pass_bounded_materialization_preferred(
+	requires ::fast_io::single_pass_bounded_materialization_source<
+		char_type, value_type>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::printf_force_radix_t<value_type>>) noexcept
 {
@@ -108,18 +104,14 @@ inline constexpr ::std::true_type print_single_pass_bounded_direct_put_area_safe
 }
 
 /// @brief Adds the active radix code unit using the caller's non-fatal remaining budget.
+/// @details The bound query is read-only; the wrapped scalar remains available for the subsequent emission pass.
 template <::std::integral char_type, typename value_type>
-	requires requires(value_type &value, ::std::size_t maximum_size) {
-		{
-			concat_single_pass_bounded_materialization_size(
-				::fast_io::io_reserve_type<char_type, value_type>, value,
-				maximum_size)
-		} noexcept -> ::std::same_as<::std::size_t>;
-	}
-inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
+	requires ::fast_io::single_pass_bounded_materialization_source<
+		char_type, value_type>
+inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::printf_force_radix_t<value_type>>,
-	::fast_io::manipulators::printf_force_radix_t<value_type> &value,
+	::fast_io::manipulators::printf_force_radix_t<value_type> const &value,
 	::std::size_t maximum_size) noexcept
 {
 	auto const extra_size{static_cast<::std::size_t>(value.active)};
@@ -128,9 +120,9 @@ inline constexpr ::std::size_t concat_single_pass_bounded_materialization_size(
 		return SIZE_MAX;
 	}
 	auto const remaining{maximum_size - extra_size};
-	auto const child_size{concat_single_pass_bounded_materialization_size(
-		::fast_io::io_reserve_type<char_type, value_type>, value.value,
-		remaining)};
+	auto const child_size{
+		::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+			value.value, remaining)};
 	if (child_size == SIZE_MAX || remaining < child_size)
 	{
 		return SIZE_MAX;
@@ -659,7 +651,7 @@ floating_scalar_flags() noexcept
 
 template <format_specification specification, typename value_type>
 [[nodiscard]] inline constexpr auto make_brace_floating(
-	value_type value, resolved_format_parameter precision)
+	value_type &&value, resolved_format_parameter precision)
 {
 	static_assert(!specification.locale_specific,
 				  "fast_io format: locale-specific floating formatting requires an explicit locale overload");
@@ -668,7 +660,6 @@ template <format_specification specification, typename value_type>
 		::fast_io::fast_terminate();
 	}
 
-	using alias_type = ::fast_io::details::float_alias_type<value_type>;
 	constexpr bool presentation_has_default_six{
 		specification.presentation == presentation_type::scientific_lower ||
 		specification.presentation == presentation_type::scientific_upper ||
@@ -705,11 +696,11 @@ template <format_specification specification, typename value_type>
 				return result;
 			}();
 			auto fixed_scalar{
-				::fast_io::manipulators::scalar_manip_precision_t<fixed_flags, alias_type>{
-					static_cast<alias_type>(value), count}};
+				::fast_io::details::make_floating_scalar_manip_precision<
+					fixed_flags>(value, count)};
 			auto scientific_scalar{
-				::fast_io::manipulators::scalar_manip_precision_t<scientific_flags, alias_type>{
-					static_cast<alias_type>(value), count}};
+				::fast_io::details::make_floating_scalar_manip_precision<
+					scientific_flags>(value, count)};
 			auto fixed{::fast_io::manipulators::format_scalar_t<
 				decltype(fixed_scalar), 0u, specification.sign == format_sign::space>{
 				::std::move(fixed_scalar)}};
@@ -722,8 +713,9 @@ template <format_specification specification, typename value_type>
 		else
 		{
 			constexpr auto flags{floating_scalar_flags<specification, true>()};
-			auto scalar{::fast_io::manipulators::scalar_manip_precision_t<flags, alias_type>{
-				static_cast<alias_type>(value), count}};
+			auto scalar{
+				::fast_io::details::make_floating_scalar_manip_precision<flags>(
+					value, count)};
 			constexpr ::std::size_t prefix_size{
 				flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
 			auto formatted{::fast_io::manipulators::format_scalar_t<
@@ -745,8 +737,8 @@ template <format_specification specification, typename value_type>
 	else
 	{
 		constexpr auto flags{floating_scalar_flags<specification, false>()};
-		auto scalar{::fast_io::manipulators::scalar_manip_t<flags, alias_type>{
-			static_cast<alias_type>(value)}};
+		auto scalar{
+			::fast_io::details::make_floating_scalar_manip<flags>(value)};
 		constexpr ::std::size_t prefix_size{
 			flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
 		auto formatted{::fast_io::manipulators::format_scalar_t<
@@ -1490,6 +1482,19 @@ template <typename char_type, replacement_field field,
 		if constexpr (field.printf_length == printf_length_modifier::long_double)
 		{
 			return emit(static_cast<long double>(value));
+		}
+		else if constexpr (
+			::fast_io::details::floating_scalar_requires_integer_proxy<clean_type>)
+		{
+			// bfloat16 participates in the scalar register ABI, but an arithmetic
+			// cast of sNaN to printf's promoted double would raise FE_INVALID and
+			// quiet its payload.  Its exact value is representable in binary32;
+			// widen the preserved fields by bit-copy and let the existing float
+			// formatter apply the identical decimal precision grammar.
+			auto const representation{
+				::fast_io::bit_cast<::std::uint_least16_t>(value)};
+			return emit(::fast_io::bit_cast<float>(
+				static_cast<::std::uint_least32_t>(representation) << 16u));
 		}
 		else
 		{

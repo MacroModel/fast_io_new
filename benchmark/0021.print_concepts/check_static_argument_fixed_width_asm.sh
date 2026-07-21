@@ -57,9 +57,9 @@ check_compiler()
 		! grep -q -E '[[:space:]]call[[:space:]]|sub[[:space:]]+rsp|writev|scatter|floating_|compiler_constant' "$body"
 	done
 
-	# Each complete 24-byte spelling must be owned by the compiled format
-	# program in read-only storage, rather than reconstructed on the stack.
-	test "$(grep -c -E '[.]rodata.*compiled_static_format_program.*::storage$' "$symbols")" -eq 3
+	# Each complete 24-byte spelling must be owned by the IO planner's merged
+	# provider in read-only storage, rather than reconstructed on the stack.
+	test "$(grep -c -E '[.]rodata.*print_static_provider_merged_run_provider.*::storage$' "$symbols")" -eq 3
 	grep -q -F 'i = 0000000000012.440000' "$executable"
 	grep -q -F 'i = +000000000012.440000' "$executable"
 	grep -q -F 'i = *****12.440000******' "$executable"
@@ -67,11 +67,12 @@ check_compiler()
 	local runtime_body="$temporary/$tag.runtime"
 	extract_symbol "$dump" brace_runtime_fixed "$runtime_body"
 	test -s "$runtime_body"
-	! grep -q -E 'compiled_static_format_program|compiler_constant' "$runtime_body"
+	! grep -q -E 'print_static_provider_merged_run_provider|compiled_static_replacement_provider|compiler_constant' "$runtime_body"
 }
 
 tested=0
-for cxx in "${GCC13_CXX:-g++-13}" "${GCC14_CXX:-g++-14}" \
+for cxx in "${GCC11_CXX:-g++-11}" "${GCC12_CXX:-g++-12}" \
+	"${GCC13_CXX:-g++-13}" "${GCC14_CXX:-g++-14}" \
 	"${GCC15_CXX:-g++-15}" "${GCC16_CXX:-g++-16}"; do
 	if command -v "$cxx" >/dev/null 2>&1; then
 		check_compiler "$cxx" "${cxx##*/}"
@@ -97,4 +98,3 @@ if (( tested == 0 )); then
 	echo "no supported GCC or Clang executable found" >&2
 	exit 77
 fi
-

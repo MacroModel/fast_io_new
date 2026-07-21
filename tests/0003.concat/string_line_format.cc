@@ -81,21 +81,33 @@ inline constexpr ::fast_io::fmt::basic_fixed_string full_static_line_format{
 	"A{}B\n"};
 using full_static_line_argument =
 	decltype(::fast_io::mnp::static_arg<42u>);
-static_assert(::fast_io::fmt::details::static_format_program<
-			  full_static_line_format, ::fast_io::fmt::brace_fmt_t,
-			  full_static_line_argument>());
+
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::std::size_t field_index, typename... argument_types>
+[[nodiscard]] consteval bool replacement_is_static() noexcept
+{
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<
+			format_literal, ::fast_io::fmt::brace_fmt_t>};
+	static_assert(field_index < program.field_count);
+	return ::fast_io::fmt::details::static_format_replacement<
+		format_literal, program.fields[field_index],
+		::fast_io::fmt::brace_fmt_t, argument_types...>();
+}
+
+static_assert(replacement_is_static<
+			  full_static_line_format, 0u, full_static_line_argument>());
 
 inline constexpr ::fast_io::fmt::basic_fixed_string partial_static_line_format{
 	"A{}B{}C\n"};
 using partial_static_line_argument =
 	decltype(::fast_io::mnp::static_arg<42u>);
-static_assert(!::fast_io::fmt::details::static_format_program<
-			  partial_static_line_format, ::fast_io::fmt::brace_fmt_t,
-			  partial_static_line_argument, ::std::string_view>());
-static_assert(::fast_io::fmt::details::static_format_groups<
-				  partial_static_line_format, ::fast_io::fmt::brace_fmt_t,
-				  partial_static_line_argument, ::std::string_view>
-				  .has_static_replacement);
+static_assert(replacement_is_static<
+			  partial_static_line_format, 0u, partial_static_line_argument,
+			  ::std::string_view>());
+static_assert(!replacement_is_static<
+			  partial_static_line_format, 1u, partial_static_line_argument,
+			  ::std::string_view>());
 
 consteval bool constexpr_line_format_is_correct()
 {

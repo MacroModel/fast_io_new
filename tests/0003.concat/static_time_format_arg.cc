@@ -1,5 +1,6 @@
 #include <fast_io_format.h>
 
+#include <array>
 #include <string_view>
 #include <type_traits>
 
@@ -45,154 +46,149 @@ inline constexpr ::fast_io::fmt::basic_fixed_string utf16_format{
 inline constexpr ::fast_io::fmt::basic_fixed_string utf32_format{
 	U"<{:%Y|%F|%A|%B}>"};
 
-using narrow_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		narrow_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-using wide_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		wide_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-using utf8_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		utf8_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-using utf16_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		utf16_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-using utf32_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		utf32_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
+/** Renders through the public constexpr IO endpoint; fmt owns no cached array. */
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::fast_io::fmt::basic_fixed_string expected_literal,
+		  typename... argument_types>
+[[nodiscard]] consteval bool public_consteval_format_matches(
+	argument_types... arguments)
+{
+	using char_type = typename decltype(format_literal)::value_type;
+	static_assert(::std::same_as<
+				  char_type, typename decltype(expected_literal)::value_type>);
+	::std::array<char_type, expected_literal.size()> storage{};
+	::fast_io::basic_obuffer_view<char_type> output{storage};
+	::fast_io::fmt::print<format_literal>(output, arguments...);
+	return output.size() == expected_literal.size() &&
+		   ::std::basic_string_view<char_type>{storage.data(), output.size()} ==
+			   ::std::basic_string_view<char_type>{
+				   expected_literal.data(), expected_literal.size()};
+}
 
-static_assert(::std::same_as<narrow_static_program::char_type, char>);
-static_assert(::std::same_as<wide_static_program::char_type, wchar_t>);
-static_assert(::std::same_as<utf8_static_program::char_type, char8_t>);
-static_assert(::std::same_as<utf16_static_program::char_type, char16_t>);
-static_assert(::std::same_as<utf32_static_program::char_type, char32_t>);
+template <::fast_io::fmt::basic_fixed_string format_literal,
+		  ::std::size_t field_index, typename... argument_types>
+[[nodiscard]] consteval bool replacement_is_static() noexcept
+{
+	constexpr auto const &program{
+		::fast_io::fmt::details::checked_program<
+			format_literal, ::fast_io::fmt::brace_fmt_t>};
+	static_assert(field_index < program.field_count);
+	return ::fast_io::fmt::details::static_format_replacement<
+		format_literal, program.fields[field_index],
+		::fast_io::fmt::brace_fmt_t, argument_types...>();
+}
 
-static_assert(::std::string_view{
-				  narrow_static_program::storage.data(),
-				  narrow_static_program::size} ==
-			  "<2024|2024-02-29|Thursday|February>");
-static_assert(::std::wstring_view{
-				  wide_static_program::storage.data(),
-				  wide_static_program::size} ==
-			  L"<2024|2024-02-29|Thursday|February>");
-static_assert(::std::u8string_view{
-				  utf8_static_program::storage.data(),
-				  utf8_static_program::size} ==
-			  u8"<2024|2024-02-29|Thursday|February>");
-static_assert(::std::u16string_view{
-				  utf16_static_program::storage.data(),
-				  utf16_static_program::size} ==
-			  u"<2024|2024-02-29|Thursday|February>");
-static_assert(::std::u32string_view{
-				  utf32_static_program::storage.data(),
-				  utf32_static_program::size} ==
-			  U"<2024|2024-02-29|Thursday|February>");
+/// Exercises the optimizer-constant ISO protocol without the explicit static provider.
+/// The output object remains caller-owned, so this proves both public IO constant evaluation and the default raw
+/// concat spelling while leaving `.rodata` ownership to the separately tested `mnp::static_arg` path.
+[[nodiscard]] consteval bool ordinary_iso_is_constant_evaluated()
+{
+	::std::array<char, 20u> storage{};
+	::fast_io::basic_obuffer_view<char> output{storage};
+	::fast_io::io::print(output, leap_day);
+	if (output.size() != storage.size() ||
+		::std::string_view{storage.data(), output.size()} !=
+			"2024-02-29T13:45:07Z")
+	{
+		return false;
+	}
+	auto const concatenated{::fast_io::concat_fast_io(leap_day)};
+	return concatenated.size() == storage.size() &&
+		   ::std::string_view{concatenated.data(), concatenated.size()} ==
+			   "2024-02-29T13:45:07Z";
+}
+
+static_assert(ordinary_iso_is_constant_evaluated());
+
+static_assert(::std::same_as<
+			  typename decltype(narrow_format)::value_type, char>);
+static_assert(::std::same_as<
+			  typename decltype(wide_format)::value_type, wchar_t>);
+static_assert(::std::same_as<
+			  typename decltype(utf8_format)::value_type, char8_t>);
+static_assert(::std::same_as<
+			  typename decltype(utf16_format)::value_type, char16_t>);
+static_assert(::std::same_as<
+			  typename decltype(utf32_format)::value_type, char32_t>);
+
+static_assert(public_consteval_format_matches<
+			  narrow_format, "<2024|2024-02-29|Thursday|February>">(
+	::fast_io::mnp::static_arg<leap_day>));
+static_assert(public_consteval_format_matches<
+			  wide_format, L"<2024|2024-02-29|Thursday|February>">(
+	::fast_io::mnp::static_arg<leap_day>));
+static_assert(public_consteval_format_matches<
+			  utf8_format, u8"<2024|2024-02-29|Thursday|February>">(
+	::fast_io::mnp::static_arg<leap_day>));
+static_assert(public_consteval_format_matches<
+			  utf16_format, u"<2024|2024-02-29|Thursday|February>">(
+	::fast_io::mnp::static_arg<leap_day>));
+static_assert(public_consteval_format_matches<
+			  utf32_format, U"<2024|2024-02-29|Thursday|February>">(
+	::fast_io::mnp::static_arg<leap_day>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string timestamp_format{
 	"{:%F|%A|%B|%Z}"};
-using timestamp_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		timestamp_format, ::fast_io::fmt::brace_fmt_t,
-		static_timestamp_argument>;
-static_assert(::std::string_view{
-				  timestamp_static_program::storage.data(),
-				  timestamp_static_program::size} ==
-			  "2024-02-29|Thursday|February|UTC");
+static_assert(public_consteval_format_matches<
+			  timestamp_format, "2024-02-29|Thursday|February|UTC">(
+	::fast_io::mnp::static_arg<leap_day_timestamp>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string default_format{
 	"[{}]"};
-using default_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		default_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-static_assert(::std::string_view{
-				  default_static_program::storage.data(),
-				  default_static_program::size} ==
-			  "[2024-02-29T13:45:07Z]");
+static_assert(public_consteval_format_matches<
+			  default_format, "[2024-02-29T13:45:07Z]">(
+	::fast_io::mnp::static_arg<leap_day>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string offset_format{
 	"{0:%z}|{1:%z}"};
-using offset_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		offset_format, ::fast_io::fmt::brace_fmt_t,
-		positive_offset_argument, negative_offset_argument>;
-static_assert(::std::string_view{
-				  offset_static_program::storage.data(),
-				  offset_static_program::size} ==
-			  "+0800|-053030");
+static_assert(public_consteval_format_matches<offset_format, "+0800|-053030">(
+	::fast_io::mnp::static_arg<positive_offset>,
+	::fast_io::mnp::static_arg<negative_second_offset>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string escaped_locale_format{
 	"{:%%c|%%x|%%X}"};
-using escaped_locale_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		escaped_locale_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument>;
-static_assert(::std::string_view{
-					  escaped_locale_static_program::storage.data(),
-					  escaped_locale_static_program::size} ==
-				  "%c|%x|%X");
+static_assert(public_consteval_format_matches<
+			  escaped_locale_format, "%c|%x|%X">(
+	::fast_io::mnp::static_arg<leap_day>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string iso_week_boundary_format{
 	"{0:%G-W%V-%u}|{1:%G-W%V-%u}"};
-using iso_week_boundary_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		iso_week_boundary_format, ::fast_io::fmt::brace_fmt_t,
-		iso_week_one_boundary_argument,
-		previous_iso_year_boundary_argument>;
-static_assert(::std::string_view{
-				  iso_week_boundary_static_program::storage.data(),
-				  iso_week_boundary_static_program::size} ==
-			  "1903-W01-4|2020-W53-5");
+static_assert(public_consteval_format_matches<
+			  iso_week_boundary_format, "1903-W01-4|2020-W53-5">(
+	::fast_io::mnp::static_arg<iso_week_one_boundary>,
+	::fast_io::mnp::static_arg<previous_iso_year_boundary>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string named_format{
 	"date={when:%F|%A}"};
-using named_static_program =
-	::fast_io::fmt::details::compiled_static_format_program<
-		named_format, ::fast_io::fmt::brace_fmt_t,
-		named_static_iso_argument>;
-static_assert(::std::string_view{
-				  named_static_program::storage.data(),
-				  named_static_program::size} ==
-			  "date=2024-02-29|Thursday");
+static_assert(public_consteval_format_matches<
+			  named_format, "date=2024-02-29|Thursday">(
+	::fast_io::mnp::static_arg<"when", leap_day>));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string partial_format{
 	"date={when:%F} value={1}"};
-inline constexpr auto partial_plan{
-	::fast_io::fmt::details::static_format_groups<
-		partial_format, ::fast_io::fmt::brace_fmt_t,
-		named_static_iso_argument, unsigned>};
-static_assert(partial_plan.has_static_replacement);
-static_assert(partial_plan.group_count == 2u);
-static_assert(partial_plan.is_static[0u]);
-static_assert(!partial_plan.is_static[1u]);
-
-using partial_static_prefix =
-	::fast_io::fmt::details::compiled_static_format_run<
-		partial_format, ::fast_io::fmt::brace_fmt_t, 0u, 3u,
-		named_static_iso_argument, unsigned>;
-static_assert(::std::string_view{
-				  partial_static_prefix::storage.data(),
-				  partial_static_prefix::size} ==
-			  "date=2024-02-29 value=");
+static_assert(replacement_is_static<
+			  partial_format, 0u, named_static_iso_argument, unsigned>());
+static_assert(!replacement_is_static<
+			  partial_format, 1u, named_static_iso_argument, unsigned>());
+static_assert(public_consteval_format_matches<
+			  partial_format, "date=2024-02-29 value=42">(
+	::fast_io::mnp::static_arg<"when", leap_day>, 42u));
 
 inline constexpr ::fast_io::fmt::basic_fixed_string locale_format{
 	"<{0:%c}|{1:%x}|{2:%X}>"};
 inline constexpr auto locale_program{
 	::fast_io::fmt::details::checked_program<
 		locale_format, ::fast_io::fmt::brace_fmt_t>};
-inline constexpr auto locale_plan{
-	::fast_io::fmt::details::static_format_groups<
-		locale_format, ::fast_io::fmt::brace_fmt_t,
-		static_iso_argument, static_iso_argument,
-		static_iso_argument>};
-
 static_assert(locale_program.field_count == 3u);
-static_assert(!locale_plan.has_static_replacement);
+static_assert(!replacement_is_static<
+			  locale_format, 0u, static_iso_argument, static_iso_argument,
+			  static_iso_argument>());
+static_assert(!replacement_is_static<
+			  locale_format, 1u, static_iso_argument, static_iso_argument,
+			  static_iso_argument>());
+static_assert(!replacement_is_static<
+			  locale_format, 2u, static_iso_argument, static_iso_argument,
+			  static_iso_argument>());
 static_assert(!::fast_io::fmt::details::automatic_static_replacement_probe<
 			  locale_format, locale_program.fields[0u],
 			  ::fast_io::fmt::brace_fmt_t,

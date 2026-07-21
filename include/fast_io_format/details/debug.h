@@ -380,6 +380,18 @@ struct basic_debug_string_field
 	basic_text_field_options<char_type> options{};
 };
 
+/// Models the unconditional default debug spelling used by range elements.
+///
+/// Keeping this semantic promise in the type removes run-time width/precision policy from the leaf and gives every
+/// consumer the same branch-free one-pass define.  The type describes formatting only; destination strategy remains
+/// owned by the core print/concat bounded-materialization protocol.
+template <::fast_io::fmt::format_character char_type>
+struct basic_default_debug_string_field
+{
+	using manip_tag = ::fast_io::manip_tag_t;
+	::fast_io::basic_io_scatter_t<char_type> source{};
+};
+
 template <::fast_io::fmt::format_character char_type>
 struct basic_debug_character_field
 {
@@ -394,6 +406,14 @@ make_debug_string_field(::fast_io::basic_io_scatter_t<char_type> source,
 						basic_text_field_options<char_type> options) noexcept
 {
 	return {source, options};
+}
+
+template <::fast_io::fmt::format_character char_type>
+[[nodiscard]] inline constexpr basic_default_debug_string_field<char_type>
+make_default_debug_string_field(
+	::fast_io::basic_io_scatter_t<char_type> source) noexcept
+{
+	return {source};
 }
 
 template <::fast_io::fmt::format_character char_type>
@@ -514,6 +534,118 @@ measure_debug_character_field(basic_debug_character_field<char_type> const &fiel
 namespace fast_io
 {
 
+/// @brief Opts the default debug-string semantic leaf into destination-neutral bounded materialization.
+/// @details Every input code unit expands to at most `\\U0010ffff` (ten output code units), and two additional
+///          code units cover the quotes.  Advertising that conservative bound lets core print and concat decide how to
+///          use contiguous storage without exposing any destination type or endpoint policy in the format layer.
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::true_type
+single_pass_bounded_materialization_preferred(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Authorizes core print to emit a capacity-proven default debug string directly into a deferred put area.
+/// @details The companion define is non-throwing and does not publish the destination cursor itself.  Core therefore
+///          owns the single final cursor commit after every component in the admitted run has completed.
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_single_pass_bounded_direct_put_area_safe(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Returns a cheap non-fatal capacity bound for the default debug-string spelling.
+/// @details The overflow-safe division check proves the complete conservative extent before multiplication. The const
+///          source query neither advances nor consumes the view; failure writes nothing and lets the caller resume its
+///          established precise strategy.
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::size_t
+single_pass_bounded_materialization_size(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>,
+	::fast_io::fmt::details::basic_default_debug_string_field<source_char_type> const &field,
+	::std::size_t maximum_size) noexcept
+{
+	if (maximum_size < 2u ||
+		field.source.len > (maximum_size - 2u) / 10u)
+	{
+		return SIZE_MAX;
+	}
+	return 2u + field.source.len * 10u;
+}
+
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>,
+	::fast_io::fmt::details::basic_default_debug_string_field<source_char_type> field) noexcept
+{
+	return ::fast_io::fmt::details::measure_debug_text_payload<
+		::fast_io::fmt::details::debug_text_kind::string>(
+		field.source.base, field.source.len, SIZE_MAX).storage_size;
+}
+
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+inline constexpr output_char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>,
+	output_char_type *output,
+	::fast_io::fmt::details::basic_default_debug_string_field<source_char_type> field) noexcept
+{
+	return ::fast_io::fmt::details::emit_debug_text_payload<
+		::fast_io::fmt::details::debug_text_kind::string>(
+		output, field.source.base, field.source.len, SIZE_MAX);
+}
+
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>> tag,
+	::fast_io::fmt::details::basic_default_debug_string_field<source_char_type> field) noexcept
+{
+	return print_reserve_size(tag, field);
+}
+
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+inline constexpr output_char_type *print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>> tag,
+	output_char_type *output, ::std::size_t,
+	::fast_io::fmt::details::basic_default_debug_string_field<source_char_type> field) noexcept
+{
+	return print_reserve_define(tag, output, field);
+}
+
+template <::std::integral output_char_type,
+		  ::fast_io::fmt::format_character source_char_type>
+	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_precise_resize_initialization_sensitive(
+	::fast_io::io_reserve_type_t<output_char_type,
+		::fast_io::fmt::details::basic_default_debug_string_field<source_char_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral output_char_type,
 		  ::fast_io::fmt::format_character source_char_type>
 	requires ::std::same_as<::std::remove_cv_t<output_char_type>, source_char_type>
@@ -534,6 +666,16 @@ inline constexpr output_char_type *print_reserve_define(
 	output_char_type *output,
 	::fast_io::fmt::details::basic_debug_string_field<source_char_type> field) noexcept
 {
+	if (field.options.maximum_display_width == SIZE_MAX &&
+		field.options.minimum_width == 0u)
+	{
+		// The caller has already reserved the exact measured size. Default debug
+		// strings need neither padding nor truncation, so emission can classify
+		// every source scalar once instead of repeating the measurement pass.
+		return ::fast_io::fmt::details::emit_debug_text_payload<
+			::fast_io::fmt::details::debug_text_kind::string>(
+			output, field.source.base, field.source.len, SIZE_MAX);
+	}
 	return ::fast_io::fmt::details::emit_debug_text_field<
 		::fast_io::fmt::details::debug_text_kind::string>(output,
 															 field.source.base, field.source.len, field.options);

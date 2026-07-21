@@ -30,14 +30,21 @@ static_assert(direct_format_fill_test<char8_t, 8u, 4u>(
 
 inline constexpr ::fast_io::fmt::basic_fixed_string pattern_width_format{
 	u8"{:😀>5}"};
-using pattern_width_argument =
-	decltype(::fast_io::mnp::static_arg<42u>);
-using static_pattern_width =
-	::fast_io::fmt::details::compiled_static_format_program<
-		pattern_width_format, ::fast_io::fmt::brace_fmt_t,
-		pattern_width_argument>;
-static_assert(::std::u8string_view{static_pattern_width::storage.data(),
-								   static_pattern_width::size} == u8"😀😀😀42");
+
+consteval auto render_static_pattern_width()
+{
+	::std::array<char8_t, 14u> result{};
+	::fast_io::basic_obuffer_view<char8_t> buffer{result};
+	::fast_io::fmt::print<pattern_width_format>(
+		buffer, ::fast_io::mnp::static_arg<42u>);
+	return result;
+}
+
+// Width grammar lowers into the public constexpr IO endpoint; immutable
+// storage and write policy remain core responsibilities.
+inline constexpr auto static_pattern_width{render_static_pattern_width()};
+static_assert(::std::u8string_view{static_pattern_width.data(),
+								   static_pattern_width.size()} == u8"😀😀😀42");
 
 constexpr auto ascii_precision{
 	::fast_io::fmt::details::measure_unicode_prefix(u8"aa", 2u, 1u)};
@@ -64,7 +71,7 @@ int main()
 	auto const scalar_utf8_fill{
 		::fast_io::fmt::u8concat_std<pattern_width_format>(42u)};
 	if (scalar_utf8_fill != ::std::u8string_view{
-			static_pattern_width::storage.data(), static_pattern_width::size})
+								static_pattern_width.data(), static_pattern_width.size()})
 	{
 		return 8;
 	}

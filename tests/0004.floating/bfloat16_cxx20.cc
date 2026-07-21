@@ -59,10 +59,17 @@ int main()
 	static_assert(
 		!::fast_io::details::print_floating_decimal_requires_integer_transport<
 			__bf16>);
+	// Native AVX512BF16 transports __bf16 in an XMM register. The source-level
+	// integer proxy is intentionally restricted to the simulated ABI so that
+	// public manipulators cannot demote this native calling convention to a GPR.
+	static_assert(
+		!::fast_io::details::floating_scalar_requires_integer_proxy<__bf16>);
 #else
 	static_assert(
 		::fast_io::details::print_floating_decimal_requires_integer_transport<
 			__bf16>);
+	static_assert(
+		::fast_io::details::floating_scalar_requires_integer_proxy<__bf16>);
 #endif
 	auto const subnormal{::std::bit_cast<__bf16>(::std::uint_least16_t{1u})};
 	constexpr auto scalar_flags{[]() constexpr noexcept {

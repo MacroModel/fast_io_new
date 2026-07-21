@@ -248,11 +248,15 @@ Internal assert macros for fuzzing fast_io.
 
 #pragma push_macro("FAST_IO_IF_CONSTEVAL")
 #undef FAST_IO_IF_CONSTEVAL
-// Preserve the immediate-function context of `if consteval` when the language
-// mode provides it.  In strict C++20 mode both arms must remain ordinary,
-// well-formed statements, so the standard constant-evaluation query is the
-// only portable selection mechanism.
-#if defined(__cpp_if_consteval) && __cpp_if_consteval >= 202106L
+// Feature-macro presence is the two-way syntax gate. Clang 14's experimental
+// C++2b implementation is the narrow exception: both `if consteval` and its
+// library query fold runtime constexpr calls through the constant arm, while
+// the compiler builtin retains the required call-site semantics.
+#if defined(__cpp_if_consteval) && defined(__clang__) && \
+	__clang_major__ == 14
+#define FAST_IO_IF_CONSTEVAL \
+	if ([]() constexpr noexcept { return __builtin_is_constant_evaluated(); }())
+#elif defined(__cpp_if_consteval)
 #define FAST_IO_IF_CONSTEVAL if consteval
 #else
 // The lambda keeps GCC from diagnosing the query as tautologically false when
@@ -266,7 +270,11 @@ Internal assert macros for fuzzing fast_io.
 #undef FAST_IO_IF_NOT_CONSTEVAL
 // Keep the runtime half symmetric with FAST_IO_IF_CONSTEVAL so call sites never
 // need to duplicate feature-test branches or rely on a C++23 extension in C++20.
-#if defined(__cpp_if_consteval) && __cpp_if_consteval >= 202106L
+#if defined(__cpp_if_consteval) && defined(__clang__) && \
+	__clang_major__ == 14
+#define FAST_IO_IF_NOT_CONSTEVAL \
+	if (![]() constexpr noexcept { return __builtin_is_constant_evaluated(); }())
+#elif defined(__cpp_if_consteval)
 #define FAST_IO_IF_NOT_CONSTEVAL if !consteval
 #else
 #define FAST_IO_IF_NOT_CONSTEVAL \
@@ -279,10 +287,8 @@ Internal assert macros for fuzzing fast_io.
 // using it is still a pedantic error.  Require both a post-C++20 language mode
 // and attribute support, then use the compiler builtin when strict C++20 has
 // no standard spelling.  Omitting the hint is always semantics-preserving.
-#if (((defined(__cpp_assume) && __cpp_assume >= 202207L) || \
-	  (!defined(__cpp_assume) &&                                      \
-	   ((defined(_MSVC_LANG) && _MSVC_LANG > 202002L) ||              \
-		(!defined(_MSVC_LANG) && __cplusplus > 202002L)))) &&           \
+#if (((defined(_MSVC_LANG) && _MSVC_LANG > 202002L) || \
+	  (!defined(_MSVC_LANG) && __cplusplus > 202002L)) && \
 	 FAST_IO_HAS_ATTRIBUTE(assume))
 #define FAST_IO_ASSUME(...) [[assume(__VA_ARGS__)]]
 #elif FAST_IO_HAS_BUILTIN(__builtin_assume)

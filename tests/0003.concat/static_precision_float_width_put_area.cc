@@ -48,7 +48,7 @@ inline ::std::size_t print_define_internal_shift(
 
 template <bool shift_is_nothrow>
 inline constexpr ::std::true_type
-	concat_single_pass_bounded_materialization_preferred(
+	single_pass_bounded_materialization_preferred(
 		::fast_io::io_reserve_type_t<char, audited_internal_leaf<shift_is_nothrow>>) noexcept
 {
 	return {};
@@ -63,7 +63,7 @@ inline constexpr ::std::true_type
 }
 
 template <bool shift_is_nothrow>
-inline ::std::size_t concat_single_pass_bounded_materialization_size(
+inline ::std::size_t single_pass_bounded_materialization_size(
 	::fast_io::io_reserve_type_t<char, audited_internal_leaf<shift_is_nothrow>>,
 	audited_internal_leaf<shift_is_nothrow> value,
 	::std::size_t maximum_size) noexcept
@@ -99,7 +99,12 @@ static_assert(!::fast_io::operations::decay::
 struct static_internal_format_probe
 {
 	template <typename field_type>
-	[[nodiscard]] consteval bool operator()(field_type &&) const noexcept
+	// Keep the callback itself constexpr: GCC 13 in C++20 mode cannot forward an
+	// immediate function object through an ordinary constexpr algorithm, even
+	// when the complete call is already inside an immediate function.  The two
+	// consteval wrappers and their static_asserts below still require the whole
+	// lowering operation, including this callback, to be constant-evaluated.
+	[[nodiscard]] constexpr bool operator()(field_type &&) const noexcept
 	{
 		using field_expression = ::std::add_lvalue_reference_t<
 			::std::remove_reference_t<field_type>>;
