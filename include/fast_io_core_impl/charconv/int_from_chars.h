@@ -111,7 +111,12 @@ template <::std::size_t base, ::fast_io::details::my_integral T,
 		  ::fast_io::details::character char_type>
 	requires(2u <= base && base <= 36u &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars_integral_fixed_base(char_type const *first, char_type const *last, T &value) noexcept
 {
 	/*
@@ -477,7 +482,12 @@ template <unsigned base, ::fast_io::details::my_integral T,
 		  ::fast_io::details::character char_type>
 	requires(11u <= base && base <= 15u &&
 			 !::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars_integral_gcc_literal_mid_base_compact(char_type const *first,
 												 char_type const *last,
 												 T &value) noexcept
@@ -764,7 +774,12 @@ flow.
 */
 template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars_integral_literal_base(char_type const *first, char_type const *last,
 								 T &value, int base) noexcept
 {
@@ -849,7 +864,12 @@ from_chars_integral_literal_base(char_type const *first, char_type const *last,
 
 template <::fast_io::details::my_integral T, ::fast_io::details::character char_type>
 	requires(!::std::same_as<::std::remove_cv_t<T>, bool>)
-[[gnu::always_inline]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars(char_type const *first, char_type const *last, T &value, int base = 10) noexcept
 {
 	// The standard interface requires base in [2, 36].  This optional attribute

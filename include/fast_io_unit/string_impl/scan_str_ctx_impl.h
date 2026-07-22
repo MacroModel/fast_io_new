@@ -139,24 +139,9 @@ inline constexpr ::fast_io::parse_code scan_context_eof_define(
 	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<
 									 flags, ::std::basic_string<char_type, traits, allocator_type> &>>,
 	scan_string_context skip_space_done,
-	::fast_io::manipulators::scalar_manip_t<flags, ::std::basic_string<char_type, traits, allocator_type> &>
-		str) noexcept
+	::fast_io::manipulators::scalar_manip_t<flags, ::std::basic_string<char_type, traits, allocator_type> &>) noexcept
 {
-	if constexpr (flags.line || flags.noskipws)
-	{
-		if (str.reference.empty())
-		{
-			return ::fast_io::parse_code::end_of_file;
-		}
-		else
-		{
-			return ::fast_io::parse_code::ok;
-		}
-	}
-	else
-	{
-		return ::fast_io::details::scan_context_eof_string_define_impl(skip_space_done.copying);
-	}
+	return ::fast_io::details::scan_context_eof_string_define_impl(skip_space_done.copying);
 }
 
 template <::std::integral char_type, typename traits, typename allocator_type>

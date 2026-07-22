@@ -875,7 +875,11 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 }
 
 template <::std::size_t n, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
 inline constexpr void jeaiii_hash(char_type *iter, ::std::uint_least32_t u, ::std::uint_least32_t len) noexcept
 {
 	if constexpr (n == 7)

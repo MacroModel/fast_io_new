@@ -143,6 +143,22 @@ template <typename scatter_type, ::std::input_iterator I, typename Sentinel>
 range_view_t(scatter_type, I, Sentinel)
 	-> range_view_t<typename ::std::remove_cvref_t<scatter_type>::value_type, I, Sentinel>;
 
+/// @brief Owns a non-borrowed rvalue range until its deferred range-print operation completes.
+/// @details `range_view_t` and `sized_range_view_t` deliberately remain iterator-only views for lvalues and standard
+///          borrowed ranges. A non-borrowed rvalue cannot use those representations because its iterators may refer to
+///          the range object itself (notably a transform view's callable). This wrapper stores the moved range and no
+///          iterators. Its print alias obtains fresh iterators only after the wrapper has reached its final location in
+///          the enclosing print call, so moving either the source range or this wrapper never leaves cached iterators
+///          referring to the pre-move object. The separator retains the same non-owning scatter contract as ordinary
+///          `rgvw`; the owning distinction here concerns the range argument only.
+template <::std::ranges::range range_type, ::std::integral ch_type>
+struct owning_range_view_t
+{
+	using char_type = ch_type;
+	range_type range;
+	basic_io_scatter_t<char_type> sep;
+};
+
 /// @brief Returns a safe contiguous-capacity bound for a sized range.
 /// @details The separator contribution is `(size - 1) * sep.len`. Fixed-reserve elements need no sizing traversal, so
 ///          a single-pass input iterator remains valid. Object-dependent reserve or scatter elements must be inspected;
@@ -811,17 +827,17 @@ concept range_element_print_forwardable =
 		::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(*iterator));
 	};
 
-/// @brief Creates a range-printing view with a literal separator.
-/// @details The terminating null is excluded, so an `N`-element literal contributes `N - 1` separator characters;
-///          this supports multi-character separators and preserves embedded nulls before the terminator. A sized view
-///          is selected only when its reserve protocol is iterator-safe: fixed per-type bounds need no measuring pass,
-///          while object-dependent sizes require a forward range and scatter sizing additionally requires explicit
-///          borrowed/repeatable provenance. Otherwise the sentinel view retains one-pass input-range semantics.
-///          Contiguous ranges store pointers as an implementation optimization without changing this protocol decision.
-template <::std::ranges::range rg, ::std::integral char_type, ::std::size_t n>
-		requires(n != 0u && ::std::ranges::borrowed_range<rg> &&
-				 ::fast_io::manipulators::range_element_print_forwardable<char_type, rg>)
-inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
+namespace range_view_details
+{
+
+/// @brief Builds the iterator-only implementation after the range lifetime has already been proved.
+/// @details Public lvalue/borrowed overloads call this directly. An owning rvalue wrapper calls it later from its print
+///          alias, when the stored range is a stable lvalue. Keeping iterator acquisition here is essential: obtaining
+///          iterators before moving a non-borrowed range into the wrapper would not be valid for a general C++20 range.
+template <::std::ranges::range rg, ::std::integral char_type>
+	requires ::fast_io::manipulators::range_element_print_forwardable<char_type, rg>
+inline constexpr auto make_nonowning_range_view(
+	rg &&r, ::fast_io::basic_io_scatter_t<char_type> printed)
 {
 	using ::fast_io::range_view_t;
 	using ::fast_io::sized_range_view_t;
@@ -829,9 +845,8 @@ inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
 	using ::std::ranges::begin;
 	using ::std::ranges::end;
 	using ::std::ranges::size;
-	using forwarded_expression_type = decltype(
-		::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(
-			*::std::declval<::std::ranges::iterator_t<rg> &>())));
+	using forwarded_expression_type = decltype(::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(
+		*::std::declval<::std::ranges::iterator_t<rg> &>())));
 	using forwarded_value_type = ::std::remove_cvref_t<forwarded_expression_type>;
 	using iterator_type = ::std::ranges::iterator_t<rg>;
 	constexpr bool is_contiguous_range = ::std::ranges::contiguous_range<rg>;
@@ -840,12 +855,8 @@ inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
 	constexpr bool is_common_range = ::std::ranges::common_range<rg>;
 	constexpr bool is_fixed_reserve = ::fast_io::reserve_printable<char_type, forwarded_value_type>;
 	constexpr bool is_runtime_sized = ::fast_io::dynamic_reserve_printable<char_type, forwarded_value_type> ||
-										  ::fast_io::sized_range_view_two_pass_scatter_element_v<
-											  char_type, iterator_type>;
-	// Array extent includes the terminator. Unlike the former one-character special case, this retains the complete
-	// literal payload and makes separator accounting identical to an ordinary character scatter.
-	auto printed = ::fast_io::basic_io_scatter_t<char_type>{
-		reinterpret_cast<char_type const *>(__builtin_addressof(sep)), n - 1u};
+									  ::fast_io::sized_range_view_two_pass_scatter_element_v<
+										  char_type, iterator_type>;
 	if constexpr (is_fixed_reserve || (is_runtime_sized && is_forward_range))
 	{
 		if constexpr (is_contiguous_range && is_sized_range)
@@ -877,6 +888,46 @@ inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
 			return range_view_t{printed, begin(r), end(r)};
 		}
 	}
+}
+
+} // namespace range_view_details
+
+/// @brief Creates a range-printing view with a literal separator.
+/// @details The terminating null is excluded, so an `N`-element literal contributes `N - 1` separator characters;
+///          this supports multi-character separators and preserves embedded nulls before the terminator. A sized view
+///          is selected only when its reserve protocol is iterator-safe: fixed per-type bounds need no measuring pass,
+///          while object-dependent sizes require a forward range and scatter sizing additionally requires explicit
+///          borrowed/repeatable provenance. Otherwise the sentinel view retains one-pass input-range semantics.
+///          Contiguous ranges store pointers as an implementation optimization without changing this protocol decision.
+template <::std::ranges::range rg, ::std::integral char_type, ::std::size_t n>
+	requires(n != 0u && ::std::ranges::borrowed_range<rg> &&
+			 ::fast_io::manipulators::range_element_print_forwardable<char_type, rg>)
+inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
+{
+	// Array extent includes the terminator. Unlike the former one-character special case, this retains the complete
+	// literal payload and makes separator accounting identical to an ordinary character scatter.
+	auto const printed = ::fast_io::basic_io_scatter_t<char_type>{
+		reinterpret_cast<char_type const *>(__builtin_addressof(sep)), n - 1u};
+	return ::fast_io::manipulators::range_view_details::make_nonowning_range_view(
+		::std::forward<rg>(r), printed);
+}
+
+/// @brief Owns a non-borrowed rvalue range while preserving the historical nested `rgvw` call syntax.
+/// @details The separator remains a scatter exactly as in the iterator-only overload. The range itself is moved into
+///          `owning_range_view_t`; no iterator is formed here. This makes both immediate nested printing and storing the
+///          returned view safe for owning containers and parent-referencing views such as `transform_view`.
+template <::std::ranges::range rg, ::std::integral char_type, ::std::size_t n>
+	requires(n != 0u && !::std::ranges::borrowed_range<rg> &&
+			 !::std::is_lvalue_reference_v<rg> &&
+			 ::std::constructible_from<::std::remove_cvref_t<rg>, rg &&> &&
+			 ::fast_io::manipulators::range_element_print_forwardable<char_type, rg>)
+inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
+{
+	using range_type = ::std::remove_cvref_t<rg>;
+	auto const printed = ::fast_io::basic_io_scatter_t<char_type>{
+		reinterpret_cast<char_type const *>(__builtin_addressof(sep)), n - 1u};
+	return ::fast_io::owning_range_view_t<range_type, char_type>{
+		::std::forward<rg>(r), printed};
 }
 
 /// @brief Creates a range-printing view with a string-like separator.
@@ -913,67 +964,62 @@ using range_separator_char_type_t = typename ::std::remove_cvref_t<
 	::fast_io::manipulators::range_separator_alias_result_t<T>>::value_type;
 
 template <::std::ranges::range rg, ::fast_io::manipulators::stable_range_separator T>
-		requires(::std::ranges::borrowed_range<rg> &&
-				 ::fast_io::manipulators::range_element_print_forwardable<
-					 ::fast_io::manipulators::range_separator_char_type_t<T>, rg>)
+	requires(::std::ranges::borrowed_range<rg> &&
+			 ::fast_io::manipulators::range_element_print_forwardable<
+				 ::fast_io::manipulators::range_separator_char_type_t<T>, rg>)
 inline constexpr auto rgvw(rg &&r, T &&sep)
 {
-	using ::fast_io::range_view_t;
-	using ::fast_io::sized_range_view_t;
-	using ::std::to_address;
-	using ::std::ranges::begin;
-	using ::std::ranges::end;
-	using ::std::ranges::size;
-	constexpr bool is_contiguous_range = ::std::ranges::contiguous_range<rg>;
-	constexpr bool is_sized_range = ::std::ranges::sized_range<rg>;
-	constexpr bool is_forward_range = ::std::ranges::forward_range<rg>;
-	constexpr bool is_common_range = ::std::ranges::common_range<rg>;
 	decltype(auto) printed = print_alias_define(io_alias, sep);
 	// The admission concept deliberately permits a stable alias reference as well as an owned scatter value. Strip
 	// transport cv/ref here for the same reason; querying a member directly on `decltype(printed)` would accept the
 	// reference during constraint checking and then fail only inside this function body.
 	using char_type = typename ::std::remove_cvref_t<decltype(printed)>::value_type;
-	using forwarded_expression_type = decltype(
-		::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(
-			*::std::declval<::std::ranges::iterator_t<rg> &>())));
-	using forwarded_value_type = ::std::remove_cvref_t<forwarded_expression_type>;
-	using iterator_type = ::std::ranges::iterator_t<rg>;
-	constexpr bool is_fixed_reserve = ::fast_io::reserve_printable<char_type, forwarded_value_type>;
-	constexpr bool is_runtime_sized = ::fast_io::dynamic_reserve_printable<char_type, forwarded_value_type> ||
-										  ::fast_io::sized_range_view_two_pass_scatter_element_v<
-											  char_type, iterator_type>;
-	if constexpr (is_fixed_reserve || (is_runtime_sized && is_forward_range))
-	{
-		if constexpr (is_contiguous_range && is_sized_range)
-		{
-			return sized_range_view_t{printed, to_address(begin(r)), size(r)};
-		}
-		else if constexpr (is_contiguous_range && is_common_range)
-		{
-			auto const first{to_address(begin(r))};
-			return sized_range_view_t{printed, first, to_address(end(r)) - first};
-		}
-		else if constexpr (is_sized_range)
-		{
-			return sized_range_view_t{printed, begin(r), size(r)};
-		}
-		else
-		{
-			return range_view_t{printed, begin(r), end(r)};
-		}
-	}
-	else
-	{
-		if constexpr (is_contiguous_range && is_common_range)
-		{
-			return range_view_t{printed, to_address(begin(r)), to_address(end(r))};
-		}
-		else
-		{
-			return range_view_t{printed, begin(r), end(r)};
-		}
-	}
+	return ::fast_io::manipulators::range_view_details::make_nonowning_range_view(
+		::std::forward<rg>(r),
+		static_cast<::fast_io::basic_io_scatter_t<char_type>>(printed));
+}
+
+template <::std::ranges::range rg, ::fast_io::manipulators::stable_range_separator T>
+	requires(!::std::ranges::borrowed_range<rg> &&
+			 !::std::is_lvalue_reference_v<rg> &&
+			 ::std::constructible_from<::std::remove_cvref_t<rg>, rg &&> &&
+			 ::fast_io::manipulators::range_element_print_forwardable<
+				 ::fast_io::manipulators::range_separator_char_type_t<T>, rg>)
+inline constexpr auto rgvw(rg &&r, T &&sep)
+{
+	using range_type = ::std::remove_cvref_t<rg>;
+	decltype(auto) printed = print_alias_define(io_alias, sep);
+	using char_type = typename ::std::remove_cvref_t<decltype(printed)>::value_type;
+	return ::fast_io::owning_range_view_t<range_type, char_type>{
+		::std::forward<rg>(r),
+		static_cast<::fast_io::basic_io_scatter_t<char_type>>(printed)};
 }
 
 } // namespace manipulators
+
+/// @brief Borrows an owned range only after the owner has reached the print operation's stable argument storage.
+/// @details Public print entry points normalize named lvalue parameters. The returned iterator-only alias is therefore
+///          consumed while `value` remains alive. Direct aliasing of an rvalue does not select this overload and keeps
+///          the owning object intact instead of returning iterators which could escape that temporary.
+template <::std::ranges::range range_type, ::std::integral char_type>
+	requires ::fast_io::manipulators::range_element_print_forwardable<char_type, range_type &>
+inline constexpr auto print_alias_define(
+	::fast_io::io_alias_t, ::fast_io::owning_range_view_t<range_type, char_type> &value)
+{
+	return ::fast_io::manipulators::range_view_details::make_nonowning_range_view(
+		value.range, value.sep);
+}
+
+template <::std::ranges::range range_type, ::std::integral char_type>
+	requires(::std::ranges::range<range_type const &> &&
+			 ::fast_io::manipulators::range_element_print_forwardable<
+				 char_type, range_type const &>)
+inline constexpr auto print_alias_define(
+	::fast_io::io_alias_t,
+	::fast_io::owning_range_view_t<range_type, char_type> const &value)
+{
+	return ::fast_io::manipulators::range_view_details::make_nonowning_range_view(
+		value.range, value.sep);
+}
+
 } // namespace fast_io

@@ -113,24 +113,35 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
+/// @brief Materializes and scans exactly one printable argument before deciding whether another argument is needed.
+/// @details This is the dynamic fallback paired with `scan_context_define`, not the whole-pack high-throughput print
+///          path. A context scanner carries its parse state across fragment boundaries and can report `ok` as soon as
+///          the minimum printed prefix determines the result--for example, once an integer's terminating delimiter is
+///          observed. Printing the complete argument pack first would format producers which the scanner never needs,
+///          execute their observable side effects, and change peak storage from the largest required fragment to the
+///          sum of every fragment. The reserve/scatter branches above already coalesce packs whose complete size and
+///          replay behavior are proved. This fallback instead prioritizes obtaining the exact scan result from the
+///          least output required by the context protocol; it reuses one dynamic buffer and stops immediately on `ok`.
 inline constexpr void
 inplace_to_decay_context_impl(basic_dynamic_output_buffer_ref<basic_dynamic_output_buffer<char_type>> buffer, state &s,
 							  T &t, Arg1 arg, Args... args)
 {
-	::fast_io::details::decay::print_control_single<false>(buffer, arg);
-#if 0
-	::fast_io::details::decay::print_control_fallback_single(buffer, arg);
-#endif
-	char_type *buffer_beg{buffer.ptr->buffer_begin};
+	// Keep this call single-argument. Combining `arg, args...` would erase the context scanner's early-completion and
+	// bounded-fragment properties even though it can look faster as an isolated print operation.
+	::fast_io::operations::decay::print_freestanding_decay_impl<false>(buffer, arg);
+
+	char_type *buffer_beg{buffer.dob_ptr->begin_ptr};
 	char_type const *buffer_begin{buffer_beg};
-	char_type const *buffer_curr{buffer.ptr->buffer_curr};
+	char_type const *buffer_curr{buffer.dob_ptr->curr_ptr};
 	if (::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, buffer_begin, buffer_curr))
 	{
 		return;
 	}
 	if constexpr (sizeof...(Args) != 0)
 	{
-		buffer.ptr->buffer_curr = buffer_beg;
+		// The scanner consumed this fragment while retaining `s`; rewind only the output cursor so the next argument can
+		// reuse the same allocation. Character storage is not required after `scan_context_define` returns partial.
+		buffer.dob_ptr->curr_ptr = buffer_beg;
 		inplace_to_decay_context_impl(buffer, s, t, args...);
 	}
 	else

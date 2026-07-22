@@ -176,6 +176,43 @@ struct unprintable_element
 struct fixed_text
 {};
 
+struct move_only_text_range
+{
+	::std::vector<::std::string_view> values;
+
+	explicit move_only_text_range(::std::vector<::std::string_view> initial_values)
+		: values(::std::move(initial_values))
+	{}
+
+	move_only_text_range(move_only_text_range &&) = default;
+	move_only_text_range &operator=(move_only_text_range &&) = default;
+	move_only_text_range(move_only_text_range const &) = delete;
+	move_only_text_range &operator=(move_only_text_range const &) = delete;
+
+	inline auto begin() noexcept
+	{
+		return values.begin();
+	}
+
+	inline auto end() noexcept
+	{
+		return values.end();
+	}
+
+	inline auto begin() const noexcept
+	{
+		return values.begin();
+	}
+
+	inline auto end() const noexcept
+	{
+		return values.end();
+	}
+};
+
+static_assert(::std::ranges::range<move_only_text_range>);
+static_assert(!::std::copy_constructible<move_only_text_range>);
+
 inline constexpr ::std::size_t
 print_reserve_size(::fast_io::io_reserve_type_t<char, fixed_text>) noexcept
 {
@@ -643,6 +680,38 @@ inline void test_lvalue_scratch_alias_is_not_retained()
 	require(::fast_io::concat_std(range) == "a!|b!|c!");
 }
 
+inline void test_owned_rvalue_range_lifetime()
+{
+	using namespace ::std::literals;
+
+	// An owning container can be moved into rgvw and the returned formatter can outlive the construction expression.
+	auto owned{::fast_io::mnp::rgvw(
+		::std::vector<::std::string_view>{"red"sv, "green"sv, "blue"sv}, "::")};
+	require(::fast_io::concat_std(owned) == "red::green::blue");
+	auto owned_state{capture_print(owned)};
+	require(owned_state.output == "red::green::blue");
+	auto move_only_owned{::fast_io::mnp::rgvw(
+		move_only_text_range{{"left"sv, "right"sv}}, "|")};
+	require(::fast_io::concat_std(move_only_owned) == "left|right");
+
+	// transform_view iterators can refer to their parent view's callable. Move the completed owning formatter once more
+	// before printing: success proves that rgvw did not cache iterators before either move.
+	::std::vector<::std::string_view> source{"alpha"sv, "bravo"sv, "cider"sv};
+	auto transformed{::fast_io::mnp::rgvw(
+		source | ::std::views::transform([](::std::string_view value) { return value.substr(0u, 1u); }), "/")};
+	auto moved{::std::move(transformed)};
+	require(::fast_io::concat_std(moved) == "a/b/c");
+
+	// Preserve the historical nested call as well as the stored-view case above.
+	auto immediate_state{capture([&](direct_scatter_sink sink) {
+		::fast_io::print(
+			sink,
+			::fast_io::mnp::rgvw(
+				source | ::std::views::transform([](::std::string_view value) { return value; }), ","));
+	})};
+	require(immediate_state.output == "alpha,bravo,cider");
+}
+
 inline void test_mutex_scope()
 {
 	using namespace ::std::literals;
@@ -678,5 +747,6 @@ int main()
 	test_width_placements();
 	test_owning_prvalue_elements_are_materialized();
 	test_lvalue_scratch_alias_is_not_retained();
+	test_owned_rvalue_range_lifetime();
 	test_mutex_scope();
 }

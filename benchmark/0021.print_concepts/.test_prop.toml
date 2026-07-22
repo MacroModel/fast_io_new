@@ -1,0 +1,47 @@
+["binary32_precision_promotion_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["compiler_constant_bridge_outline_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["composition_bench.cc"] # manual O3 benchmark with a multi-gigabyte compiler working set
+ignore = true
+
+["runtime_fixed_direct_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["runtime_float_scatter_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["static_fragment_direct_write_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["static_precision_float_width_bench.cc"] # requires an external Google Benchmark build
+ignore = true
+
+["fmt_comparison.cc"] # optional comparison requiring external fmt headers
+ignore = true
+
+["compiler_constant_facade_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["compiler_constant_float64_width_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["compiler_constant_integer_facade_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["compiler_constant_width_policy_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["format_plain_float_lowering_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["observer_transport_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["static_fragment_hot_policy_asm.cc"] # assembly-only translation unit without main
+ignore = true
+
+["static_precision_float_width_asm.cc"] # assembly-only translation unit without main
+ignore = true

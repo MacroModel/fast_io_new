@@ -2501,6 +2501,14 @@ inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) 
 
 #endif
 
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC 13--15 can lose the enclosing reserve proof after inlining the two-digit table copies below and diagnose their
+// destination as a zero-sized region. Keep the warning visible, but do not let this known false positive inherit the
+// translation unit's -Werror policy. The diagnostic scope is limited to this formatter.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic warning "-Wstringop-overflow"
+#endif
+
 template <::std::size_t base, bool uppercase = false, ::std::integral char_type,
 		  typename result_type = char_type *, my_unsigned_integral T>
 	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
@@ -3193,6 +3201,10 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 	}
 	return ::fast_io::details::print_reserve_power_of_two_result<result_type>(last);
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 template <::std::size_t base, bool uppercase_showbase, bool oct_c2y, ::std::integral char_type>
 inline constexpr char_type *print_reserve_show_base_impl(char_type *iter)

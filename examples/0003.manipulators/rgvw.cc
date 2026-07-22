@@ -15,8 +15,10 @@ int main()
 	std::deque d{1., 2.};
 	std::set s{1.f, 2.f, 3.f};
 	std::unordered_set u{1ull, 2ull, 3ull, 4ull};
+	auto os_separator{fast_io::mnp::os_c_str(" ")};
+	auto string_separator{"&"s};
 	println(rgvw(i, " "));
-	println(rgvw(d, fast_io::mnp::os_c_str(" ")));
-	println(rgvw(s, "&"s));
+	println(rgvw(d, os_separator));
+	println(rgvw(s, string_separator));
 	println(rgvw(u, " | "sv));
 }

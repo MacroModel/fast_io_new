@@ -1,4 +1,5 @@
-﻿#include <string>
+﻿#include <ranges>
+#include <string>
 #include <fast_io.h>
 #include <fast_io_device.h>
 #include <fast_io_dsal/string.h>
@@ -27,9 +28,10 @@ int main()
 	::fast_io::println(str);
 	::fast_io::println(::fast_io::mnp::os_c_str(str.data()));
 	::fast_io::println(::fast_io::mnp::pointervw(&str));
-	::fast_io::println(::fast_io::mnp::rgvw(str, ","));
+	::fast_io::println(::fast_io::mnp::rgvw(
+		::std::views::transform(str, [](char ch) { return ::fast_io::mnp::chvw(ch); }), ","));
 	::fast_io::println(::fast_io::mnp::chvw('c'));
-	::fast_io::println('c'); // output : 99
+	::fast_io::println(::fast_io::mnp::dec('c')); // output : 99
 	::fast_io::println(point{2, 5});
 
 	::std::string s;

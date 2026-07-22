@@ -3,6 +3,19 @@
 
 using namespace fast_io::io;
 
+static_assert(::fast_io::status_io_print_forwardable<char, ::fast_io::freestanding::errc>);
+static_assert(::fast_io::reserve_printable<char, ::fast_io::parse_code>);
+static_assert(!::fast_io::scatter_printable<char, ::fast_io::parse_code>);
+
+#if defined(_WIN32)
+static_assert(::fast_io::reserve_printable<char, ::fast_io::win32_code>);
+static_assert(!::fast_io::scatter_printable<char, ::fast_io::win32_code>);
+#if !defined(_WIN32_WINDOWS)
+static_assert(::fast_io::reserve_printable<char, ::fast_io::nt_code>);
+static_assert(!::fast_io::scatter_printable<char, ::fast_io::nt_code>);
+#endif
+#endif
+
 int main()
 try
 {

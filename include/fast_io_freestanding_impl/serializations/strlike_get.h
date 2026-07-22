@@ -263,14 +263,7 @@ inline constexpr ::fast_io::parse_code scan_context_eof_define(
 		if constexpr (::fast_io::buffer_strlike<char_type, typename ::std::remove_cvref_t<T>::value_type> &&
 					  ::std::same_as<undefttype_char_type, char_type>)
 		{
-			if (obuffer_begin(ref.reference.reference) == obuffer_curr(ref.reference.reference))
-			{
-				return ::fast_io::parse_code::end_of_file;
-			}
-			else
-			{
-				return ::fast_io::parse_code::ok;
-			}
+			return ::fast_io::details::scan_context_eof_strlike_define_impl(ctx.copying);
 		}
 		else
 		{

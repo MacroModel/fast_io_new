@@ -4084,7 +4084,8 @@ inline constexpr void print_control_single(output &outstm, T &t)
 				// Buffered streams first try to emit the static reserve output into the current put area.
 				char_type *bcurr{obuffer_curr(outstm)};
 				char_type *bend{obuffer_end(outstm)};
-				::std::ptrdiff_t const diff(bend - bcurr);
+				::std::ptrdiff_t const diff{
+					bcurr == nullptr || bend == nullptr ? -1 : bend - bcurr};
 				// Equality is a valid exact fit: emission may commit the put cursor to `bend`.  The former strict
 				// comparison forced a flush or temporary allocation despite having precisely enough live storage.
 				bool fits{static_cast<::std::ptrdiff_t>(size) <= diff};
@@ -4096,6 +4097,10 @@ inline constexpr void print_control_single(output &outstm, T &t)
 						// The current put area is short, so prepare the minimum-size buffer before emission.
 						obuffer_minimum_size_flush_prepare_define(outstm);
 						bcurr = obuffer_curr(outstm);
+					}
+					if (bcurr == nullptr) [[unlikely]]
+					{
+						::fast_io::fast_terminate();
 					}
 					bcurr = print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, bcurr, t);
 					if constexpr (line)
@@ -4292,7 +4297,8 @@ inline constexpr void print_control_single(output &outstm, T &t)
 				// Buffered streams first try to emit the dynamic reserve output into the current put area.
 				auto curr{obuffer_curr(outstm)};
 				auto ed{obuffer_end(outstm)};
-				::std::ptrdiff_t diff(ed - curr);
+				::std::ptrdiff_t const diff{
+					curr == nullptr || ed == nullptr ? -1 : ed - curr};
 				// `[curr, ed)` contains exactly `diff` writable elements; equality consumes the final slot and leaves
 				// the cursor at `ed`, so it must stay on the direct path.
 				bool fits{static_cast<::std::ptrdiff_t>(size) <= diff};
@@ -4443,7 +4449,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 				{
 					auto bcurr{obuffer_curr(outstm)};
 					auto bed{obuffer_end(outstm)};
-					if (bed <= bcurr)
+					if (bcurr == nullptr || bed == nullptr || bed <= bcurr)
 #if __has_cpp_attribute(unlikely)
 						[[unlikely]]
 #endif
@@ -4489,7 +4495,8 @@ inline constexpr void print_control_single(output &outstm, T &t)
 								}
 								return;
 							}
-							else if (bed - bcurr < producer_window_difference)
+							else if (bcurr == nullptr || bed == nullptr ||
+									 bed - bcurr < producer_window_difference)
 #if __has_cpp_attribute(unlikely)
 								[[unlikely]]
 #endif
@@ -5966,7 +5973,8 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 				// Buffered streams prefer direct materialization into the current put area.
 				char_type *const curr{obuffer_curr(optstm)};
 				char_type *const end{obuffer_end(optstm)};
-				if (static_cast<::std::size_t>(end - curr) >= total_size)
+				if (curr != nullptr && end != nullptr &&
+					static_cast<::std::size_t>(end - curr) >= total_size)
 				{
 					// The put area can hold the full scatter prefix, so no temporary stack buffer is needed.
 					char_type *ptr{materialize(curr)};
@@ -7460,7 +7468,8 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 					constexpr ::std::size_t buffersize{rsvresult.neededspace + static_cast<::std::size_t>(needprintlf)};
 					char_type *bcurr{obuffer_curr(optstm)};
 					char_type *bend{obuffer_end(optstm)};
-					::std::ptrdiff_t const diff(bend - bcurr);
+					::std::ptrdiff_t const diff{
+						bcurr == nullptr || bend == nullptr ? -1 : bend - bcurr};
 					// A reserve prefix may end exactly at `bend`; no sentinel character is stored in the put area.
 					bool fits{static_cast<::std::ptrdiff_t>(buffersize) <= diff};
 					if constexpr (minimum_buffer_output_stream_require_size_impl<outputstmtype, buffersize>)
@@ -7471,6 +7480,10 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 							// The current put area is short, so prepare a minimum-size buffer for the reserve prefix.
 							obuffer_minimum_size_flush_prepare_define(optstm);
 							bcurr = obuffer_curr(optstm);
+						}
+						if (bcurr == nullptr) [[unlikely]]
+						{
+							::fast_io::fast_terminate();
 						}
 						bcurr = ::fast_io::details::decay::print_n_reserve<rsvresult.position, char_type>(
 							bcurr, t, args...);
@@ -10885,9 +10898,10 @@ inline constexpr bool print_semantic_try_static_bounded_coalesce(outputstmtype &
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
 		{
 			// Buffered streams avoid a temporary frame when their current put area contains the entire reserve bound.
-			char_type *const curr{obuffer_curr(optstm)};
-			char_type *const end{obuffer_end(optstm)};
-			if (static_cast<::std::size_t>(end - curr) >= static_bound)
+				char_type *const curr{obuffer_curr(optstm)};
+				char_type *const end{obuffer_end(optstm)};
+				if (curr != nullptr && end != nullptr &&
+					static_cast<::std::size_t>(end - curr) >= static_bound)
 			{
 				// The static capacity proof permits bounded leaf emission directly into the stream buffer.
 				char_type *const iter{
@@ -10948,9 +10962,10 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype &optstm,
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
 		{
 			// Buffered streams can use the existing put area when it can hold the upper bound.
-			char_type *const curr{obuffer_curr(optstm)};
-			char_type *const end{obuffer_end(optstm)};
-			if (static_cast<::std::size_t>(end - curr) >= required)
+				char_type *const curr{obuffer_curr(optstm)};
+				char_type *const end{obuffer_end(optstm)};
+				if (curr != nullptr && end != nullptr &&
+					static_cast<::std::size_t>(end - curr) >= required)
 			{
 				// The put area was checked against the upper bound, so reserve-based bounded emission is safe in place.
 				if constexpr (
@@ -11063,9 +11078,10 @@ inline constexpr bool print_semantic_try_precise_coalesce(outputstmtype &optstm,
 		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype>)
 		{
 			// Buffered streams can coalesce directly into their current put area when enough space remains.
-			char_type *const curr{obuffer_curr(optstm)};
-			char_type *const end{obuffer_end(optstm)};
-			if (static_cast<::std::size_t>(end - curr) >= required)
+				char_type *const curr{obuffer_curr(optstm)};
+				char_type *const end{obuffer_end(optstm)};
+				if (curr != nullptr && end != nullptr &&
+					static_cast<::std::size_t>(end - curr) >= required)
 			{
 				// The existing output buffer has enough room, so emit in place and advance the stream cursor once.
 				char_type *const iter{
@@ -11274,9 +11290,10 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 			// The line variant needs one additional output slot for the trailing newline.
 			required = ::fast_io::details::intrinsics::add_or_overflow_die(required, static_cast<::std::size_t>(1u));
 		}
-		char_type *const curr{obuffer_curr(optstm)};
-		char_type *const end{obuffer_end(optstm)};
-		if (static_cast<::std::size_t>(end - curr) >= required)
+			char_type *const curr{obuffer_curr(optstm)};
+			char_type *const end{obuffer_end(optstm)};
+			if (curr != nullptr && end != nullptr &&
+				static_cast<::std::size_t>(end - curr) >= required)
 		{
 			// The stream put area can hold the complete field, so emit directly and commit once.
 			char_type *iter{curr};
@@ -12772,9 +12789,10 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 				// every leaf's upper bound type-static. Keep this direct cursor comparison only when the complete static
 				// extent exists; otherwise the unchanged semantic continuation below performs its run-time sizing before
 				// staging.
-				char_type *const curr{obuffer_curr(optstm)};
-				char_type *const end{obuffer_end(optstm)};
-				if (static_cast<::std::size_t>(end - curr) >= static_bound) [[likely]]
+					char_type *const curr{obuffer_curr(optstm)};
+					char_type *const end{obuffer_end(optstm)};
+					if (curr != nullptr && end != nullptr &&
+						static_cast<::std::size_t>(end - curr) >= static_bound) [[likely]]
 				{
 					char_type *const iter{
 						::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include "../misc/push_macros.h"
 
 namespace fast_io
 {
@@ -212,3 +213,5 @@ inline constexpr char_type *print_reserve_define(
 } // namespace manipulators
 
 } // namespace fast_io
+
+#include "../misc/pop_macros.h"

@@ -1,0 +1,2 @@
+["public_codegen_probe.cc"] # compiled separately with probe-site definitions
+ignore = true

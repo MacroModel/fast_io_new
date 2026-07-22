@@ -20,7 +20,7 @@ concept range_view_admitted = requires(range_type &&range, separator_type &&sepa
 
 using comma_literal = char const (&)[2u];
 static_assert(range_view_admitted<lifetime_probe_range &, comma_literal>);
-static_assert(!range_view_admitted<lifetime_probe_range, comma_literal>);
+static_assert(range_view_admitted<lifetime_probe_range, comma_literal>);
 static_assert(range_view_admitted<::std::span<::std::string_view>, comma_literal>);
 static_assert(range_view_admitted<lifetime_probe_range &, ::std::string &>);
 static_assert(!range_view_admitted<lifetime_probe_range &, ::std::string>);
@@ -158,7 +158,7 @@ int main()
 	assert(output == "tags=alpha::bravo::cider::delta note=memo");
 	assert(write_calls == 1u);
 
-	::std::array<::std::string_view, 0> empty_tags{};
+	[[maybe_unused]] ::std::array<::std::string_view, 0> empty_tags{};
 	assert(::fast_io::concat_std(::fast_io::mnp::rgvw(empty_tags, "::")).empty());
 
 	::std::array variable_values{variable_token{"1"sv}, variable_token{"22"sv}, variable_token{"333"sv}};

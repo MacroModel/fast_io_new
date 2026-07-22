@@ -1,0 +1,3 @@
+["json_bench.cc"] # manual comparison requiring four external source trees
+ignore = true
+
