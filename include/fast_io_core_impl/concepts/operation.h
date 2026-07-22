@@ -1370,6 +1370,86 @@ concept one_pass_printable_preferred =
 		} -> ::std::same_as<::std::true_type>;
 	};
 
+/// @brief Marks a one-pass producer which should grow a freshly constructed concat result directly.
+/// @details `one_pass_printable_preferred` only proves that direct emission is cheaper for a destination which has
+///          independently advertised cheap streaming.  A fresh string has a different trade-off: growing it may be
+///          cheaper for a large state-machine producer, but an initialization-sensitive range can still be faster when
+///          measured into one contiguous staging allocation and range-constructed.  This second, deliberately narrower
+///          source marker lets concat distinguish those cases instead of inferring a construction policy from the
+///          ordinary stream policy.  The concat implementation must additionally prove the exact result adapter's
+///          direct CPO before selecting the path.
+/// @fn         print_concat_one_pass_preferred
+/// @return     std::true_type
+template <typename char_type, typename T>
+concept concat_one_pass_printable_preferred =
+	::std::integral<char_type> && one_pass_printable_preferred<char_type, T> && requires {
+		{
+			print_concat_one_pass_preferred(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Marks a precise producer whose exact extent is already cached and inexpensive to observe.
+/// @details `precise_reserve_printable` proves exactness, but its size query may still traverse the complete source.
+///          This stronger, destination-neutral cost proof says that querying the same unchanged normalized object is
+///          constant-time, stable, and non-throwing. It does not by itself select concat construction, stream output,
+///          or destination growth: every consumer must pair it with the storage and lifetime proofs required by that
+///          operation.
+/// @fn         print_precise_reserve_size_cached
+/// @return     std::true_type
+template <typename char_type, typename T>
+concept cached_precise_reserve_printable =
+	::std::integral<char_type> && precise_reserve_printable<char_type, T> &&
+	requires(T &value) {
+		{
+			print_precise_reserve_size_cached(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+		{
+			print_reserve_precise_size(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
+		} noexcept -> ::std::same_as<::std::size_t>;
+	};
+
+/// @brief Proves that growing an output destination cannot invalidate a precise producer's source representation.
+/// @details A print sink already contains observable state and may reallocate when asked for one larger put area.
+///          Exact size alone is therefore insufficient: a producer may read views into that same destination, and
+///          reserving first would invalidate them. This explicit source promise states that neither its exact-size
+///          query nor its exact writer reads storage owned by an output destination, aliases the supplied destination
+///          range, or loses any source lifetime when that destination grows or relocates. The print dispatcher still
+///          requires a cached size, a non-throwing pointer-reporting exact writer, and independent destination-side
+///          reserve/deferred-commit proofs before it can write into unpublished capacity.
+/// @fn         print_precise_reserve_output_growth_independent
+/// @return     std::true_type
+template <typename char_type, typename T>
+concept output_growth_independent_precise_reserve_printable =
+	::std::integral<char_type> && cached_precise_reserve_printable<char_type, T> &&
+	nothrow_precise_reserve_printable<char_type, T> && requires {
+		{
+			print_precise_reserve_output_growth_independent(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Marks an exact producer which should size a freshly constructed concat result before writing it.
+/// @details `precise_reserve_printable` establishes the exact-size and contiguous-write protocol, but it deliberately
+///          says nothing about cost: determining that size may traverse the complete source.  Fresh-result concat must
+///          therefore not infer that measuring is cheaper than using a destination's ordinary growth path.  This
+///          narrower marker states that the precise-size query is the preferred construction strategy for this source
+///          (typically because the extent is cached or available in constant time).  It changes neither printing to an
+///          output stream nor concat-to-an-existing-string.  Concat must still prove that its fresh result can either
+///          reserve and publish an exact buffer range or establish one exact live range through its precise-resize CPO.
+/// @fn         print_concat_fresh_precise_resize_preferred
+/// @return     std::true_type
+template <typename char_type, typename T>
+concept concat_fresh_precise_resize_printable_preferred =
+	::std::integral<char_type> && precise_reserve_printable<char_type, T> && requires {
+		{
+			print_concat_fresh_precise_resize_preferred(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Marks a direct-print producer which may be redirected through one bounded staging put area.
 /// @details The producer promises a single forward traversal and endpoint-independent byte semantics. Core may delay
 ///          intermediate writes until its bounded window fills, but it must never size by replaying the source. A
@@ -2605,20 +2685,28 @@ inline constexpr auto print_define_internal_shift(io_reserve_type_t<char_type, p
 		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
 
+/// @brief Forwards an exact-size query through a mutable parameter while preserving the delegated exception contract.
 template <::std::integral char_type, typename value_type>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_precise_size(io_reserve_type_t<char_type, parameter<value_type>>,
-														  parameter<value_type> &para)
+														  parameter<value_type> &para) noexcept(noexcept(
+	print_reserve_precise_size(
+		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
+		para.reference)))
 {
 	return print_reserve_precise_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
 
+/// @brief Forwards an exact-size query through a const parameter without copying its cache-bearing source.
 template <::std::integral char_type, typename value_type>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_precise_size(io_reserve_type_t<char_type, parameter<value_type>>,
-														  parameter<value_type> const &para)
+														  parameter<value_type> const &para) noexcept(noexcept(
+	print_reserve_precise_size(
+		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
+		para.reference)))
 {
 	// Exact sizing is permitted to update logically-const caches, but it must do so in the caller's object. Borrowing
 	// the const member supplies that identity proof and makes the later exact define phase observe the same cache.
@@ -2634,44 +2722,41 @@ print_reserve_static_precise_size(io_reserve_type_t<char_type, parameter<value_t
 	return print_reserve_static_precise_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>);
 }
 
+/// @brief Forwards mutable precise emission and preserves the underlying writer's endpoint type and noexcept contract.
 template <::std::integral char_type, typename value_type, typename Iter>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
-							 parameter<value_type> &para)
-#if __cpp_lib_string_resize_and_overwrite >= 202110L
+								 parameter<value_type> &para)
 	noexcept(noexcept(print_reserve_precise_define(
 		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
-#endif
 {
 	// Preserve the wrapped customization's return type and value category. Some precise writers return the actual
 	// end pointer; discarding it in this transparent manipulator would break higher-level composition even though the
-	// characters themselves were emitted correctly. When the resize-and-overwrite feature macro is present, the
-	// conditional exception specification mirrors the full delegated call expression, including any conversion into an
+	// characters themselves were emitted correctly. The conditional exception specification mirrors the full delegated
+	// call expression, including any conversion into an
 	// underlying by-value parameter. That last point is the parameter-transport proof required by an overwrite callback;
 	// inspecting only the callee's declared specification would miss a throwing copy performed before the callee is
-	// entered. Macro-absent library modes keep the historical function type.
+	// entered.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }
 
+/// @brief Forwards const precise emission without erasing its endpoint or complete-expression exception behavior.
 template <::std::integral char_type, typename value_type, typename Iter>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
-							 parameter<value_type> const &para)
-#if __cpp_lib_string_resize_and_overwrite >= 202110L
+								 parameter<value_type> const &para)
 	noexcept(noexcept(print_reserve_precise_define(
 		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
-#endif
 {
 	// Preserve both the formatter's identity and its precise writer's return type. A pointer result is an actual cursor,
 	// not metadata that the transparent wrapper may replace with `begin + n`; a void result retains its distinct exact-
-	// extent contract in the caller. When the feature macro is present, this specification repeats the mutable adapter's
-	// complete-expression proof so const transport cannot silently discard a throwing conversion which its underlying
-	// formatter requires.
+	// extent contract in the caller. The complete-expression exception proof mirrors the mutable adapter so const
+	// transport cannot silently discard a throwing conversion which its underlying formatter requires.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }
@@ -2754,6 +2839,93 @@ print_one_pass_preferred(io_reserve_type_t<char_type, parameter<value_type>>) no
 	return {};
 }
 
+/// @brief Preserves a wrapped producer's non-consuming bounded-materialization preference.
+template <::std::integral char_type, typename value_type>
+	requires single_pass_bounded_materialization_source<
+		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
+inline constexpr ::std::true_type single_pass_bounded_materialization_preferred(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// The wrapper changes transport only. Preserve the source author's non-consuming bounded-size contract instead of
+	// silently demoting a normalized parameter to replay-based dynamic sizing in print, concat, or another consumer.
+	return {};
+}
+
+/// @brief Delegates bounded-size discovery to the exact source stored by a const parameter wrapper.
+template <::std::integral char_type, typename value_type>
+	requires single_pass_bounded_materialization_source<
+		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
+[[nodiscard]] inline constexpr ::std::size_t single_pass_bounded_materialization_size(
+	io_reserve_type_t<char_type, parameter<value_type>>,
+	parameter<value_type> const &wrapper, ::std::size_t maximum_size) noexcept
+{
+	// Query the exact const member expression exposed by a const parameter. The generic accessor preserves the
+	// underlying CPO's fail-with-SIZE_MAX contract and prevents this transparent adapter from inventing another bound.
+	return ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+		wrapper.reference, maximum_size);
+}
+
+/// @brief Preserves the wrapped source's explicit one-pass staging safety proof.
+template <::std::integral char_type, typename value_type>
+	requires single_pass_staging_printable<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type print_single_pass_staging_safe(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// Parameter owns or references the same producer for the complete synchronous operation. It therefore preserves an
+	// existing endpoint-independent one-pass proof, but never manufactures that proof for an arbitrary print_define.
+	return {};
+}
+
+/// @brief Preserves the wrapped source's cached precise-size cost proof.
+template <::std::integral char_type, typename value_type>
+	requires cached_precise_reserve_printable<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type print_precise_reserve_size_cached(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// `parameter` changes transport only. Its exact-size adapter delegates to the same member expression and mirrors
+	// that complete call's exception specification, so the underlying cached-size proof remains valid.
+	return {};
+}
+
+/// @brief Preserves source independence from output growth across transparent parameter transport.
+template <::std::integral char_type, typename value_type>
+	requires output_growth_independent_precise_reserve_printable<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type
+print_precise_reserve_output_growth_independent(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// A reference wrapper does not introduce character storage, while an owning wrapper retains the source object for
+	// the complete synchronous operation. It therefore preserves, but never manufactures, relocation independence.
+	return {};
+}
+
+/// @brief Forwards the wrapped producer's preference for direct growth of a fresh concat result.
+template <::std::integral char_type, typename value_type>
+	requires concat_one_pass_printable_preferred<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type
+print_concat_one_pass_preferred(io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// A parameter changes transport only.  Forward the narrower fresh-result construction preference exactly as the
+	// ordinary one-pass stream marker is forwarded; never manufacture it for an arbitrary dynamic producer.
+	return {};
+}
+
+/// @brief Forwards the wrapped producer's preferred exact fresh-result construction policy.
+template <::std::integral char_type, typename value_type>
+	requires concat_fresh_precise_resize_printable_preferred<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type print_concat_fresh_precise_resize_preferred(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// Parameter normalization changes transport only.  Preserve the source author's exact fresh-construction cost
+	// proof, just as the precise size/define CPOs above preserve the underlying formatter and its cv-qualification.
+	return {};
+}
+
 template <::std::integral char_type, typename value_type>
 	requires borrowed_scatter_source<char_type, ::std::remove_cvref_t<value_type>>
 inline constexpr ::std::true_type
@@ -2762,6 +2934,30 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, parameter<value_type>
 	// A reference specialization preserves the caller's source; an owning specialization keeps the source object inside
 	// the wrapper for the entire enclosing operation. Neither form creates separate character scratch, so it preserves
 	// (but cannot create) the underlying source's borrowed-lifetime and repeatability guarantee.
+	return {};
+}
+
+/// @brief Preserves a wrapped scatter source's independence from destination cursor state.
+template <::std::integral char_type, typename value_type>
+	requires scatter_output_state_independent<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type print_scatter_output_state_independent(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// Reading through the wrapper does not introduce access to an output cursor. Forward the exact source proof so a
+	// deferred-commit put-area plan treats parameter<T> and its underlying producer identically.
+	return {};
+}
+
+/// @brief Preserves the wrapped source's explicit equivalence between scatter and direct emission.
+template <::std::integral char_type, typename value_type>
+	requires scatter_direct_print_equivalent<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type print_scatter_direct_print_equivalent(
+	io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
+	// The transparent print adapters delegate every observable operation to `reference`; retaining the source's explicit
+	// scatter/direct equivalence proof therefore cannot hide a parameter-specific status or formatting side effect.
 	return {};
 }
 

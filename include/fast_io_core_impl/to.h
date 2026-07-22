@@ -388,12 +388,88 @@ inline constexpr ::std::size_t calculate_scatter_dynamic_reserve_size_with_scatt
 	}
 }
 
+/// @brief Proves that `to` can materialize its normalized print arguments without constructing a stream fallback.
+/// @details This predicate is the type-level counterpart of the first branch in `basic_inplace_to_decay`.  Keeping the
+///          complete fragment proof in one function prevents public availability from drifting away from execution:
+///          context scanners may consume each fragment once, a single contiguous scatter is observed once, static
+///          reserves need no replay, and a multi-fragment contiguous scan retains only explicitly repeatable scatters.
+template <::std::integral char_type, typename T, typename... Args>
+inline consteval bool inplace_to_direct_fragment_strategy_available() noexcept
+{
+	// An empty run or a non-scannable target cannot consume any direct printable fragment.
+	if constexpr (
+		sizeof...(Args) == 0u ||
+		!(::fast_io::contiguous_scannable<char_type, T> ||
+		  ::fast_io::context_scannable<char_type, T>))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr bool all_named_fragments{
+			((::fast_io::reserve_printable<char_type, Args> ||
+			  ::fast_io::dynamic_reserve_printable<char_type, Args> ||
+			  ::fast_io::details::to_named_scatter_printable_v<char_type, Args>) && ...)};
+		constexpr bool all_scatters{
+			((::fast_io::details::to_named_scatter_printable_v<char_type, Args>) && ...)};
+		constexpr bool all_static_reserves{
+			((::fast_io::reserve_printable<char_type, Args>) && ...)};
+		constexpr bool context_fragment_strategy{
+			::fast_io::context_scannable<char_type, T> &&
+			(!(::fast_io::contiguous_scannable<char_type, T> && sizeof...(Args) == 1u))};
+		constexpr bool contiguous_single_scatter_strategy{
+			::fast_io::contiguous_scannable<char_type, T> && sizeof...(Args) == 1u && all_scatters};
+		constexpr bool contiguous_two_pass_strategy{
+			::fast_io::contiguous_scannable<char_type, T> &&
+			((::fast_io::details::to_two_pass_fragment_available_v<char_type, Args>) && ...)};
+		return all_named_fragments &&
+			(context_fragment_strategy || contiguous_single_scatter_strategy ||
+			 all_static_reserves || contiguous_two_pass_strategy);
+	}
+}
+
+/// @brief Proves the exact dynamic-output fallback issued by `basic_inplace_to_decay`.
+/// @details A context scanner formats one argument at a time so it can stop as soon as parsing completes; its proof must
+///          therefore validate every singleton call.  A contiguous scanner formats the complete run in one call and
+///          instead requires that exact pack.  Testing the concrete dynamic-buffer observer closes the former
+///          character-only concept hole where a dummy-stream-only `print_define` was admitted and failed later inside
+///          the dispatcher.
+template <::std::integral char_type, typename T, typename... Args>
+inline consteval bool inplace_to_dynamic_output_strategy_available() noexcept
+{
+	using output_type = ::fast_io::basic_dynamic_output_buffer_ref<
+		::fast_io::basic_dynamic_output_buffer<char_type>>;
+	// Context scanners require singleton printability because the fallback checks completion after every argument.
+	if constexpr (
+		::fast_io::context_scannable<char_type, T> &&
+		(!(::fast_io::contiguous_scannable<char_type, T> && sizeof...(Args) == 1u)))
+	{
+		return (::fast_io::details::decay::print_freestanding_output_run_okay<
+			false, output_type, Args>() && ...);
+	}
+	// Contiguous scanners observe one complete dynamic-buffer run and therefore validate the whole argument pack.
+	else if constexpr (::fast_io::contiguous_scannable<char_type, T>)
+	{
+		return ::fast_io::details::decay::print_freestanding_output_run_okay<
+			false, output_type, Args...>();
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Accepts exactly the normalized source packs supported by either direct-fragment or dynamic-output conversion.
 template <typename char_type, typename T, typename... Args>
 concept inplace_to_decay_detect =
 	::std::integral<char_type> &&
-	(sizeof...(Args) != 0 &&
-	 ::fast_io::operations::decay::defines::print_freestanding_params_okay<char_type, Args...> &&
-	 (contiguous_scannable<char_type, T> || context_scannable<char_type, T>));
+	(sizeof...(Args) != 0u &&
+	 (::fast_io::contiguous_scannable<char_type, T> ||
+	  ::fast_io::context_scannable<char_type, T>) &&
+	 (::fast_io::details::inplace_to_direct_fragment_strategy_available<
+		  char_type, T, Args...>() ||
+	  ::fast_io::details::inplace_to_dynamic_output_strategy_available<
+		  char_type, T, Args...>()));
 
 } // namespace details
 
@@ -405,30 +481,20 @@ concept inplace_to_decay_detect =
 template <::std::integral char_type, typename T, typename... Args>
 inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 {
-	constexpr bool failed{::fast_io::details::inplace_to_decay_detect<char_type, T, Args...>};
-	if constexpr (failed)
+	constexpr bool available{::fast_io::details::inplace_to_decay_detect<char_type, T, Args...>};
+	// Instantiate execution only after the exact direct-or-dynamic strategy has been proved for the normalized pack.
+	if constexpr (available)
 	{
-		constexpr bool all_named_fragments{
-			((reserve_printable<char_type, Args> || dynamic_reserve_printable<char_type, Args> ||
-			  ::fast_io::details::to_named_scatter_printable_v<char_type, Args>) && ...)};
+		constexpr bool direct_fragment_strategy{
+			::fast_io::details::inplace_to_direct_fragment_strategy_available<
+				char_type, T, Args...>()};
 		constexpr bool all_scatters{
 			((::fast_io::details::to_named_scatter_printable_v<char_type, Args>) && ...)};
 		constexpr bool all_static_reserves{((reserve_printable<char_type, Args>) && ...)};
-		constexpr bool context_fragment_strategy{
-			context_scannable<char_type, T> &&
-			(!(contiguous_scannable<char_type, T> && sizeof...(Args) == 1u))};
-		constexpr bool contiguous_single_scatter_strategy{
-			contiguous_scannable<char_type, T> && sizeof...(Args) == 1u && all_scatters};
-		constexpr bool contiguous_two_pass_strategy{
-			contiguous_scannable<char_type, T> &&
-			((::fast_io::details::to_two_pass_fragment_available_v<char_type, Args>) && ...)};
 		// Context scanning consumes every fragment immediately, a single contiguous scatter is observed once, and a
 		// static-reserve pack needs no sizing pass. Every other contiguous composition is length-then-copy and therefore
 		// enters it only when each selected scatter has explicit repeatable provenance (or a reserve fallback).
-		constexpr bool direct_fragment_strategy_safe{
-			context_fragment_strategy || contiguous_single_scatter_strategy || all_static_reserves ||
-			contiguous_two_pass_strategy};
-		if constexpr (all_named_fragments && direct_fragment_strategy_safe)
+		if constexpr (direct_fragment_strategy)
 		{
 			constexpr bool no_need_dynamic_reserve{
 				((reserve_printable<char_type, Args> ||
@@ -512,10 +578,14 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 				}
 			}
 		}
-			else
-			{
-				basic_dynamic_output_buffer<char_type> buffer;
-				decltype(auto) ref = ::fast_io::operations::output_stream_ref(buffer);
+		else
+		{
+			static_assert(
+				::fast_io::details::inplace_to_dynamic_output_strategy_available<
+					char_type, T, Args...>(),
+				"the normalized to() fallback is not printable to its dynamic output buffer");
+			basic_dynamic_output_buffer<char_type> buffer;
+			decltype(auto) ref = ::fast_io::operations::output_stream_ref(buffer);
 			if constexpr (context_scannable<char_type, T> &&
 						  (!(contiguous_scannable<char_type, T> && sizeof...(args) == 1)))
 			{
@@ -540,7 +610,7 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 	}
 	else
 	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
+		static_assert(available, "either some arguments are not printable or the target is not scannable");
 	}
 }
 
@@ -560,223 +630,422 @@ concept can_do_inplace_to = requires(T &t, Args &&...args) {
 		io_print_forward<char_type>(io_print_alias(args))...);
 };
 
+template <::std::integral char_type, typename T>
+using inplace_to_compiler_constant_source_replacement_t =
+	::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_replacement_t<char_type, T>;
+
+/// The exact already-normalized prvalue passed by the compiler-constant true arm.
+/// `plain_true_forward` intentionally treats candidates and untouched sources differently: a candidate aliases its
+/// newly materialized prvalue, while a non-candidate aliases the helper's named source lvalue. Re-running
+/// `io_print_alias` on the raw replacement type would erase that distinction and make availability disagree with the
+/// call below for ref-qualified customization sets.
+template <::std::integral char_type, typename T>
+using inplace_to_compiler_constant_normalized_t = ::std::remove_cvref_t<decltype(
+	::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_plain_true_forward<
+			false, char_type>(::std::declval<T>()))>;
+
+/// The exact forwarding-parameter type deduced by `basic_inplace_to_decay` for the named public scan target.
+template <::std::integral char_type, typename T>
+using inplace_to_normalized_target_t = decltype(
+	::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(
+		::std::declval<::std::remove_reference_t<T> &>())));
+
+/// The exact normalized source type passed by the historical false arm.
+template <::std::integral char_type, typename T>
+using inplace_to_compiler_constant_source_normalized_t =
+	::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_normalized_t<
+			char_type, false, T>;
+
+/// @brief Detects a status owner which the selected dynamic-output `to` strategy would actually invoke.
+/// @details Direct fragment conversion never enters an output dispatcher, so an otherwise matching status CPO is
+///          irrelevant there. The dynamic context fallback emits singleton runs to preserve early completion, whereas
+///          the contiguous fallback emits the complete pack. Mirroring that exact shape prevents a compiler-constant
+///          replacement from adding or removing a whole-run customization and thereby changing the characters scanned.
+template <::std::integral char_type, typename T, typename... Args>
+inline consteval bool
+inplace_to_selected_dynamic_status_owner() noexcept
+{
+	// Direct fragment scanning bypasses every output dispatcher, so no dynamic-output status owner can participate.
+	if constexpr (
+		::fast_io::details::inplace_to_direct_fragment_strategy_available<
+			char_type, T, Args...>())
+	{
+		return false;
+	}
+	else
+	{
+		using output_type = ::fast_io::basic_dynamic_output_buffer_ref<
+			::fast_io::basic_dynamic_output_buffer<char_type>>;
+		// A fragmented context fallback dispatches each argument separately to preserve early completion.
+		if constexpr (
+			::fast_io::context_scannable<char_type, T> &&
+			(!(::fast_io::contiguous_scannable<char_type, T> &&
+			   sizeof...(Args) == 1u)))
+		{
+			return (false || ... ||
+				::fast_io::operations::decay::defines::
+					has_status_print_define<false, output_type, Args>);
+		}
+		// A contiguous fallback dispatches the complete pack and must test its whole-run status customization.
+		else if constexpr (::fast_io::contiguous_scannable<char_type, T>)
+		{
+			return ::fast_io::operations::decay::defines::
+				has_status_print_define<false, output_type, Args...>;
+		}
+		else
+		{
+			return false;
+		}
+	}
+}
+
+/// @brief Proves that `to` may replace one or more public source values before print normalization.
+/// @details The replacement uses the same destination-neutral compiler-constant CPO as print and concat, but admission
+///          is checked against `to`'s exact scanner and dynamic-output/direct-fragment strategies. Semantic nodes keep
+///          their existing graph-owned normalization. Both arms perform the same per-source alias/status forwarding;
+///          destination status owners are checked separately against the exact strategy and run shape below. Only
+///          candidate proxy state counts toward the common materialization budget; unchanged run-time fragments retain
+///          their ordinary zero-copy or reserve protocol.
+template <::std::integral char_type, typename T, typename... Args>
+inline consteval bool
+inplace_to_compiler_constant_source_available() noexcept
+{
+	constexpr bool has_candidate{
+		(false || ... ||
+		 ::fast_io::operations::decay::
+			 print_compiler_constant_pre_normalization_candidate_v<
+				 char_type, Args>)};
+	constexpr bool has_semantic_source{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 char_type, Args>)};
+	constexpr bool has_semantic_replacement{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 char_type,
+			 ::fast_io::details::inplace_to_compiler_constant_source_replacement_t<
+				 char_type, Args>>)};
+	// Empty candidate sets and semantic graphs remain on their established normalization path.
+	if constexpr (!has_candidate || has_semantic_source ||
+				  has_semantic_replacement)
+	{
+		return false;
+	}
+	else
+	{
+		using target_type =
+			::fast_io::details::inplace_to_normalized_target_t<char_type, T>;
+		constexpr bool source_status_owner{
+			::fast_io::details::inplace_to_selected_dynamic_status_owner<
+				char_type, target_type,
+				::fast_io::details::
+					inplace_to_compiler_constant_source_normalized_t<
+						char_type, Args>...>()};
+		constexpr bool replacement_status_owner{
+			::fast_io::details::inplace_to_selected_dynamic_status_owner<
+				char_type, target_type,
+				::fast_io::details::inplace_to_compiler_constant_normalized_t<
+					char_type, Args>...>()};
+		// Either spelling must retain a selected dynamic-output status owner, so direct replacement is rejected.
+		if constexpr (source_status_owner || replacement_status_owner)
+		{
+			return false;
+		}
+
+		constexpr ::std::size_t proxy_bytes{[]() consteval {
+			constexpr ::std::size_t maximum{
+				::fast_io::details::compiler_constant_materialization_max_bytes};
+			::std::size_t total{};
+			((total = [](::std::size_t current) consteval {
+				// Only actual candidates contribute proxy state; untouched sources retain their zero-byte budget entry.
+				if constexpr (::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_candidate_v<
+						char_type, Args>)
+				{
+					constexpr ::std::size_t extent{sizeof(
+						::fast_io::details::inplace_to_compiler_constant_source_replacement_t<
+							char_type, Args>)};
+					return current > maximum || extent > maximum - current
+						? SIZE_MAX
+						: current + extent;
+				}
+				else
+				{
+					return current;
+				}
+			}(total)),
+			 ...);
+			return total;
+		}()};
+		return proxy_bytes != SIZE_MAX &&
+			   proxy_bytes <=
+				   ::fast_io::details::compiler_constant_materialization_max_bytes &&
+			   ::fast_io::details::inplace_to_decay_detect<
+				   char_type,
+				   target_type,
+				   ::fast_io::details::inplace_to_compiler_constant_normalized_t<
+					   char_type, Args>...>;
+	}
+}
+
+/// @brief Executes only the proven compiler-constant arm and then reuses the ordinary normalized `to` dispatcher.
+/// @details Every proxy is a synchronous prvalue whose lifetime covers aliasing, printing, and scanning in the nested
+///          call. Non-candidates retain the historical named-lvalue normalization, so a mixed constant/run-time
+///          conversion does not copy or pre-measure its dynamic fragments.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr void inplace_to_compiler_constant_source_materialized(
+	T &&target, Args &&...args)
+{
+	::fast_io::basic_inplace_to_decay<char_type>(
+		::fast_io::io_scan_forward<char_type>(
+			::fast_io::io_scan_alias(target)),
+		// A non-candidate must still be aliased from this function's named source lvalue. Forwarding it directly to
+		// `io_print_alias` would select an rvalue-only customization only in a neighboring argument's constant true arm,
+		// making observable spelling depend on optimization. The shared print primitive materializes candidates as owned
+		// prvalues while deliberately retaining the historical named-lvalue category for every untouched source.
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_plain_true_forward<
+				false, char_type>(::std::forward<Args>(args))...);
+}
+
+/// @brief Shared public source boundary for every character-domain `inplace_to` facade.
+/// @details The false arm is exactly the historical alias/forward/decay expression. Consequently an unknown value pays
+///          no proxy construction, size query, or extra output pass; only a proven true optimizer query enters the
+///          optional replacement arm.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr void inplace_to_compiler_constant_checked_entry(
+	T &&target, Args &&...args)
+{
+	constexpr bool ordinary_available{
+		::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
+	// Keep malformed public source/target combinations in the diagnostic arm without instantiating either execution path.
+	if constexpr (ordinary_available)
+	{
+		// Enter the optional source replacement only when its normalized scan and status semantics have been proved.
+		if constexpr (
+			::fast_io::details::inplace_to_compiler_constant_source_available<
+				char_type, T, Args &&...>())
+		{
+			if (::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_gate<char_type>(args...))
+			{
+				::fast_io::details::inplace_to_compiler_constant_source_materialized<
+					char_type>(::std::forward<T>(target),
+							   ::std::forward<Args>(args)...);
+				return;
+			}
+		}
+		::fast_io::basic_inplace_to_decay<char_type>(
+			::fast_io::io_scan_forward<char_type>(
+				::fast_io::io_scan_alias(target)),
+			::fast_io::io_print_forward<char_type>(
+				::fast_io::io_print_alias(args))...);
+	}
+	else
+	{
+		static_assert(ordinary_available,
+			"either some arguments are not printable or the target is not scannable");
+	}
+}
+
 } // namespace details
 
+/// @brief Applies the shared compiler-constant source gate to an explicit character-domain inplace conversion.
 template <::std::integral char_type, typename T, typename... Args>
 inline constexpr void basic_inplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(t)),
-													 io_print_forward<char_type>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::details::inplace_to_compiler_constant_checked_entry<char_type>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
+/// @brief Converts printable narrow-character fragments into an existing scan target.
 template <typename T, typename... Args>
 inline constexpr void inplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<char>(::fast_io::io_scan_forward<char>(::fast_io::io_scan_alias(t)),
-												io_print_forward<char>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::basic_inplace_to<char>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
+/// @brief Converts printable wide-character fragments into an existing scan target.
 template <typename T, typename... Args>
 inline constexpr void winplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<wchar_t, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<wchar_t>(::fast_io::io_scan_forward<wchar_t>(::fast_io::io_scan_alias(t)),
-												   io_print_forward<wchar_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::basic_inplace_to<wchar_t>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
+/// @brief Converts printable UTF-8 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
 inline constexpr void u8inplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char8_t, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<char8_t>(::fast_io::io_scan_forward<char8_t>(::fast_io::io_scan_alias(t)),
-												   io_print_forward<char8_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::basic_inplace_to<char8_t>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
+/// @brief Converts printable UTF-16 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
 inline constexpr void u16inplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char16_t, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<char16_t>(::fast_io::io_scan_forward<char16_t>(::fast_io::io_scan_alias(t)),
-													io_print_forward<char16_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::basic_inplace_to<char16_t>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
+/// @brief Converts printable UTF-32 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
 inline constexpr void u32inplace_to(T &&t, Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char32_t, T, Args...>};
-	if constexpr (failed)
-	{
-		::fast_io::basic_inplace_to_decay<char32_t>(::fast_io::io_scan_forward<char32_t>(::fast_io::io_scan_alias(t)),
-													io_print_forward<char32_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-	}
+	::fast_io::basic_inplace_to<char32_t>(
+		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
 
 namespace decay
 {
 
+/// @brief Constructs and scans a target from an already-normalized source pack without repeating alias normalization.
 template <::std::integral char_type, typename T, typename... Args>
 inline constexpr T basic_to_decay(Args... args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
 	if constexpr (sizeof...(Args) == 0)
 	{
 		return T();
 	}
-	else if constexpr (failed)
+	else
 	{
-		if constexpr (::std::is_scalar_v<T>)
+		// `Args...` have already passed the public source alias/forward boundary and are owned by value here. Re-applying
+		// `can_do_inplace_to` would alias those normalized objects a second time, so a non-idempotent alias set could make
+		// this admission test disagree with the direct `args...` expression in the body. Model precisely that body instead.
+		constexpr bool available{
+			::fast_io::details::inplace_to_decay_detect<
+				char_type,
+				::fast_io::details::inplace_to_normalized_target_t<char_type, T>,
+				Args...>};
+		// Construct the target only when the already-normalized source pack has a concrete conversion strategy.
+		if constexpr (available)
 		{
-			T v{};
-			basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
-											  args...);
-			return v;
+			// Scalar targets are value-initialized so a scanner can safely assign only the fields required by its protocol.
+			if constexpr (::std::is_scalar_v<T>)
+			{
+				T v{};
+				basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
+												  args...);
+				return v;
+			}
+			else
+			{
+				T v;
+				basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
+												  args...);
+				return v;
+			}
 		}
 		else
 		{
-			T v;
-			basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
-											  args...);
-			return v;
+			static_assert(available,
+				"the normalized arguments are not printable to the to() conversion strategy");
+			return T();
 		}
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
 	}
 }
 
 } // namespace decay
 
+namespace details
+{
+
+/// @brief Shared compiler-constant source boundary for every value-returning `to` facade.
+/// @details Both selected arms first normalize the public print sources and only then enter `basic_to_decay`, which
+///          constructs the scan target. This preserves the historical observable order: source alias CPO side effects
+///          precede `T`'s default construction. Constructing `T` here and delegating to `basic_inplace_to` would reverse
+///          that order even though the final character sequence is identical.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
+{
+	// An empty conversion has no source boundary and preserves the historical default-construction semantics directly.
+	if constexpr (sizeof...(Args) == 0u)
+	{
+		// `basic_to_decay` has always defined the empty conversion as ordinary value/default construction. Keep the public
+		// source boundary transparent for that case: there is no source protocol to normalize or compiler-constant query.
+		return ::fast_io::decay::basic_to_decay<char_type, T>();
+	}
+	else
+	{
+		constexpr bool ordinary_available{
+			::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
+		// Delay all conversion instantiation until the public alias and scanner protocols are known to be valid.
+		if constexpr (ordinary_available)
+		{
+			// The compiler-constant arm is available only when replacing sources preserves the exact selected scan strategy.
+			if constexpr (
+				::fast_io::details::inplace_to_compiler_constant_source_available<
+					char_type, T, Args &&...>())
+			{
+				if (::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_gate<char_type>(args...))
+				{
+					return ::fast_io::decay::basic_to_decay<char_type, T>(
+						::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_plain_true_forward<
+								false, char_type>(::std::forward<Args>(args))...);
+				}
+			}
+			return ::fast_io::decay::basic_to_decay<char_type, T>(
+				::fast_io::io_print_forward<char_type>(
+					::fast_io::io_print_alias(args))...);
+		}
+		else
+		{
+			static_assert(ordinary_available,
+				"either some arguments are not printable or the target is not scannable");
+		}
+	}
+}
+
+} // namespace details
+
+/// @brief Constructs a target in the requested character domain through the shared compiler-constant source boundary.
 template <::std::integral char_type, typename T, typename... Args>
 inline constexpr T basic_to(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<char_type, T>(io_print_forward<char_type>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::details::to_compiler_constant_checked_entry<char_type, T>(
+		::std::forward<Args>(args)...);
 }
 
+/// @brief Constructs a target by formatting and scanning narrow-character source fragments.
 template <typename T, typename... Args>
 [[nodiscard]] inline constexpr T to(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<char, T>(io_print_forward<char>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::basic_to<char, T>(::std::forward<Args>(args)...);
 }
 
+/// @brief Constructs a target by formatting and scanning wide-character source fragments.
 template <typename T, typename... Args>
 [[nodiscard]] inline constexpr T wto(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<wchar_t, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<wchar_t, T>(io_print_forward<wchar_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::basic_to<wchar_t, T>(::std::forward<Args>(args)...);
 }
 
+/// @brief Constructs a target by formatting and scanning UTF-8 code-unit source fragments.
 template <typename T, typename... Args>
 [[nodiscard]] inline constexpr T u8to(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char8_t, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<char8_t, T>(io_print_forward<char8_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::basic_to<char8_t, T>(::std::forward<Args>(args)...);
 }
 
+/// @brief Constructs a target by formatting and scanning UTF-16 code-unit source fragments.
 template <typename T, typename... Args>
 [[nodiscard]] inline constexpr T u16to(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char16_t, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<char16_t, T>(io_print_forward<char16_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::basic_to<char16_t, T>(::std::forward<Args>(args)...);
 }
 
+/// @brief Constructs a target by formatting and scanning UTF-32 code-unit source fragments.
 template <typename T, typename... Args>
 [[nodiscard]] inline constexpr T u32to(Args &&...args)
 {
-	constexpr bool failed{::fast_io::details::can_do_inplace_to<char32_t, T, Args...>};
-	if constexpr (failed)
-	{
-		return ::fast_io::decay::basic_to_decay<char32_t, T>(io_print_forward<char32_t>(io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(failed, "either somes args not printable or some type not detectable");
-		return T();
-	}
+	return ::fast_io::basic_to<char32_t, T>(::std::forward<Args>(args)...);
 }
 
 } // namespace fast_io

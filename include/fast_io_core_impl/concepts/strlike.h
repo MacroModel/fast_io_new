@@ -79,6 +79,44 @@ concept alias_strlike = requires(T &t) { strlike_alias_define(io_alias, t); };
 template <typename char_type, typename T>
 concept buffer_strlike = strlike<char_type, T> && ::fast_io::details::buffer_strlike_impl<char_type, T>;
 
+namespace details
+{
+
+/// @brief Proves a string-like put area which exists only during run-time evaluation.
+/// @details Some hosted containers own writable spare capacity at run time, but the language does not permit writes
+///          beyond their logical size during constant evaluation.  This protocol keeps that distinction explicit
+///          instead of making the ordinary `buffer_strlike` contract conditionally false.  A constant-evaluated
+///          `strlike_runtime_end` must equal `strlike_runtime_curr`; ordinary overflow/append operations then retain
+///          fully standard constexpr behavior without exposing an unconstructed character range.
+template <typename char_type, typename T>
+concept runtime_buffer_strlike_impl = requires(T &t) {
+	{ strlike_runtime_begin(io_strlike_type<char_type, T>, t) } -> ::std::same_as<char_type *>;
+	{ strlike_runtime_curr(io_strlike_type<char_type, T>, t) } -> ::std::same_as<char_type *>;
+	{ strlike_runtime_end(io_strlike_type<char_type, T>, t) } -> ::std::same_as<char_type *>;
+	requires requires(char_type *ptr) {
+		{ strlike_runtime_set_curr(io_strlike_type<char_type, T>, t, ptr) } -> ::std::same_as<void>;
+	};
+	requires requires(::std::size_t n) {
+		{ strlike_runtime_reserve(io_strlike_type<char_type, T>, t, n) } -> ::std::same_as<void>;
+	};
+};
+
+} // namespace details
+
+/// @brief A hosted string-like whose spare capacity is a put area only outside constant evaluation.
+/// @details The IO adapter consumes this capability exactly like an ordinary output buffer at run time.  During
+///          constant evaluation the provider exposes an empty current window, so every mutation is performed by its
+///          standard append/push-back protocol.  Keeping this separate from `buffer_strlike` prevents concat's raw
+///          exact-placement algorithms from writing outside a standard container's live logical range.
+template <typename char_type, typename T>
+concept runtime_buffer_strlike = strlike<char_type, T> &&
+	::fast_io::details::runtime_buffer_strlike_impl<char_type, T>;
+
+/// @brief Unifies portable and runtime-only writable string put-area protocols for output dispatch.
+template <typename char_type, typename T>
+concept output_buffer_strlike = buffer_strlike<char_type, T> ||
+	runtime_buffer_strlike<char_type, T>;
+
 template <typename char_type, typename T>
 concept auxiliary_strlike = strlike<char_type, T> && requires(T &t, char_type ch, char_type const *ptr) {
 	{ strlike_push_back(io_strlike_type<char_type, T>, t, ch) } -> ::std::same_as<void>;
@@ -210,6 +248,17 @@ concept concat_borrowed_scatter_precise_resize_safe_strlike =
 		{
 			strlike_concat_borrowed_scatter_precise_resize_safe(
 				io_strlike_type<char_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Runtime-put-area counterpart of `deferred_obuffer_commit_safe_strlike`.
+/// @details The promise covers only the non-constant writable window advertised by `runtime_buffer_strlike`; its
+///          constexpr window is empty and therefore never receives a deferred raw copy.
+template <typename char_type, typename T>
+concept runtime_deferred_obuffer_commit_safe_strlike =
+	runtime_buffer_strlike<char_type, T> && requires {
+		{
+			strlike_runtime_deferred_obuffer_commit_safe(io_strlike_type<char_type, T>)
 		} -> ::std::same_as<::std::true_type>;
 	};
 

@@ -220,117 +220,109 @@ inline constexpr void strlike_exact_resize_and_overwrite(
 }
 #endif
 
-#if (defined(__GLIBCXX__) && !defined(_LIBCPP_VERSION) && !defined(_GLIBCXX_USE_CXX11_ABI)) || \
-	(defined(_LIBCPP_VERSION) &&                                                               \
-	 !((_LIBCPP_VERSION < 20 && !defined(_LIBCPP_HAS_NO_ASAN) || _LIBCPP_HAS_ASAN) && defined(_LIBCPP_INSTRUMENTED_WITH_ASAN)))
+/*
+The implementation models below expose standard-string spare capacity only at
+run time.  Constant evaluation cannot write beyond `size()` even when
+`capacity()` is larger, so `strlike_runtime_end` deliberately collapses the
+put area to the current cursor there.  The output adapter consequently uses
+the ordinary append/push-back overflow protocol in constexpr evaluation while
+retaining the real SSO/heap put area in generated code.  This is separate from
+`buffer_strlike`: concat algorithms which write an exact result straight into
+an underlying owner must first establish its logical size through the portable
+precise-resize protocol.
 
+Implementations with contiguous-container sanitizer annotations remain on the
+append protocol.  Their spare capacity is deliberately poisoned until the
+container publishes a larger logical size, so a stateless output cursor cannot
+make that range writable before emission and then restore its annotation after
+commit.
+*/
+/// @brief Returns the beginning of an audited standard-string put area during runtime output.
 template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr char_type *
-strlike_begin(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
-			  ::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr char_type *strlike_runtime_begin(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
 {
 	return str.data();
 }
 
+/// @brief Returns the standard string's current logical output cursor without exposing non-live constexpr storage.
 template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr char_type *
-strlike_curr(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
-			 ::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr char_type *strlike_runtime_curr(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
 {
 	return str.data() + str.size();
 }
 
+/// @brief Returns runtime spare-capacity end while collapsing constant evaluation to the logical cursor.
 template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr char_type *
-strlike_end(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
-			::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr char_type *strlike_runtime_end(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str) noexcept
 {
+	FAST_IO_IF_CONSTEVAL
+	{
+		return str.data() + str.size();
+	}
 	return str.data() + str.capacity();
 }
-#if __cpp_lib_string_resize_and_overwrite >= 202110L
-namespace details
-{
 
-template <::std::integral char_type, typename size_type>
-struct empty_string_set_ptr
-{
-	::std::size_t realsize{};
-	inline constexpr ::std::size_t operator()(char_type const *, size_type) noexcept
-	{
-		return realsize;
-	}
-};
-
-} // namespace details
-
+/// @brief Publishes a runtime string cursor and verifies that constexpr callers did not advance beyond live storage.
 template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr ::std::size_t
-strlike_sso_size(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+inline constexpr void strlike_runtime_set_curr(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str, char_type *pointer) noexcept
 {
-	return ::fast_io::details::string_hack::local_capacity<
-		::std::basic_string<char_type, traits_type, allocator_type>>();
-}
-#endif
-
-template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr void
-strlike_set_curr(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
-				 ::std::basic_string<char_type, traits_type, allocator_type> &str, char_type *p)
-{
-#if (__cpp_lib_string_resize_and_overwrite >= 202110L || __cpp_constexpr_dynamic_alloc >= 201907L)
-	if (__builtin_is_constant_evaluated())
+	FAST_IO_IF_CONSTEVAL
 	{
-		auto old_ptr{str.data()};
-		::std::size_t const sz{static_cast<::std::size_t>(p - str.data())};
-#if __cpp_lib_string_resize_and_overwrite >= 202110L
-
-		str.resize_and_overwrite(
-			sz, ::fast_io::details::empty_string_set_ptr<
-					char_type, typename ::std::basic_string<char_type, traits_type, allocator_type>::size_type>{sz});
-#else
-		auto curr_ptr{str.data() + str.size()};
-		if (p < curr_ptr)
-		{
-			str.resize(sz);
-		}
-		else if (curr_ptr < p)
-		{
-			::std::size_t const oldsz{str.size()};
-			::std::size_t const diff{static_cast<::std::size_t>(p - curr_ptr)};
-			::fast_io::details::local_operator_new_array_ptr<char_type> buffer(diff);
-			for (::std::size_t i{}; i != diff; ++i)
-			{
-				buffer[i] = curr_ptr[i];
-			}
-			str.append(diff, 0);
-			auto newp{str.data() + oldsz};
-			for (::std::size_t i{}; i != diff; ++i)
-			{
-				newp[i] = buffer[i];
-			}
-		}
-#endif
-		if (old_ptr != str.data())
+		// The constexpr window is empty, so publishing any other cursor would prove a broken output algorithm.
+		if (pointer != str.data() + str.size()) [[unlikely]]
 		{
 			::fast_io::fast_terminate();
 		}
+		return;
 	}
-	else
-#endif
-	{
-		::fast_io::details::string_hack::set_end_ptr(str, p);
-		traits_type::assign(*p, char_type());
-	}
+	::fast_io::details::string_hack::set_end_ptr(str, pointer);
+	traits_type::assign(*pointer, char_type{});
 }
 
+/// @brief Reserves standard-string capacity for the runtime-only put-area adapter.
 template <::std::integral char_type, typename traits_type, typename allocator_type>
-inline constexpr void
-strlike_reserve(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
-				::std::basic_string<char_type, traits_type, allocator_type> &str, ::std::size_t n)
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+inline constexpr void strlike_runtime_reserve(
+	io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
+	::std::basic_string<char_type, traits_type, allocator_type> &str, ::std::size_t size)
 {
-	str.reserve(n);
+	str.reserve(size);
 }
-#endif
+
+/// @brief Marks the audited runtime standard-string adapter as safe for one deferred cursor commit.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr ::std::true_type strlike_runtime_deferred_obuffer_commit_safe(
+	io_strlike_type_t<char_type,
+		::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 inline constexpr void
 strlike_append(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,

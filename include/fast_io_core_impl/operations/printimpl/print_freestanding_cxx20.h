@@ -3938,6 +3938,104 @@ inline constexpr void print_single_pass_stage_and_write(
 #endif
 }
 
+/// @brief Proves the exact grow-in-place protocol for one already-normalized source and output.
+/// @details Source and destination evidence remain deliberately separate. The source promises a cached exact size,
+///          non-throwing checked emission, and independence from destination relocation. The output promises both an
+///          explicit growable put area and one deferred cursor publication. Non-throwing cursor access is required
+///          because exact emission starts before the new logical cursor is published.
+template <::std::integral char_type, typename output_type, typename value_type>
+inline constexpr bool print_cached_precise_growable_obuffer_available_v =
+	::fast_io::output_growth_independent_precise_reserve_printable<
+		char_type, value_type> &&
+	::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+		output_type> &&
+	::fast_io::operations::decay::defines::has_obuffer_flush_reserve_define<
+		output_type> &&
+	::fast_io::deferred_obuffer_commit_safe<char_type, output_type> &&
+	requires(output_type &output, char_type *cursor) {
+		{ obuffer_curr(output) } noexcept -> ::std::same_as<char_type *>;
+		{ obuffer_end(output) } noexcept -> ::std::same_as<char_type *>;
+		{ obuffer_set_curr(output, cursor) } noexcept -> ::std::same_as<void>;
+	};
+
+/// @brief Appends one cached exact source directly into a growable destination put area.
+/// @details The source is measured before any destination mutation. A capacity miss then requests exactly the
+///          additional complete record, after which fresh cursors are queried because growth may relocate storage.
+///          Emission is non-throwing and its endpoint is checked before one final cursor publication. Thus an
+///          allocation failure leaves the old destination unchanged, while no formatter exception can strand raw
+///          bytes behind an unpublished cursor. The caller owns mutex and whole-run status dispatch.
+template <bool line, ::std::integral char_type, typename output_type,
+		  typename value_type>
+	requires ::fast_io::details::decay::
+		print_cached_precise_growable_obuffer_available_v<
+			char_type, output_type, value_type>
+inline constexpr void print_cached_precise_growable_obuffer(
+	output_type &output, value_type &value)
+{
+	using source_type = ::std::remove_cvref_t<value_type>;
+	::std::size_t const payload_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, source_type>, value)};
+	::std::size_t const total_size{
+		::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<
+			char_type>(payload_size, static_cast<::std::size_t>(line))};
+	if (total_size == SIZE_MAX) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	if (total_size == 0u)
+	{
+		// Preserve the exact formatter invocation even for an empty spelling, but do not require a zero-capacity output
+		// to manufacture a non-null array. The protocol forbids a write when its exact extent is zero.
+		char_type sentinel{};
+		char_type *const first{__builtin_addressof(sentinel)};
+		char_type *const actual_end{print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, source_type>, first,
+			payload_size, value)};
+		if (actual_end != first) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		return;
+	}
+
+	char_type *current{obuffer_curr(output)};
+	char_type *put_end{obuffer_end(output)};
+	::std::ptrdiff_t available{
+		current == nullptr || put_end == nullptr ? -1 : put_end - current};
+	if (available < 0 ||
+		total_size > static_cast<::std::size_t>(available)) [[unlikely]]
+	{
+		// This operation requests additional capacity after the current logical cursor, rather than an absolute
+		// destination size. The source-side relocation proof is what permits this call before emission.
+		obuffer_flush_reserve_define(output, total_size);
+		current = obuffer_curr(output);
+		put_end = obuffer_end(output);
+		available = current == nullptr || put_end == nullptr
+			? -1
+			: put_end - current;
+		if (available < 0 ||
+			total_size > static_cast<::std::size_t>(available)) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	}
+
+	char_type *expected_end{current + payload_size};
+	char_type *const actual_end{print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, source_type>, current,
+		payload_size, value)};
+	if (actual_end != expected_end) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	// The line specialization publishes its newline in the same single cursor commit as the exact payload.
+	if constexpr (line)
+	{
+		*expected_end++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+	}
+	obuffer_set_curr(output, expected_end);
+}
+
 /// @brief    Emits one already-forwarded printable control argument to an output stream.
 /// @details  The dispatcher selects the most specialized single-argument path available: scatter, static reserve,
 ///           dynamic reserve, reserve-scatters, context printing, or the ordinary print_define customization.
@@ -5082,6 +5180,7 @@ inline constexpr void print_n_scatters(basic_io_scatter_t<scattertype> *pscatter
 				return print_n_scatters<n - 1, char_type>(pscatters, args...);
 			}
 		}
+		// Static scatter leaves already own stable descriptors and need no reserve-buffer materialization.
 		else if constexpr (
 			::fast_io::details::decay::print_static_scatter_traits<
 				char_type, ::std::remove_cvref_t<T>>::available)
@@ -12816,6 +12915,34 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 			// compile-time descriptor count intentionally models each dynamic producer as one contiguous range.
 			return ::fast_io::details::decay::print_runtime_scatter_plan_fast_entry<line>(optstm, args...);
 		}
+		// A singleton cached-size source can grow the destination once without perturbing mixed-run planning.
+		else if constexpr (
+			sizeof...(Args) == 1u &&
+			(::fast_io::details::decay::
+				 print_cached_precise_growable_obuffer_available_v<
+					 char_type, outputstmtype, Args> &&
+			 ...))
+		{
+			// Exact in-place append is deliberately a whole-run singleton strategy. Applying it inside the leaf dispatcher
+			// would reserve independently for every member of a mixed record and defeat its established combined sizing
+			// and scatter choices. Native run-time scatter remains above it; mutex and status normalization remain above
+			// this complete plain-run dispatcher.
+			FAST_IO_IF_NOT_CONSTEVAL
+			{
+				(::fast_io::details::decay::
+					 print_cached_precise_growable_obuffer<line, char_type>(
+						 optstm, args),
+				 ...);
+				return;
+			}
+			else
+			{
+				// Runtime string adapters expose writable capacity through implementation-defined CPOs which are
+				// intentionally unavailable during portable constant evaluation. Preserve the existing materialization
+				// dispatcher there.
+				return ::fast_io::operations::decay::print_freestanding_decay_no_pack<line>(optstm, args...);
+			}
+		}
 		else if constexpr (
 			::fast_io::operations::decay::print_plain_single_pass_staging_run<
 				line, char_type, outputstmtype, Args...>())
@@ -18498,10 +18625,11 @@ concept print_freestanding_okay_for_line =
 
 /// @brief    Public freestanding print entry point.
 /// @details  The wrapper obtains the stream reference, forwards semantic input arguments when present, and then
-///           delegates to the decayed freestanding dispatcher.  Keep this public policy boundary ordinarily inline:
-///           GCC 13/15 and Clang 23 at `-O3` produce byte-identical scalar and mixed-output probes without a force
-///           attribute, while ordinary placement leaves future large semantic graphs under the compiler's code-size
-///           budget instead of imposing a library-wide inlining decision.
+///           delegates to the decayed freestanding dispatcher. This broad policy boundary deliberately remains
+///           ordinary inline. Forcing it does expose mixed integer/floating literals to GCC 11--16, but a 16-call-site
+///           volatile probe makes GCC 15 optimize the complete dispatcher at every caller, increasing compile time by
+///           more than one half and growing text. Constant discovery therefore needs a smaller caller-side gate with an
+///           independently shared unknown-value continuation before this boundary can be forced safely.
 /// @tparam   line   true when a trailing newline is appended
 /// @tparam   output the output stream object type
 /// @tparam   Args   the argument types in the print run

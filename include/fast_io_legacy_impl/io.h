@@ -150,14 +150,15 @@ inline namespace io
 {
 
 template <typename T, typename... Args>
-// Tested GCC 13-16 leave this facade outlined at -O3. That boundary hides source-expression
-// constants from the core __builtin_constant_p gate and selects the full runtime
-// formatter. In a mixed integer/floating probe, removing only this marker grew GCC 16
-// object text from 55,936 to 63,053 bytes and changed both constant wrappers into calls;
-// the constant-double obuffer benchmark regressed from 0.984 ns to 17.6 ns. Clang
-// performs the required inlining unaided. The positive GCC policy remains open until
-// a newer compiler measures a reversal.
-#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+// GCC 11--16 leave this facade outlined at -O3. That boundary hides source-expression constants from the core
+// __builtin_constant_p gate and adds a public-wrapper call to the unknown-value path. Removing only this marker makes
+// every tested constant int/double obuffer wrapper call the runtime formatter; on GCC 11 and 12 it also slows a runtime
+// int/double obuffer loop by 10--12%. This is a measured compile-time tradeoff: at sixteen call sites forcing costs
+// roughly 1.5--2.8x compilation across GCC 11--16, but runtime text changes by only about -1.5% to +3% because the
+// compiler still shares the lower continuation. An explicitly noinline continuation was rejected because it reproduced
+// an approximately 12% runtime regression. Clang 17--23 performs the facade decision unaided, so the force attribute
+// is deliberately restricted to the future-open GCC range with demonstrated code-generation benefit.
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void print(T &&t, Args &&...args)
@@ -225,11 +226,10 @@ static_assert(device_and_type_ok, "some types are not printable for print");
 }
 
 template <typename T, typename... Args>
-// As with print above, tested GCC 13-16 otherwise outline this facade and erase the
-// source-expression visibility required by the compiler-constant gate. The same
-// A/B probe turns a constant println into a call when this marker is removed; the
-// positive GCC policy remains open until a newer compiler measures a reversal.
-#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+// Keep the line-terminating facade on the same measured GCC policy as print. GCC 11--16 otherwise outline it and lose
+// both caller-expression constant discovery and the small unknown-value hot path, whereas Clang 17--23 needs no
+// override. The lower continuation remains compiler-shareable, which bounds text growth at larger call-site counts.
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void println(T &&t, Args &&...args)
