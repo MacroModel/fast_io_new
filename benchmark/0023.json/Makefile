@@ -18,7 +18,12 @@ CPPFLAGS += -I$(ROOT)/include \
 	-I$(GLAZE_ROOT)/include
 CXXFLAGS ?= -O3 -march=native -std=c++23 -DNDEBUG -Wall -Wextra -Wpedantic
 CFLAGS ?= -O3 -march=native -std=c17 -DNDEBUG -Wall -Wextra -Wpedantic
+DEPFLAGS := -MMD -MP
 LDLIBS += -pthread
+
+CXX_SOURCES := json_bench.cc fast_io_adapter.cc yyjson_adapter.cc \
+	rapidjson_adapter.cc simdjson_adapter.cc glaze_adapter.cc
+CXX_OBJECTS := $(addprefix $(BUILD_DIR)/,$(CXX_SOURCES:.cc=.o))
 
 .PHONY: all fetch run clean FORCE
 
@@ -33,11 +38,15 @@ $(BUILD_DIR):
 $(BUILD_DIR)/yyjson.o: $(YYJSON_ROOT)/src/yyjson.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(YYJSON_ROOT)/src -c $< -o $@
 
-$(OUT): json_bench.cc $(BUILD_DIR)/yyjson.o \
-	$(SIMDJSON_ROOT)/singleheader/simdjson.cpp FORCE | $(BUILD_DIR)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) json_bench.cc \
-		$(SIMDJSON_ROOT)/singleheader/simdjson.cpp $(BUILD_DIR)/yyjson.o \
-		$(LDLIBS) -o $@
+$(BUILD_DIR)/%.o: %.cc benchmark_adapter.h | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/simdjson_library.o: $(SIMDJSON_ROOT)/singleheader/simdjson.cpp | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(OUT): $(CXX_OBJECTS) $(BUILD_DIR)/simdjson_library.o $(BUILD_DIR)/yyjson.o FORCE | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(CXX_OBJECTS) $(BUILD_DIR)/simdjson_library.o \
+		$(BUILD_DIR)/yyjson.o $(LDLIBS) -o $@
 
 run: $(OUT)
 	taskset -c $(CPU) $(OUT)
@@ -47,3 +56,4 @@ clean:
 
 FORCE:
 
+-include $(CXX_OBJECTS:.o=.d) $(BUILD_DIR)/simdjson_library.d
