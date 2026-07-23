@@ -42,6 +42,16 @@ struct incomplete_bound_source;
 struct invalid_plan_sink
 {};
 
+struct mutable_only_plan_sink
+{
+	using output_char_type = char;
+};
+
+struct const_plan_sink
+{
+	using output_char_type = char;
+};
+
 // Index holes are part of the public arity but not part of the observable source graph. This customization makes any
 // accidental normalization visible at runtime while deliberately providing no printable representation.
 struct observed_plan_hole
@@ -251,6 +261,30 @@ inline constexpr plan_sink output_stream_ref_define(plan_sink sink) noexcept
 {
 	return sink;
 }
+
+[[maybe_unused]] inline void write_all_overflow_define(
+	mutable_only_plan_sink &, char const *, char const *) noexcept
+{}
+
+[[maybe_unused]] inline void write_all_overflow_define(
+	const_plan_sink const &, char const *, char const *) noexcept
+{}
+
+// Compiled-plan output is a named observer expression. Its capability proof
+// must preserve const instead of borrowing a mutable terminal operation which
+// the descriptor emitter cannot invoke.
+static_assert(
+	!::fast_io::details::decay::compiled_scatter_plan_final_output_v<
+		char, mutable_only_plan_sink const &>);
+static_assert(
+	::fast_io::details::decay::compiled_scatter_plan_final_output_v<
+		char, const_plan_sink const &>);
+static_assert(
+	!::fast_io::details::decay::compiled_scatter_plan_print_output<
+		char, mutable_only_plan_sink const &>());
+static_assert(
+	::fast_io::details::decay::compiled_scatter_plan_print_output<
+		char, const_plan_sink const &>());
 
 inline void scatter_write_all_overflow_define(plan_sink sink,
 											  fast_io::basic_io_scatter_t<char> const *scatters,

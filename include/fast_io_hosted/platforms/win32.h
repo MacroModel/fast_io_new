@@ -957,33 +957,18 @@ using tlc_win32_9xa_dir_handle_path_str = ::fast_io::containers::basic_string<ch
 template <typename... Args>
 constexpr inline win32_9xa_dir_handle_path_str concat_win32_9xa_dir_handle_path_str(Args &&...args)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<char8_t>, Args...>};
-	if constexpr (type_error)
-	{
-		return ::fast_io::basic_general_concat<false, char8_t, win32_9xa_dir_handle_path_str>(
-			::fast_io::io_print_forward<char8_t>(::fast_io::io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(type_error, "some types are not printable, so we cannot concat ::fast_io::win32::details::win32_9xa_dir_handle_path_str");
-		return {};
-	}
+	// Path construction is a concat operation. Let its checked entry prove the selected string destination and perform
+	// exactly one normalization of this wrapper's named lvalue arguments.
+	return ::fast_io::basic_general_concat_checked<
+		false, char8_t, win32_9xa_dir_handle_path_str>(args...);
 }
 
 template <typename... Args>
 constexpr inline tlc_win32_9xa_dir_handle_path_str concat_tlc_win32_9xa_dir_handle_path_str(Args &&...args)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<char8_t>, Args...>};
-	if constexpr (type_error)
-	{
-		return ::fast_io::basic_general_concat<false, char8_t, tlc_win32_9xa_dir_handle_path_str>(
-			::fast_io::io_print_forward<char8_t>(::fast_io::io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(type_error, "some types are not printable, so we cannot concat ::fast_io::win32::details::tlc_win32_9xa_dir_handle_path_str");
-		return {};
-	}
+	// Keep the thread-local path result on the same exact concat admission and one-normalization execution path.
+	return ::fast_io::basic_general_concat_checked<
+		false, char8_t, tlc_win32_9xa_dir_handle_path_str>(args...);
 }
 } // namespace win32::details
 

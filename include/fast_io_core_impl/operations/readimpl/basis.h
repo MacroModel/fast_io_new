@@ -110,11 +110,34 @@ inline constexpr
 	{
 		auto const current_position{
 			::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, 0, ::fast_io::seekdir::cur)};
-		auto ret{::fast_io::details::pread_some_cold_impl(
-			insm, first, last, current_position / static_cast<::fast_io::intfpos_t>(sizeof(char_type)))};
-		::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, (ret - first) * sizeof(char_type),
-																	::fast_io::seekdir::cur);
-		return ret;
+		::std::byte *const first_bytes{reinterpret_cast<::std::byte *>(first)};
+		::std::byte *const last_bytes{reinterpret_cast<::std::byte *>(last)};
+		::std::byte *read{
+			::fast_io::details::pread_some_bytes_cold_impl(insm, first_bytes, last_bytes, current_position)};
+		::std::ptrdiff_t const byte_difference{read - first_bytes};
+		::std::size_t const complete_characters{
+			static_cast<::std::size_t>(byte_difference) / sizeof(char_type)};
+		::std::size_t const partial_bytes{
+			static_cast<::std::size_t>(byte_difference) % sizeof(char_type)};
+		::std::size_t character_progress{complete_characters};
+		if (partial_bytes != 0u)
+		{
+			::std::size_t const remaining_bytes{sizeof(char_type) - partial_bytes};
+			auto const continuation_position{
+				::fast_io::fposoffadd_nonegative(current_position, byte_difference)};
+			::fast_io::details::pread_all_bytes_cold_impl(
+				insm, read, read + remaining_bytes, continuation_position);
+			++character_progress;
+		}
+		// Byte seek and byte-pread concepts establish one coordinate system; the pread progress invariant keeps `read`
+		// inside the destination range. Using the queried byte position verbatim is required when it is not character
+		// aligned. Finishing a partial object before exposing typed progress preserves object bounds and lets the checked
+		// multiplication advance the sequential cursor by exactly the initialized character prefix.
+		auto const byte_progress{::fast_io::details::scatter_fpos_mul<char_type>(
+			::fast_io::fposoffadd_nonegative(0, character_progress))};
+		::fast_io::operations::decay::input_stream_seek_bytes_decay(
+			insm, byte_progress, ::fast_io::seekdir::cur);
+		return first + character_progress;
 	}
 }
 

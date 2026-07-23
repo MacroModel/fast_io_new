@@ -11808,6 +11808,11 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 	::std::int_least32_t rounded_e10 = {}, ::std::size_t requested = {},
 	::std::size_t = {}) noexcept
 {
+	// `requested` selects native-u128 DA shortcuts below.  Native MSVC does not
+	// provide that integer type and therefore compiles every such block out;
+	// retain the shared signature while making the intentionally unused parameter
+	// explicit for `/W4 /WX` builds.
+	(void)requested;
 	// Equal decimal lengths do not prove that the shortest carrier is the
 	// correctly rounded P-digit coefficient.  The shortest interval may select a
 	// carrier on the opposite side of the exact value from the P-digit rounding

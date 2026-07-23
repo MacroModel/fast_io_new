@@ -52,10 +52,15 @@ template <::std::size_t I, typename T>
 struct tuple_element_impl_
 {
 #ifndef __INTELLISENSE__
+// GCC 16.1 ICEs in `init_subob_ctx` when an aggregate returned from a function inherits a base containing a
+// `[[no_unique_address]]` empty member. The minimized failure is independent of fast_io and GCC 17 trunk accepts the
+// original layout, so suppress the attribute only for real GCC 16 and retain the future layout policy unchanged.
+#if !(defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 16)
 #if __has_cpp_attribute(msvc::no_unique_address)
 	[[msvc::no_unique_address]]
 #elif __has_cpp_attribute(no_unique_address)
 	[[no_unique_address]]
+#endif
 #endif
 #endif
 	T val_;
@@ -151,7 +156,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
 	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &self) noexcept
 {
-	return static_cast<decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
+	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
 }
 
 template <typename T, typename... Args>
@@ -161,7 +166,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &&self) noexcept
 {
 	return ::std::move(
-		static_cast<decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
+		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
 }
 
 template <typename T, typename... Args>
@@ -170,7 +175,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
 	constexpr auto&& get(::fast_io::containers::tuple<Args...> &self) noexcept
 {
-	return static_cast<decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
+	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
 }
 
 template <typename T, typename... Args>
@@ -180,7 +185,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	constexpr auto&& get(::fast_io::containers::tuple<Args...> &&self) noexcept
 {
 	return ::std::move(
-		static_cast<decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
+		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
 }
 
 namespace details

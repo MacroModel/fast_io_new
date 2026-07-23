@@ -83,28 +83,6 @@ validate_printf_argument_list() noexcept
 	return result;
 }
 
-template <auto format_literal, printf_argument_list_error error,
-		  ::std::size_t argument_index, ::std::size_t source_position>
-inline consteval void diagnose_printf_argument_list()
-{
-	if constexpr (error == printf_argument_list_error::index_out_of_range)
-	{
-		static_assert(error == printf_argument_list_error::none,
-					  "fast_io format: printf argument index is out of range");
-	}
-	else if constexpr (error == printf_argument_list_error::unreferenced_argument)
-	{
-		static_assert(error == printf_argument_list_error::none,
-					  "fast_io format: printf format does not reference every supplied argument");
-	}
-	else
-	{
-		static_assert(error == printf_argument_list_error::none);
-	}
-	(void)argument_index;
-	(void)source_position;
-}
-
 } // namespace fast_io::fmt::details
 
 namespace fast_io::fmt
@@ -137,26 +115,18 @@ concept percent_format_rule = format_rule_for<format_literal, printf_fmt_t>;
 
 /** Enforces printf's exact argument domain before syntax-neutral lowering. */
 template <basic_fixed_string format_literal, typename... argument_types>
-inline consteval void validate_format_argument_list(
-	printf_fmt_t,
-	::fast_io::fmt::details::format_argument_list_validation_adl::
-		argument_type_list<argument_types...>) noexcept
+[[nodiscard]] inline constexpr bool validate_format_argument_list(
+	printf_fmt_t) noexcept
 {
 	constexpr auto validation{
 		::fast_io::fmt::details::validate_printf_argument_list<
 			format_literal, sizeof...(argument_types)>()};
 	// Indexed replacement lowering already owns the missing-argument
-	// diagnostic.  This rule-level contract supplies the complementary check
-	// which ordinary per-reference resolution cannot observe: an argument that
-	// was supplied but never referenced at all.
-	if constexpr (validation.error ==
-				  ::fast_io::fmt::details::printf_argument_list_error::
-					  unreferenced_argument)
-	{
-		::fast_io::fmt::details::diagnose_printf_argument_list<
-			format_literal, validation.error, validation.argument_index,
-			validation.source_position>();
-	}
+	// diagnostic. This rule-level contract supplies the complementary complete
+	// domain proof. Its exact bool result remains a valid expression when false,
+	// allowing the generic consumer to reject it explicitly on every frontend.
+	return validation.error ==
+		   ::fast_io::fmt::details::printf_argument_list_error::none;
 }
 
 /** Registers percent argument selection and value-rule lowering through ADL. */

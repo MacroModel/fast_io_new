@@ -97,36 +97,33 @@ inline constexpr auto checked_program{
 namespace format_argument_list_validation_adl
 {
 
-template <typename... argument_types>
-struct argument_type_list
-{};
-
-// An argument-list contract is grammar-owned.  The generic lowering path only
-// invokes this optional CPO.  The type-only carrier preserves arrays,
-// cv-qualification, named-argument metadata, and every other fact required to
-// resolve structural references without transporting run-time state.
-template <auto>
+// An argument-list contract is grammar-owned. Source types are explicit
+// template arguments rather than members of a function-argument carrier: this
+// preserves arrays, cv/ref qualification, and named metadata without adding
+// their namespaces to ADL. Only the grammar token selects the customization,
+// so a supplied value type cannot hide mandatory brace/printf validation by
+// introducing an ambiguous overload.
+template <auto, typename...>
 void validate_format_argument_list() = delete;
 
 template <auto format_literal, typename grammar_type,
 		  typename... argument_types>
 concept expression = requires {
-	validate_format_argument_list<format_literal>(
-		::std::remove_cvref_t<grammar_type>{},
-		argument_type_list<argument_types...>{});
+	{
+		validate_format_argument_list<format_literal, argument_types...>(
+			::std::remove_cvref_t<grammar_type>{})
+	} -> ::std::same_as<bool>;
 };
 
 template <auto format_literal, typename grammar_type,
 		  typename... argument_types>
 	requires expression<format_literal, grammar_type, argument_types...>
-inline consteval void invoke() noexcept(noexcept(
-	validate_format_argument_list<format_literal>(
-		::std::remove_cvref_t<grammar_type>{},
-		argument_type_list<argument_types...>{})))
+[[nodiscard]] inline consteval bool invoke() noexcept(noexcept(
+	validate_format_argument_list<format_literal, argument_types...>(
+		::std::remove_cvref_t<grammar_type>{})))
 {
-	validate_format_argument_list<format_literal>(
-		::std::remove_cvref_t<grammar_type>{},
-		argument_type_list<argument_types...>{});
+	return validate_format_argument_list<format_literal, argument_types...>(
+		::std::remove_cvref_t<grammar_type>{});
 }
 
 } // namespace format_argument_list_validation_adl

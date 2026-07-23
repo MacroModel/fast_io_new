@@ -109,7 +109,7 @@ struct custom_value
 };
 
 template <typename context_type>
-[[nodiscard]] consteval custom_state format_parse_define(
+[[nodiscard]] constexpr custom_state format_parse_define(
 	::fast_io::io_type_t<custom_value>, context_type context) noexcept
 {
 	using char_type = typename context_type::char_type;
@@ -172,7 +172,7 @@ template <typename output_char_type, typename node_char_type, bool alternate>
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval ::std::size_t format_static_reserve_size(
+[[nodiscard]] constexpr ::std::size_t format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth> context,
 	::fast_io::fmt::basic_static_format_as_t<char_type>,
 	format_as_value const &) noexcept
@@ -188,7 +188,7 @@ template <auto specification, ::std::size_t depth,
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval char_type *format_static_reserve_define(
+[[nodiscard]] constexpr char_type *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char_type>, char_type *output,
 	format_as_value const &value) noexcept
@@ -203,7 +203,7 @@ template <auto specification, ::std::size_t depth,
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval ::std::size_t format_static_reserve_size(
+[[nodiscard]] constexpr ::std::size_t format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char_type>,
 	empty_value const &) noexcept
@@ -213,7 +213,7 @@ template <auto specification, ::std::size_t depth,
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval char_type *format_static_reserve_define(
+[[nodiscard]] constexpr char_type *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char_type>, char_type *output,
 	empty_value const &) noexcept
@@ -223,7 +223,7 @@ template <auto specification, ::std::size_t depth,
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type, auto state>
-[[nodiscard]] consteval ::std::size_t format_static_reserve_size(
+[[nodiscard]] constexpr ::std::size_t format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth> context,
 	::fast_io::fmt::basic_custom_format_state_t<char_type, state>,
 	custom_value const &) noexcept
@@ -239,7 +239,7 @@ template <auto specification, ::std::size_t depth,
 
 template <auto specification, ::std::size_t depth,
 		  ::fast_io::fmt::format_character char_type, auto state>
-[[nodiscard]] consteval char_type *format_static_reserve_define(
+[[nodiscard]] constexpr char_type *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_custom_format_state_t<char_type, state>,
 	char_type *output, custom_value const &value) noexcept
@@ -275,7 +275,7 @@ inline unsigned runtime_calls{};
 
 // Both return types deliberately violate the exact terminal-output protocol.
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval bool format_static_reserve_size(
+[[nodiscard]] constexpr bool format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char>,
 	value_type const &) noexcept
@@ -284,7 +284,7 @@ template <auto specification, ::std::size_t depth>
 }
 
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval char const *format_static_reserve_define(
+[[nodiscard]] constexpr char const *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char>, char *output,
 	value_type const &) noexcept
@@ -313,7 +313,7 @@ inline unsigned runtime_calls{};
 }
 
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval ::std::size_t format_static_reserve_size(
+[[nodiscard]] constexpr ::std::size_t format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char>,
 	value_type const &) noexcept
@@ -322,7 +322,7 @@ template <auto specification, ::std::size_t depth>
 }
 
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval char *format_static_reserve_define(
+[[nodiscard]] constexpr char *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth>,
 	::fast_io::fmt::basic_static_format_as_t<char>, char *output,
 	value_type const &value) noexcept
@@ -402,14 +402,14 @@ struct parse_state
 };
 
 template <typename context_type>
-[[nodiscard]] consteval parse_state format_parse_define(
+[[nodiscard]] constexpr parse_state format_parse_define(
 	::fast_io::io_type_t<value_type>, context_type) noexcept
 {
 	return {};
 }
 
 template <typename context_type>
-[[nodiscard]] consteval parse_state format_parse_define(
+[[nodiscard]] constexpr parse_state format_parse_define(
 	::fast_io::io_type_t<leaf_type>, context_type) noexcept
 {
 	return {};
@@ -554,7 +554,7 @@ struct value_type
 {};
 
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval ::std::size_t format_static_reserve_size(
+[[nodiscard]] constexpr ::std::size_t format_static_reserve_size(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth> context,
 	::fast_io::fmt::basic_static_format_as_t<char>,
 	value_type const &) noexcept
@@ -569,7 +569,7 @@ template <auto specification, ::std::size_t depth>
 }
 
 template <auto specification, ::std::size_t depth>
-[[nodiscard]] consteval char *format_static_reserve_define(
+[[nodiscard]] constexpr char *format_static_reserve_define(
 	::fast_io::fmt::basic_static_format_context_t<specification, depth> context,
 	::fast_io::fmt::basic_static_format_as_t<char>, char *output,
 	value_type const &value) noexcept

@@ -57,8 +57,7 @@ inline constexpr bool io_print_alias_nothrow = []() constexpr {
 ///          bounded copy solely to establish ownership even when the compiler lowers its inevitable return through
 ///          caller storage.
 inline constexpr ::std::size_t io_print_forward_transport_max_value_size{
-	::fast_io::details::print_forward_transport_max_value_size
-};
+	::fast_io::details::print_forward_transport_max_value_size};
 
 /// @brief Selects the category-aware value representation shared by print semantic manipulators.
 /// @details Trivial copyability alone is not a cost proof: a large pack or condition can be trivial while copying its
@@ -308,6 +307,29 @@ inline constexpr bool io_print_forward_admissible = []() constexpr {
 	}
 }();
 
+/// @brief Proves that scan-alias normalization can execute its selected transport branch.
+/// @details Function and valid alias branches construct their own known result. Every lvalue fallback is borrowed,
+///          including an immovable manipulator. A non-lvalue fallback must instead cross the return boundary as owned
+///          `remove_reference_t<T>` storage; completeness is tested before the constructibility trait so a forward-
+///          declared or immovable rvalue makes the call constraint-false rather than diagnosing inside the function.
+template <typename T>
+inline constexpr bool io_scan_alias_admissible = []() constexpr {
+	using no_ref_t = ::std::remove_reference_t<T>;
+	if constexpr (::std::is_function_v<no_ref_t> || ::fast_io::alias_scannable<T> ||
+				  ::std::is_lvalue_reference_v<T &&>)
+	{
+		return true;
+	}
+	else if constexpr (!::fast_io::details::io_print_complete_object<no_ref_t>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::constructible_from<no_ref_t, T &&>;
+	}
+}();
+
 } // namespace details
 
 /// @brief Applies the print-alias customization for the argument's actual value category.
@@ -413,6 +435,7 @@ inline constexpr decltype(auto) io_scan_forward(T &&t)
 ///          not add a copy to the common path. The function is not unconditionally `noexcept`, because an alias
 ///          customization or rvalue construction may validate, allocate, or throw.
 template <typename T>
+	requires ::fast_io::details::io_scan_alias_admissible<T>
 inline constexpr decltype(auto) io_scan_alias(T &&t)
 {
 	using no_ref_t = ::std::remove_reference_t<T>;
@@ -430,10 +453,13 @@ inline constexpr decltype(auto) io_scan_alias(T &&t)
 	{
 		if constexpr (::std::is_lvalue_reference_v<T &&>)
 		{
+			// The lvalue branch returns the exact existing object, so the classification marker needs no copy/move proof.
 			return (t);
 		}
 		else
 		{
+			// The entry constraint proves this exact `no_ref_t(T&&)` expression before the owning branch is instantiated.
+			// Ownership is mandatory here because returning a reference to the forwarding parameter would dangle.
 			return no_ref_t(::std::forward<T>(t));
 		}
 	}

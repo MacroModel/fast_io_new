@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <span>
+
 #include "locale/module.h"
 
 namespace fast_io

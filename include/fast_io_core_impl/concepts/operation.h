@@ -389,14 +389,15 @@ print_compiler_constant_materialize_gate_proven(
 		::fast_io::io_reserve_type<char_type, T>, value);
 }
 
-/// @brief Marks an eligibility query as safe for direct optimizer evaluation.
-/// @details `__builtin_constant_p` does not generally look through an arbitrary
-///          function-call expression.  This optional type-only CPO is therefore
-///          a strong contract: the query must be forced inline, and every unknown
-///          source field must make the complete query fold to false with no
-///          surviving work.  Marked queries may consequently be evaluated
-///          directly; unmarked extensions remain supported through the
-///          conservative builtin-on-call-expression gate.
+/// @brief Marks an eligibility query as safe for direct optimizer evaluation at the consumer-owned expression boundary.
+/// @details `__builtin_constant_p` does not generally look through an arbitrary call. This optional type-only CPO is
+///          therefore a strong expression contract: every value-bearing field must be tested directly and every
+///          independently unknown field must make the complete query fold to false with no surviving work. The shared
+///          print/concat/to caller boundary is responsible for any measured mandatory inlining needed to expose the
+///          original expression. The provider query itself remains ordinary inline unless an isolated A/B proves that
+///          a narrower attribute is required; imposing `always_inline` merely because this marker exists would enlarge
+///          every future consumer without proving a deletion benefit. Marked queries may be evaluated directly;
+///          unmarked extensions retain the conservative builtin-on-call-expression gate.
 /// @fn print_compiler_constant_materialization_query_inline_safe
 template <typename char_type, typename T>
 concept compiler_constant_query_inline_safe =
@@ -414,9 +415,10 @@ concept compiler_constant_query_inline_safe =
 ///          equivalent. It is intentionally type-only and exact-`true_type`: arbitrary alias/status extensions must
 ///          keep the historical normalization boundary unless they explicitly establish this stronger contract.
 ///
-///          The marker also promises that the source's eligibility query is a pure, forced-inline optimizer query.
-///          Every unknown payload field must therefore fold the query to false without leaving run-time work. This is
-///          what permits the false arm of the public early gate to be the unchanged print entry.
+///          The marker also promises that the source's eligibility query is pure and expression-transparent under the
+///          consumer-owned query boundary. Every unknown payload field must therefore fold the query to false without
+///          leaving run-time work. This is what permits the false arm of the public early gate to be the unchanged print
+///          entry; placement of the provider function itself remains governed by the measured rule above.
 /// @fn print_compiler_constant_pre_normalization_safe
 template <typename char_type, typename T>
 concept compiler_constant_pre_normalization_safe =
@@ -426,6 +428,117 @@ concept compiler_constant_pre_normalization_safe =
 		{
 			print_compiler_constant_pre_normalization_safe(
 				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Marks a compiler-constant provider whose complete optimizer graph has a permanent deletion classification.
+/// @details The semantic replacement contract above is intentionally insufficient for code-generation admission. A
+///          provider may satisfy every observable-output requirement while its query, materializer, or proxy writer
+///          remains as run-time work after `__builtin_constant_p` succeeds. This exact-`true_type` marker states that
+///          the provider has permanent constant/unknown query roots for every value-bearing field and recursive
+///          assembly/IR evidence for its declared source-shape categories. A constant root must erase the query,
+///          materializer, proxy writer, and native formatter selected by the audited consumer; an independently unknown
+///          field must fold the query to false and retain the ordinary native continuation without proxy residue.
+///
+///          This is only the provider half of the proof. Each print, concat, or conversion consumer must still combine
+///          the marker with its own destination, record-shape, compiler, and version deletion proof before evaluating a
+///          value query. A provider extension without this marker therefore remains semantically usable but is
+///          fail-closed for the optional optimization. Supplying the marker without the stated paired evidence violates
+///          the concept contract; returning `bool`, another truth-valued type, or deriving it from a value query is not
+///          sufficient. The CPO must be type-only so a rejecting consumer can inspect it before forming a replacement.
+/// @fn print_compiler_constant_materialization_graph_proven
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_materialization_graph_proven_source_shape =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_materialization_graph_proven(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Combines a provider's code-generation classification with its complete semantic replacement protocol.
+/// @details Consumers which have already selected a supported compiler/destination category may use this conjunction;
+///          the source-shape form remains available for earlier fail-closed ordering.
+template <typename char_type, typename T>
+concept compiler_constant_materialization_graph_proven =
+	::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+		char_type, T> &&
+	::fast_io::compiler_constant_printable<char_type, T>;
+
+/// @brief Marks a flat scalar source whose compiler-constant graph has no nested semantic or precision state.
+/// @details The provider promises that the source query observes only the scalar payload represented by this source and
+///          that successful materialization produces one flat replacement leaf with the same spelling. The replacement
+///          may expose reserve, precise, or immutable-fragment protocols, but it must not contain a condition, pack,
+///          dynamic width/precision owner, or another value-dependent operation graph.
+///
+///          This marker is deliberately independent from `compiler_constant_pre_normalization_safe`. A
+///          compiler-specific consumer can reject an unsupported source shape before asking whether the source owns the
+///          replacement protocol at all. Passing this marker proves shape only: the consumer must then establish the
+///          complete pre-normalization contract and prove, for its exact compiler/version, record shape, and destination
+///          strategy, that a successful query erases the complete replacement formatter. The marker CPO's own
+///          constraints must depend only on primitive source traits; depending on this full concept, the candidate
+///          predicate, or a replacement type would create a recursive satisfaction graph and violate fail-closed order.
+/// @fn print_compiler_constant_simple_scalar_source
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_simple_scalar_source_shape =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_simple_scalar_source(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Combines the flat-scalar shape marker with the complete source replacement contract.
+/// @details Consumers which do not need ordered fail-closed probing may use this conjunction directly. A positive result
+///          still says nothing about code-generation profitability or deletion on a particular compiler.
+template <typename char_type, typename T>
+concept compiler_constant_simple_scalar_source =
+	::fast_io::compiler_constant_simple_scalar_source_shape<char_type, T> &&
+	::fast_io::compiler_constant_pre_normalization_safe<char_type, T>;
+
+/// @brief Marks a compiler-constant source graph which owns run-time floating precision state.
+/// @details The provider promises that the source, a spelling wrapper, or an exact semantic/layout wrapper contains a
+///          descendant with both a floating payload and a value-dependent precision payload, and that materializing the
+///          complete graph constructs the descendant's precision plan. A wrapper may forward this marker only when its
+///          ordinary execution necessarily retains that exact child graph; unrelated siblings or inactive condition
+///          arms are insufficient. This is a negative code-generation partition, not permission to materialize:
+///          consumers use it to reject compiler/version paths which retain the planner after
+///          `__builtin_constant_p` succeeds. The marker must be type-only and must not evaluate either payload, form a
+///          replacement, or claim output equivalence.
+/// @fn print_compiler_constant_dynamic_precision_floating_leaf
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_dynamic_precision_floating_source_shape =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_dynamic_precision_floating_leaf(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Marks a source whose ordinary spelling is one borrowed text range.
+/// @details This is a source-shape fact, not permission to replace the source.
+///          The provider promises that ordinary normalization borrows the exact
+///          `[data, data + size)` character sequence for the complete synchronous
+///          operation and adds no formatting state. A consumer may use the fact
+///          to reject compiler-constant materialization when that strategy would
+///          only copy the same range into automatic storage. The marker is
+///          type-only; it must not read the source, invoke its alias, or claim
+///          that its characters are constant.
+/// @fn print_compiler_constant_borrowed_text_leaf
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_borrowed_text_source_shape =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_borrowed_text_leaf(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::true_type>;
 	};
 
@@ -465,6 +578,66 @@ concept compiler_constant_static_fragment_printable =
 	(print_compiler_constant_static_fragments_size(
 		 ::fast_io::io_reserve_type<char_type,
 			 ::std::remove_cvref_t<T>>) != 0u);
+
+/// @brief Marks a proxy whose immutable fragments are the preferred bounded mid-end materialization spelling.
+/// @details This marker strengthens `compiler_constant_static_fragment_printable` for consumers which need one
+///          contiguous character range rather than scatter output. The provider promises that zero-initializing the
+///          declared maximum descriptor array, invoking the fragment define CPO once, and copying every nonempty slot
+///          in index order produces exactly the ordinary reserve spelling and no more than its type-level reserve
+///          extent. It also promises that unused slots may remain zero descriptors and that expanding the bounded slots
+///          does not add observable work.
+///
+///          A consumer may select this spelling only after a compiler-specific deletion test proves that the provider's
+///          exact writer would retain run-time formatting work and that expanded fragment copying is fully eliminated
+///          for a successful optimizer query. Unknown inputs must fail before proxy construction, and a consumer must
+///          still bound the aggregate descriptor count and character extent. The marker is therefore a formal strategy
+///          preference, not permission to allocate an unbounded descriptor or character array.
+/// @fn print_compiler_constant_prefer_expanded_fragments
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_expanded_fragment_preferred =
+	::std::integral<char_type> &&
+	::fast_io::compiler_constant_static_fragment_printable<char_type, T> &&
+	::fast_io::reserve_printable<char_type, T> && requires {
+		{
+			print_compiler_constant_prefer_expanded_fragments(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Classifies the source shape of a replacement which prefers expanded immutable fragments.
+/// @details This source-side marker lets a consumer reject an unaudited code-generation strategy before forming the
+///          replacement type or evaluating its value query. The provider promises that a successful materialization of
+///          this exact source produces a replacement satisfying `compiler_constant_expanded_fragment_preferred` for the
+///          same character type. The marker is type-only and has no output, aliasing, or status effect. Its CPO
+///          constraints must depend only on primitive source traits; referring to the complete safety contract would
+///          make an early fail-closed consumer recursively instantiate the replacement protocol it is meant to avoid.
+///
+///          The marker does not authorize fragment materialization. A consumer may use it only as an early strategy
+///          partition: either its complete compiler/version deletion proof covers the expanded-fragment graph, or it
+///          must fail closed before `__builtin_constant_p`. This distinction is needed when one IO destination erases a
+///          provider graph while another retains descriptor traversal or formatting work.
+/// @fn print_compiler_constant_source_prefer_expanded_fragments
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_expanded_fragment_preferred_source_shape =
+	::std::integral<char_type> && requires {
+		{
+			print_compiler_constant_source_prefer_expanded_fragments(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Combines the expanded-fragment source marker with the complete replacement contract.
+/// @details This conjunction is appropriate only after a consumer's compiler partition has admitted the source shape.
+///          It proves semantic materialization safety, but does not prove that any compiler erases the formatter.
+template <typename char_type, typename T>
+concept compiler_constant_expanded_fragment_preferred_source =
+	::fast_io::compiler_constant_expanded_fragment_preferred_source_shape<
+		char_type, T> &&
+	::fast_io::compiler_constant_pre_normalization_safe<char_type, T>;
 
 /// @brief Opts an output into synchronous, direct consumption of one immutable scalar range.
 /// @details A scalar write customization proves only that an output accepts a pointer range. It does not prove that
@@ -1065,6 +1238,27 @@ concept nothrow_precise_reserve_printable =
 			print_reserve_precise_define(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, n, value)
 		} noexcept -> ::std::same_as<char_type *>;
+	};
+
+/// @brief Classifies a materialized compiler-constant proxy with one bounded integer conversion leaf.
+/// @details This type-only provider contract is stronger than precise reserve printability. The proxy's complete exact
+///          writer graph must consist only of integral sign/prefix/digit spelling whose loops are bounded by the
+///          integer type, plus type-owned spelling wrappers. It must contain no floating-point precision planner,
+///          dynamic width, semantic condition, allocation, or fallback to the corresponding native source writer.
+///          Consumers may use the marker only after an independent value gate has selected the proxy; the marker does
+///          not make an ordinary source eligible and does not authorize a formatting strategy.
+/// @fn print_compiler_constant_flat_integer_replacement
+/// @return std::true_type
+template <typename char_type, typename T>
+concept compiler_constant_flat_integer_replacement =
+	::std::integral<char_type> &&
+	::fast_io::nothrow_precise_reserve_printable<char_type, T> &&
+	requires {
+		{
+			print_compiler_constant_flat_integer_replacement(
+				::fast_io::io_reserve_type<char_type,
+					::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
 	};
 
 /// @brief Marks a compiler-constant proxy whose exact reserve spelling should be tried before immutable fragments.
@@ -2360,6 +2554,11 @@ concept status_io_scan_forwardable =
 				io_alias_type<char_type>, ::fast_io::freestanding::forward<T>(t)))>();
 	};
 
+/// @brief Recognizes a character-dependent print proxy which can cross normalization without losing provenance.
+/// @details Stable lvalue results remain borrowed. A non-lvalue result must be safely materializable under the ABI
+///          transport policy, and a result exposing borrowed scatters must independently prove that copying does not
+///          change their lifetime or identity. These nested proofs match the forwarding helper's exact source category;
+///          defining only a callable CPO is insufficient.
 template <typename char_type, typename T>
 concept status_io_print_forwardable = ::std::integral<char_type> && requires(T &&t) {
 	status_io_print_forward(io_alias_type<char_type>, ::fast_io::freestanding::forward<T>(t));
@@ -2377,6 +2576,11 @@ struct manip_tag_t
 {
 };
 
+/// @brief Recognizes the nested marker which prevents an existing manipulator from being wrapped as a plain parameter.
+/// @details A provider supplies a member type named `manip_tag`; no particular definition is required. This marker
+///          proves classification only. It does not prove copy/move construction, ownership, printability, scannability,
+///          or safe transport of an rvalue, so every consumer must establish those properties for its exact expression
+///          category before constructing or retaining a manipulator object.
 template <typename T>
 concept manipulator = requires(T t) { typename T::manip_tag; };
 
@@ -3174,6 +3378,10 @@ concept precise_reserve_scannable = ::std::integral<char_type> && requires(char_
 			parse_code>);
 };
 
+/// @brief Refines fixed-width scanning with the exact infallible `void` result contract.
+/// @details For every bit pattern in the advertised fixed extent, the CPO must assign the target without reporting a
+///          parse failure and consume exactly that complete extent. The concept does not assert `noexcept`; consumers
+///          which aggregate calls or delay cursor publication must prove non-throwing invocation independently.
 template <typename char_type, typename T>
 concept precise_reserve_scannable_no_error =
 	precise_reserve_scannable<char_type, T> && requires(char_type const *buffer_curr, T &t) {

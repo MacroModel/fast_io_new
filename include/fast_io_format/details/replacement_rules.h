@@ -55,6 +55,19 @@ concept brace_direct_identity_rule =
 	format_backend_identity_printable<
 		typename decltype(format_literal)::value_type, value_type>;
 
+/**
+ * Preserves the direct-identity proof across provider-template deduction.
+ *
+ * Clang 23 can incorrectly re-normalize the named concept as false when both
+ * structural NTTPs are deduced through basic_format_replacement_context. A
+ * variable-template instantiation evaluates the identical proof before that
+ * deduction-sensitive constraint boundary; it neither admits another value
+ * category nor changes the selected rule token.
+ */
+template <auto format_literal, auto field, typename value_type>
+inline constexpr bool brace_direct_identity_rule_constraint_v{
+	brace_direct_identity_rule<format_literal, field, value_type>};
+
 template <auto format_literal, auto field, typename value_type>
 concept brace_custom_replacement_rule =
 	(!brace_direct_identity_rule<format_literal, field, value_type>) &&
@@ -192,7 +205,7 @@ namespace fast_io::fmt
  * exclusively in the final core backend.
  */
 template <auto format_literal, auto field, typename value_type>
-	requires ::fast_io::fmt::details::brace_direct_identity_rule<
+	requires ::fast_io::fmt::details::brace_direct_identity_rule_constraint_v<
 		format_literal, field, value_type>
 [[nodiscard]] consteval auto format_replacement_rule_type(
 	brace_fmt_t,

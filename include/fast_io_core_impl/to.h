@@ -659,6 +659,165 @@ using inplace_to_compiler_constant_source_normalized_t =
 		print_compiler_constant_pre_normalization_normalized_t<
 			char_type, false, T>;
 
+/// @brief Proves that this compiler has an audited, formatter-free `to` true arm.
+/// @details GCC 11 and later erase the complete proxy graph when immutable fragment slots are expanded at compile
+///          time. Clang 21 and later instead erase the precise proxy writer. Clang 13--20 retain 967--1,078
+///          instructions of floating proxy code for the same literal, and native MSVC has no builtin query, so those
+///          implementations are rejected before a replacement type or value query is formed. The positive bounds are
+///          deliberately future-open; every newly observed reversal must narrow this proof before the query can run.
+inline consteval bool inplace_to_compiler_constant_codegen_supported() noexcept
+{
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+	return true;
+#else
+	return false;
+#endif
+}
+
+/// @brief Computes the aggregate type-level reserve bound of a proven replacement run.
+/// @details This is a capacity proof only. The GCC emitter below obtains bytes from immutable fragments, while the
+///          Clang emitter uses exact writers; both spellings are required by their provider contracts to equal the
+///          ordinary reserve spelling and therefore cannot exceed this bound.
+template <::std::integral char_type, typename... Args>
+inline consteval ::std::size_t
+inplace_to_compiler_constant_reserve_capacity() noexcept
+{
+	constexpr ::std::size_t maximum{
+		::fast_io::details::compiler_constant_materialization_max_bytes /
+		sizeof(char_type)};
+	::std::size_t total{};
+	((total = [](::std::size_t current) constexpr {
+		constexpr ::std::size_t extent{print_reserve_size(
+			::fast_io::io_reserve_type<char_type,
+				::std::remove_cvref_t<Args>>)};
+		return current > maximum || extent > maximum - current
+			? SIZE_MAX
+			: current + extent;
+	}(total)), ...);
+	return total;
+}
+
+/// @brief Admits only replacement packs whose selected compiler strategy is bounded and completely specified.
+/// @details Every source must be a candidate, so this true arm never changes a passive sibling's normalization or
+///          replay policy. The target is the exact normalized contiguous scanner used by `basic_to_decay`. GCC needs
+///          a bounded immutable-fragment protocol because its 11/12 precise writer leaves a run-time decimal loop;
+///          Clang needs the exact compact protocol because its pre-21 fragment graph survives optimization. A maximum
+///          of 64 fragment slots and 256 bytes bounds both compile-time work and any pre-optimization automatic state.
+template <::std::integral char_type, typename T, typename... SourceArgs>
+inline consteval bool
+inplace_to_compiler_constant_direct_strategy_available() noexcept
+{
+	if constexpr (!::fast_io::details::
+		inplace_to_compiler_constant_codegen_supported())
+	{
+		return false;
+	}
+	else if constexpr (
+		sizeof...(SourceArgs) == 0u || sizeof...(SourceArgs) > 16u ||
+		!(::fast_io::operations::decay::
+			  print_compiler_constant_pre_normalization_candidate_v<
+				  char_type, SourceArgs> && ...))
+	{
+		return false;
+	}
+	else
+	{
+		using target_type =
+			::fast_io::details::inplace_to_normalized_target_t<char_type, T>;
+		if constexpr (!::fast_io::contiguous_scannable<char_type, target_type>)
+		{
+			return false;
+		}
+		else if constexpr (!(::fast_io::reserve_printable<
+							 char_type,
+							 ::fast_io::details::
+								 inplace_to_compiler_constant_normalized_t<
+									 char_type, SourceArgs>> && ...))
+		{
+			return false;
+		}
+		else
+		{
+			constexpr ::std::size_t capacity{
+				::fast_io::details::
+					inplace_to_compiler_constant_reserve_capacity<
+						char_type,
+						::fast_io::details::
+							inplace_to_compiler_constant_normalized_t<
+								char_type, SourceArgs>...>()};
+			if constexpr (
+				capacity == SIZE_MAX ||
+				capacity > ::fast_io::details::
+					compiler_constant_materialization_max_bytes /
+						sizeof(char_type))
+			{
+				return false;
+			}
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+			else if constexpr (!((
+				::fast_io::compiler_constant_expanded_fragment_preferred<
+					char_type,
+					::fast_io::details::
+						inplace_to_compiler_constant_normalized_t<
+							char_type, SourceArgs>> ||
+				::fast_io::compiler_constant_precise_compact_preferred<
+					char_type,
+					::fast_io::details::
+						inplace_to_compiler_constant_normalized_t<
+							char_type, SourceArgs>>) && ...))
+			{
+				return false;
+			}
+			else
+			{
+				constexpr ::std::size_t fragment_count{[]() consteval {
+					::std::size_t total{};
+					((total = [](::std::size_t current) constexpr {
+						using replacement_type = ::fast_io::details::
+							inplace_to_compiler_constant_normalized_t<
+								char_type, SourceArgs>;
+						constexpr ::std::size_t extent{[]() constexpr {
+							if constexpr (::fast_io::
+								compiler_constant_expanded_fragment_preferred<
+									char_type, replacement_type>)
+							{
+								return print_compiler_constant_static_fragments_size(
+									::fast_io::io_reserve_type<
+										char_type, replacement_type>);
+							}
+							else
+							{
+								return static_cast<::std::size_t>(0u);
+							}
+						}()};
+						return current > 64u || extent > 64u - current
+							? SIZE_MAX
+							: current + extent;
+					}(total)), ...);
+					return total;
+				}()};
+				return fragment_count != SIZE_MAX && fragment_count <= 64u;
+			}
+#elif defined(__clang__) && 21 <= __clang_major__
+			else
+			{
+				return (::fast_io::compiler_constant_precise_compact_preferred<
+					char_type,
+					::fast_io::details::
+						inplace_to_compiler_constant_normalized_t<
+							char_type, SourceArgs>> && ...);
+			}
+#else
+			else
+			{
+				return false;
+			}
+#endif
+		}
+	}
+}
+
 /// @brief Detects a status owner which the selected dynamic-output `to` strategy would actually invoke.
 /// @details Direct fragment conversion never enters an output dispatcher, so an otherwise matching status CPO is
 ///          irrelevant there. The dynamic context fallback emits singleton runs to preserve early completion, whereas
@@ -722,20 +881,31 @@ inplace_to_compiler_constant_source_available() noexcept
 		(false || ... ||
 		 ::fast_io::details::decay::print_semantic_input_argument_v<
 			 char_type, Args>)};
-	constexpr bool has_semantic_replacement{
-		(false || ... ||
-		 ::fast_io::details::decay::print_semantic_input_argument_v<
-			 char_type,
-			 ::fast_io::details::inplace_to_compiler_constant_source_replacement_t<
-				 char_type, Args>>)};
-	// Empty candidate sets and semantic graphs remain on their established normalization path.
-	if constexpr (!has_candidate || has_semantic_source ||
-				  has_semantic_replacement)
+	// Reject unsupported compilers before forming a replacement type. This ordering is part of the code-generation
+	// proof: a fail-closed call must not instantiate a proxy whose formatter could remain reachable or trigger a
+	// compiler-specific frontend defect.
+	if constexpr (
+		!has_candidate || has_semantic_source ||
+		!::fast_io::details::
+			inplace_to_compiler_constant_codegen_supported())
 	{
 		return false;
 	}
 	else
 	{
+		constexpr bool has_semantic_replacement{
+			(false || ... ||
+			 ::fast_io::details::decay::print_semantic_input_argument_v<
+				 char_type,
+				 ::fast_io::details::inplace_to_compiler_constant_source_replacement_t<
+					 char_type, Args>>)};
+		// Semantic replacements retain their graph-owned condition/pack traversal and therefore never enter this flat arm.
+		if constexpr (has_semantic_replacement)
+		{
+			return false;
+		}
+		else
+		{
 		using target_type =
 			::fast_io::details::inplace_to_normalized_target_t<char_type, T>;
 		constexpr bool source_status_owner{
@@ -783,32 +953,203 @@ inplace_to_compiler_constant_source_available() noexcept
 		return proxy_bytes != SIZE_MAX &&
 			   proxy_bytes <=
 				   ::fast_io::details::compiler_constant_materialization_max_bytes &&
+			   ::fast_io::details::
+				   inplace_to_compiler_constant_direct_strategy_available<
+					   char_type, T, Args...>() &&
 			   ::fast_io::details::inplace_to_decay_detect<
 				   char_type,
 				   target_type,
 				   ::fast_io::details::inplace_to_compiler_constant_normalized_t<
 					   char_type, Args>...>;
+		}
 	}
 }
 
-/// @brief Executes only the proven compiler-constant arm and then reuses the ordinary normalized `to` dispatcher.
-/// @details Every proxy is a synchronous prvalue whose lifetime covers aliasing, printing, and scanning in the nested
-///          call. Non-candidates retain the historical named-lvalue normalization, so a mixed constant/run-time
-///          conversion does not copy or pre-measure its dynamic fragments.
+/// @brief Copies a type-bounded immutable-fragment array without a run-time descriptor loop.
+/// @details GCC 11/12 leave both a descriptor loop and calls to `memcpy` when the returned fragment prefix is traversed
+///          dynamically. Expanding every provider-declared slot makes unused zero-initialized entries disappear and
+///          reduces the `3.125` probe to five immediate byte stores on every tested GCC 11--17. This helper is reachable
+///          only after the successful source query and the 64-slot/256-byte availability proof.
+template <::std::integral char_type, ::std::size_t... index>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr char_type *
+inplace_to_compiler_constant_copy_fragment_slots(
+	char_type *current,
+	::fast_io::basic_io_scatter_t<char_type> const *fragments,
+	::std::index_sequence<index...>) noexcept
+{
+	((current = fragments[index].len == 0u
+		? current
+		: ::fast_io::freestanding::non_overlapped_copy_n(
+			fragments[index].base, fragments[index].len, current)), ...);
+	return current;
+}
+
+/// @brief Emits one already-proven replacement using the compiler-specific deletion proof.
+/// @details GCC expands immutable fragment slots because its pre-13 precise decimal writer retains a loop. Clang 21+
+///          uses the provider's exact-size protocol because its fragment graph is the code-generation reversal. Neither
+///          branch names an ordinary native formatter, and both operate only on a replacement proxy created after the
+///          value query succeeded.
+template <::std::integral char_type, typename Arg>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr char_type *
+inplace_to_compiler_constant_emit_one(char_type *current, Arg &arg) noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	if constexpr (::fast_io::compiler_constant_expanded_fragment_preferred<
+		char_type, arg_type>)
+	{
+		constexpr ::std::size_t fragment_count{
+			print_compiler_constant_static_fragments_size(
+				::fast_io::io_reserve_type<char_type, arg_type>)};
+		::fast_io::basic_io_scatter_t<char_type> fragments[fragment_count]{};
+		(void)print_compiler_constant_static_fragments_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, fragments, arg);
+		return ::fast_io::details::
+			inplace_to_compiler_constant_copy_fragment_slots(
+				current, fragments,
+				::std::make_index_sequence<fragment_count>{});
+	}
+	else
+	{
+		::std::size_t const precise_size{print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, arg_type>, arg)};
+		char_type *const expected_end{current + precise_size};
+		char_type *const actual_end{print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, current,
+			precise_size, arg)};
+		if (actual_end != expected_end) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		return expected_end;
+	}
+#elif defined(__clang__) && 21 <= __clang_major__
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	::std::size_t const precise_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, arg_type>, arg)};
+	char_type *const expected_end{current + precise_size};
+	char_type *const actual_end{print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, arg_type>, current,
+		precise_size, arg)};
+	if (actual_end != expected_end) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	return expected_end;
+#else
+	// Availability rejects this instantiation before any value query on an unaudited compiler.
+	(void)arg;
+	return current;
+#endif
+}
+
+/// @brief Keeps the floating scanner out of the GCC 11/12 literal-formatting frame.
+/// @details After formatting has become five immediate stores, GCC 11 and 12 otherwise inline the independent decimal
+///          scanner into the caller, growing the `to<double>(3.125)` root to 1,890 and 1,627 instructions. This
+///          26-instruction caller boundary affects only the already-selected true arm; the ordinary run-time `to` path
+///          continues to call its historical scanner directly.
+template <::std::integral char_type, typename T>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ <= 12
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+#endif
+inline constexpr void scan_contiguous_materialized_to(
+	char_type const *first, char_type const *last, T &target)
+{
+	::fast_io::details::deal_with_single_to<char_type>(
+		first, last, target);
+}
+
+/// @brief Formats a proven replacement pack once and presents only its completed character range to the scanner.
+/// @details The type-level reserve sum bounds the local range; every provider's fragment or exact protocol promises
+///          byte-for-byte equivalence with its ordinary spelling. Forced placement is confined to this true-only
+///          formatter. The scanner remains a separate operation, and an endpoint mismatch terminates rather than
+///          re-entering a run-time formatter after a successful builtin query.
 template <::std::integral char_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void inplace_to_compiler_constant_direct_materialized(
+	T &&target, Args... args)
+{
+	constexpr ::std::size_t capacity{
+		::fast_io::details::inplace_to_compiler_constant_reserve_capacity<
+			char_type, Args...>()};
+	static_assert(
+		capacity != SIZE_MAX &&
+		capacity <= ::fast_io::details::
+			compiler_constant_materialization_max_bytes / sizeof(char_type));
+	char_type buffer[capacity == 0u ? 1u : capacity];
+	char_type *current{buffer};
+	((current = ::fast_io::details::
+		  inplace_to_compiler_constant_emit_one<char_type>(current, args)), ...);
+	::fast_io::details::scan_contiguous_materialized_to<char_type>(
+		buffer, current, target);
+}
+
+/// @brief Executes the proven inplace conversion after all public source values have passed the successful query.
+/// @details Each source becomes an owned proxy prvalue before this helper enters the direct formatter. The availability
+///          proof admits no passive sibling, so no run-time source is copied, replayed, or observed through a different
+///          alias category.
+template <::std::integral char_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void inplace_to_compiler_constant_source_materialized(
 	T &&target, Args &&...args)
 {
-	::fast_io::basic_inplace_to_decay<char_type>(
-		::fast_io::io_scan_forward<char_type>(
-			::fast_io::io_scan_alias(target)),
-		// A non-candidate must still be aliased from this function's named source lvalue. Forwarding it directly to
-		// `io_print_alias` would select an rvalue-only customization only in a neighboring argument's constant true arm,
-		// making observable spelling depend on optimization. The shared print primitive materializes candidates as owned
-		// prvalues while deliberately retaining the historical named-lvalue category for every untouched source.
-		::fast_io::operations::decay::
-			print_compiler_constant_pre_normalization_plain_true_forward<
-				false, char_type>(::std::forward<Args>(args))...);
+	::fast_io::details::inplace_to_compiler_constant_direct_materialized<
+		char_type>(
+			::fast_io::io_scan_forward<char_type>(
+				::fast_io::io_scan_alias(target)),
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_plain_true_forward<
+					false, char_type>(::std::forward<Args>(args))...);
+}
+
+/// @brief Constructs a value target only after its public sources have been normalized into proven replacements.
+/// @details Function arguments are materialized before entry, preserving `to`'s historical order in which source alias
+///          operations precede target construction. Scalar initialization and non-scalar default initialization match
+///          `basic_to_decay`; only the formatting continuation is replaced.
+template <::std::integral char_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr T to_compiler_constant_source_materialized(Args... args)
+{
+	if constexpr (::std::is_scalar_v<T>)
+	{
+		T value{};
+		::fast_io::details::inplace_to_compiler_constant_direct_materialized<
+			char_type>(
+				::fast_io::io_scan_forward<char_type>(
+					::fast_io::io_scan_alias(value)),
+				args...);
+		return value;
+	}
+	else
+	{
+		T value;
+		::fast_io::details::inplace_to_compiler_constant_direct_materialized<
+			char_type>(
+				::fast_io::io_scan_forward<char_type>(
+					::fast_io::io_scan_alias(value)),
+				args...);
+		return value;
+	}
 }
 
 /// @brief Shared public source boundary for every character-domain `inplace_to` facade.
@@ -816,6 +1157,12 @@ inline constexpr void inplace_to_compiler_constant_source_materialized(
 ///          no proxy construction, size query, or extra output pass; only a proven true optimizer query enters the
 ///          optional replacement arm.
 template <::std::integral char_type, typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// GCC 11--17 otherwise outline this source-query boundary for an existing target. A literal dynamic-precision source
+// then reaches the same native formatter graph as its unknown peer, while forcing this forwarding-only edge lets the
+// already-proved materializer erase that graph; the unknown-value continuation remains the historical decay call.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void inplace_to_compiler_constant_checked_entry(
 	T &&target, Args &&...args)
 {
@@ -855,6 +1202,11 @@ inline constexpr void inplace_to_compiler_constant_checked_entry(
 
 /// @brief Applies the shared compiler-constant source gate to an explicit character-domain inplace conversion.
 template <::std::integral char_type, typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This character-domain forwarding edge is jointly required with the checked boundary below: leaving either outlined
+// hides the public source value from GCC's builtin query. It contains no formatting strategy or target-side mutation.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void basic_inplace_to(T &&t, Args &&...args)
 {
 	::fast_io::details::inplace_to_compiler_constant_checked_entry<char_type>(
@@ -863,6 +1215,11 @@ inline constexpr void basic_inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable narrow-character fragments into an existing scan target.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// Final narrow-character source-expression edge for GCC's inplace conversion query. The constant arm becomes
+// formatter-free on GCC 11--17, and the unknown arm retains the ordinary inplace conversion graph.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void inplace_to(T &&t, Args &&...args)
 {
 	::fast_io::basic_inplace_to<char>(
@@ -871,6 +1228,11 @@ inline constexpr void inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable wide-character fragments into an existing scan target.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This is the wchar_t instantiation of the same forwarding-only public edge proved for `inplace_to`; without forced
+// placement GCC 11--17 may move the builtin query below an opaque parameter boundary. No formatter is selected here.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void winplace_to(T &&t, Args &&...args)
 {
 	::fast_io::basic_inplace_to<wchar_t>(
@@ -879,6 +1241,11 @@ inline constexpr void winplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-8 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This is the char8_t instantiation of the measured public source edge. The attribute exposes the original expression
+// to the IO-level gate only; the successful and unknown-value formatting strategies remain owned by that gate.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void u8inplace_to(T &&t, Args &&...args)
 {
 	::fast_io::basic_inplace_to<char8_t>(
@@ -887,6 +1254,11 @@ inline constexpr void u8inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-16 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This char16_t facade has the same single forwarding expression as the narrow measured edge. Forced placement is
+// needed to prevent GCC's parameter boundary from making every source appear unknown to the builtin query.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void u16inplace_to(T &&t, Args &&...args)
 {
 	::fast_io::basic_inplace_to<char16_t>(
@@ -895,6 +1267,11 @@ inline constexpr void u16inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-32 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This char32_t facade is a type-domain projection of the measured edge and contains no algorithmic work. Inlining it
+// preserves the caller expression for the shared query while the false arm remains the ordinary runtime conversion.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr void u32inplace_to(T &&t, Args &&...args)
 {
 	::fast_io::basic_inplace_to<char32_t>(
@@ -956,11 +1333,18 @@ namespace details
 {
 
 /// @brief Shared compiler-constant source boundary for every value-returning `to` facade.
-/// @details Both selected arms first normalize the public print sources and only then enter `basic_to_decay`, which
-///          constructs the scan target. This preserves the historical observable order: source alias CPO side effects
-///          precede `T`'s default construction. Constructing `T` here and delegating to `basic_inplace_to` would reverse
-///          that order even though the final character sequence is identical.
+/// @details Both arms normalize public print sources before constructing the scan target. The successful query enters
+///          the bounded formatter-free materializer; the false arm remains the historical `basic_to_decay` expression.
+///          This preserves the observable order in which source alias CPO side effects precede `T`'s construction.
 template <::std::integral char_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// The builtin query must observe the public source expression. With ordinary placement GCC 15 outlines this boundary,
+// so both literal and unknown callers jump to an opaque parameter and the literal cannot enter the proven true arm.
+// Forcing this edge alone is text-neutral and merely moves the boundary to `basic_to`; the paired facade edge below is
+// therefore required. The unknown-value continuation remains the unchanged `basic_to_decay` expression.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 {
 	// An empty conversion has no source boundary and preserves the historical default-construction semantics directly.
@@ -985,7 +1369,9 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 				if (::fast_io::operations::decay::
 						print_compiler_constant_pre_normalization_gate<char_type>(args...))
 				{
-					return ::fast_io::decay::basic_to_decay<char_type, T>(
+					return ::fast_io::details::
+						to_compiler_constant_source_materialized<
+							char_type, T>(
 						::fast_io::operations::decay::
 							print_compiler_constant_pre_normalization_plain_true_forward<
 								false, char_type>(::std::forward<Args>(args))...);
@@ -1007,6 +1393,13 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 
 /// @brief Constructs a target in the requested character domain through the shared compiler-constant source boundary.
 template <::std::integral char_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// Paired source-query facade edge. Deleting it after forcing the checked entry leaves GCC 15 callers as a two-
+// instruction jump to `basic_to` and again hides constants from `__builtin_constant_p`. It contains no formatting
+// policy and only forwards the exact public expression into the IO-level availability/query boundary.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr T basic_to(Args &&...args)
 {
 	return ::fast_io::details::to_compiler_constant_checked_entry<char_type, T>(
@@ -1015,6 +1408,13 @@ inline constexpr T basic_to(Args &&...args)
 
 /// @brief Constructs a target by formatting and scanning narrow-character source fragments.
 template <typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// Final source-expression edge. Without it GCC 15 leaves the literal caller as a jump to `to`, so the paired IO
+// boundaries below still receive an opaque parameter. The same placement is applied to every character-domain facade;
+// no facade makes a formatting decision, and an unknown source continues into the unchanged false arm.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr T to(Args &&...args)
 {
 	return ::fast_io::basic_to<char, T>(::std::forward<Args>(args)...);
@@ -1022,6 +1422,12 @@ template <typename T, typename... Args>
 
 /// @brief Constructs a target by formatting and scanning wide-character source fragments.
 template <typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// The wchar_t facade is the same forwarding-only edge as `to`; the character type changes only the downstream
+// instantiation. Forced placement preserves the public expression for the shared query and adds no format policy.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr T wto(Args &&...args)
 {
 	return ::fast_io::basic_to<wchar_t, T>(::std::forward<Args>(args)...);
@@ -1029,6 +1435,12 @@ template <typename T, typename... Args>
 
 /// @brief Constructs a target by formatting and scanning UTF-8 code-unit source fragments.
 template <typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// The char8_t facade contains only the measured forwarding expression. Keeping that expression in the caller prevents
+// the GCC 11--17 and Clang 21--23 query boundary from degrading a literal into an opaque function parameter.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr T u8to(Args &&...args)
 {
 	return ::fast_io::basic_to<char8_t, T>(::std::forward<Args>(args)...);
@@ -1036,6 +1448,12 @@ template <typename T, typename... Args>
 
 /// @brief Constructs a target by formatting and scanning UTF-16 code-unit source fragments.
 template <typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// The char16_t facade is structurally identical to the measured narrow edge and performs no formatting itself. Forced
+// placement exposes only the original source expression; the IO-level gate still owns both result strategies.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr T u16to(Args &&...args)
 {
 	return ::fast_io::basic_to<char16_t, T>(::std::forward<Args>(args)...);
@@ -1043,6 +1461,12 @@ template <typename T, typename... Args>
 
 /// @brief Constructs a target by formatting and scanning UTF-32 code-unit source fragments.
 template <typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// The char32_t facade is the final forwarding-only projection of the measured source edge. Inlining avoids an opaque
+// parameter at the builtin query without duplicating or changing either the constant or runtime formatter graph.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 [[nodiscard]] inline constexpr T u32to(Args &&...args)
 {
 	return ::fast_io::basic_to<char32_t, T>(::std::forward<Args>(args)...);

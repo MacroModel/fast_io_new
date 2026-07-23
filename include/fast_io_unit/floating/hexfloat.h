@@ -1497,10 +1497,12 @@ inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *i
 			++e2;
 		}
 		auto aligned_mantissa{static_cast<mantissa_type>(mantissa << makeup_bits)};
-		auto hex_digit_at = [aligned_mantissa, exponent](::std::size_t index) constexpr noexcept -> ::std::uint_least32_t {
+		// Init-capture transports the structured-binding value without requiring the later direct-capture extension from
+		// the frontend; the copied scalar is exactly the exponent observed by the surrounding formatting operation.
+		auto hex_digit_at = [aligned_mantissa, exponent_value = exponent](::std::size_t index) constexpr noexcept -> ::std::uint_least32_t {
 			if (!index)
 			{
-				return exponent ? 1u : 0u;
+				return exponent_value ? 1u : 0u;
 			}
 			if (fractional_hex_digits < index)
 			{

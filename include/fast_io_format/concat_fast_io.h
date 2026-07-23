@@ -7,16 +7,30 @@
 #include "details/brace_rule.h"
 #include "details/concat.h"
 #include "details/printf_rule.h"
+#include "../fast_io_dsal/impl/misc/push_macros.h"
 
 #include <cstddef>
 #include <utility>
+
+// These public functions are the outermost value-visible links of the format
+// concat level.  Keeping the thin syntax facade in the caller is required for
+// the IO-level `__builtin_constant_p` query below it; no format policy is
+// introduced here, and the runtime false arm remains the checked concat path.
+#pragma push_macro("FAST_IO_FMT_CONCAT_FACADE_INLINE")
+#undef FAST_IO_FMT_CONCAT_FACADE_INLINE
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+#define FAST_IO_FMT_CONCAT_FACADE_INLINE FAST_IO_GNU_ALWAYS_INLINE
+#else
+#define FAST_IO_FMT_CONCAT_FACADE_INLINE
+#endif
 
 namespace fast_io::fmt
 {
 
 // Brace grammar, fast_io::basic_string destination.
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto concat_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto concat_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char, ::fast_io::string, format_literal>(
@@ -24,7 +38,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto wconcat_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto wconcat_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		wchar_t, ::fast_io::wstring, format_literal>(
@@ -32,7 +46,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u8concat_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u8concat_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char8_t, ::fast_io::u8string, format_literal>(
@@ -40,7 +54,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u16concat_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u16concat_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char16_t, ::fast_io::u16string, format_literal>(
@@ -48,7 +62,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u32concat_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u32concat_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char32_t, ::fast_io::u32string, format_literal>(
@@ -57,7 +71,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 
 // Percent grammar.
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto concatf_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto concatf_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char, ::fast_io::string, format_literal>(
@@ -65,7 +79,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto wconcatf_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto wconcatf_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		wchar_t, ::fast_io::wstring, format_literal>(
@@ -73,7 +87,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u8concatf_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u8concatf_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char8_t, ::fast_io::u8string, format_literal>(
@@ -81,7 +95,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u16concatf_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u16concatf_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char16_t, ::fast_io::u16string, format_literal>(
@@ -89,7 +103,7 @@ template <basic_fixed_string format_literal, typename... argument_types>
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
-[[nodiscard]] inline constexpr auto u32concatf_fast_io(argument_types &&...arguments)
+[[nodiscard]] FAST_IO_FMT_CONCAT_FACADE_INLINE inline constexpr auto u32concatf_fast_io(argument_types &&...arguments)
 {
 	return ::fast_io::fmt::details::concat_builtin_with_rule<
 		char32_t, ::fast_io::u32string, format_literal>(
@@ -119,3 +133,6 @@ template <typename char_type, ::std::size_t extent, typename... argument_types>
 auto u32concatf_fast_io(char_type const (&)[extent], argument_types &&...) = delete;
 
 } // namespace fast_io::fmt
+
+#pragma pop_macro("FAST_IO_FMT_CONCAT_FACADE_INLINE")
+#include "../fast_io_dsal/impl/misc/pop_macros.h"

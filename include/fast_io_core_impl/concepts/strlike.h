@@ -63,19 +63,38 @@ concept range_constructible_strlike =
 		{ strlike_construct_define(io_strlike_type<char_type, T>, first, first) } -> ::std::same_as<T>;
 	};
 
+/// @brief Defines the construction/storage boundary for a string-like concat result.
+/// @details `T` must be a complete, unqualified, default-constructible object and provide either exact range
+///          construction or the writable cursor protocol. A cursor provider has the additional semantic obligation
+///          that `begin <= curr <= end` denotes one live contiguous `char_type` array, that `set_curr` publishes only a
+///          pointer in that closed range, and that `reserve(n)` preserves the existing prefix while making capacity at
+///          least `n`. Any reserve operation may invalidate previously returned cursors, so consumers reacquire them.
+///          These ordering, preservation, and lifetime properties are not expressible by the structural requirements.
 template <typename char_type, typename T>
 concept strlike =
 	::std::integral<char_type> && ::fast_io::details::strlike_result_object<T> &&
 	(range_constructible_strlike<char_type, T> || ::fast_io::details::buffer_strlike_impl<char_type, T>);
 
+/// @brief Proves the exact one-character construction fast path for a string-like result.
+/// @details The returned prvalue must own exactly the supplied character and be observationally equivalent to invoking
+///          the range constructor with a one-element range. Exact `T` matching proves the concat return expression;
+///          ownership and equivalence remain provider obligations.
 template <typename char_type, typename T>
 concept single_character_constructible_strlike = strlike<char_type, T> && requires(char_type ch) {
 	{ strlike_construct_single_character_define(io_strlike_type<char_type, T>, ch) } -> ::std::same_as<T>;
 };
 
+/// @brief Recognition-only hook for a string-like alias customization.
+/// @details No active core concat consumer currently selects this concept. A future consumer must additionally prove
+///          the alias result's ownership/transport and its character-specific string protocol before retaining it;
+///          expression existence alone supplies neither property.
 template <typename char_type, typename T>
 concept alias_strlike = requires(T &t) { strlike_alias_define(io_alias, t); };
 
+/// @brief Refines `strlike` with the exact portable writable-cursor protocol.
+/// @details Providers inherit the cursor ordering, capacity, preservation, invalidation, and lifetime obligations of
+///          `strlike`. This concept intentionally does not infer that deferred cursor publication or direct scatter
+///          copying is safe; those stronger properties have independent opt-in concepts below.
 template <typename char_type, typename T>
 concept buffer_strlike = strlike<char_type, T> && ::fast_io::details::buffer_strlike_impl<char_type, T>;
 
@@ -117,6 +136,12 @@ template <typename char_type, typename T>
 concept output_buffer_strlike = buffer_strlike<char_type, T> ||
 	runtime_buffer_strlike<char_type, T>;
 
+/// @brief Proves the public append operations used when a string-like put area overflows.
+/// @details `push_back` appends exactly one character and `append(first,last)` appends the complete valid input range in
+///          order. Both operations may relocate destination storage, but must preserve the existing prefix. An append
+///          source may overlap the destination only when the provider's documented implementation supports it; generic
+///          consumers otherwise retain the ordinary non-overlap precondition. Exact `void` results keep cursor/count
+///          proxies from being silently discarded.
 template <typename char_type, typename T>
 concept auxiliary_strlike = strlike<char_type, T> && requires(T &t, char_type ch, char_type const *ptr) {
 	{ strlike_push_back(io_strlike_type<char_type, T>, t, ch) } -> ::std::same_as<void>;
@@ -169,12 +194,24 @@ template <typename char_type, typename T, typename operation>
 concept exact_resize_and_overwrite_strlike_for = false;
 #endif
 
+/// @brief Proves a type-level initial writable capacity for a buffer string-like result.
+/// @details Concat uses this value in `constexpr` storage-policy branches before any result object is observed. The CPO
+///          must therefore be a constant expression, not merely return `size_t`. For every default-constructed `T`, a
+///          value `n` promises that the initial writable range beginning at `strlike_begin` contains at least `n`
+///          characters without calling `strlike_reserve`. The value is a guaranteed lower bound, not permission to
+///          write beyond the live `[begin,end)` range returned by the cursor protocol. It must fit `ptrdiff_t`, because
+///          no single C++ array can provide a larger element distance.
 template <typename char_type, typename T>
 concept sso_buffer_strlike = buffer_strlike<char_type, T> &&
 							 requires {
 								 {
 									 strlike_sso_size(io_strlike_type<char_type, T>)
 								 } -> ::std::same_as<::std::size_t>;
+								 typename ::std::integral_constant<
+									 ::std::size_t,
+									 strlike_sso_size(io_strlike_type<char_type, T>)>;
+								 requires(strlike_sso_size(io_strlike_type<char_type, T>) <=
+									 static_cast<::std::size_t>(PTRDIFF_MAX));
 							 };
 
 /// @brief Marks a string-like output adapter whose amortized-growth path is a preferred print destination.

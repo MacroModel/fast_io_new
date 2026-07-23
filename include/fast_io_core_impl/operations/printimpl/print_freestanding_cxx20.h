@@ -7697,6 +7697,34 @@ inline constexpr bool print_semantic_pack_argument_v =
 	 ::fast_io::details::print_pack<
 		 decltype(::fast_io::details::decay::print_semantic_node_ref(::std::declval<T>()))>);
 
+/// @brief Detects a semantic condition at one normalized argument position.
+/// @details The one-layer semantic-node predicate is part of execution semantics: recursive access through
+///          `print_semantic_node_ref` identifies the stored node only after that admission check succeeds.
+template <typename T>
+inline constexpr bool print_semantic_top_level_condition_v =
+	::fast_io::details::decay::print_semantic_node<T> &&
+	::fast_io::details::decay::print_semantic_condition_v<
+		::std::remove_cvref_t<decltype(
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::declval<T>()))>>;
+
+/// @brief Identifies a normalized argument which execution must route through semantic expansion.
+/// @details Ordinary semantic-node admission intentionally unwraps only one public parameter layer. Pack execution is
+///          the documented exception: `print_semantic_pack_argument_v` accepts recursively wrapped packs and the pack
+///          expander consumes that exact shape. Keeping the union in one predicate prevents a supported pack from
+///          falling into `print_freestanding_decay_no_pack`. It does not broaden condition or width recognition.
+template <typename T>
+inline constexpr bool print_semantic_execution_node_v =
+	::fast_io::details::decay::print_semantic_node<T> ||
+	::fast_io::details::decay::print_semantic_pack_argument_v<T>;
+
+/// @brief Proves that a complete normalized argument list needs no semantic pack/node dispatcher.
+/// @details This is the substitution-time contract of `print_freestanding_decay_no_pack`; keeping it as a named fold
+///          makes every caller prove the same execution invariant before the function body can participate.
+template <typename... Args>
+inline constexpr bool print_semantic_flat_record_v =
+	(!::fast_io::details::decay::print_semantic_execution_node_v<Args> && ...);
+
 /// @brief    Alias result type produced by io_print_alias for one semantic input argument.
 /// @tparam   char_type the print character type
 /// @tparam   T         the input argument type
@@ -7717,7 +7745,7 @@ template <::std::integral char_type, typename T>
 inline constexpr bool print_semantic_input_argument_v =
 	::fast_io::details::decay::print_semantic_node_no_parameter_v<
 		::std::remove_cvref_t<::fast_io::details::decay::print_semantic_input_alias_t<char_type, T>>> ||
-	::fast_io::details::decay::print_semantic_node<
+	::fast_io::details::decay::print_semantic_execution_node_v<
 		::fast_io::details::decay::print_semantic_input_forward_t<char_type, T>>;
 
 /// @brief Derives semantic input forwarding's exception specification from the CPO branch it invokes.
@@ -7768,6 +7796,17 @@ inline constexpr decltype(auto) print_semantic_input_forward(T &&t) noexcept(::f
 	}
 }
 
+/// @brief Models the named expression produced after semantic input forwarding.
+/// @details `print_semantic_input_forward` may return either an owned value or an exact reference. Every consumer binds
+///          that result to a named local before sizing or emission, so the subsequent expression is an lvalue which
+///          preserves the result's cv-qualification. This alias is the proof type for those exact calls; raw
+///          `io_print_forward(io_print_alias(...))` is not equivalent when the alias result is already a semantic node.
+template <::std::integral char_type, typename T>
+using print_semantic_stable_input_forward_t = ::std::add_lvalue_reference_t<
+	::std::remove_reference_t<decltype(
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::declval<T>()))>>;
+
 /// @brief    Invokes a continuation with every element from a semantic pack.
 /// @tparam   T            the pack-like semantic node type
 /// @tparam   continuation the continuation receiving expanded elements
@@ -7800,6 +7839,105 @@ inline constexpr decltype(auto) print_semantic_pack_apply(T &&t, continuation &&
 		::std::remove_cvref_t<decltype(::fast_io::details::decay::print_semantic_node_ref(::std::forward<T>(t)))>;
 	return ::fast_io::details::decay::print_semantic_pack_apply_impl(
 		::std::forward<T>(t), ::std::forward<continuation>(cont), ::std::make_index_sequence<pack_type::size>{});
+}
+
+/// @brief Identifies the normalization phase at which an empty-record proof observes one semantic expression.
+/// @details An already-forwarded argument and a selected condition arm may be inspected by condition selection. A raw
+///          pack member has not yet crossed `io_print_alias` and `io_print_forward`; except for fast_io's exact null
+///          identity and recursively nested packs, its apparent structure is therefore not execution evidence.
+enum class print_semantic_empty_proof_stage : unsigned char
+{
+	already_forwarded,
+	pack_member,
+	condition_branch
+};
+
+template <print_semantic_empty_proof_stage stage, typename T>
+inline constexpr bool print_semantic_argument_provably_empty_impl(T &&t);
+
+/// @brief Proves that every raw stored member of one semantic pack normalizes to no active leaf.
+/// @details Pack expansion itself is library-owned, but each non-pack member subsequently crosses provider alias/status
+///          forwarding before condition selection. Members therefore enter the raw-pack-member proof stage rather than
+///          inheriting the enclosing argument's stage. This boundary is the reason a provider cannot make an apparently
+///          empty stored condition disappear before its forwarding replacement is observed.
+template <typename T, ::std::size_t... I>
+inline constexpr bool print_semantic_pack_provably_empty_impl(
+	T &&t, ::std::index_sequence<I...>)
+{
+	auto &&pack_ref{
+		::fast_io::details::decay::print_semantic_node_ref(::std::forward<T>(t))};
+	return (true && ... &&
+			::fast_io::details::decay::print_semantic_argument_provably_empty_impl<
+				print_semantic_empty_proof_stage::pack_member>(
+				::fast_io::containers::get<I>(pack_ref.storage)));
+}
+
+/// @brief Conservatively proves that one semantic expression contributes no active print leaf at its execution phase.
+/// @details The phase is part of the proof. Already-forwarded arguments undergo pack expansion followed by condition
+///          selection, and a selected condition arm follows the branch selector's null/pack/condition order. A raw pack
+///          member is different: runtime first applies `io_print_forward(io_print_alias(member))`. The provider may
+///          replace an original condition or null-like object with a nonempty value, so inspecting that original node
+///          would move provider effects across the mutex and could suppress output. Raw-member recursion is consequently
+///          limited to nested packs, which runtime expands before forwarding, and exact `io_null_t`, whose normalization
+///          identity is owned by fast_io. A wrapped null, multiply wrapped condition, width, or ordinary leaf remains
+///          inconclusive. False is conservative and merely retains the normal lock-and-normalize execution path.
+template <print_semantic_empty_proof_stage stage, typename T>
+inline constexpr bool print_semantic_argument_provably_empty_impl(T &&t)
+{
+	if constexpr (::std::same_as<::std::remove_cvref_t<T>, ::fast_io::io_null_t>)
+	{
+		// Exact io_null_t is fast_io's library-owned identity leaf. Parameter-wrapped nulls deliberately do not match.
+		return true;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_pack_argument_v<T>)
+	{
+		using node_type = ::std::remove_cvref_t<decltype(
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::forward<T>(t)))>;
+		return ::fast_io::details::decay::print_semantic_pack_provably_empty_impl(
+			::std::forward<T>(t), ::std::make_index_sequence<node_type::size>{});
+	}
+	else if constexpr (
+		stage != print_semantic_empty_proof_stage::pack_member &&
+		::fast_io::details::decay::print_semantic_top_level_condition_v<T>)
+	{
+		auto &&node_ref{
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::forward<T>(t))};
+		if (node_ref.pred)
+		{
+			return ::fast_io::details::decay::print_semantic_argument_provably_empty_impl<
+				print_semantic_empty_proof_stage::condition_branch>(
+				node_ref.t1);
+		}
+		return ::fast_io::details::decay::print_semantic_argument_provably_empty_impl<
+			print_semantic_empty_proof_stage::condition_branch>(
+			node_ref.t2);
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Applies the empty-record proof to one argument already owned by the normalized print-level boundary.
+template <typename T>
+inline constexpr bool print_semantic_argument_provably_empty(T &&t)
+{
+	return ::fast_io::details::decay::print_semantic_argument_provably_empty_impl<
+		print_semantic_empty_proof_stage::already_forwarded>(::std::forward<T>(t));
+}
+
+/// @brief Proves that the current values in a semantic source run normalize to zero active leaves.
+/// @details Every argument must be structurally empty. This fold is used only when the type graph contains a pack or
+///          top-level condition, so a standalone `io_null` retains its historical explicit-argument path.
+template <typename... Args>
+inline constexpr bool print_semantic_run_provably_empty(Args &&...args)
+{
+	return (true && ... &&
+			::fast_io::details::decay::print_semantic_argument_provably_empty(
+				::std::forward<Args>(args)));
 }
 
 /// @brief    Prefix continuation that prepends a stored value reference to later semantic arguments.
@@ -8041,13 +8179,6 @@ inline constexpr decltype(auto) print_semantic_pack_expand(continuation &&cont, 
 	}
 }
 
-/// @brief    Detects a semantic condition at one normalized argument position.
-/// @tparam   T the argument type to inspect
-template <typename T>
-inline constexpr bool print_semantic_top_level_condition_v =
-	::fast_io::details::decay::print_semantic_node<T> &&
-	::fast_io::details::decay::print_semantic_condition_v<::std::remove_cvref_t<decltype(::fast_io::details::decay::print_semantic_node_ref(::std::declval<T>()))>>;
-
 template <::std::integral char_type, typename continuation>
 inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&cont);
 
@@ -8163,64 +8294,6 @@ inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&
 	}
 }
 
-/// @brief    Completes null filtering for a semantic argument run.
-/// @details  If the original run contained only nulls, one null is preserved so the downstream printer sees a valid
-///           no-output argument; otherwise all null arguments are removed.
-/// @tparam   had_null     true when at least one null argument was seen
-/// @tparam   has_value    true when at least one non-null argument was preserved
-/// @tparam   continuation the continuation receiving the filtered run
-/// @param    cont         the continuation to invoke
-/// @return   decltype(auto) the continuation result
-template <bool had_null, bool has_value, typename continuation>
-#if __has_cpp_attribute(__gnu__::__flatten__)
-[[__gnu__::__flatten__]]
-#endif
-inline constexpr decltype(auto) print_semantic_filter_nulls(continuation &&cont)
-{
-	if constexpr (!has_value && had_null)
-	{
-		// A run made only of nulls preserves one null to represent intentional empty output.
-		return cont(::fast_io::io_null);
-	}
-	else
-	{
-		// A run with real values drops all nulls before invoking the continuation.
-		return cont();
-	}
-}
-
-/// @brief    Removes null arguments from a semantic run before flattened emission.
-/// @tparam   had_null     true when at least one null argument was seen before T
-/// @tparam   has_value    true when at least one non-null argument was preserved before T
-/// @tparam   continuation the continuation receiving the filtered run
-/// @tparam   T            the current argument type
-/// @tparam   Args         the remaining argument types
-/// @param    cont         the continuation to invoke
-/// @param    t            the current argument
-/// @param    args         the remaining arguments
-/// @return   decltype(auto) the continuation result
-template <bool had_null, bool has_value, typename continuation, typename T, typename... Args>
-#if __has_cpp_attribute(__gnu__::__flatten__)
-[[__gnu__::__flatten__]]
-#endif
-inline constexpr decltype(auto) print_semantic_filter_nulls(continuation &&cont, T &&t, Args &&...args)
-{
-	if constexpr (::std::same_as<::std::remove_cvref_t<T>, ::fast_io::io_null_t>)
-	{
-		// Null output is removed from mixed semantic runs but remembered in case the whole run is null.
-		return ::fast_io::details::decay::print_semantic_filter_nulls<true, has_value>(
-			::std::forward<continuation>(cont), ::std::forward<Args>(args)...);
-	}
-	else
-	{
-		// Non-null output is preserved by prepending it to the filtered tail continuation.
-		return ::fast_io::details::decay::print_semantic_filter_nulls<had_null, true>(
-			::fast_io::details::decay::print_semantic_value_prefix_continuation<continuation, T>{
-				__builtin_addressof(cont), __builtin_addressof(t)},
-			::std::forward<Args>(args)...);
-	}
-}
-
 /// @brief    Checks whether one decayed print argument is accepted by the freestanding dispatcher.
 /// @details  The dispatcher receives every normalized argument by value and invokes its CPO through the named local.
 ///           Scatter admission therefore models `remove_cvref_t<T>&`; the public forwarding-expression query would
@@ -8247,12 +8320,18 @@ struct print_freestanding_decay_param_okay_single
 template <::std::integral char_type, typename output, typename T>
 inline consteval bool print_directly_to_effective_output() noexcept
 {
-	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<output>)
+	using normalized_output = ::std::remove_reference_t<output>;
+	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<normalized_output>)
 	{
 		if constexpr (
-			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<output>)
+			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<normalized_output>)
 		{
-			using unlocked_output = decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(::std::declval<output &>()));
+			using unlocked_result = decltype(
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+					::std::declval<normalized_output &>()));
+			// Runtime binds the CPO result with `decltype(auto)` and then passes that named expression onward. Removing only
+			// the reference therefore models the next dispatcher template argument without inventing mutability.
+			using unlocked_output = ::std::remove_reference_t<unlocked_result>;
 			return ::fast_io::details::decay::print_directly_to_effective_output<
 				char_type, unlocked_output, T>();
 		}
@@ -8262,7 +8341,7 @@ inline consteval bool print_directly_to_effective_output() noexcept
 			return false;
 		}
 	}
-	return ::fast_io::details::direct_printable_to<char_type, output, T>;
+	return ::fast_io::details::direct_printable_to<char_type, normalized_output, T>;
 }
 
 template <typename output, ::std::integral char_type, typename T>
@@ -8279,7 +8358,9 @@ struct print_freestanding_output_param_okay_single;
 ///          `writable || bytes_writable` explicitly rather than weakening their unit-specific definitions.
 template <typename output>
 inline constexpr bool print_freestanding_primitive_output_okay = []() constexpr {
-	using normalized_output = ::std::remove_cvref_t<output>;
+	// A mutex CPO may return a const observer reference. Runtime retains that cv-qualification in its named
+	// `decltype(auto)` binding, so primitive capability discovery must not silently replace it with a mutable type.
+	using normalized_output = ::std::remove_reference_t<output>;
 	if constexpr (requires { typename normalized_output::output_char_type; })
 	{
 		return ::std::integral<typename normalized_output::output_char_type> &&
@@ -8298,7 +8379,7 @@ inline constexpr bool print_freestanding_primitive_output_okay = []() constexpr 
 ///          completion proof because it may be full when the operation begins.
 template <typename output>
 inline constexpr bool print_freestanding_line_output_okay = []() constexpr {
-	using normalized_output = ::std::remove_cvref_t<output>;
+	using normalized_output = ::std::remove_reference_t<output>;
 	if constexpr (requires { typename normalized_output::output_char_type; })
 	{
 		return ::fast_io::details::decay::print_freestanding_primitive_output_okay<normalized_output> ||
@@ -8310,73 +8391,161 @@ inline constexpr bool print_freestanding_line_output_okay = []() constexpr {
 	}
 }();
 
-/// @brief Recursively validates semantic children against one concrete output stream.
-/// @details Semantic packs, conditions, and width nodes are flattened before their leaves reach `print_control_single`.
-///          This parallel trait follows exactly that type graph, so a dummy-only leaf cannot hide inside a composite.
-///          It is intentionally internal; the public character-only compatibility concept retains its historical
-///          dummy-stream meaning.
+/// @brief Converts a CPO result type to the exact expression category observed by the next semantic continuation.
+/// @details Every forwarding result is first bound to a named `decltype(auto)` local. A value or rvalue-reference result
+///          is consequently passed onward as a mutable lvalue, while an lvalue result retains its original cv-qualification.
+template <typename T>
+using print_semantic_named_result_expression_t =
+	::std::add_lvalue_reference_t<::std::remove_reference_t<T>>;
+
+template <typename output, ::std::integral char_type, typename expression>
+inline consteval bool print_semantic_output_expression_okay() noexcept;
+
+/// @brief Proves the raw-forwarding step applied to one member of an expanded semantic pack.
+/// @details A member which is already a pack is recursively expanded before forwarding. Every other member uses the
+///          pack expander's exact `io_print_forward(io_print_alias(member))` expression and is then observed as a named
+///          local. This distinction is required because condition and width branches use `print_semantic_input_forward`.
+template <typename output, ::std::integral char_type, typename expression>
+inline consteval bool print_semantic_pack_member_output_okay() noexcept
+{
+	if constexpr (
+		::fast_io::details::decay::print_semantic_pack_argument_v<expression>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_output_expression_okay<output, char_type, expression>();
+	}
+	else
+	{
+		using forwarded_result = decltype(::fast_io::io_print_forward<char_type>(
+			::fast_io::io_print_alias(::std::declval<expression>())));
+		using forwarded_argument = ::std::remove_reference_t<forwarded_result>;
+		return ::fast_io::details::decay::
+			print_freestanding_output_param_okay_single<
+				output, char_type, forwarded_argument>::value;
+	}
+}
+
+template <typename output, ::std::integral char_type, typename node_expression,
+		  ::std::size_t... I>
+inline consteval bool print_semantic_pack_output_expression_okay_impl(
+	::std::index_sequence<I...>) noexcept
+{
+	return (::fast_io::details::decay::
+				print_semantic_pack_member_output_okay<
+					output, char_type,
+					decltype(::fast_io::containers::get<I>(
+						::std::declval<node_expression>().storage))>() &&
+			...);
+}
+
+/// @brief Proves one condition alternative using the branch normalization selected by runtime.
+/// @details Nested conditions, exact nulls, and raw packs are handled before ordinary branch forwarding. The ordinary
+///          case deliberately calls `print_semantic_input_forward`: unlike raw pack-member forwarding, an alias result
+///          which is already a semantic node must not pass through status forwarding a second time.
+template <typename output, ::std::integral char_type, typename expression>
+inline consteval bool print_semantic_condition_branch_output_okay() noexcept
+{
+	if constexpr (
+		::fast_io::details::decay::print_semantic_top_level_condition_v<expression> ||
+		::fast_io::details::decay::print_semantic_pack_argument_v<expression>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_output_expression_okay<output, char_type, expression>();
+	}
+	else if constexpr (
+		::std::same_as<::std::remove_cvref_t<expression>, ::fast_io::io_null_t>)
+	{
+		return true;
+	}
+	else
+	{
+		using forwarded_result = decltype(
+			::fast_io::details::decay::print_semantic_input_forward<char_type>(
+				::std::declval<expression>()));
+		using forwarded_argument = ::std::remove_reference_t<forwarded_result>;
+		return ::fast_io::details::decay::
+			print_freestanding_output_param_okay_single<
+				output, char_type, forwarded_argument>::value;
+	}
+}
+
+/// @brief Recursively validates one exact semantic-node expression against a concrete output stream.
+/// @details The proof starts from the same named node reference as execution. Consequently an outer const pack or
+///          condition makes its value members const lvalues, while tuple reference members retain their referent type.
+///          Pack and condition traversal remain linear here: both condition arms are checked independently without
+///          constructing the Cartesian product of complete active records.
+template <typename output, ::std::integral char_type, typename expression>
+inline consteval bool print_semantic_output_expression_okay() noexcept
+{
+	using node_result = decltype(
+		::fast_io::details::decay::print_semantic_node_ref(
+			::std::declval<expression>()));
+	using node_expression = ::std::add_lvalue_reference_t<
+		::std::remove_reference_t<node_result>>;
+	using node_type = ::std::remove_cvref_t<node_result>;
+	if constexpr (::fast_io::details::print_pack<node_type>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_pack_output_expression_okay_impl<
+				output, char_type, node_expression>(
+					::std::make_index_sequence<node_type::size>{});
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_condition_v<node_type>)
+	{
+		using first_expression = decltype(
+			(::std::declval<node_expression>().t1));
+		using second_expression = decltype(
+			(::std::declval<node_expression>().t2));
+		return ::fast_io::details::decay::
+				   print_semantic_condition_branch_output_okay<
+					   output, char_type, first_expression>() &&
+			   ::fast_io::details::decay::
+				   print_semantic_condition_branch_output_okay<
+					   output, char_type, second_expression>();
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_width_v<node_type>)
+	{
+		using width_traits =
+			::fast_io::details::decay::print_semantic_width_traits<node_type>;
+		constexpr bool fill_character_matches{[]() consteval {
+			if constexpr (width_traits::has_fill_char)
+			{
+				return ::std::same_as<
+					char_type, typename width_traits::fill_char_type>;
+			}
+			else
+			{
+				return true;
+			}
+		}()};
+		using child_expression = decltype(
+			(::std::declval<node_expression>().reference));
+		using forwarded_result = decltype(
+			::fast_io::details::decay::print_semantic_input_forward<char_type>(
+				::std::declval<child_expression>()));
+		using forwarded_argument = ::std::remove_reference_t<forwarded_result>;
+		return fill_character_matches &&
+			   ::fast_io::details::decay::
+				   print_freestanding_primitive_output_okay<output> &&
+			   ::fast_io::details::decay::
+				   print_freestanding_output_param_okay_single<
+					   output, char_type, forwarded_argument>::value;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Compatibility wrapper for the exact-expression semantic output proof.
+/// @details `T` is the dispatcher template argument; runtime observes it through the named lvalue expression `T&`.
 template <typename output, ::std::integral char_type, typename T>
-struct print_semantic_output_params_okay : ::std::false_type
-{};
-
-template <typename output, ::std::integral char_type, typename T>
-struct print_semantic_output_params_okay<output, char_type, ::fast_io::parameter<T>>
-	: print_semantic_output_params_okay<output, char_type, ::std::remove_cvref_t<T>>
-{};
-
-template <typename output, ::std::integral char_type, typename... Args>
-struct print_semantic_output_params_okay<output, char_type, ::fast_io::manipulators::pack_t<Args...>>
+struct print_semantic_output_params_okay
 	: ::std::bool_constant<
-		  (::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			   output, char_type,
-			   ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, Args>>::value &&
-		   ...)>
-{};
-
-template <typename output, ::std::integral char_type, typename T1, typename T2>
-struct print_semantic_output_params_okay<output, char_type, ::fast_io::manipulators::condition<T1, T2>>
-	: ::std::bool_constant<
-		  ::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			  output, char_type,
-			  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T1>>::value && ::fast_io::details::decay::print_freestanding_output_param_okay_single<output, char_type,
-																																													  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T2>>::value>
-{};
-
-template <typename output, ::std::integral char_type,
-		  ::fast_io::manipulators::scalar_placement placement, typename T>
-struct print_semantic_output_params_okay<
-	output, char_type, ::fast_io::manipulators::width_t<placement, T>>
-	: ::std::bool_constant<
-		  ::fast_io::details::decay::print_freestanding_primitive_output_okay<output> && ::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			  output, char_type,
-			  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T>>::value>
-{};
-
-template <typename output, ::std::integral char_type,
-		  ::fast_io::manipulators::scalar_placement placement, typename T, ::std::integral fill_char_type>
-struct print_semantic_output_params_okay<
-	output, char_type, ::fast_io::manipulators::width_ch_t<placement, T, fill_char_type>>
-	: ::std::bool_constant<
-		  ::std::same_as<char_type, fill_char_type> && ::fast_io::details::decay::print_freestanding_primitive_output_okay<output> && ::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			  output, char_type,
-			  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T>>::value>
-{};
-
-template <typename output, ::std::integral char_type, typename T>
-struct print_semantic_output_params_okay<output, char_type, ::fast_io::manipulators::width_runtime_t<T>>
-	: ::std::bool_constant<
-		  ::fast_io::details::decay::print_freestanding_primitive_output_okay<output> && ::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			  output, char_type,
-			  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T>>::value>
-{};
-
-template <typename output, ::std::integral char_type, typename T, ::std::integral fill_char_type>
-struct print_semantic_output_params_okay<
-	output, char_type, ::fast_io::manipulators::width_runtime_ch_t<T, fill_char_type>>
-	: ::std::bool_constant<
-		  ::std::same_as<char_type, fill_char_type> && ::fast_io::details::decay::print_freestanding_primitive_output_okay<output> && ::fast_io::details::decay::print_freestanding_output_param_okay_single<
-			  output, char_type,
-			  ::fast_io::details::decay::print_semantic_named_member_forwarded_arg_t<char_type, T>>::value>
+		  ::fast_io::details::decay::print_semantic_output_expression_okay<
+			  output, char_type, T &>()>
 {};
 
 /// @brief Validates one normalized argument against the protocol branch that can actually emit it.
@@ -8394,15 +8563,16 @@ inline consteval bool print_freestanding_output_param_okay_single_impl() noexcep
 	{
 		return true;
 	}
-	else if constexpr (::fast_io::details::decay::print_semantic_node<T>)
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_execution_node_v<T>)
 	{
-		return ::fast_io::details::decay::print_semantic_output_params_okay<
-			output, char_type, value_type>::value;
+		return ::fast_io::details::decay::
+			print_semantic_output_expression_okay<output, char_type, T &>();
 	}
 	else if constexpr (
 		::fast_io::reserve_printable<char_type, T> ||
 		::fast_io::dynamic_reserve_printable<char_type, T> ||
-		::fast_io::scatter_printable_for<char_type, value_type &> ||
+		::fast_io::scatter_printable_for<char_type, T &> ||
 		::fast_io::reserve_scatters_printable<char_type, T> ||
 		::fast_io::context_printable<char_type, T>)
 	{
@@ -8421,6 +8591,479 @@ struct print_freestanding_output_param_okay_single
 			  output, char_type, T>()>
 {};
 
+/// @brief Carries one type-only active print-record prefix or unprocessed semantic suffix.
+/// @details The list has no run-time representation. It exists solely to prove every record shape which pack expansion
+///          and condition selection can pass to the ordinary complete-record dispatcher.
+template <typename... Args>
+struct print_semantic_active_record_type_list
+{};
+
+/// @brief Identifies the normalization operation which runtime applies to one pending semantic expression.
+/// @details The stages are intentionally distinct. In particular, a pack produced by forwarding is not sent back into
+///          the earlier global pack-expansion pass; it remains a semantic node and is emitted at its own record boundary.
+enum class print_semantic_active_record_stage : unsigned char
+{
+	already_forwarded,
+	pack_member,
+	condition_branch,
+	post_forward
+};
+
+template <print_semantic_active_record_stage stage_value, typename expression_type>
+struct print_semantic_active_record_input
+{
+	inline static constexpr print_semantic_active_record_stage stage{stage_value};
+	using expression = expression_type;
+};
+
+template <typename expression, typename tail_list, typename index_sequence>
+struct print_semantic_active_record_pack_prepend_impl;
+
+/// @brief Prepends the exact member expressions exposed by one named semantic pack node.
+/// @details `get` is formed on the cv-qualified named node expression, not on the pack's declared element types. This
+///          preserves const value members while correctly retaining the referent type of tuple reference members.
+template <typename expression, typename... TailArgs, ::std::size_t... I>
+struct print_semantic_active_record_pack_prepend_impl<
+	expression, print_semantic_active_record_type_list<TailArgs...>,
+	::std::index_sequence<I...>>
+{
+	using node_result = decltype(
+		::fast_io::details::decay::print_semantic_node_ref(
+			::std::declval<expression>()));
+	using node_expression = ::std::add_lvalue_reference_t<
+		::std::remove_reference_t<node_result>>;
+	using type = print_semantic_active_record_type_list<
+		print_semantic_active_record_input<
+			print_semantic_active_record_stage::pack_member,
+			decltype(::fast_io::containers::get<I>(
+				::std::declval<node_expression>().storage))>...,
+		TailArgs...>;
+};
+
+template <typename expression, typename tail_list>
+struct print_semantic_active_record_pack_prepend
+	: print_semantic_active_record_pack_prepend_impl<
+		  expression, tail_list,
+		  ::std::make_index_sequence<
+			  ::std::remove_cvref_t<decltype(
+				  ::fast_io::details::decay::print_semantic_node_ref(
+					  ::std::declval<expression>()))>::size>>
+{};
+
+template <bool line, typename output, typename active_list, typename remaining_list>
+struct print_semantic_active_record_runs_okay_impl;
+
+template <bool line, typename output, typename active_list>
+inline consteval bool print_semantic_active_flat_fallback_okay() noexcept;
+
+/// @brief Validates one fully selected active record against the operation execution actually used for that shape.
+/// @details A plain active sequence re-enters `print_freestanding_decay_no_pack`, so an exact whole-record status CPO
+///          may own otherwise unprintable leaves, including the zero-leaf sequence. A remaining width node is emitted
+///          by semantic node logic instead; whole-record status is not an execution branch there, so the ordinary
+///          per-node and primitive-output proof remains mandatory. This distinction prevents admission from promising
+///          a customization which the selected implementation would never call.
+template <bool line, typename output, typename... ActiveArgs>
+struct print_semantic_active_record_runs_okay_impl<
+	line, output, print_semantic_active_record_type_list<ActiveArgs...>,
+	print_semantic_active_record_type_list<>>
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	using char_type = typename normalized_output::output_char_type;
+	inline static constexpr bool has_remaining_semantic_node{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_execution_node_v<ActiveArgs>)};
+	inline static constexpr bool ordinary_fallback{
+		(!line || ::fast_io::details::decay::
+				  print_freestanding_line_output_okay<normalized_output>) &&
+		(::fast_io::details::decay::print_freestanding_output_param_okay_single<
+			 normalized_output, char_type,
+			 ::std::remove_reference_t<ActiveArgs>>::value &&
+		 ...)};
+	inline static constexpr bool value{
+		ordinary_fallback ||
+		(!has_remaining_semantic_node &&
+		 ::fast_io::operations::decay::defines::has_status_print_define<
+			 line, normalized_output,
+			 ::std::remove_reference_t<ActiveArgs>...>) ||
+		(has_remaining_semantic_node &&
+		 ::fast_io::details::decay::
+			 print_semantic_active_flat_fallback_okay<
+				 line, normalized_output,
+				 print_semantic_active_record_type_list<ActiveArgs...>>())};
+};
+
+/// @brief Enumerates the active type sequences produced by semantic pack and condition normalization.
+/// @details The stage tag mirrors the four runtime transitions: initial already-forwarded inputs, raw pack members,
+///          raw selected condition arms, and named post-forwarding results. Exact null removal and condition selection
+///          occur only in the post-forward stage, while raw packs expand before forwarding. Both condition alternatives
+///          must satisfy the continuation because the predicate is a run-time value. The evaluator is instantiated only
+///          after the ordinary linear capability proof has failed, so a normal writable stream avoids the record product.
+template <bool line, typename output, typename... ActiveArgs,
+		  print_semantic_active_record_stage stage, typename expression,
+		  typename... TailArgs>
+struct print_semantic_active_record_runs_okay_impl<
+	line, output, print_semantic_active_record_type_list<ActiveArgs...>,
+	print_semantic_active_record_type_list<
+		print_semantic_active_record_input<stage, expression>, TailArgs...>>
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	using char_type = typename normalized_output::output_char_type;
+
+	inline static constexpr bool value{[]() consteval {
+		using tail_list =
+			print_semantic_active_record_type_list<TailArgs...>;
+		if constexpr (
+			stage == print_semantic_active_record_stage::already_forwarded)
+		{
+			if constexpr (
+				::fast_io::details::decay::
+					print_semantic_pack_argument_v<expression>)
+			{
+				using expanded_tail = typename ::fast_io::details::decay::
+					print_semantic_active_record_pack_prepend<
+						expression, tail_list>::type;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						expanded_tail>::value;
+			}
+			else
+			{
+				using next_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::post_forward,
+						expression>,
+					TailArgs...>;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						next_list>::value;
+			}
+		}
+		else if constexpr (
+			stage == print_semantic_active_record_stage::pack_member)
+		{
+			if constexpr (
+				::fast_io::details::decay::
+					print_semantic_pack_argument_v<expression>)
+			{
+				using expanded_tail = typename ::fast_io::details::decay::
+					print_semantic_active_record_pack_prepend<
+						expression, tail_list>::type;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						expanded_tail>::value;
+			}
+			else
+			{
+				using forwarded_result = decltype(
+					::fast_io::io_print_forward<char_type>(
+						::fast_io::io_print_alias(
+							::std::declval<expression>())));
+				using forwarded_expression =
+					::fast_io::details::decay::
+						print_semantic_named_result_expression_t<
+							forwarded_result>;
+				using next_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::post_forward,
+						forwarded_expression>,
+					TailArgs...>;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						next_list>::value;
+			}
+		}
+		else if constexpr (
+			stage == print_semantic_active_record_stage::condition_branch)
+		{
+			if constexpr (
+				::fast_io::details::decay::
+					print_semantic_top_level_condition_v<expression>)
+			{
+				using next_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::post_forward,
+						expression>,
+					TailArgs...>;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						next_list>::value;
+			}
+			else if constexpr (
+				::std::same_as<::std::remove_cvref_t<expression>,
+							   ::fast_io::io_null_t>)
+			{
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						tail_list>::value;
+			}
+			else if constexpr (
+				::fast_io::details::decay::
+					print_semantic_pack_argument_v<expression>)
+			{
+				using expanded_tail = typename ::fast_io::details::decay::
+					print_semantic_active_record_pack_prepend<
+						expression, tail_list>::type;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						expanded_tail>::value;
+			}
+			else
+			{
+				using forwarded_result = decltype(
+					::fast_io::details::decay::
+						print_semantic_input_forward<char_type>(
+							::std::declval<expression>()));
+				using forwarded_expression =
+					::fast_io::details::decay::
+						print_semantic_named_result_expression_t<
+							forwarded_result>;
+				using next_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::post_forward,
+						forwarded_expression>,
+					TailArgs...>;
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						next_list>::value;
+			}
+		}
+		else
+		{
+			static_assert(
+				stage == print_semantic_active_record_stage::post_forward);
+			if constexpr (
+				::std::same_as<::std::remove_cvref_t<expression>,
+							   ::fast_io::io_null_t>)
+			{
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<ActiveArgs...>,
+						tail_list>::value;
+			}
+			else if constexpr (
+				::fast_io::details::decay::
+					print_semantic_top_level_condition_v<expression>)
+			{
+				using node_result = decltype(
+					::fast_io::details::decay::print_semantic_node_ref(
+						::std::declval<expression>()));
+				using node_expression = ::std::add_lvalue_reference_t<
+					::std::remove_reference_t<node_result>>;
+				using first_expression = decltype(
+					(::std::declval<node_expression>().t1));
+				using second_expression = decltype(
+					(::std::declval<node_expression>().t2));
+				using first_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::condition_branch,
+						first_expression>,
+					TailArgs...>;
+				using second_list = print_semantic_active_record_type_list<
+					print_semantic_active_record_input<
+						print_semantic_active_record_stage::condition_branch,
+						second_expression>,
+					TailArgs...>;
+				return ::fast_io::details::decay::
+						   print_semantic_active_record_runs_okay_impl<
+							   line, output,
+							   print_semantic_active_record_type_list<ActiveArgs...>,
+							   first_list>::value &&
+					   ::fast_io::details::decay::
+						   print_semantic_active_record_runs_okay_impl<
+							   line, output,
+							   print_semantic_active_record_type_list<ActiveArgs...>,
+							   second_list>::value;
+			}
+			else
+			{
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay_impl<
+						line, output,
+						print_semantic_active_record_type_list<
+							ActiveArgs..., expression>,
+						tail_list>::value;
+			}
+		}
+	}()};
+};
+
+/// @brief Proves one plain prefix against the complete-record dispatcher used by semantic fallback.
+/// @details The arguments are exact named expressions. Removing only references reproduces the `Args` deduced by
+///          `print_freestanding_decay_no_pack(Args&...)`; an exact status CPO may own the prefix when ordinary output
+///          protocols do not. An empty non-line prefix is always a valid no-op, while an empty line prefix still needs
+///          either its exact status operation or the one-character output proof.
+template <bool line, typename output, typename... expressions>
+inline consteval bool print_semantic_active_plain_record_okay(
+	print_semantic_active_record_type_list<expressions...>) noexcept
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	using char_type = typename normalized_output::output_char_type;
+	constexpr bool ordinary_fallback{
+		(!line || ::fast_io::details::decay::
+				  print_freestanding_line_output_okay<normalized_output>) &&
+		(::fast_io::details::decay::print_freestanding_output_param_okay_single<
+			 normalized_output, char_type,
+			 ::std::remove_reference_t<expressions>>::value &&
+		 ...)};
+	return ordinary_fallback ||
+		   ::fast_io::operations::decay::defines::has_status_print_define<
+			   line, normalized_output,
+			   ::std::remove_reference_t<expressions>...>;
+}
+
+/// @brief Proves the independent record emitted for one semantic node encountered by flat fallback.
+/// @details A retained pack or condition is not merged with adjacent plain prefixes. Its raw members re-enter
+///          `print_semantic_emit<..., false>` and therefore begin at the pack-member forwarding stage. This permits an
+///          exact child-record status customization without incorrectly treating that customization as owner of the
+///          surrounding prefix or suffix. Width remains governed by its dedicated linear output proof.
+template <bool line, typename output, typename expression>
+inline consteval bool print_semantic_active_node_record_okay() noexcept
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	using char_type = typename normalized_output::output_char_type;
+	using node_result = decltype(
+		::fast_io::details::decay::print_semantic_node_ref(
+			::std::declval<expression>()));
+	using node_expression = ::std::add_lvalue_reference_t<
+		::std::remove_reference_t<node_result>>;
+	using node_type = ::std::remove_cvref_t<node_result>;
+	if constexpr (::fast_io::details::print_pack<node_type>)
+	{
+		using expanded = typename ::fast_io::details::decay::
+			print_semantic_active_record_pack_prepend<
+				expression,
+				print_semantic_active_record_type_list<>>::type;
+		return ::fast_io::details::decay::
+			print_semantic_active_record_runs_okay_impl<
+				line, normalized_output,
+				print_semantic_active_record_type_list<>, expanded>::value;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_condition_v<node_type>)
+	{
+		using first_expression = decltype(
+			(::std::declval<node_expression>().t1));
+		using second_expression = decltype(
+			(::std::declval<node_expression>().t2));
+		using first_list = print_semantic_active_record_type_list<
+			print_semantic_active_record_input<
+				print_semantic_active_record_stage::pack_member,
+				first_expression>>;
+		using second_list = print_semantic_active_record_type_list<
+			print_semantic_active_record_input<
+				print_semantic_active_record_stage::pack_member,
+				second_expression>>;
+		return ::fast_io::details::decay::
+				   print_semantic_active_record_runs_okay_impl<
+					   line, normalized_output,
+					   print_semantic_active_record_type_list<>,
+					   first_list>::value &&
+			   ::fast_io::details::decay::
+				   print_semantic_active_record_runs_okay_impl<
+					   line, normalized_output,
+					   print_semantic_active_record_type_list<>,
+					   second_list>::value;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_width_v<node_type>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_output_expression_okay<
+				normalized_output, char_type, expression>();
+	}
+	else
+	{
+		return false;
+	}
+}
+
+template <bool line, typename output, typename prefix_list,
+		  typename remaining_list>
+struct print_semantic_active_flat_fallback_okay_impl;
+
+template <bool line, typename output, typename... prefix_expressions>
+struct print_semantic_active_flat_fallback_okay_impl<
+	line, output,
+	print_semantic_active_record_type_list<prefix_expressions...>,
+	print_semantic_active_record_type_list<>>
+	: ::std::bool_constant<
+		  ::fast_io::details::decay::print_semantic_active_plain_record_okay<
+			  line, output>(print_semantic_active_record_type_list<
+							prefix_expressions...>{})>
+{};
+
+template <bool line, typename output, typename... prefix_expressions,
+		  typename expression, typename... tail_expressions>
+struct print_semantic_active_flat_fallback_okay_impl<
+	line, output,
+	print_semantic_active_record_type_list<prefix_expressions...>,
+	print_semantic_active_record_type_list<expression, tail_expressions...>>
+	: ::std::bool_constant<[]() consteval {
+		if constexpr (
+			::fast_io::details::decay::print_semantic_execution_node_v<expression>)
+		{
+			return ::fast_io::details::decay::
+					   print_semantic_active_plain_record_okay<false, output>(
+						   print_semantic_active_record_type_list<
+							   prefix_expressions...>{}) &&
+				   ::fast_io::details::decay::
+					   print_semantic_active_node_record_okay<
+						   false, output, expression>() &&
+				   ::fast_io::details::decay::
+					   print_semantic_active_flat_fallback_okay_impl<
+						   line, output,
+						   print_semantic_active_record_type_list<>,
+						   print_semantic_active_record_type_list<
+							   tail_expressions...>>::value;
+		}
+		else
+		{
+			return ::fast_io::details::decay::
+				print_semantic_active_flat_fallback_okay_impl<
+					line, output,
+					print_semantic_active_record_type_list<
+						prefix_expressions..., expression>,
+					print_semantic_active_record_type_list<
+						tail_expressions...>>::value;
+		}
+	}()>
+{};
+
+template <bool line, typename output, typename active_list>
+inline consteval bool print_semantic_active_flat_fallback_okay() noexcept
+{
+	return ::fast_io::details::decay::
+		print_semantic_active_flat_fallback_okay_impl<
+			line, output, print_semantic_active_record_type_list<>,
+			active_list>::value;
+}
+
+template <bool line, typename output, typename... Args>
+inline constexpr bool print_semantic_active_record_runs_okay{
+	::fast_io::details::decay::print_semantic_active_record_runs_okay_impl<
+		line, output, print_semantic_active_record_type_list<>,
+		print_semantic_active_record_type_list<
+			print_semantic_active_record_input<
+				print_semantic_active_record_stage::already_forwarded,
+				Args &>...>>::value};
+
 /// @brief Validates one complete, already-forwarded print run against the branch selected for its destination.
 /// @details Status printing owns the entire argument pack, so validating every argument first rejects legitimate
 ///          stream-specific records that intentionally have no standalone formatter. Conversely, an outer status CPO
@@ -8433,7 +9076,9 @@ struct print_freestanding_output_param_okay_single
 template <bool line, typename output, typename... Args>
 inline consteval bool print_freestanding_output_run_okay() noexcept
 {
-	using normalized_output = ::std::remove_cvref_t<output>;
+	// The public entry supplies a mutable owned observer, while mutex recursion may supply a cv-qualified borrowed
+	// observer. Removing only references models the exact `outputstmtype` deduced by the runtime `T&` dispatcher.
+	using normalized_output = ::std::remove_reference_t<output>;
 	if constexpr (!requires { typename normalized_output::output_char_type; })
 	{
 		return false;
@@ -8444,10 +9089,12 @@ inline consteval bool print_freestanding_output_run_okay() noexcept
 		if constexpr (
 			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<normalized_output>)
 		{
-			using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
-				::std::declval<normalized_output &>()))>;
+			using unlocked_result = decltype(
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+					::std::declval<normalized_output &>()));
+			using unlocked_output = ::std::remove_reference_t<unlocked_result>;
 			return ::fast_io::details::decay::print_freestanding_output_run_okay<
-				line, unlocked_output, ::std::remove_cvref_t<Args>...>();
+				line, unlocked_output, ::std::remove_reference_t<Args>...>();
 		}
 		else
 		{
@@ -8456,7 +9103,7 @@ inline consteval bool print_freestanding_output_run_okay() noexcept
 	}
 	else if constexpr (
 		::fast_io::operations::decay::defines::has_status_print_define<
-			line, normalized_output, ::std::remove_cvref_t<Args>...>)
+			line, normalized_output, ::std::remove_reference_t<Args>...>)
 	{
 		// The status CPO has the same normalized destination, line ownership, and argument pack as the call site.
 		return true;
@@ -8464,20 +9111,178 @@ inline consteval bool print_freestanding_output_run_okay() noexcept
 	else
 	{
 		using char_type = typename normalized_output::output_char_type;
-		return (!line || ::fast_io::details::decay::print_freestanding_line_output_okay<normalized_output>) &&
-			   (::fast_io::details::decay::print_freestanding_output_param_okay_single<
-					normalized_output, char_type, ::std::remove_cvref_t<Args>>::value &&
-				...);
+		constexpr bool ordinary_fallback{
+			(!line || ::fast_io::details::decay::
+					  print_freestanding_line_output_okay<normalized_output>) &&
+			(::fast_io::details::decay::print_freestanding_output_param_okay_single<
+				 normalized_output, char_type,
+				 ::std::remove_reference_t<Args>>::value &&
+			 ...)};
+		if constexpr (ordinary_fallback)
+		{
+			return true;
+		}
+		else if constexpr (
+			(false || ... ||
+			 ::fast_io::details::decay::print_semantic_execution_node_v<Args>))
+		{
+			// The source graph itself is not the complete operation pack. Expand
+			// every type-only pack/condition shape and prove the exact record which
+			// the semantic continuation can hand to ordinary status dispatch.
+			return ::fast_io::details::decay::
+				print_semantic_active_record_runs_okay<
+					line, normalized_output,
+					::std::remove_reference_t<Args>...>;
+		}
+		else
+		{
+			return false;
+		}
+	}
+}
+
+/// @brief Detects the exact whole-record status owner reached after every mandatory mutex unwrap.
+/// @details The run-time dispatcher never calls a status CPO attached only to a locking wrapper. This proof therefore
+///          follows each complete mutex protocol to the effective output and tests the original normalized argument
+///          pack there. It is used before collapsing a structurally empty semantic graph: an exact provider operation
+///          for that source graph must retain precedence over the derived zero-argument record.
+template <bool line, typename output, typename... Args>
+inline consteval bool print_freestanding_effective_status_owner() noexcept
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	if constexpr (!requires { typename normalized_output::output_char_type; })
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::operations::decay::defines::
+			has_output_or_io_stream_mutex_ref_define<normalized_output>)
+	{
+		if constexpr (
+			::fast_io::operations::decay::defines::
+				has_complete_output_stream_mutex_protocol<normalized_output>)
+		{
+			using unlocked_output = ::std::remove_reference_t<decltype(
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+					::std::declval<normalized_output &>()))>;
+			return ::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					line, unlocked_output, Args...>();
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else
+	{
+		return ::fast_io::operations::decay::defines::
+			has_status_print_define<line, normalized_output, Args...>;
+	}
+}
+
+/// @brief Determines whether an effective destination explicitly observes an empty non-line print record.
+/// @details The default is false. A provider opts in with the already existing exact zero-argument
+///          `status_print_define<false>(output)` operation. Mutex wrappers do not become observable merely because
+///          locking has side effects: capability discovery follows the complete protocol to the effective unlocked
+///          output without evaluating it, and a run-time lock is acquired only when that output owns the completion
+///          operation. A partial mutex protocol cannot prove an observable operation and remains false here; ordinary
+///          print admission diagnoses it independently.
+template <typename output>
+inline consteval bool print_freestanding_empty_run_observable() noexcept
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	if constexpr (!requires { typename normalized_output::output_char_type; })
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<normalized_output>)
+	{
+		if constexpr (
+			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<normalized_output>)
+		{
+			using unlocked_output = ::std::remove_reference_t<decltype(
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+					::std::declval<normalized_output &>()))>;
+			return ::fast_io::details::decay::
+				print_freestanding_empty_run_observable<unlocked_output>();
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else
+	{
+		return ::fast_io::operations::decay::defines::
+			has_status_print_define<false, normalized_output>;
 	}
 }
 
 } // namespace details::decay
+
+namespace operations::decay::defines
+{
+
+/// @brief Recognizes a normalized destination whose effective output explicitly observes an empty print record.
+/// @details The concept is false by default. A provider opts in by defining the exact zero-argument completion
+///          operation `status_print_define<false>(effective_output) -> void`; a separate Boolean marker cannot claim
+///          observability without supplying the operation which consumes the record. The proof recursively follows a
+///          complete mutex protocol to the effective unlocked output, matching ordinary print capability discovery.
+///
+///          "Empty record" means either zero source arguments or zero active arguments after fast_io-owned pack
+///          expansion and condition selection. It does not mean one active argument whose representation has zero
+///          characters: an empty string/static fragment and a standalone `io_null_t` retain their explicit-argument
+///          operation path. A structurally selected `io_null_t` below a pack/condition may participate in a proven
+///          zero-active record. Line mode is never governed by this concept because its owned newline is observable.
+template <typename output>
+concept empty_print_observable =
+	::fast_io::details::decay::print_freestanding_empty_run_observable<output>();
+
+} // namespace operations::decay::defines
 
 namespace operations
 {
 
 namespace decay
 {
+
+/// @brief Completes one empty non-line print record at the normalized print-level boundary.
+/// @details A destination without `empty_print_observable` is ignored before locking or primitive output. If the
+///          effective unlocked destination supplies the zero-argument status operation, every complete outer mutex is
+///          acquired in normal outside-in order and the operation is invoked exactly once. This helper must be used by
+///          every print-level ownership or optimization entry which can receive an empty source pack; a public facade
+///          must not suppress output-reference normalization on its behalf. Byte count alone is not evidence for this
+///          entry: any still-active leaf, including a zero-character literal or standalone null object, remains an
+///          ordinary explicit record unless semantic structure has selected it away.
+template <typename outputstmtype>
+inline constexpr void print_freestanding_empty_run(outputstmtype &optstm)
+{
+	if constexpr (
+		::fast_io::operations::decay::defines::
+			empty_print_observable<outputstmtype>)
+	{
+		if constexpr (
+			::fast_io::operations::decay::defines::
+				has_output_or_io_stream_mutex_ref_define<outputstmtype>)
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::
+					has_complete_output_stream_mutex_protocol<outputstmtype>);
+			::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
+			decltype(auto) unlocked_output =
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm);
+			::fast_io::operations::decay::print_freestanding_empty_run(
+				unlocked_output);
+		}
+		else
+		{
+			status_print_define<false>(optstm);
+		}
+	}
+}
 
 /// @brief    Freestanding print dispatcher for runs that do not require semantic pack expansion.
 /// @details  The dispatcher handles status-print customizations, empty line output, mutex-wrapped streams, buffered
@@ -8490,9 +9295,16 @@ namespace decay
 /// @param    args          the arguments to emit
 /// @return   decltype(auto) the selected output path's return value, when any
 template <bool line, typename outputstmtype, typename... Args>
+	requires(::fast_io::details::decay::print_semantic_flat_record_v<Args...>)
 inline constexpr decltype(auto) print_freestanding_decay_no_pack(outputstmtype &optstm, Args &...args)
 {
-	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype>)
+	if constexpr (!line && sizeof...(Args) == 0u)
+	{
+		// Empty-record observability belongs to the print level, before any
+		// destination strategy can turn a no-op into a lock or primitive call.
+		return ::fast_io::operations::decay::print_freestanding_empty_run(optstm);
+	}
+	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype>)
 	{
 		if constexpr (
 			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outputstmtype>)
@@ -8524,18 +9336,12 @@ inline constexpr decltype(auto) print_freestanding_decay_no_pack(outputstmtype &
 	}
 	else if constexpr (sizeof...(Args) == 0)
 	{
-		// Empty runs either emit only the requested newline or produce no output.
-		if constexpr (line)
-		{
-			// The line variant of an empty run emits exactly one newline character.
-			using char_type = typename outputstmtype::output_char_type;
-			return ::fast_io::operations::decay::char_put_decay(optstm, char_literal_v<u8'\n', char_type>);
-		}
-		else
-		{
-			// The non-line variant of an empty run emits nothing.
-			return;
-		}
+		// The earlier print-level branch owns a non-line empty record. Therefore
+		// reaching this branch proves line mode and emits its one required newline.
+		static_assert(line);
+		using char_type = typename outputstmtype::output_char_type;
+		return ::fast_io::operations::decay::char_put_decay(
+			optstm, char_literal_v<u8'\n', char_type>);
 	}
 	else if constexpr (
 		::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_available_v<
@@ -9049,7 +9855,8 @@ inline constexpr ::std::size_t print_semantic_precise_size(T &&t)
 		// lvalue even when this function received an rvalue node; the forwarding trait must model the same lvalue passed
 		// to the size CPO below, rather than the member's declared type as an invented prvalue.
 		using width_child_type =
-			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, decltype((node_ref.reference))>;
+			::fast_io::details::decay::print_semantic_stable_input_forward_t<
+				char_type, decltype((node_ref.reference))>;
 		::std::size_t const width{node_ref.width};
 		auto const placement{
 			::fast_io::operations::decay::print_semantic_width_placement<width_traits>(node_ref)};
@@ -9324,7 +10131,8 @@ inline constexpr char_type *print_semantic_emit_unchecked(char_type *iter, T &&t
 		// Width nodes materialize their child before padding so dynamic-reserve children use their actual length.
 		using width_traits = ::fast_io::details::decay::print_semantic_width_traits<node_type>;
 		using width_child_type =
-			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, decltype((node_ref.reference))>;
+			::fast_io::details::decay::print_semantic_stable_input_forward_t<
+				char_type, decltype((node_ref.reference))>;
 		::std::size_t const width{node_ref.width};
 		char_type const fillch{
 			::fast_io::operations::decay::print_semantic_width_fill_char<char_type, width_traits>(node_ref)};
@@ -10797,7 +11605,8 @@ inline constexpr void print_semantic_emit_large_passive_checked(
 			// same partial-prefix and exception boundary on a capacity miss. Index expansion supplies this fact without
 			// recursively creating one continuation type for every component prefix.
 			constexpr bool component_line{line && position + 1u == sizeof...(Args)};
-			if constexpr (::fast_io::details::decay::print_semantic_node<T>)
+			if constexpr (
+				::fast_io::details::decay::print_semantic_execution_node_v<T>)
 			{
 				::fast_io::operations::decay::print_semantic_emit<
 					component_line, true, char_type>(optstm, value);
@@ -11330,7 +12139,7 @@ inline constexpr char_type *print_semantic_emit_prepared_width_child(char_type *
 	decltype(auto) forwarded{
 		::fast_io::details::decay::print_semantic_input_forward<char_type>(::std::forward<T>(t))};
 	using value_type = ::std::remove_cvref_t<decltype(forwarded)>;
-	if constexpr (!::fast_io::details::decay::print_semantic_node<value_type> &&
+	if constexpr (!::fast_io::details::decay::print_semantic_execution_node_v<value_type> &&
 				  ::fast_io::precise_reserve_printable<char_type, value_type>)
 	{
 		// A measured leaf can pass its exact extent directly to the precise define customization.
@@ -11578,9 +12387,18 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 		}
 	}
 	using forwarded_reference_type = ::std::remove_cvref_t<
-		::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, T &>>;
+		::fast_io::details::decay::print_semantic_stable_input_forward_t<
+			char_type, decltype((reference))>>;
 	constexpr bool passive_scatter_child{
 		::std::same_as<forwarded_reference_type, ::fast_io::basic_io_scatter_t<char_type>>};
+	auto emit_forwarded_child = [&](auto &output) constexpr {
+		decltype(auto) forwarded{
+			::fast_io::details::decay::print_semantic_input_forward<char_type>(reference)};
+		// Width sizing and every contiguous emitter observe this same named post-forwarding category. Marking it already
+		// forwarded prevents an alias result which is itself semantic from entering status forwarding a second time.
+		::fast_io::operations::decay::print_semantic_emit<false, true, char_type>(
+			output, forwarded);
+	};
 	auto emit_stream_child = [&]() constexpr {
 		if constexpr (passive_scatter_child)
 		{
@@ -11593,7 +12411,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 				return;
 			}
 		}
-		::fast_io::operations::decay::print_semantic_emit<false, false, char_type>(optstm, reference);
+		emit_forwarded_child(optstm);
 	};
 	if (width <= len || placement_code == 0u)
 	{
@@ -11635,7 +12453,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 				// The child is buffered so padding can be inserted between its internal prefix and suffix.
 				::fast_io::basic_dynamic_output_buffer<char_type> buffer;
 				decltype(auto) buffer_ref = ::fast_io::operations::output_stream_ref(buffer);
-				::fast_io::operations::decay::print_semantic_emit<false, false, char_type>(buffer_ref, reference);
+				emit_forwarded_child(buffer_ref);
 				char_type const *const first{buffer.begin_ptr};
 				char_type const *const last{buffer.curr_ptr};
 				if (len < internal_len)
@@ -11707,7 +12525,8 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 	using width_type = ::std::remove_cvref_t<decltype(width_ref)>;
 	using width_traits = ::fast_io::details::decay::print_semantic_width_traits<width_type>;
 	using width_child_type =
-		::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, decltype((width_ref.reference))>;
+		::fast_io::details::decay::print_semantic_stable_input_forward_t<
+			char_type, decltype((width_ref.reference))>;
 	using width_child_node_type = ::std::remove_cvref_t<decltype(::fast_io::details::decay::print_semantic_node_ref(::std::declval<width_child_type>()))>;
 	constexpr bool child_selects_composite_branch{
 		::fast_io::details::print_pack<width_child_node_type> ||
@@ -11759,7 +12578,11 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 	// its actual length is available before placement is applied.
 	::fast_io::basic_dynamic_output_buffer<char_type> buffer;
 	decltype(auto) buffer_ref = ::fast_io::operations::output_stream_ref(buffer);
-	::fast_io::operations::decay::print_semantic_emit<false, false, char_type>(buffer_ref, width_ref.reference);
+	decltype(auto) forwarded_child{
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			width_ref.reference)};
+	::fast_io::operations::decay::print_semantic_emit<false, true, char_type>(
+		buffer_ref, forwarded_child);
 	char_type const *const first{buffer.begin_ptr};
 	char_type const *const last{buffer.curr_ptr};
 	::std::size_t const len{static_cast<::std::size_t>(last - first)};
@@ -11963,11 +12786,15 @@ inline constexpr void print_semantic_emit_node(outputstmtype &optstm, T &&t)
 /// @tparam   char_type     the character type of the output stream
 /// @tparam   outputstmtype the decayed output stream reference type
 /// @tparam   continuation  the accumulated prefix continuation type
+/// @details  The destination is only a recursion anchor at this terminal step. Borrowing it preserves the exact
+///           normalized observer established by the enclosing print operation; copying an unused observer would make
+///           a filtered-to-empty semantic record reject a valid immovable output before its zero-record continuation
+///           can apply status, mutex, and line semantics.
 template <bool line, ::std::integral char_type, typename outputstmtype, typename continuation>
 #if __has_cpp_attribute(__gnu__::__flatten__)
 [[__gnu__::__flatten__]]
 #endif
-inline constexpr void print_semantic_emit_flat_impl(outputstmtype, continuation &&cont)
+inline constexpr void print_semantic_emit_flat_impl(outputstmtype &, continuation &&cont)
 {
 	cont.template operator()<line>();
 }
@@ -12009,7 +12836,8 @@ template <bool line, ::std::integral char_type, typename outputstmtype, typename
 #endif
 inline constexpr void print_semantic_emit_flat_impl(outputstmtype &optstm, continuation &&cont, T &&t, Args &&...args)
 {
-	if constexpr (::fast_io::details::decay::print_semantic_node<T>)
+	if constexpr (
+		::fast_io::details::decay::print_semantic_execution_node_v<T>)
 	{
 		// A semantic node terminates the current flat prefix before node-specific output is emitted.
 		cont.template operator()<false>();
@@ -12044,11 +12872,16 @@ struct print_semantic_emit_freestanding_continuation
 	{
 		using char_type = typename outputstmtype::output_char_type;
 		if constexpr (
+			!::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					prefix_line, outputstmtype,
+					::std::remove_reference_t<Prefix>...>() &&
 			!::fast_io::details::decay::print_output_run_retains_static_scatter<outputstmtype, Prefix...> &&
 			::fast_io::details::decay::print_controls_dynamic_scatters_reserve_fast_entry_available<
 				char_type, ::std::remove_cvref_t<Prefix>...>())
 		{
-			// The fast dynamic reserve-scatters entry handles the prefix when every argument supports it.
+			// The fast dynamic reserve-scatters entry handles the prefix when every argument supports it and the
+			// effective destination does not own the exact complete-record status operation.
 			::fast_io::details::decay::print_controls_dynamic_scatters_reserve_fast_entry<prefix_line>(
 				optstm, ::std::forward<Prefix>(prefix)...);
 		}
@@ -12093,7 +12926,7 @@ inline constexpr void print_semantic_emit_flat_fallback(outputstmtype &optstm, A
 {
 #if defined(__GNUC__) && !defined(__clang__)
 	if constexpr (
-		!(::fast_io::details::decay::print_semantic_node<Args> || ...) &&
+		!(::fast_io::details::decay::print_semantic_execution_node_v<Args> || ...) &&
 		sizeof...(Args) > 128u)
 	{
 		::fast_io::operations::decay::print_semantic_emit_freestanding_continuation<outputstmtype>{optstm}
@@ -12108,7 +12941,7 @@ inline constexpr void print_semantic_emit_flat_fallback(outputstmtype &optstm, A
 	}
 #elif defined(__clang__) && __clang_major__ >= 17
 	if constexpr (
-		!(::fast_io::details::decay::print_semantic_node<Args> || ...) &&
+		!(::fast_io::details::decay::print_semantic_execution_node_v<Args> || ...) &&
 		sizeof...(Args) > 128u)
 	{
 		::fast_io::operations::decay::print_semantic_emit_large_plain_prefix<line>(
@@ -12152,7 +12985,8 @@ inline consteval bool print_semantic_top_level_width_has_runtime_scatter() noexc
 		// `declval<node_reference>()` (an xvalue for a temporary node) can select a different ref-qualified CPO.
 		using child_reference = decltype((::std::declval<node_reference &>().reference));
 		using child_type =
-			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, child_reference>;
+			::fast_io::details::decay::print_semantic_stable_input_forward_t<
+				char_type, child_reference>;
 		return ::fast_io::dynamic_reserve_scatters_printable<char_type, child_type> &&
 			   ::fast_io::details::decay::retained_reserve_scatters_printable_v<char_type, child_type>;
 	}
@@ -12174,8 +13008,9 @@ inline consteval bool print_semantic_top_level_width_has_semantic_child() noexce
 		using node_reference = decltype(::fast_io::details::decay::print_semantic_node_ref(::std::declval<T>()));
 		using child_reference = decltype((::std::declval<node_reference &>().reference));
 		using child_type =
-			::fast_io::details::decay::print_semantic_forwarded_arg_t<char_type, child_reference>;
-		return ::fast_io::details::decay::print_semantic_node<child_type>;
+			::fast_io::details::decay::print_semantic_stable_input_forward_t<
+				char_type, child_reference>;
+		return ::fast_io::details::decay::print_semantic_execution_node_v<child_type>;
 	}
 	else
 	{
@@ -12229,6 +13064,18 @@ template <bool line, typename outputstmtype, typename... Args>
 [[nodiscard]] inline constexpr bool print_freestanding_decay_compiler_constant_materialized(
 	outputstmtype &optstm, Args... args);
 
+/// @brief Tries compiler-constant materialization on an already-selected active record.
+/// @details The definition follows the compiler-constant protocol implementation.  This early declaration lets the
+///          semantic terminal keep the value query in its caller while leaving the large run-time emitter out of line.
+template <bool line, typename outputstmtype, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr bool
+print_semantic_try_compiler_constant_active_record(
+	outputstmtype &optstm, Args &...args);
+
 /// @brief Emits the rejected bounded run one already-filtered component at a time.
 /// @details This continuation is reached only after the compact one-pass capacity probe returned `SIZE_MAX`.  Calling
 ///          the general flat emitter here makes GCC instantiate and flatten every large-precision coalescing
@@ -12243,7 +13090,8 @@ inline constexpr void print_semantic_emit_rejected_bounded_run(
 	outputstmtype &optstm, T &&value, Args &&...args)
 {
 	constexpr bool component_line{line && sizeof...(Args) == 0u};
-	if constexpr (::fast_io::details::decay::print_semantic_node<T>)
+	if constexpr (
+		::fast_io::details::decay::print_semantic_execution_node_v<T>)
 	{
 		::fast_io::operations::decay::print_semantic_emit_node<
 			component_line, char_type>(optstm, ::std::forward<T>(value));
@@ -12414,7 +13262,7 @@ inline consteval bool print_plain_single_pass_staging_run() noexcept
 /// @tparam   char_type     the character type of the output stream
 /// @tparam   outputstmtype the decayed output stream reference type
 template <bool line, ::std::integral char_type, typename outputstmtype>
-struct print_semantic_emit_flat_continuation
+struct print_semantic_emit_flat_runtime_continuation
 {
 	using output_char_type = char_type;
 	outputstmtype &optstm;
@@ -12425,6 +13273,25 @@ struct print_semantic_emit_flat_continuation
 	template <typename... FilteredArgs>
 	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
 	{
+		constexpr bool has_remaining_semantic_node{
+			(false || ... ||
+			 ::fast_io::details::decay::print_semantic_execution_node_v<FilteredArgs>)};
+		constexpr bool has_effective_whole_record_status{
+			!has_remaining_semantic_node &&
+			::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					line, outputstmtype,
+					::std::remove_reference_t<FilteredArgs>...>()};
+		if constexpr (has_effective_whole_record_status)
+		{
+			// Status printing owns the complete active record. Route through the ordinary dispatcher before any scatter,
+			// staging, coalescing, or put-area strategy is instantiated; a run-time return alone would still instantiate
+			// those discarded-in-semantics branches and could reject a status-only leaf.
+			::fast_io::operations::decay::print_freestanding_decay_no_pack<line>(
+				optstm, filtered_args...);
+		}
+		else
+		{
 		if constexpr (
 			::fast_io::operations::decay::print_semantic_exact_two_passive_scatter_direct_write_v<
 				line, char_type, outputstmtype, FilteredArgs...>)
@@ -12447,8 +13314,7 @@ struct print_semantic_emit_flat_continuation
 				return;
 			}
 		}
-		constexpr bool has_semantic_node{
-			(false || ... || ::fast_io::details::decay::print_semantic_node<FilteredArgs>)};
+		constexpr bool has_semantic_node{has_remaining_semantic_node};
 		constexpr bool has_runtime_scatter_component{
 			(false || ... ||
 			 (::fast_io::dynamic_reserve_scatters_printable<
@@ -12687,6 +13553,55 @@ struct print_semantic_emit_flat_continuation
 			}
 		}
 	}
+	}
+};
+
+/// @brief    Applies the value-level constant gate at the exact active-record boundary.
+/// @details  Pack expansion and condition selection have already fixed the operation arity and leaf types.  The small
+///           wrapper must remain in the expression caller so an accepted `__builtin_constant_p` query disappears with
+///           its materializer, while a rejected query enters the unchanged large run-time continuation below.  Keeping
+///           those bodies separate is the code-size proof: forced placement covers only the query and one cold edge,
+///           never the mutually exclusive semantic sizing and output strategies.
+/// @tparam   line          true when a trailing newline is appended
+/// @tparam   char_type     the character type of the output stream
+/// @tparam   outputstmtype the decayed output stream reference type
+template <bool line, ::std::integral char_type, typename outputstmtype>
+struct print_semantic_emit_flat_continuation
+{
+	using output_char_type = char_type;
+	outputstmtype &optstm;
+
+	template <typename... FilteredArgs>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	FAST_IO_GNU_ALWAYS_INLINE
+#endif
+	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
+	{
+		constexpr bool has_remaining_semantic_node{
+			(false || ... ||
+			 ::fast_io::details::decay::print_semantic_execution_node_v<FilteredArgs>)};
+		constexpr bool has_effective_whole_record_status{
+			!has_remaining_semantic_node &&
+			::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					line, outputstmtype,
+					::std::remove_reference_t<FilteredArgs>...>()};
+		if constexpr (!has_remaining_semantic_node &&
+					  !has_effective_whole_record_status)
+		{
+			if (::fast_io::operations::decay::
+					print_semantic_try_compiler_constant_active_record<line>(
+						optstm, filtered_args...))
+			{
+				return;
+			}
+		}
+		::fast_io::operations::decay::
+			print_semantic_emit_flat_runtime_continuation<
+				line, char_type, outputstmtype>{optstm}(
+					::std::forward<FilteredArgs>(filtered_args)...);
+	}
 };
 
 /// @brief    Filters null semantic outputs before the flattened emitter is invoked.
@@ -12802,11 +13717,36 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 template <bool line, typename outputstmtype, typename... Args>
 inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &optstm, Args &...args)
 {
-	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype>)
+	if constexpr (!line && sizeof...(Args) == 0u)
+	{
+		// This is the lowest stable-reference record boundary. Resolve the
+		// provider's empty-record contract before mutex or output strategy selection.
+		return ::fast_io::operations::decay::print_freestanding_empty_run(optstm);
+	}
+	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype>)
 	{
 		if constexpr (
 			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<outputstmtype>)
 		{
+			constexpr bool structural_graph_can_select_empty{
+				(false || ... ||
+				 (::fast_io::details::decay::print_semantic_pack_argument_v<Args> ||
+				  ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>))};
+			if constexpr (
+				!line && structural_graph_can_select_empty &&
+				!::fast_io::details::decay::
+					print_freestanding_effective_status_owner<
+						line, outputstmtype, Args...>())
+			{
+				// Pack expansion and condition selection can turn a nonzero source arity into a zero-leaf record. Prove
+				// that fact from fast_io-owned structural values before acquiring the mutex. An exact status owner for
+				// the original graph was excluded above, so resolving the derived empty record cannot bypass a provider
+				// operation. An inconclusive leaf retains the established lock-before-normalization ordering.
+				if (::fast_io::details::decay::print_semantic_run_provably_empty(args...))
+				{
+					return ::fast_io::operations::decay::print_freestanding_empty_run(optstm);
+				}
+			}
 			// Apply synchronization before every output-specific shortcut. In particular an outer status CPO must not
 			// pre-empt the wrapper's lock; the corresponding customization belongs on the unlocked observer, whose
 			// capabilities are selected recursively while this guard remains alive.
@@ -12835,20 +13775,15 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 	}
 	else if constexpr (sizeof...(Args) == 0)
 	{
-		// Empty decayed runs either emit only the requested newline or produce no output.
-		if constexpr (line)
-		{
-			// An empty line-print run emits exactly one newline character.
-			using char_type = typename outputstmtype::output_char_type;
-			return ::fast_io::operations::decay::char_put_decay(optstm, char_literal_v<u8'\n', char_type>);
-		}
-		else
-		{
-			// An empty non-line print run emits nothing.
-			return;
-		}
+		// Non-line emptiness was resolved before mutex/status selection. The only
+		// remaining zero-source record is line mode and owns exactly one newline.
+		static_assert(line);
+		using char_type = typename outputstmtype::output_char_type;
+		return ::fast_io::operations::decay::char_put_decay(
+			optstm, char_literal_v<u8'\n', char_type>);
 	}
-	else if constexpr ((::fast_io::details::decay::print_semantic_node<Args> || ...))
+	else if constexpr (
+		(::fast_io::details::decay::print_semantic_execution_node_v<Args> || ...))
 	{
 		// Semantic nodes require flattening and condition selection before any contiguous strategy can be proved.
 		using char_type = typename outputstmtype::output_char_type;
@@ -13044,7 +13979,10 @@ inline consteval bool print_compiler_constant_materialization_available() noexce
 			  char_type, outputstmtype> ||
 		  !::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
 			  outputstmtype, char_type>)) ||
-		(false || ... || ::fast_io::details::decay::print_semantic_node<Args>) ||
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_execution_node_v<Args>) ||
+		!(::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			  char_type, Args> && ...) ||
 		!(::fast_io::compiler_constant_printable<char_type, Args> && ...))
 	{
 		return false;
@@ -13115,7 +14053,11 @@ print_compiler_constant_materialization_gate(Args const &...args) noexcept
 					   args...);
 	}
 #else
-	(void)sizeof...(args);
+	// Native MSVC has no `__builtin_constant_p` equivalent.  Consume every
+	// parameter explicitly so the deliberately closed gate also satisfies
+	// `/W4 /WX`; `sizeof...(args)` observes only the pack cardinality and does
+	// not constitute a use of the individual function parameters.
+	((void)args, ...);
 	return false;
 #endif
 }
@@ -13639,10 +14581,36 @@ inline constexpr decltype(auto)
 print_freestanding_decay_borrowed_output(
 	outputstmtype &optstm, Args... args)
 {
-	if constexpr (
+	if constexpr (sizeof...(Args) == 0u)
+	{
+		// This mutex-specialized overload is selected before the generic
+		// borrowed boundary. Route the complete zero-source record to the
+		// line-aware dispatcher before this adapter acquires a lock itself.
+		return ::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+			optstm);
+	}
+	else if constexpr (
 		::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
 			outputstmtype>)
 	{
+		constexpr bool structural_graph_can_select_empty{
+			(false || ... ||
+			 (::fast_io::details::decay::print_semantic_pack_argument_v<Args> ||
+			  ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>))};
+		if constexpr (
+			!line && structural_graph_can_select_empty &&
+			!::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					line, outputstmtype, Args...>())
+		{
+			// This ownership adapter precedes the stable-reference dispatcher, so it must apply the same print-level
+			// active-record proof before taking its own lock. Only fast_io structural values are inspected; a source-graph
+			// status owner or any inconclusive leaf preserves the ordinary synchronized recursive path below.
+			if (::fast_io::details::decay::print_semantic_run_provably_empty(args...))
+			{
+				return ::fast_io::operations::decay::print_freestanding_empty_run(optstm);
+			}
+		}
 		// The arguments are sole owners at this by-value boundary. Moving them transports the normalized graph without
 		// another copy; the recursive call completes before the lock guard releases either an lvalue or owned prvalue
 		// unlocked observer.
@@ -13754,7 +14722,9 @@ inline constexpr bool print_passive_mixed_put_area_destination_safe =
 template <bool line, typename outputstmtype, typename... Args>
 inline consteval bool print_passive_mixed_put_area_fast_entry_available() noexcept
 {
-	using output_type = ::std::remove_cvref_t<outputstmtype>;
+	// Dispatcher recursion passes a named output expression. Preserve const while removing only reference transport so
+	// the fast-entry proof cannot borrow mutable put-area operations from an observer runtime cannot mutate.
+	using output_type = ::std::remove_reference_t<outputstmtype>;
 	if constexpr (sizeof...(Args) < 2u ||
 				  !requires { typename output_type::output_char_type; })
 	{
@@ -13839,10 +14809,11 @@ inline constexpr void print_passive_mixed_put_area_fast_entry(
 	}
 	if constexpr (
 		::fast_io::operations::decay::defines::has_obuffer_overflow_never_define<
-			::std::remove_cvref_t<outputstmtype>>)
+			::std::remove_reference_t<outputstmtype>>)
 	{
-		// A no-overflow put area has no continuation.  Terminating here also avoids materializing the normalized
-		// variadic pack solely for an unreachable continuation at call sites whose capacity is visible to the optimizer.
+		// Test the exact named output expression: a const observer cannot borrow a mutable-only terminal assertion. A
+		// proven no-overflow put area has no continuation. Terminating here also avoids materializing the normalized pack
+		// solely for an unreachable continuation at call sites whose capacity is visible to the optimizer.
 		::fast_io::fast_terminate();
 	}
 	else
@@ -13917,10 +14888,99 @@ inline constexpr void print_freestanding_decay_cold_unforwarded(
 ///          is observable, so neither `__builtin_constant_p` nor an early materializer may inspect it. This fail-closed
 ///          source check also preserves the original volatile-qualified object for ordinary alias/status normalization.
 template <::std::integral char_type, typename T>
-inline constexpr bool print_compiler_constant_pre_normalization_candidate_v =
-	!::std::is_volatile_v<::std::remove_reference_t<T>> &&
-	::fast_io::compiler_constant_pre_normalization_safe<
-		char_type, ::std::remove_cvref_t<T>>;
+inline consteval bool
+print_compiler_constant_pre_normalization_candidate() noexcept
+{
+	if constexpr (::std::is_volatile_v<::std::remove_reference_t<T>>)
+	{
+		return false;
+	}
+	else if constexpr (
+		!::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			char_type, ::std::remove_cvref_t<T>>)
+	{
+		// Semantic replaceability alone cannot prove that a successful optimizer query erases this provider's complete
+		// formatter graph. An unclassified extension therefore remains on the historical source path before its
+		// replacement type or value query can be formed.
+		return false;
+	}
+#if !FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	else if constexpr (
+		::fast_io::manipulators::is_static_arg_v<::std::remove_cvref_t<T>>)
+	{
+		// An explicit static argument is a type-owned constant provider, not an
+		// optimizer-discovered value. Its eligibility CPO is unconditionally true
+		// only when the native consteval materializer exists, so native MSVC may
+		// preserve the independent rodata path without pretending that the frontend
+		// implements __builtin_constant_p. Keeping this exception inside the
+		// no-builtin partition leaves every measured GNU/Clang source-shape policy
+		// unchanged. The complete source contract still rejects an unsupported NTTP
+		// spelling, including native-MSVC floating providers.
+		return ::fast_io::compiler_constant_pre_normalization_safe<
+			char_type, ::std::remove_cvref_t<T>>;
+	}
+	else
+	{
+		// A frontend with no optimizer-constant query cannot enter this strategy.
+		// Rejecting the source here is stronger than calling an eligibility CPO
+		// which returns false: replacement types, materializers, and the discarded
+		// true arm are never instantiated. The type-level static-provider case was
+		// discharged above and therefore never depends on this frontend facility.
+		return false;
+	}
+#else
+	else if constexpr (
+		::fast_io::compiler_constant_borrowed_text_source_shape<
+			char_type, ::std::remove_cvref_t<T>>)
+	{
+		// A standard string/view already normalizes to its exact borrowed
+		// pointer/extent pair. Its compiler-constant proxy carries the same pair,
+		// so a successful query cannot remove a formatter and only adds a bounded
+		// character scan or an automatic copy. Classify that leaf as passive at
+		// this shared print/concat source boundary. Other leaves in the same record
+		// remain independent candidates, while the text query and materializer are
+		// structurally absent from both the constant and unknown continuations.
+		return false;
+	}
+#if defined(__clang__)
+	// Recursive IR/assembly audits show that Clang 13--20 retains proxy code even for raw integers and floating values.
+	// Clang 21--23 fully erase only the flat scalar source category; precision, timestamp, width, and format-wrapper
+	// sources retain both replacement and native formatter graphs. Keep those categories query-free until an independent
+	// consumer/version deletion proof exists. Test the marker-only shape before the complete source protocol so an
+	// unsupported category cannot instantiate a replacement customization as a side effect of classification.
+	else if constexpr (__clang_major__ < 21)
+	{
+		// Old Clang releases are rejected before even looking up the optional source-shape marker.
+		return false;
+	}
+	else if constexpr (
+		!::fast_io::compiler_constant_simple_scalar_source_shape<
+			char_type, ::std::remove_cvref_t<T>>)
+	{
+		return false;
+	}
+#endif
+	else
+	{
+		return ::fast_io::compiler_constant_pre_normalization_safe<
+			char_type, ::std::remove_cvref_t<T>>;
+	}
+#endif
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_compiler_constant_pre_normalization_candidate_v{
+	::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_candidate<char_type, T>()};
+
+/// @brief Reports whether a source record contains any leaf authorized for compiler-constant replacement.
+/// @details This is a type-only fold. It neither forms a replacement type nor evaluates a value query, so entry-family
+///          and destination proofs may reject the complete record before the optional strategy graph exists.
+template <::std::integral char_type, typename... Args>
+inline constexpr bool print_compiler_constant_pre_normalization_has_candidate_v{
+	(false || ... ||
+	 ::fast_io::operations::decay::
+		 print_compiler_constant_pre_normalization_candidate_v<char_type, Args>)};
 
 template <::std::integral char_type, typename T,
 		  bool = ::fast_io::operations::decay::
@@ -13974,20 +15034,104 @@ using print_compiler_constant_pre_normalization_normalized_t =
 		print_compiler_constant_pre_normalization_normalized<
 			char_type, semantic_run, T>::type;
 
+/// @brief Models the normalized type produced by the compiler-constant true arm for one original source.
+/// @details A non-candidate follows the historical normalization category: a semantic run forwards its original
+///          expression, while a plain run aliases the helper's named lvalue. A candidate is different because the
+///          materializer creates a new owned proxy and both true-arm forwarders normalize that proxy as an xvalue.
+///          This distinction is observable through ref-qualified alias CPOs and therefore belongs in the status proof.
+template <::std::integral char_type, bool semantic_run, typename T,
+		  bool = ::fast_io::operations::decay::
+			  print_compiler_constant_pre_normalization_candidate_v<char_type, T>>
+struct print_compiler_constant_pre_normalization_replacement_normalized
+{
+	using type = ::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_normalized_t<
+			char_type, semantic_run, T>;
+};
+
+template <::std::integral char_type, typename T>
+struct print_compiler_constant_pre_normalization_replacement_normalized<
+	char_type, false, T, true>
+{
+	using proxy_type =
+		::fast_io::details::compiler_constant_materialized_t<
+			char_type, ::std::remove_cvref_t<T>>;
+	using type = ::std::remove_cvref_t<decltype(::fast_io::io_print_forward<char_type>(
+		::fast_io::io_print_alias(::std::declval<proxy_type &&>())))>;
+};
+
+template <::std::integral char_type, typename T>
+struct print_compiler_constant_pre_normalization_replacement_normalized<
+	char_type, true, T, true>
+{
+	using proxy_type =
+		::fast_io::details::compiler_constant_materialized_t<
+			char_type, ::std::remove_cvref_t<T>>;
+	using type = ::std::remove_cvref_t<decltype(
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::declval<proxy_type &&>()))>;
+};
+
+template <::std::integral char_type, bool semantic_run, typename T>
+using print_compiler_constant_pre_normalization_replacement_normalized_t =
+	typename ::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_replacement_normalized<
+			char_type, semantic_run, T>::type;
+
+/// @brief Models one true-arm argument when immutable fragments are preserved as descriptors.
+/// @details Only an opted-in candidate whose materialized proxy owns the static-fragment protocol changes shape: the
+///          true arm wraps that owned proxy so its descriptor storage remains alive through synchronous scatter output.
+///          Every other source retains the exact replacement-normalization category proved above.
+template <::std::integral char_type, bool semantic_run, typename T,
+		  bool = ::fast_io::operations::decay::
+			  print_compiler_constant_pre_normalization_candidate_v<char_type, T>>
+struct print_compiler_constant_pre_normalization_preserved_fragment_normalized
+	: ::fast_io::operations::decay::
+		  print_compiler_constant_pre_normalization_replacement_normalized<
+			  char_type, semantic_run, T>
+{};
+
+template <::std::integral char_type, bool semantic_run, typename T>
+struct print_compiler_constant_pre_normalization_preserved_fragment_normalized<
+	char_type, semantic_run, T, true>
+{
+	using proxy_type =
+		::fast_io::details::compiler_constant_materialized_t<
+			char_type, ::std::remove_cvref_t<T>>;
+	using type = ::std::conditional_t<
+		::fast_io::compiler_constant_static_fragment_printable<
+			char_type, proxy_type>,
+		::fast_io::details::decay::
+			print_compiler_constant_static_fragment_proxy<char_type, proxy_type>,
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_replacement_normalized_t<
+				char_type, semantic_run, T>>;
+};
+
+template <::std::integral char_type, bool semantic_run, typename T>
+using print_compiler_constant_pre_normalization_preserved_fragment_normalized_t =
+	typename ::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_preserved_fragment_normalized<
+			char_type, semantic_run, T>::type;
+
 template <typename... Args>
 struct print_compiler_constant_pre_normalization_type_list
 {};
 
 template <bool allow_staged_obuffer, bool line, typename outputstmtype,
-		  typename source_list, typename replacement_list>
+		  typename source_list, typename replacement_list,
+		  typename preserved_fragment_list = replacement_list>
 struct print_compiler_constant_pre_normalization_output_safe;
 
 template <bool allow_staged_obuffer, bool line, typename outputstmtype,
-		  typename... SourceArgs, typename... ReplacementArgs>
+		  typename... SourceArgs, typename... ReplacementArgs,
+		  typename... PreservedFragmentArgs>
 struct print_compiler_constant_pre_normalization_output_safe<
 	allow_staged_obuffer, line, outputstmtype,
 	print_compiler_constant_pre_normalization_type_list<SourceArgs...>,
-	print_compiler_constant_pre_normalization_type_list<ReplacementArgs...>>
+	print_compiler_constant_pre_normalization_type_list<ReplacementArgs...>,
+	print_compiler_constant_pre_normalization_type_list<
+		PreservedFragmentArgs...>>
 {
 	inline static constexpr bool value{[]() consteval {
 		if constexpr (
@@ -13998,7 +15142,7 @@ struct print_compiler_constant_pre_normalization_output_safe<
 				::fast_io::operations::decay::defines::
 					has_complete_output_stream_mutex_protocol<outputstmtype>)
 			{
-				using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+				using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 					::std::declval<outputstmtype &>()))>;
 				return ::fast_io::operations::decay::
 					print_compiler_constant_pre_normalization_output_safe<
@@ -14006,7 +15150,9 @@ struct print_compiler_constant_pre_normalization_output_safe<
 						print_compiler_constant_pre_normalization_type_list<
 							SourceArgs...>,
 						print_compiler_constant_pre_normalization_type_list<
-							ReplacementArgs...>>::value;
+							ReplacementArgs...>,
+						print_compiler_constant_pre_normalization_type_list<
+							PreservedFragmentArgs...>>::value;
 			}
 			else
 			{
@@ -14015,6 +15161,10 @@ struct print_compiler_constant_pre_normalization_output_safe<
 		}
 		else
 		{
+			// Direct synchronous scatter output is the only destination class for
+			// which the true arm exposes fragment-owner wrappers to the complete
+			// dispatcher. Its exact wrapper pack must decline status independently
+			// of both the historical source pack and the ordinary proxy pack.
 			return (!::fast_io::operations::decay::defines::has_obuffer_basic_operations<
 						outputstmtype> ||
 					allow_staged_obuffer ||
@@ -14026,7 +15176,11 @@ struct print_compiler_constant_pre_normalization_output_safe<
 				   !::fast_io::operations::decay::defines::has_status_print_define<
 					   line, outputstmtype, SourceArgs...> &&
 				   !::fast_io::operations::decay::defines::has_status_print_define<
-					   line, outputstmtype, ReplacementArgs...>;
+					   line, outputstmtype, ReplacementArgs...> &&
+				   (!::fast_io::details::decay::
+						 print_output_retains_static_scatter<outputstmtype> ||
+					!::fast_io::operations::decay::defines::has_status_print_define<
+						line, outputstmtype, PreservedFragmentArgs...>);
 		}
 	}()};
 };
@@ -14060,45 +15214,60 @@ print_compiler_constant_pre_normalization_common_available() noexcept
 													 ::fast_io::operations::decay::
 														 print_compiler_constant_pre_normalization_replacement_t<
 															 char_type, Args>>)};
-		using source_types =
-			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_type_list<
-					::fast_io::operations::decay::
-						print_compiler_constant_pre_normalization_normalized_t<
-							char_type, source_semantic_run, Args>...>;
-		using replacement_types =
-			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_type_list<
-					::fast_io::operations::decay::
-						print_compiler_constant_pre_normalization_normalized_t<
-							char_type, replacement_semantic_run,
-							::fast_io::operations::decay::
-								print_compiler_constant_pre_normalization_replacement_t<
-									char_type, Args>>...>;
-		if constexpr (!::fast_io::operations::decay::
-						  print_compiler_constant_pre_normalization_output_safe<
-							  allow_staged_obuffer, line, outputstmtype, source_types,
-							  replacement_types>::value)
+		if constexpr (source_semantic_run || replacement_semantic_run)
 		{
+			// A top-level semantic node is not the complete operation record. Pack
+			// expansion and condition selection can change both active types and
+			// arity, so a status probe on the node itself proves nothing about the
+			// dispatcher reached after expansion. No current source/proxy protocol
+			// supplies a value-independent active-record proof; fail closed here.
 			return false;
 		}
 		else
 		{
-			constexpr ::std::size_t maximum{
-				::fast_io::details::compiler_constant_materialization_max_bytes};
-			::std::size_t proxy_bytes{};
-			::std::size_t reserve_size{};
-			((proxy_bytes = proxy_bytes == SIZE_MAX ||
+			using source_types =
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_type_list<
+						::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_normalized_t<
+								char_type, false, Args>...>;
+			using replacement_types =
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_type_list<
+						::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_replacement_normalized_t<
+								char_type, false, Args>...>;
+			using preserved_fragment_types =
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_type_list<
+						::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_preserved_fragment_normalized_t<
+								char_type, false, Args>...>;
+			if constexpr (!::fast_io::operations::decay::
+							  print_compiler_constant_pre_normalization_output_safe<
+								  allow_staged_obuffer, line, outputstmtype,
+								  source_types, replacement_types,
+								  preserved_fragment_types>::value)
+			{
+				return false;
+			}
+			else
+			{
+				constexpr ::std::size_t maximum{
+					::fast_io::details::compiler_constant_materialization_max_bytes};
+				::std::size_t proxy_bytes{};
+				::std::size_t reserve_size{};
+				((proxy_bytes = proxy_bytes == SIZE_MAX ||
 									::fast_io::operations::decay::
-											print_compiler_constant_pre_normalization_replacement<
-												char_type, Args>::proxy_bytes > maximum - proxy_bytes
+										print_compiler_constant_pre_normalization_replacement<
+											char_type, Args>::proxy_bytes > maximum - proxy_bytes
 								? SIZE_MAX
 								: proxy_bytes +
 									  ::fast_io::operations::decay::
 										  print_compiler_constant_pre_normalization_replacement<
 											  char_type, Args>::proxy_bytes),
-			 ...);
-			((reserve_size = reserve_size == SIZE_MAX ||
+				 ...);
+				((reserve_size = reserve_size == SIZE_MAX ||
 									 ::fast_io::operations::decay::
 											 print_compiler_constant_pre_normalization_replacement<
 												 char_type, Args>::reserve_size > maximum / sizeof(char_type) - reserve_size
@@ -14107,16 +15276,17 @@ print_compiler_constant_pre_normalization_common_available() noexcept
 									   ::fast_io::operations::decay::
 										   print_compiler_constant_pre_normalization_replacement<
 											   char_type, Args>::reserve_size),
-			 ...);
-			if constexpr (require_reserve_budget)
-			{
-				return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum &&
-					   reserve_size != SIZE_MAX &&
-					   reserve_size <= maximum / sizeof(char_type);
-			}
-			else
-			{
-				return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum;
+				 ...);
+				if constexpr (require_reserve_budget)
+				{
+					return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum &&
+						   reserve_size != SIZE_MAX &&
+						   reserve_size <= maximum / sizeof(char_type);
+				}
+				else
+				{
+					return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum;
+				}
 			}
 		}
 	}
@@ -14136,10 +15306,14 @@ print_compiler_constant_pre_normalization_available() noexcept
 }
 
 template <::std::integral char_type, typename T>
-// Candidate discovery needs forcing on GCC 13--16 and Clang 21--23: removing
-// it grows the GCC 16 caller by 17.7 KiB and the Clang 23 caller by 6 KiB.
-// GCC 11--12 and Clang 17--20 are deliberately left to ordinary inlining.
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+// This query must execute in the source caller.  A strict constant/runtime
+// assembly pair showed that ordinary placement on GCC 11/12 both rejected a
+// literal precision float and retained the constant proxy graph for an unknown
+// precision float.  GCC 13--16 and Clang 21--23 also need the marker for the
+// previously measured caller-size boundary.  The function performs only the
+// side-effect-free query; neither materialization nor formatting is in its
+// false arm.
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14160,7 +15334,7 @@ print_compiler_constant_pre_normalization_eligible_one(T const &value) noexcept
 }
 
 template <::std::integral char_type, typename... Args>
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14173,7 +15347,7 @@ print_compiler_constant_pre_normalization_gate(Args const &...args) noexcept
 }
 
 template <::std::integral char_type, typename T>
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14284,7 +15458,13 @@ print_compiler_constant_partial_fragment_original(
 template <bool line, ::std::integral char_type, ::std::size_t source_index,
 		  bool has_fragment, typename outputstmtype, typename source_tuple,
 		  typename... Built>
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+// GCC 12 otherwise outlines the all-false recursion in a runtime raw-integer
+// record, retaining a 24-byte frame and a compiler-constant helper call before
+// the ordinary integer writer. Mandatory inlining restores the direct zero-frame
+// jeaiii path; an aligned ABBA microbenchmark is neutral (+0.08%), while the
+// complete facade TU loses the residual helper. GCC 11 likewise drops its last
+// unused partial-transform body. GCC 13 and later already required this edge.
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14369,7 +15549,11 @@ print_compiler_constant_partial_fragment_transform(
 }
 
 template <bool preserve_static_fragments, ::std::integral char_type, typename T>
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+// The proved source must remain in the same optimizer frame as its proxy.
+// GCC 11/12 otherwise outline this edge after a successful builtin query and
+// reconstruct both the compact proxy and native precision fallback in the
+// literal caller.  Unknown sources cannot reach this true-only continuation.
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14416,7 +15600,7 @@ print_compiler_constant_pre_normalization_plain_true_forward(T &&value)
 }
 
 template <bool preserve_static_fragments, ::std::integral char_type, typename T>
-#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13) || \
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -14812,6 +15996,26 @@ struct print_compiler_constant_pre_normalization_precise_fragment_source<
 		  char_type, T>
 {};
 
+/// @brief Proves that this compiler can erase an exact put-area replacement before the output call returns.
+/// @details GCC 11--14 retain a value-dependent decimal digit loop for a scalar floating replacement even though its
+///          builtin query succeeds (83/83/83/60 instructions for the `3.125` root). Expanding the provider's 32 slots
+///          is a measured reversal: it grows the same roots to 642/730/662/339 instructions and 1,080/1,080/1,080/528
+///          bytes of stack. Those source categories therefore fail closed before their replacement type or value query
+///          is formed. GCC 15 and later reduce the precise writer to immediate stores; other source categories retain
+///          their independent deletion proofs.
+template <::std::integral char_type, typename... Args>
+inline consteval bool
+print_compiler_constant_exact_obuffer_codegen_supported() noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__ && __GNUC__ <= 14
+	return !(false || ... ||
+		::fast_io::compiler_constant_expanded_fragment_preferred_source<
+			char_type, Args>);
+#else
+	return true;
+#endif
+}
+
 /// @brief Admits the exact compiler-constant path for a put-area destination.
 /// @details This is deliberately independent of the replacement's ordinary reserve bound.  A scalar floating proxy
 ///          retains the mature 5006-character all-values reserve protocol, but its compiler-constant spelling is often
@@ -14826,6 +16030,14 @@ print_compiler_constant_pre_normalization_exact_obuffer_available() noexcept
 	using char_type = typename outputstmtype::output_char_type;
 	if constexpr (
 		!::fast_io::operations::decay::
+			print_compiler_constant_exact_obuffer_codegen_supported<
+				char_type, Args...>())
+	{
+		// This consumer-specific rejection must precede the common proof because that proof forms replacement types.
+		return false;
+	}
+	else if constexpr (
+		!::fast_io::operations::decay::
 			print_compiler_constant_pre_normalization_common_available<
 				false, line, true, outputstmtype, Args...>())
 	{
@@ -14835,7 +16047,7 @@ print_compiler_constant_pre_normalization_exact_obuffer_available() noexcept
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		return ::fast_io::operations::decay::
 			print_compiler_constant_pre_normalization_exact_obuffer_available<
@@ -15120,6 +16332,10 @@ struct print_compiler_constant_exact_obuffer_flat_continuation
 ///          function returns false without output; its caller still owns every original source expression and can enter
 ///          the byte-for-byte historical continuation without exposing the proxy's conservative reserve capacity.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_exact_obuffer_available<
+				line, outputstmtype, Args &&...>())
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
@@ -15159,6 +16375,10 @@ print_compiler_constant_pre_normalization_exact_obuffer_try(
 
 /// @brief Acquires a complete stream mutex before constructing any exact compiler-constant proxy.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_exact_obuffer_available<
+				line, outputstmtype, Args &&...>())
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
@@ -16419,7 +17639,21 @@ inline consteval bool
 print_compiler_constant_pre_normalization_fragment_run_available() noexcept
 {
 	using char_type = typename outputstmtype::output_char_type;
-	if constexpr (
+	constexpr bool semantic_run{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 char_type, Args>)};
+	if constexpr (semantic_run)
+	{
+		// A semantic source is not its normalized record: pack expansion and
+		// condition selection may change both the active types and their count,
+		// including reducing a non-empty source pack to zero leaves. Therefore a
+		// pre-normalization fragment proof cannot establish equivalence with the
+		// exact whole-record status protocol. Let semantic flattening select a
+		// strategy from the active normalized record instead.
+		return false;
+	}
+	else if constexpr (
 		(!::fast_io::details::decay::
 			 print_output_retains_static_scatter<outputstmtype> &&
 		 !::fast_io::details::decay::
@@ -16441,9 +17675,6 @@ print_compiler_constant_pre_normalization_fragment_run_available() noexcept
 	}
 	else
 	{
-		constexpr bool semantic_run{(false || ... ||
-									 ::fast_io::details::decay::print_semantic_input_argument_v<
-										 char_type, Args>)};
 		if constexpr (
 			::fast_io::operations::decay::defines::has_status_print_define<
 				line, outputstmtype,
@@ -16777,11 +18008,16 @@ struct print_compiler_constant_pre_normalization_static_source<char_type, T &&>
 {};
 
 template <::std::integral char_type, typename T>
-// Removing this static-emission chain is neutral through Clang 20 but causes a
-// 4.9 KiB growth and an extra call on Clang 21--23. Keep the future-open Clang
-// boundary proven by 23. MSVC is intentionally not forced without equivalent
-// code-generation evidence.
-#if defined(__clang__) && __clang_major__ >= 21
+// GCC 11, 12, 14, and 15 through the newest tested trunk otherwise retain a
+// 1,257--1,406-instruction floating conversion body after a successful value
+// query. Forcing only this constant-only leaf reduces the failing direct roots
+// to their final output bytes. GCC 13 alone erases every tested source shape
+// without assistance; GCC 15 still outlines the raw and bare-format shapes.
+// Clang 21--23 also need the leaf to avoid 4.9 KiB of text and one extra call.
+#if (defined(__GNUC__) && !defined(__clang__) && \
+	 (__GNUC__ == 11 || __GNUC__ == 12 || __GNUC__ == 14 || \
+	  __GNUC__ >= 15)) || \
+	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr char_type *
@@ -16806,7 +18042,10 @@ print_compiler_constant_pre_normalization_static_emit_pack(
 }
 
 template <::std::integral char_type, typename T>
-#if defined(__clang__) && __clang_major__ >= 21
+#if (defined(__GNUC__) && !defined(__clang__) && \
+	 (__GNUC__ == 11 || __GNUC__ == 12 || __GNUC__ == 14 || \
+	  __GNUC__ >= 15)) || \
+	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr char_type *
@@ -16868,7 +18107,18 @@ print_compiler_constant_pre_normalization_static_run_size() noexcept
 }
 
 template <bool line, typename outputstmtype, typename... Args>
-#if defined(__clang__) && __clang_major__ >= 21
+// GCC 11/12 outline this buffer/output wrapper after the conversion leaf;
+// GCC 14 through the current trunk also retain it for a constant ISO8601
+// source. Forcing only this true-arm wrapper makes the affected releases emit
+// one direct 25-code-unit record. GCC 13 already erases ISO naturally, while
+// forcing this wrapper there makes an ordinary constant double outline its
+// conversion leaf, so that exact release is deliberately excluded. The paired
+// unknown-value roots keep zero compiler-constant residue and their historical
+// frames/call graphs. Clang 21--23 retain the previously proved true-arm
+// placement. No formatter is placed in the query's false arm.
+#if (defined(__GNUC__) && !defined(__clang__) && \
+	 (__GNUC__ == 11 || __GNUC__ == 12 || __GNUC__ >= 14)) || \
+	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void
@@ -16939,25 +18189,22 @@ struct print_static_provider_merged_component<char_type, ::fast_io::io_null_t>
 	{}
 };
 
+template <bool materializable, ::std::integral char_type,
+		  ::fast_io::manipulators::static_argument_constant value_literal>
+struct print_static_argument_merged_component
+{
+	inline static constexpr bool available{};
+	inline static constexpr ::std::size_t size{SIZE_MAX};
+};
+
 template <::std::integral char_type,
 		  ::fast_io::manipulators::static_argument_constant value_literal>
-struct print_static_provider_merged_component<
-	char_type, ::fast_io::manipulators::static_arg_t<value_literal>>
+struct print_static_argument_merged_component<true, char_type, value_literal>
 {
-	inline static constexpr bool available{
-		::fast_io::manipulators::static_argument_details::
-			native_materializable<char_type, value_literal>};
-	inline static constexpr ::std::size_t size{[]() consteval {
-		if constexpr (available)
-		{
-			return ::fast_io::manipulators::
-				static_argument_materialized_t<char_type, value_literal>::size;
-		}
-		else
-		{
-			return SIZE_MAX;
-		}
-	}()};
+	inline static constexpr bool available{true};
+	using proxy_type = ::fast_io::manipulators::
+		static_argument_materialized_t<char_type, value_literal>;
+	inline static constexpr ::std::size_t size{proxy_type::size};
 
 	// Keep the component operation constexpr rather than immediate.  The only
 	// caller is the consteval merged-storage initializer below, so this does not
@@ -16968,9 +18215,6 @@ struct print_static_provider_merged_component<
 	inline static constexpr void append(
 		storage_type &destination, ::std::size_t &position)
 	{
-		static_assert(available);
-		using proxy_type = ::fast_io::manipulators::
-			static_argument_materialized_t<char_type, value_literal>;
 		auto const &source{
 			::fast_io::manipulators::static_provider_storage_t<
 				typename proxy_type::provider>::storage};
@@ -16983,9 +18227,6 @@ struct print_static_provider_merged_component<
 
 	[[nodiscard]] inline static constexpr ::fast_io::basic_io_scatter_t<char_type> define() noexcept
 	{
-		static_assert(available);
-		using proxy_type = ::fast_io::manipulators::
-			static_argument_materialized_t<char_type, value_literal>;
 		return {
 			::fast_io::manipulators::static_provider_storage_t<
 				typename proxy_type::provider>::storage.data() +
@@ -16993,6 +18234,16 @@ struct print_static_provider_merged_component<
 			proxy_type::size};
 	}
 };
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::static_argument_constant value_literal>
+struct print_static_provider_merged_component<
+	char_type, ::fast_io::manipulators::static_arg_t<value_literal>>
+	: print_static_argument_merged_component<
+		  ::fast_io::manipulators::static_argument_details::
+			  native_materializable<char_type, value_literal>,
+		  char_type, value_literal>
+{};
 
 template <::std::integral char_type,
 		  ::fast_io::manipulators::static_argument_constant name_literal,
@@ -17231,14 +18482,18 @@ print_static_provider_single_run_emit(outputstmtype &optstm)
 template <typename... Args>
 inline constexpr bool print_all_static_provider_components_v{
 	sizeof...(Args) != 0u &&
-	((::fast_io::manipulators::is_static_provider_node_v<Args> ||
+	((::fast_io::manipulators::is_static_arg_v<Args> ||
+	  ::fast_io::manipulators::is_static_provider_node_v<Args> ||
 	  ::fast_io::manipulators::syntax_transport_details::is_static_provider_scatter_node_v<Args> ||
 	  ::std::same_as<::std::remove_cvref_t<Args>, ::fast_io::io_null_t>) &&
 	 ...)};
 
-/// Selects a destination shortcut only after every lowered operation proves a
-/// type-owned provider. Partial programs deliberately fail this predicate and
-/// retain the ordinary write/writev threshold and status dispatch.
+/// Selects a destination shortcut only after every source proves a type-owned
+/// provider. Raw `static_arg` and named-static tokens satisfy the same merged-
+/// component proof below as already-lowered provider nodes; admitting them at
+/// this source boundary is what prevents a compiler fail-closed value-query
+/// path from copying immutable payload into automatic scratch. Partial programs
+/// deliberately fail this predicate and retain ordinary status and write policy.
 template <bool line, typename outputstmtype, typename... Args>
 inline consteval bool
 print_static_provider_component_run_available() noexcept
@@ -17506,7 +18761,7 @@ inline constexpr bool print_static_provider_mixed_static_component_v{
 /// @brief Proves that historical source normalization yields one retained character descriptor.
 /// @details This proof is intentionally local to the provider/scatter endpoint plan. Adding a direct scatter CPO to an
 ///          alias-only source would change ordinary put-area and reserve dispatch throughout the library. Instead this
-///          predicate models the established `io_print_alias` then `io_print_forward` sequence on the same const lvalue
+///          predicate models the established `io_print_alias` then `io_print_forward` sequence on the same named lvalue
 ///          later observed by the emitter. The independent source markers prove descriptor lifetime, destination-state
 ///          independence, complete print equivalence, and safety after the small source view is copied by normalization.
 ///          A potentially throwing projection is rejected so descriptor construction cannot split one logical record.
@@ -17518,8 +18773,9 @@ template <::std::integral char_type, typename T>
 print_static_provider_mixed_alias_scatter_component_query()
 {
 	using value_type = ::std::remove_cvref_t<T>;
+	using source_reference = ::std::remove_reference_t<T> &;
 	if constexpr (
-		requires(value_type const &value) {
+		requires(source_reference value) {
 			{
 				::fast_io::io_print_forward<char_type>(
 					::fast_io::io_print_alias(value))
@@ -17531,7 +18787,7 @@ print_static_provider_mixed_alias_scatter_component_query()
 		::fast_io::copy_stable_borrowed_print_source<char_type, value_type>)
 	{
 		return noexcept(::fast_io::io_print_forward<char_type>(
-			::fast_io::io_print_alias(::std::declval<value_type const &>())));
+			::fast_io::io_print_alias(::std::declval<source_reference>())));
 	}
 	else
 	{
@@ -17551,6 +18807,7 @@ template <::std::integral char_type, typename T>
 print_static_provider_mixed_dynamic_component_query()
 {
 	using value_type = ::std::remove_cvref_t<T>;
+	using source_reference = ::std::remove_reference_t<T> &;
 	if constexpr (
 		::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>> ||
 		::fast_io::details::decay::print_static_scatter_traits<
@@ -17559,7 +18816,7 @@ print_static_provider_mixed_dynamic_component_query()
 		return true;
 	}
 	else if constexpr (
-		::fast_io::scatter_printable_for<char_type, value_type const &> &&
+		::fast_io::scatter_printable_for<char_type, source_reference> &&
 		::fast_io::borrowed_scatter_source<char_type, value_type> &&
 		::fast_io::scatter_output_state_independent<char_type, value_type> &&
 		::fast_io::scatter_direct_print_equivalent<char_type, value_type> &&
@@ -17567,12 +18824,12 @@ print_static_provider_mixed_dynamic_component_query()
 	{
 		return noexcept(print_scatter_define(
 			::fast_io::io_reserve_type<char_type, value_type>,
-			::std::declval<value_type const &>()));
+			::std::declval<source_reference>()));
 	}
 	else if constexpr (
 		::fast_io::operations::decay::
 			print_static_provider_mixed_alias_scatter_component_v<
-				char_type, value_type>)
+				char_type, T>)
 	{
 		return true;
 	}
@@ -17590,9 +18847,10 @@ inline constexpr bool print_static_provider_mixed_dynamic_component_v =
 
 template <::std::integral char_type, typename T>
 [[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char_type>
-print_static_provider_mixed_dynamic_scatter(T const &value) noexcept
+print_static_provider_mixed_dynamic_scatter(T &value) noexcept
 {
 	using value_type = ::std::remove_cvref_t<T>;
+	using source_reference = T &;
 	if constexpr (::std::same_as<
 					  value_type, ::fast_io::basic_io_scatter_t<char_type>>)
 	{
@@ -17608,20 +18866,20 @@ print_static_provider_mixed_dynamic_scatter(T const &value) noexcept
 		}
 		else
 		{
-			static_assert(::fast_io::operations::decay::
-							  print_static_provider_mixed_dynamic_component_v<
-								  char_type, value_type>);
-			if constexpr (::fast_io::scatter_printable_for<
-							  char_type, value_type const &>)
+				static_assert(::fast_io::operations::decay::
+								  print_static_provider_mixed_dynamic_component_v<
+									  char_type, source_reference>);
+				if constexpr (::fast_io::scatter_printable_for<
+								  char_type, source_reference>)
 			{
 				return print_scatter_define(
 					::fast_io::io_reserve_type<char_type, value_type>, value);
 			}
 			else
 			{
-				static_assert(::fast_io::operations::decay::
-								  print_static_provider_mixed_alias_scatter_component_v<
-									  char_type, value_type>);
+					static_assert(::fast_io::operations::decay::
+									  print_static_provider_mixed_alias_scatter_component_v<
+										  char_type, source_reference>);
 				// Invoke both historical normalization CPOs exactly once. Their result is
 				// retained only until this synchronous mixed-plan write completes.
 				return ::fast_io::io_print_forward<char_type>(
@@ -17782,30 +19040,53 @@ inline consteval bool
 print_static_provider_mixed_run_available() noexcept
 {
 	using char_type = typename outputstmtype::output_char_type;
-	return sizeof...(Args) != 0u &&
-		   !::fast_io::operations::decay::defines::
-			   has_output_or_io_stream_mutex_ref_define<outputstmtype> &&
-		   !::fast_io::operations::decay::defines::has_obuffer_basic_operations<
-			   outputstmtype> &&
-		   (::fast_io::details::decay::
-				print_output_retains_static_scatter<outputstmtype> ||
-			::fast_io::details::decay::
-				print_output_accepts_static_provider_scalar<outputstmtype>) &&
-		   ((::fast_io::operations::decay::
-				 print_static_provider_mixed_static_component_v<
-					 char_type, Args> ||
-			 ::fast_io::operations::decay::
-				 print_static_provider_mixed_dynamic_component_v<
-					 char_type, Args>) &&
-			...) &&
-		   (false || ... ||
-			::fast_io::operations::decay::
-				print_static_provider_mixed_static_component_v<char_type, Args>) &&
-		   (false || ... ||
-			::fast_io::operations::decay::
-				print_static_provider_mixed_dynamic_component_v<char_type, Args>) &&
-		   !::fast_io::operations::decay::defines::has_status_print_define<
-			   line, outputstmtype, ::std::remove_cvref_t<Args>...>;
+	constexpr bool semantic_run{
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_input_argument_v<
+			 char_type, Args>)};
+	if constexpr (semantic_run)
+	{
+		// A semantic node can change the active operation pack before status
+		// dispatch. The mixed physical plan has no proof for that transformation
+		// and must remain outside this pre-normalization shortcut.
+		return false;
+	}
+	else
+	{
+		// Historical source normalization applies alias and character-aware
+		// forwarding before exact status dispatch. Both the public source pack and
+		// that normalized pack must decline ownership before provider/scatter
+		// substitution is equivalent to the ordinary dispatcher.
+		return sizeof...(Args) != 0u &&
+			   !::fast_io::operations::decay::defines::
+				   has_output_or_io_stream_mutex_ref_define<outputstmtype> &&
+			   !::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+				   outputstmtype> &&
+			   (::fast_io::details::decay::
+					print_output_retains_static_scatter<outputstmtype> ||
+				::fast_io::details::decay::
+					print_output_accepts_static_provider_scalar<outputstmtype>) &&
+			   ((::fast_io::operations::decay::
+					 print_static_provider_mixed_static_component_v<
+						 char_type, Args> ||
+				 ::fast_io::operations::decay::
+					 print_static_provider_mixed_dynamic_component_v<
+						 char_type, Args>) &&
+				...) &&
+			   (false || ... ||
+				::fast_io::operations::decay::
+					print_static_provider_mixed_static_component_v<char_type, Args>) &&
+			   (false || ... ||
+				::fast_io::operations::decay::
+					print_static_provider_mixed_dynamic_component_v<char_type, Args>) &&
+			   !::fast_io::operations::decay::defines::has_status_print_define<
+				   line, outputstmtype, ::std::remove_cvref_t<Args>...> &&
+			   !::fast_io::operations::decay::defines::has_status_print_define<
+				   line, outputstmtype,
+				   ::fast_io::operations::decay::
+					   print_compiler_constant_pre_normalization_normalized_t<
+						   char_type, false, Args>...>;
+	}
 }
 
 template <bool line, typename outputstmtype, typename... Args>
@@ -17947,6 +19228,18 @@ struct print_compiler_constant_pre_normalization_flat_continuation
 	outputstmtype &optstm;
 
 	template <typename... Args>
+		requires(sizeof...(Args) == 0u)
+	inline constexpr void operator()(Args &&...) const
+	{
+		// Semantic replacement can reduce a non-empty source graph to an empty
+		// active record. No flat materialization proof exists for that record;
+		// re-enter the normalized dispatcher so exact status, mutex, and line
+		// ownership are resolved before any physical output strategy.
+		::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm);
+	}
+
+	template <typename... Args>
+		requires(sizeof...(Args) != 0u)
 	// GCC 11--16 reconstructs the pre-normalization graph when this closure is
 	// left ordinary inline (GCC 16 grows by 21.5 KiB in isolation). Clang 17--23
 	// gains nothing here, so only the future-open measured GCC range is forced.
@@ -18000,7 +19293,22 @@ struct print_compiler_constant_pre_normalization_flat_continuation
 	}
 };
 
+/// @brief Completes a source-free record before entering the compiler-constant true-arm strategy graph.
+/// @details A zero-source record has no value whose constancy can authorize materialization. Keeping this as a
+///          structurally separate overload makes every static-provider, fragment, and stack-materialization branch
+///          uninstantiable for that record. The normalized dispatcher then applies the exact zero-argument status CPO,
+///          mutex ordering, and line policy shared by every other print-level entrance.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(sizeof...(Args) == 0u)
+inline constexpr void
+print_compiler_constant_pre_normalization_true_emit(
+	outputstmtype &optstm, Args &&...)
+{
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+	requires(sizeof...(Args) != 0u)
 // This true-arm boundary needs forcing on every measured GCC (11--16) and on
 // Clang 21--23; Clang 17--20 is neutral without it. The lower bounds are the
 // observed reversals and the positive endpoints remain future-open.
@@ -18133,13 +19441,660 @@ print_compiler_constant_pre_normalization_true_emit(
 	}
 }
 
+/// @brief Models one leaf after compiler-constant substitution at the active-record boundary.
+/// @details Unlike the public pre-normalization model, a non-candidate is already an IO-normalized leaf and therefore
+///          keeps its exact type and reference.  Reapplying `io_print_alias` here would be a second observable CPO call.
+template <::std::integral char_type, typename T,
+		  bool = ::fast_io::operations::decay::
+			  print_compiler_constant_pre_normalization_candidate_v<char_type, T>>
+struct print_compiler_constant_active_record_replacement
+{
+	using type = ::std::remove_reference_t<T>;
+	inline static constexpr ::std::size_t proxy_bytes{};
+};
+
+template <::std::integral char_type, typename T>
+struct print_compiler_constant_active_record_replacement<char_type, T, true>
+{
+	using type = ::fast_io::details::compiler_constant_materialized_t<
+		char_type, ::std::remove_cvref_t<T>>;
+	inline static constexpr ::std::size_t proxy_bytes{sizeof(type)};
+};
+
+template <::std::integral char_type, typename T>
+using print_compiler_constant_active_record_replacement_t =
+	typename ::fast_io::operations::decay::
+		print_compiler_constant_active_record_replacement<char_type, T>::type;
+
+/// @brief Proves that replacing candidates in one selected active record cannot change operation ownership.
+/// @details Condition selection has already removed inactive leaves, so source status is tested on the exact current
+///          types rather than on the earlier semantic nodes.  Replacement status is tested independently.  Mutex
+///          outputs are rejected because this continuation does not own lock acquisition.  The aggregate proxy budget
+///          bounds only newly created state; passive active leaves remain borrowed by the unchanged dispatcher.
+template <::std::integral char_type, typename... Args>
+inline consteval bool
+print_compiler_constant_active_record_codegen_supported() noexcept
+{
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+	// Recursive assembly audits found retained proxy formatters in GCC 15--17 active floating records and in Clang
+	// active records through 23. The newest tested versions still fail, so the open compiler intervals remain query-free.
+	// The parameters intentionally remain part of the signature: a future positive proof may reopen only a precisely
+	// classified record without changing the consumer boundary.
+	(void)sizeof(char_type);
+	(void)sizeof...(Args);
+	return false;
+#else
+	(void)sizeof(char_type);
+	(void)sizeof...(Args);
+	return true;
+#endif
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_active_record_available() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+	constexpr bool has_candidate{
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_has_candidate_v<
+				char_type, Args...>};
+	if constexpr (
+		!has_candidate ||
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_execution_node_v<Args>) ||
+		::fast_io::operations::decay::defines::
+			has_output_or_io_stream_mutex_ref_define<outputstmtype> ||
+		::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype, ::std::remove_reference_t<Args>...>)
+	{
+		return false;
+	}
+	else if constexpr (
+		!::fast_io::operations::decay::
+			print_compiler_constant_active_record_codegen_supported<
+				char_type, Args...>())
+	{
+		// This rejection precedes every active-record replacement type and optimizer query.
+		return false;
+	}
+	else if constexpr (
+		::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+			outputstmtype> &&
+		!::fast_io::operations::decay::
+			print_compiler_constant_exact_obuffer_codegen_supported<
+				char_type, Args...>())
+	{
+		// Reject the complete selected record before forming any replacement type or executing its optimizer query.
+		return false;
+	}
+	else if constexpr (
+		(false || ... ||
+		 ::fast_io::details::decay::print_semantic_execution_node_v<
+			 ::fast_io::operations::decay::
+				 print_compiler_constant_active_record_replacement_t<
+					 char_type, Args>>) ||
+		::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype,
+			::fast_io::operations::decay::
+				print_compiler_constant_active_record_replacement_t<
+					char_type, Args>...>)
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t maximum{
+			::fast_io::details::compiler_constant_materialization_max_bytes};
+		::std::size_t proxy_bytes{};
+		((proxy_bytes =
+			  proxy_bytes == SIZE_MAX ||
+				  ::fast_io::operations::decay::
+					  print_compiler_constant_active_record_replacement<
+						  char_type, Args>::proxy_bytes > maximum - proxy_bytes
+				  ? SIZE_MAX
+				  : proxy_bytes +
+						::fast_io::operations::decay::
+							print_compiler_constant_active_record_replacement<
+								char_type, Args>::proxy_bytes),
+		 ...);
+		return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum;
+	}
+}
+
+/// @brief Proves the descriptor-only true arm for an exact active record.
+/// @details The public fragment predicate models another alias pass and is consequently too strong here.  This version
+///          retains its destination, source-lifetime, descriptor-count, and stack-budget obligations while relying on
+///          the exact source/replacement status proof above.
+template <bool line, typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_active_record_fragment_available() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if constexpr (
+		(!::fast_io::details::decay::
+			 print_output_retains_static_scatter<outputstmtype> &&
+		 !::fast_io::details::decay::
+			 print_output_accepts_static_provider_scalar<outputstmtype>) ||
+		::fast_io::operations::decay::defines::
+			has_output_or_io_stream_mutex_ref_define<outputstmtype> ||
+		::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+			outputstmtype> ||
+		!(::fast_io::operations::decay::
+			  print_compiler_constant_pre_normalization_fragment_source<
+				  char_type, Args>::available &&
+		  ...) ||
+		(false || ... ||
+		 ::fast_io::operations::decay::
+			 print_compiler_constant_pre_normalization_fragment_source<
+				 char_type, Args>::nested_candidate))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t count{
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_fragment_run_count<
+					line, outputstmtype, Args...>()};
+		return count != 0u && count != SIZE_MAX && count <= 256u &&
+			   ::fast_io::details::decay::print_stack_buffer_size_within_limit<
+				   count, ::fast_io::basic_io_scatter_t<char_type>>;
+	}
+}
+
+/// @brief Materializes only a proven candidate and otherwise preserves the selected lvalue.
+template <::std::integral char_type, typename T>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr decltype(auto)
+print_compiler_constant_active_record_materialize_one(T &value) noexcept
+{
+	if constexpr (
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_candidate_v<char_type, T>)
+	{
+		return print_compiler_constant_materialize_gate_proven(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+			value);
+	}
+	else
+	{
+		return (value);
+	}
+}
+
+/// @brief Proves that every selected active leaf has a bounded exact spelling after a successful value query.
+/// @details The eligibility-implies-compact marker is a value-level contract: once the source query returns true, the
+///          replacement's precise size is at most the common compiler-constant budget.  Requiring the precise compact
+///          protocol independently proves that the replacement can measure and write exactly that many code units.
+///          This conjunction is what makes a put-area capacity miss an output-transport decision rather than permission
+///          to re-enter the native formatter.  Passive siblings are deliberately excluded until they provide an
+///          equivalent aggregate bound; the current single-condition entrance selects exactly one candidate leaf.
+template <::std::integral char_type, typename T>
+inline consteval bool
+print_compiler_constant_active_record_exact_leaf_available() noexcept
+{
+	using source_type = ::std::remove_cvref_t<T>;
+	using replacement_type =
+		::fast_io::operations::decay::
+			print_compiler_constant_active_record_replacement_t<char_type, T>;
+	return ::fast_io::operations::decay::
+			   print_compiler_constant_pre_normalization_candidate_v<char_type, T> &&
+		   ::fast_io::compiler_constant_precise_compact_preferred<
+			   char_type, replacement_type> &&
+		   requires {
+			   {
+				   print_compiler_constant_eligible_implies_compact_size(
+					   ::fast_io::io_reserve_type<char_type, source_type>)
+			   } -> ::std::same_as<::std::true_type>;
+		   };
+}
+
+/// @brief Admits the definitive exact emitter for a selected active put-area record.
+/// @details Active-record status equivalence is proved by the caller.  This predicate adds the physical obligations:
+///          a real put area, at most sixteen exact components, and a successful-query compact bound for every leaf.
+///          Mutex outputs remain excluded by the active-record proof, so staging a capacity miss through `write_all`
+///          preserves the same lock and publication boundary as the established buffered dispatcher.
+template <bool line, typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_active_record_exact_obuffer_available() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+	return sizeof...(Args) != 0u && sizeof...(Args) <= 16u &&
+		   ::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+			   outputstmtype> &&
+		   ::fast_io::operations::decay::
+			   print_compiler_constant_active_record_available<
+				   line, outputstmtype, Args...>() &&
+		   (::fast_io::operations::decay::
+				print_compiler_constant_active_record_exact_leaf_available<
+					char_type, Args>() &&
+			...);
+}
+
+/// @brief Materializes and emits one gate-proven exact active record without a formatter fallback.
+/// @details Every argument arrives here only after its optimizer query succeeded.  The availability proof guarantees
+///          that exact sizing cannot exceed the bounded tier, while `print_compiler_constant_exact_obuffer_flat_try`
+///          handles both a fitting put area and a capacity miss using the same already-materialized spelling.  A false
+///          result would violate one of those type/value contracts and is therefore terminated instead of silently
+///          invoking the native formatter after the compiler-constant branch has been selected.
+template <bool line, ::std::integral char_type, typename outputstmtype>
+struct print_compiler_constant_active_record_exact_obuffer_continuation
+{
+	outputstmtype &optstm;
+
+	template <typename... MaterializedArgs>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	FAST_IO_GNU_ALWAYS_INLINE
+#endif
+	inline constexpr void operator()(MaterializedArgs &&...materialized_args) const
+	{
+		if (!::fast_io::operations::decay::
+				print_compiler_constant_exact_obuffer_flat_try<line, char_type>(
+					optstm, materialized_args...)) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	}
+};
+
+/// @brief Tries compiler-constant materialization on an already-selected active record.
+/// @details A true query emits from materialized proxies and therefore cannot retain the native formatter.  A false
+///          query returns without constructing a proxy, after which the caller invokes the byte-for-byte historical
+///          semantic run-time continuation.  Static and fragment strategies are IO policies; format lowering is not
+///          named here and contributes no policy decision.
+template <bool line, typename outputstmtype, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+[[nodiscard]] inline constexpr bool
+print_semantic_try_compiler_constant_active_record(
+	outputstmtype &optstm, Args &...args)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if constexpr (
+		::fast_io::operations::decay::
+			print_compiler_constant_active_record_available<
+				line, outputstmtype, Args...>())
+	{
+		if (::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_gate<char_type>(
+					args...))
+		{
+			if constexpr (
+				::fast_io::operations::decay::
+					print_compiler_constant_active_record_exact_obuffer_available<
+						line, outputstmtype, Args...>())
+			{
+				::fast_io::operations::decay::
+					print_compiler_constant_active_record_exact_obuffer_continuation<
+						line, char_type, outputstmtype>{optstm}(
+							::fast_io::operations::decay::
+								print_compiler_constant_active_record_materialize_one<
+									char_type>(args)...);
+				return true;
+			}
+			constexpr ::std::size_t static_run_size{
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_static_run_size<
+						line, char_type, Args...>()};
+			if constexpr (
+				static_run_size != SIZE_MAX &&
+				static_run_size <= 64u / sizeof(char_type) &&
+				!::fast_io::operations::decay::defines::
+					has_obuffer_basic_operations<outputstmtype>)
+			{
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_static_emit<line>(
+						optstm, args...);
+				return true;
+			}
+			if constexpr (
+				::fast_io::operations::decay::
+					print_compiler_constant_active_record_fragment_available<
+						line, outputstmtype, Args...>())
+			{
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_fragment_emit<line>(
+						optstm, args...);
+				return true;
+			}
+			if constexpr (
+				static_run_size != SIZE_MAX &&
+				static_run_size <=
+					::fast_io::details::compiler_constant_materialization_max_bytes /
+						sizeof(char_type) &&
+				!::fast_io::operations::decay::defines::
+					has_obuffer_basic_operations<outputstmtype>)
+			{
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_static_emit<line>(
+						optstm, args...);
+				return true;
+			}
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_flat_continuation<
+					line, char_type, outputstmtype>{optstm}(
+						::fast_io::operations::decay::
+							print_compiler_constant_active_record_materialize_one<
+								char_type>(args)...);
+			return true;
+		}
+	}
+	return false;
+}
+
+/// @brief Proves the narrow source shape whose active condition arm can be selected before the general semantic graph.
+/// @details The complete source record contains exactly one condition, the output owns neither mutex nor source-record
+///          status, and both arms normalize to one ordinary active leaf.  These obligations make early selection
+///          observationally identical to the established condition continuation.  Nested conditions, packs, nulls,
+///          volatile storage, and ownership customizations fail closed and retain the general semantic dispatcher.
+template <bool line, typename outputstmtype, typename T>
+inline consteval bool
+print_compiler_constant_single_condition_active_record_available_one() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+	if constexpr (
+		::std::is_volatile_v<::std::remove_reference_t<T>> ||
+		::fast_io::operations::decay::defines::
+			has_output_or_io_stream_mutex_ref_define<outputstmtype>)
+	{
+		return false;
+	}
+	else
+	{
+		using normalized_result = decltype(
+			::fast_io::details::decay::print_semantic_input_forward<char_type>(
+				::std::declval<T>()));
+		using normalized_expression = ::std::add_lvalue_reference_t<
+			::std::remove_reference_t<normalized_result>>;
+		if constexpr (
+			!::fast_io::details::decay::
+				print_semantic_top_level_condition_v<normalized_expression> ||
+			::fast_io::details::decay::
+				print_freestanding_effective_status_owner<
+					line, outputstmtype,
+					::std::remove_reference_t<normalized_expression>>())
+		{
+			return false;
+		}
+		else
+		{
+			using node_reference = decltype(
+				::fast_io::details::decay::print_semantic_node_ref(
+					::std::declval<normalized_expression>()));
+			using named_node_reference = ::std::add_lvalue_reference_t<
+				::std::remove_reference_t<node_reference>>;
+			using first_arm_reference = decltype(
+				(::std::declval<named_node_reference>().t1));
+			using second_arm_reference = decltype(
+				(::std::declval<named_node_reference>().t2));
+			using first_active =
+				::fast_io::details::decay::print_semantic_stable_input_forward_t<
+					char_type, first_arm_reference>;
+			using second_active =
+				::fast_io::details::decay::print_semantic_stable_input_forward_t<
+					char_type, second_arm_reference>;
+			return !::fast_io::details::decay::
+					   print_semantic_execution_node_v<first_active> &&
+				   !::fast_io::details::decay::
+					   print_semantic_execution_node_v<second_active> &&
+				   !::std::same_as<::std::remove_cvref_t<first_active>,
+								  ::fast_io::io_null_t> &&
+				   !::std::same_as<::std::remove_cvref_t<second_active>,
+								  ::fast_io::io_null_t>;
+		}
+	}
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_single_condition_active_record_available() noexcept
+{
+	if constexpr (sizeof...(Args) != 1u)
+	{
+		return false;
+	}
+	else
+	{
+		return (false || ... ||
+				::fast_io::operations::decay::
+					print_compiler_constant_single_condition_active_record_available_one<
+						line, outputstmtype, Args>());
+	}
+}
+
+/// @brief Applies the compiler code-generation partition to one source-level active-condition leaf.
+/// @details Clang 13--17 compile the dynamic-star floating protocol but cannot erase its mutually exclusive proxy and
+///          native graphs: the recursive audit finds up to eleven proxy functions and twenty-nine native formatter
+///          functions, including proxy residue in the run-time-precision root. Clang 18--20 are already rejected by the
+///          general source-candidate proof, while the independent active-record proof currently rejects all Clang
+///          releases through 23. This earlier source-shape partition remains necessary for a structurally query-free
+///          condition continuation and for future narrowly reopened active records. It runs before `materialized_t` or
+///          any value query, so an unsupported complete condition record cannot construct a replacement.
+template <::std::integral char_type, typename T>
+inline consteval bool
+print_compiler_constant_active_condition_leaf_codegen_supported() noexcept
+{
+	if constexpr (!::fast_io::operations::decay::
+					   print_compiler_constant_active_record_codegen_supported<
+						   char_type, T>())
+	{
+		// A compiler which rejects the selected active record must choose the source-level runtime branch before that
+		// record's availability proof, replacement type, or optimizer query can be instantiated.
+		return false;
+	}
+#if defined(__clang__) && __clang_major__ < 18
+	else
+	{
+		return !::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+			char_type, T>;
+	}
+#else
+	else
+	{
+		return true;
+	}
+#endif
+}
+
+/// @brief Emits one already-selected ordinary condition arm through the active-record constant gate.
+/// @details Semantic input forwarding is executed exactly once.  A rejected value query constructs no replacement and
+///          continues with the same named active leaf in the historical stable-reference dispatcher, so neither alias
+///          nor status CPOs are replayed.
+template <bool line, typename outputstmtype, typename Branch>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void
+print_compiler_constant_single_condition_active_branch(
+	outputstmtype &optstm, Branch &&branch)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	decltype(auto) active{
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::forward<Branch>(branch))};
+	if (::fast_io::operations::decay::
+			print_semantic_try_compiler_constant_active_record<line>(
+				optstm, active))
+	{
+		return;
+	}
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+		optstm, active);
+}
+
+/// @brief Emits one selected condition arm without entering the compiler-constant strategy graph.
+/// @details The source-level consumer selects this continuation only when its compiler proof rejects the complete
+///          dynamic-precision condition. Forwarding and active-arm selection remain identical to the optimized branch,
+///          but no query, proxy type, or materializer is named here.
+template <bool line, typename outputstmtype, typename Branch>
+inline constexpr void
+print_compiler_constant_single_condition_runtime_branch(
+	outputstmtype &optstm, Branch &&branch)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	decltype(auto) active{
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::forward<Branch>(branch))};
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+		optstm, active);
+}
+
+/// @brief Normalizes one source condition, selects its active arm, and enters the IO-level value gate.
+/// @details This is intentionally not a format strategy: brace and printf lowering merely produce the same semantic
+///          condition node accepted by raw IO.  Output policy, status exclusion, materialization, and the run-time
+///          continuation all remain in core IO. The type-only code-generation proof covers both alternatives before
+///          selection: rejecting only the explicit-precision arm would let a negative star precision lose its source
+///          identity and re-enter the scalar constant gate through the omitted-precision arm.
+template <bool line, typename outputstmtype, typename T>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void
+print_compiler_constant_single_condition_active_record(
+	outputstmtype &optstm, T &&source)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	static_assert(
+		::fast_io::operations::decay::
+			print_compiler_constant_single_condition_active_record_available_one<
+				line, outputstmtype, T>());
+	decltype(auto) normalized_condition{
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::forward<T>(source))};
+	auto &&node_ref{
+		::fast_io::details::decay::print_semantic_node_ref(normalized_condition)};
+	using node_reference = decltype(node_ref);
+	using named_node_reference = ::std::add_lvalue_reference_t<
+		::std::remove_reference_t<node_reference>>;
+	using first_arm_reference = decltype(
+		(::std::declval<named_node_reference>().t1));
+	using second_arm_reference = decltype(
+		(::std::declval<named_node_reference>().t2));
+	using first_active =
+		::fast_io::details::decay::print_semantic_stable_input_forward_t<
+			char_type, first_arm_reference>;
+	using second_active =
+		::fast_io::details::decay::print_semantic_stable_input_forward_t<
+			char_type, second_arm_reference>;
+	constexpr bool active_condition_codegen_supported{
+		::fast_io::operations::decay::
+			print_compiler_constant_active_condition_leaf_codegen_supported<
+				char_type, first_active>() &&
+		::fast_io::operations::decay::
+			print_compiler_constant_active_condition_leaf_codegen_supported<
+				char_type, second_active>()};
+	if constexpr (active_condition_codegen_supported)
+	{
+		if (node_ref.pred)
+		{
+			::fast_io::operations::decay::
+				print_compiler_constant_single_condition_active_branch<line>(
+					optstm, node_ref.t1);
+		}
+		else
+		{
+			::fast_io::operations::decay::
+				print_compiler_constant_single_condition_active_branch<line>(
+					optstm, node_ref.t2);
+		}
+	}
+	else
+	{
+		if (node_ref.pred)
+		{
+			::fast_io::operations::decay::
+				print_compiler_constant_single_condition_runtime_branch<line>(
+					optstm, node_ref.t1);
+		}
+		else
+		{
+			::fast_io::operations::decay::
+				print_compiler_constant_single_condition_runtime_branch<line>(
+					optstm, node_ref.t2);
+		}
+	}
+}
+
+/// @brief Identifies a source graph whose active print record is not known before semantic normalization.
+/// @details Providers may use this predicate only as a fail-closed strategy partition. A true value proves that source
+///          types are insufficient for whole-record status selection because pack expansion or condition selection can
+///          change the operation arity and types. It does not authorize emitting or inspecting any source value.
+template <typename outputstmtype, typename... Args>
+inline constexpr bool print_pre_normalization_semantic_source_run_v{
+	(false || ... ||
+	 ::fast_io::details::decay::print_semantic_input_argument_v<
+		 typename outputstmtype::output_char_type, Args &&>)};
+
+/// @brief Identifies a compiler-constant replacement run which can change the active record before output dispatch.
+/// @details This predicate proves only active-record stability for the non-semantic true-arm overload. It deliberately
+///          does not claim that any physical compiler-constant strategy is available; the caller owns that independent
+///          proof. Both ordinary semantic nodes and recursively parameter-wrapped packs are rejected through the shared
+///          execution predicate used by `print_semantic_input_argument_v`.
+template <typename outputstmtype, typename... Args>
+inline constexpr bool print_pre_normalization_semantic_replacement_run_v{
+	(false || ... ||
+	 ::fast_io::details::decay::print_semantic_input_argument_v<
+		 typename outputstmtype::output_char_type,
+		 ::fast_io::operations::decay::
+			 print_compiler_constant_pre_normalization_replacement_t<
+				 typename outputstmtype::output_char_type, Args &&>>)};
+
 /// @brief Enters a proven compiler-constant true arm only after acquiring any complete output mutex.
 /// @details The optimizer query is deliberately evaluated by the caller before this continuation.  Source
 ///          materialization remains inside it: for a mutex wrapper the original source objects cross the lock boundary,
 ///          the unlocked observer is obtained under the guard, and only then are replacement proxies formed and
-///          emitted.  This avoids constructing a constant byte proxy on the caller's stack merely to reload it into a
-///          buffered destination after locking.  Outputs without a complete mutex protocol retain the direct true arm.
+///          emitted. This avoids constructing a constant byte proxy on the caller's stack merely to reload it into a
+///          buffered destination after locking. Only marker-free outputs retain the direct true arm; a partial mutex
+///          protocol is rejected instead of being silently treated as an unlocked terminal.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(sizeof...(Args) == 0u)
+inline constexpr void
+print_compiler_constant_pre_normalization_true_emit_after_lock(
+	outputstmtype &optstm, Args &&...)
+{
+	// A zero-source call has no compiler-constant candidate. Keeping it as a
+	// separate overload makes the non-empty materialization graph uninstantiable.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...>)
+inline constexpr void
+print_compiler_constant_pre_normalization_true_emit_after_lock(
+	outputstmtype &optstm, Args &&...args)
+{
+	// A source-level semantic graph does not identify its active record. Pack
+	// expansion and condition selection may remove or replace operation types,
+	// so no pre-normalization shortcut can prove exact status equivalence. This
+	// structurally separate overload prevents those shortcuts from being
+	// instantiated and transfers ownership directly to semantic normalization.
+	::fast_io::operations::decay::print_freestanding_decay_unforwarded<line>(
+		optstm, ::std::forward<Args>(args)...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_replacement_run_v<
+					outputstmtype, Args...>)
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
@@ -18150,15 +20105,28 @@ print_compiler_constant_pre_normalization_true_emit_after_lock(
 {
 	if constexpr (
 		::fast_io::operations::decay::defines::
-			has_complete_output_stream_mutex_protocol<outputstmtype>)
+			has_output_or_io_stream_mutex_ref_define<outputstmtype>)
 	{
-		::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
-			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
-		decltype(auto) unlocked =
-			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm);
-		::fast_io::operations::decay::
-			print_compiler_constant_pre_normalization_true_emit<line>(
-				unlocked, ::std::forward<Args>(args)...);
+		if constexpr (
+			::fast_io::operations::decay::defines::
+				has_complete_output_stream_mutex_protocol<outputstmtype>)
+		{
+			::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
+				::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
+			decltype(auto) unlocked =
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm);
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_true_emit<line>(
+					unlocked, ::std::forward<Args>(args)...);
+		}
+		else
+		{
+			// A mutex marker is an ordering requirement, never permission to use the output as an unlocked terminal.
+			static_assert(
+				::fast_io::operations::decay::defines::
+					has_complete_output_stream_mutex_protocol<outputstmtype>,
+				"fast_io: compiler-constant print requires a complete output mutex protocol");
+		}
 	}
 	else
 	{
@@ -18168,11 +20136,160 @@ print_compiler_constant_pre_normalization_true_emit_after_lock(
 	}
 }
 
+/// @brief Applies the destination-specific code-generation proof at the shared print-level source boundary.
+/// @details This predicate intentionally precedes every value query in both hot and diagnostic entry families. A
+///          complete mutex wrapper is classified through its unlocked destination because that is where physical output
+///          occurs. On a rejected put-area/compiler pair, the overload set selects a structurally separate historical
+///          continuation; the rejected function body therefore cannot instantiate a replacement or builtin query.
+template <typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_pre_normalization_codegen_supported() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+#if defined(__clang__) && 21 <= __clang_major__
+	if constexpr (
+		sizeof...(Args) != 1u &&
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_has_candidate_v<
+				char_type, Args...>)
+	{
+		// Clang 21--23 reduce a single raw scalar to immediate stores, but a mixed literal/scalar record retains the
+		// replacement formatter on its put-area miss edge. Rejecting the complete multi-source record here covers every
+		// hot facade which reaches this shared level while preserving passive static-provider records.
+		return false;
+	}
+	else
+#endif
+	if constexpr (
+		::fast_io::operations::decay::defines::
+			has_complete_output_stream_mutex_protocol<outputstmtype>)
+	{
+		using unlocked_output = ::std::remove_reference_t<decltype(
+			::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+				::std::declval<outputstmtype &>()))>;
+		return ::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_codegen_supported<
+				unlocked_output, Args...>();
+	}
+	else if constexpr (
+		::fast_io::operations::decay::defines::has_obuffer_basic_operations<
+			outputstmtype>)
+	{
+		return ::fast_io::operations::decay::
+			print_compiler_constant_exact_obuffer_codegen_supported<
+				char_type, Args...>();
+	}
+	else
+	{
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11
+		if constexpr (
+			(false || ... ||
+			 ::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+				 char_type, Args>))
+		{
+			// Recursive assembly audits on GCC 11 through the current trunk find
+			// 6.2--7.9k reachable instructions from the precise-fragment planner
+			// after a successful direct-output query. Forcing its preparation links
+			// does not erase that graph, so the shared raw/format print level rejects
+			// the source shape before replacement formation or __builtin_constant_p.
+			// Constant and unknown values consequently share the mature native
+			// precision formatter, with no half-selected proxy path.
+			return false;
+		}
+#endif
+		return true;
+	}
+}
+
 /// @brief Early compiler-constant gate shared by public raw print and format's already-lowered component callback.
 /// @details The false arm is exactly the historical source-normalization entry. Replacement proxies and their
 ///          materializers occur only in the proven true arm; an unknown source therefore retains the old frame, ABI,
 ///          alias calls, and dispatcher. Non-candidate arguments are forwarded through either arm without reconstruction.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(sizeof...(Args) == 0u)
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization(
+	outputstmtype &optstm, Args &&...)
+{
+	// Output-reference normalization has already completed. The normalized
+	// print level now owns status, mutex, and optional newline semantics.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			::fast_io::operations::decay::
+				print_compiler_constant_single_condition_active_record_available<
+					line, outputstmtype, Args...>())
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization(
+	outputstmtype &optstm, Args &&...args)
+{
+	// The availability proof establishes exactly one source.  The fold avoids a
+	// tuple or another by-value ownership boundary between that expression and
+	// the builtin query.
+	(::fast_io::operations::decay::
+		 print_compiler_constant_single_condition_active_record<line>(
+			 optstm, ::std::forward<Args>(args)),
+	 ...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			!::fast_io::operations::decay::
+				print_compiler_constant_single_condition_active_record_available<
+					line, outputstmtype, Args...>())
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization(
+	outputstmtype &optstm, Args &&...args)
+{
+	// Keep semantic sources outside the compiler-constant strategy graph. The
+	// normalized dispatcher will select exact status or physical output from the
+	// active record after pack expansion and condition selection have completed.
+	::fast_io::operations::decay::print_freestanding_decay_unforwarded<line>(
+		optstm, ::std::forward<Args>(args)...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			!::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_codegen_supported<
+					outputstmtype, Args &&...>())
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization(
+	outputstmtype &optstm, Args &&...args)
+{
+	// This overload is the query-free arm selected by the compiler/destination proof. Keeping a separate body makes
+	// replacement formation structurally impossible instead of relying on dead-code elimination after a failed query.
+	::fast_io::operations::decay::print_freestanding_decay_unforwarded<line>(
+		optstm, ::std::forward<Args>(args)...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_codegen_supported<
+					outputstmtype, Args &&...>())
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
 	(defined(__clang__) && __clang_major__ >= 21)
 FAST_IO_GNU_ALWAYS_INLINE
@@ -18186,7 +20303,7 @@ print_freestanding_compiler_constant_pre_normalization(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18222,7 +20339,7 @@ print_freestanding_compiler_constant_pre_normalization(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18268,7 +20385,7 @@ print_freestanding_compiler_constant_pre_normalization(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18394,11 +20511,91 @@ print_freestanding_compiler_constant_pre_normalization(
 		optstm, ::std::forward<Args>(args)...);
 }
 
+/// @brief Proves whether a diagnostic entry may instantiate a compiler-constant replacement graph.
+/// @details Static-provider-only records retain their type-level cold optimizations. A record containing a value-query
+///          candidate is rejected on the tested GNU frontends: GCC 15--17 retain a 120--152-byte floating proxy frame
+///          and its materialization chain in public `perr`/`perrln`, and no newer tested GCC or Clang proves deletion.
+///          The rejection occurs in overload constraints, before replacement formation or `__builtin_constant_p`.
+template <typename outputstmtype, typename... Args>
+inline consteval bool
+print_compiler_constant_pre_normalization_cold_codegen_supported() noexcept
+{
+	using char_type = typename outputstmtype::output_char_type;
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+	if constexpr (
+		::fast_io::operations::decay::
+			print_compiler_constant_pre_normalization_has_candidate_v<
+				char_type, Args...>)
+	{
+		return false;
+	}
+#endif
+	return ::fast_io::operations::decay::
+		print_compiler_constant_pre_normalization_codegen_supported<
+			outputstmtype, Args...>();
+}
+
 /// @brief Diagnostic-output variant whose unknown arm retains the historical cold continuation.
-/// @details The optimizer-visible constant decision stays in the caller. A proven true arm may use the shared compact
-///          materializer; the false arm performs source normalization exactly once inside the cold borrowed-output
-///          path, so an ordinary run-time diagnostic does not acquire a new hot dispatcher clone.
+/// @details The cold overload set shares the same source-normalization level as `perr`, `perrln`, panic, and their
+///          internal diagnostic callers. Unsupported value-query records select a structurally query-free body; passive
+///          static records may still use the established provider paths without acquiring a hot dispatcher clone.
 template <bool line, typename outputstmtype, typename... Args>
+	requires(sizeof...(Args) == 0u)
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization_cold(
+	outputstmtype &optstm, Args &&...)
+{
+	// Cold placement is irrelevant to a source-free type graph. Reuse the same
+	// normalized record dispatcher as every hot and borrowed ownership boundary.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(optstm);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...>)
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization_cold(
+	outputstmtype &optstm, Args &&...args)
+{
+	// The cold front door has the same exact active-record obligation as the
+	// hot path. Its separate overload makes the pre-normalization strategy graph
+	// ill-formed by construction for semantic sources, then preserves diagnostic
+	// placement through the established cold semantic continuation.
+	::fast_io::operations::decay::print_freestanding_decay_cold_unforwarded<line>(
+		optstm, ::std::forward<Args>(args)...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			!::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_cold_codegen_supported<
+					outputstmtype, Args &&...>())
+inline constexpr void
+print_freestanding_compiler_constant_pre_normalization_cold(
+	outputstmtype &optstm, Args &&...args)
+{
+	// Diagnostic facades share the same query-free compiler/destination rejection as the hot print level.
+	::fast_io::operations::decay::print_freestanding_decay_cold_unforwarded<line>(
+		optstm, ::std::forward<Args>(args)...);
+}
+
+template <bool line, typename outputstmtype, typename... Args>
+		requires(
+			sizeof...(Args) != 0u &&
+			!::fast_io::operations::decay::
+				print_pre_normalization_semantic_source_run_v<
+					outputstmtype, Args...> &&
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_cold_codegen_supported<
+					outputstmtype, Args &&...>())
 inline constexpr void
 print_freestanding_compiler_constant_pre_normalization_cold(
 	outputstmtype &optstm, Args &&...args)
@@ -18408,7 +20605,7 @@ print_freestanding_compiler_constant_pre_normalization_cold(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18441,7 +20638,7 @@ print_freestanding_compiler_constant_pre_normalization_cold(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18477,7 +20674,7 @@ print_freestanding_compiler_constant_pre_normalization_cold(
 		::fast_io::operations::decay::defines::
 			has_complete_output_stream_mutex_protocol<outputstmtype>)
 	{
-		using unlocked_output = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+		using unlocked_output = ::std::remove_reference_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
 			::std::declval<outputstmtype &>()))>;
 		if constexpr (
 			::fast_io::operations::decay::
@@ -18582,44 +20779,119 @@ concept print_freestanding_okay_for_line =
 namespace defines
 {
 
-/// @brief    Validates public freestanding print parameters after named-lvalue aliasing and print forwarding.
-/// @details  Every public/default-output wrapper owns forwarding-reference parameters, but the expressions used in its
-///           body are the named parameters and are therefore lvalues. Modeling the caller's original rvalue category
-///           would reject a valid lvalue-only alias customization and could admit an rvalue-only customization that
-///           the body never calls. This character-only predicate intentionally mirrors the same expression model as
-///           the line- and destination-aware predicate below.
+template <typename output>
+using print_freestanding_named_output_t = ::std::remove_reference_t<decltype(
+	::fast_io::operations::output_stream_ref(
+		::std::declval<::std::remove_reference_t<output> &>()))>;
+
+/// @brief Lazily selects one source-normalization expression for a complete public print run.
+/// @details Runtime makes one run-level decision before it normalizes any source. If any named source becomes a
+///          semantic node, every source is passed through `print_semantic_input_forward`; otherwise every source uses
+///          ordinary alias/status forwarding. Separate specializations are required because forming both expressions
+///          would instantiate a CPO from a phase which execution never enters.
+template <::std::integral char_type, bool semantic_run, typename Arg>
+struct print_freestanding_named_source_arg;
+
+template <::std::integral char_type, typename Arg>
+struct print_freestanding_named_source_arg<char_type, false, Arg>
+{
+	using source_expression =
+		::std::add_lvalue_reference_t<::std::remove_reference_t<Arg>>;
+	using type = decltype(::fast_io::io_print_forward<char_type>(
+		::fast_io::io_print_alias(::std::declval<source_expression>())));
+};
+
+template <::std::integral char_type, typename Arg>
+struct print_freestanding_named_source_arg<char_type, true, Arg>
+{
+	using source_expression =
+		::std::add_lvalue_reference_t<::std::remove_reference_t<Arg>>;
+	using type = decltype(
+		::fast_io::details::decay::print_semantic_input_forward<char_type>(
+			::std::declval<source_expression>()));
+};
+
+/// @brief Carries the single normalized type sequence proved for all public print compatibility predicates.
+/// @details The three projections below intentionally consume the same list. This makes it impossible for the
+///          character-only, destination-aware, and line-aware concepts to disagree about the source-normalization
+///          phase while still allowing each decayed predicate to prove its own operation contract.
+template <typename... NormalizedArgs>
+struct print_freestanding_named_normalized_run
+{
+	template <::std::integral char_type>
+	inline static constexpr bool params_okay{
+		::fast_io::operations::decay::defines::print_freestanding_params_okay<
+			char_type, NormalizedArgs...>};
+
+	template <typename output>
+	inline static constexpr bool output_okay{
+		::fast_io::operations::decay::defines::print_freestanding_okay<
+			output, NormalizedArgs...>};
+
+	template <bool line, typename output>
+	inline static constexpr bool output_okay_for_line{
+		::fast_io::operations::decay::defines::print_freestanding_okay_for_line<
+			line, output, NormalizedArgs...>};
+};
+
+template <::std::integral char_type, typename... Args>
+inline constexpr bool print_freestanding_named_semantic_run_v{
+	(false || ... ||
+	 ::fast_io::details::decay::print_semantic_input_argument_v<
+		 char_type,
+		 ::std::add_lvalue_reference_t<::std::remove_reference_t<Args>>>)};
+
+template <::std::integral char_type, typename... Args>
+using print_freestanding_named_normalized_run_t =
+	print_freestanding_named_normalized_run<
+		typename print_freestanding_named_source_arg<
+			char_type,
+			print_freestanding_named_semantic_run_v<char_type, Args...>,
+			Args>::type...>;
+
+/// @brief    Validates public freestanding print parameters after the exact run-level source normalization.
+/// @details  Every public/default-output wrapper owns forwarding-reference parameters, but its body passes the named
+///           parameters as lvalues. The all-semantic-or-all-ordinary phase choice is identical to
+///           `print_freestanding_decay_unforwarded`; a per-argument choice is not an equivalent proof.
 /// @tparam   char_type the output character type
 /// @tparam   Args      the original public argument types
 template <typename char_type, typename... Args>
-concept print_freestanding_params_okay = ::fast_io::operations::decay::defines::print_freestanding_params_okay<char_type,
-																											   decltype(::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(
-																												   ::std::declval<::std::remove_reference_t<Args> &>())))...>;
+concept print_freestanding_params_okay =
+	::std::integral<char_type> &&
+	::fast_io::operations::defines::
+		print_freestanding_named_normalized_run_t<char_type, Args...>::
+			template params_okay<char_type>;
 
 /// @brief    Validates public freestanding print arguments for an output stream object.
+/// @details  This compatibility projection deliberately shares the source phase and named-lvalue model used by the
+///           exact line-aware public admission predicate.
 /// @tparam   output the public output stream object type
 /// @tparam   Args   the original public argument types
 template <typename output, typename... Args>
-concept print_freestanding_okay = ::fast_io::operations::decay::defines::print_freestanding_okay<
-	::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(::std::declval<output>()))>,
-	decltype(::fast_io::io_print_forward<typename ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(::std::declval<output>()))>::output_char_type>(
-		::fast_io::io_print_alias(::std::declval<Args>())))...>;
+concept print_freestanding_okay =
+	::std::integral<typename ::fast_io::operations::defines::
+		print_freestanding_named_output_t<output>::output_char_type> &&
+	::fast_io::operations::defines::print_freestanding_named_normalized_run_t<
+		typename ::fast_io::operations::defines::
+			print_freestanding_named_output_t<output>::output_char_type,
+		Args...>::template output_okay<
+		::fast_io::operations::defines::print_freestanding_named_output_t<output>>;
 
 /// @brief Validates the exact public print or println operation after its named-lvalue normalization.
 /// @details Function parameters are named lvalues at the actual call site even when the caller supplied an rvalue.
-///          Probing those same categories is essential for alias CPOs that deliberately distinguish lvalue and rvalue
-///          sources. The normalized argument types are then checked as one line-specific run, allowing an exact
-///          `status_print_define` customization to own otherwise non-printable record types.
+///          The run first selects one normalization phase for every source, then the resulting argument types are
+///          checked as one line-specific active record. Runtime binds the output CPO result with `decltype(auto)`, so
+///          its cv-qualification is likewise part of the executable expression.
 template <bool line, typename output, typename... Args>
 concept print_freestanding_okay_for_line =
-	::fast_io::operations::decay::defines::print_freestanding_okay_for_line<
+	::std::integral<typename ::fast_io::operations::defines::
+		print_freestanding_named_output_t<output>::output_char_type> &&
+	::fast_io::operations::defines::print_freestanding_named_normalized_run_t<
+		typename ::fast_io::operations::defines::
+			print_freestanding_named_output_t<output>::output_char_type,
+		Args...>::template output_okay_for_line<
 		line,
-		::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(
-			::std::declval<::std::remove_reference_t<output> &>()))>,
-		decltype(::fast_io::io_print_forward<
-				 typename ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(
-					 ::std::declval<::std::remove_reference_t<output> &>()))>::output_char_type>(
-			::fast_io::io_print_alias(
-				::std::declval<::std::remove_reference_t<Args> &>())))...>;
+		::fast_io::operations::defines::print_freestanding_named_output_t<output>>;
 
 } // namespace defines
 
@@ -19178,7 +21450,7 @@ inline constexpr bool compiled_scatter_plan_final_output_v = []() constexpr {
 	{
 		return false;
 	}
-	using output_type = ::std::remove_cvref_t<output>;
+	using output_type = ::std::remove_reference_t<output>;
 	if constexpr (!requires { typename output_type::output_char_type; })
 	{
 		return false;
@@ -19198,7 +21470,8 @@ inline consteval bool compiled_scatter_plan_print_output() noexcept
 	{
 		return false;
 	}
-	using output_type = ::std::remove_cvref_t<output>;
+	// Mutex recursion retains the cv-qualification of each named unlocked result; strategy admission must do likewise.
+	using output_type = ::std::remove_reference_t<output>;
 	if constexpr (!requires { typename output_type::output_char_type; })
 	{
 		return false;

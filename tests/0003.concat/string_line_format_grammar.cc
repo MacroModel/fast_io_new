@@ -119,12 +119,13 @@ using legacy_concat_callback =
 	::fast_io::fmt::details::concat_lowered_components<::std::string, char>;
 static_assert(::std::is_empty_v<legacy_concat_callback>);
 
+// A trailing line feed remains a literal operation when the grammar consumes
+// only the replacement marker. A grammar that consumes the whole source range
+// correctly contributes only its replacement operation.
 static_assert(
-	::fast_io::fmt::details::format_program_has_terminal_literal_line_feed<
-		context_format, context_rule>());
+	::fast_io::fmt::details::checked_program<context_format, context_rule>.operation_count == 2u);
 static_assert(
-	!::fast_io::fmt::details::format_program_has_terminal_literal_line_feed<
-		consuming_format, consuming_rule>());
+	::fast_io::fmt::details::checked_program<consuming_format, consuming_rule>.operation_count == 1u);
 
 } // namespace terminal_line_grammar_test
 
@@ -138,11 +139,20 @@ int main()
 	auto const consuming_result{
 		::fast_io::fmt::details::concat_with_rule<
 			::std::string, consuming_format>(consuming_rule{}, value)};
+	auto const directly_lowered_context_result{
+		::fast_io::fmt::details::lower_format_program<
+			context_format, context_rule>(legacy_concat_callback{}, value)};
+	auto const &static_value{::fast_io::mnp::static_arg<"value">};
+	auto const directly_lowered_static_context_result{
+		::fast_io::fmt::details::lower_format_program<
+			context_format, context_rule>(legacy_concat_callback{}, static_value)};
 	auto const explicit_component_count{
 		::fast_io::fmt::details::lower_format_program<
 			explicit_lowering_format, ::fast_io::fmt::brace_fmt_t,
 			explicit_lowering_callback>(explicit_lowering_callback{}, value)};
 	if (context_result != "value\n" || consuming_result != "value" ||
+		directly_lowered_context_result != "value\n" ||
+		directly_lowered_static_context_result != "value\n" ||
 		explicit_component_count != 1u)
 	{
 		::std::abort();

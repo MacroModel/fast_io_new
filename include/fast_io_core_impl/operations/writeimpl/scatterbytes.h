@@ -5,6 +5,133 @@ namespace details
 {
 
 template <typename outstmtype>
+inline constexpr io_scatter_status_t scatter_pwrite_some_bytes_cold_impl(
+	outstmtype &outsm, io_scatter_t const *pscatters, ::std::size_t n, ::fast_io::intfpos_t offset);
+
+template <typename outstmtype>
+inline constexpr void scatter_pwrite_all_bytes_cold_impl(
+	outstmtype &outsm, io_scatter_t const *pscatters, ::std::size_t n, ::fast_io::intfpos_t offset);
+
+/// @brief Converts byte descriptors to one-byte typed descriptors by value.
+/// @details Character width one proves equality of extent units, but not alias compatibility between descriptor
+///          classes. Member-wise construction gives each destination object the exact effective type consumed by typed
+///          scatter primitives while preserving every payload pointer and length.
+template <::std::integral char_type>
+inline constexpr void scatter_materialize_one_byte_typed_descriptors(
+	::fast_io::basic_io_scatter_t<char_type> *destination, ::fast_io::io_scatter_t const *source,
+	::std::size_t count) noexcept
+{
+	static_assert(sizeof(char_type) == 1u);
+	for (::std::size_t i{}; i != count; ++i)
+	{
+		destination[i] = {static_cast<char_type const *>(source[i].base), source[i].len};
+	}
+}
+
+/// @brief Executes one byte-scatter some request through a one-byte typed protocol with bounded stack storage.
+/// @details The noinline cold boundary is a placement requirement: it keeps the one-KiB conversion array out of hot
+///          scalar and buffered callers. Some semantics permit the converted prefix to be shorter than the request.
+template <typename outstmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr io_scatter_status_t scatter_write_some_bytes_via_typed_cold_impl(
+	outstmtype &outsm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n)
+{
+	using char_type = typename outstmtype::output_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_byte_conversion_stack_capacity};
+	::std::size_t const count{n < capacity ? n : capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	::fast_io::details::scatter_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+	return ::fast_io::details::scatter_write_some_cold_impl(outsm, converted, count);
+}
+
+/// @brief Completes byte-scatter output through consecutive one-byte typed descriptor chunks.
+template <typename outstmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr void scatter_write_all_bytes_via_typed_cold_impl(
+	outstmtype &outsm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n)
+{
+	using char_type = typename outstmtype::output_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_byte_conversion_stack_capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	while (n != 0u)
+	{
+		::std::size_t const count{n < capacity ? n : capacity};
+		::fast_io::details::scatter_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+		::fast_io::details::scatter_write_all_impl(outsm, converted, count);
+		pscatters += count;
+		n -= count;
+	}
+}
+
+/// @brief Executes one byte-scatter some request through typed positional output at the supplied equal-unit offset.
+template <typename outstmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr io_scatter_status_t scatter_pwrite_some_bytes_via_typed_cold_impl(
+	outstmtype &outsm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n,
+	::fast_io::intfpos_t offset)
+{
+	using char_type = typename outstmtype::output_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_byte_conversion_stack_capacity};
+	::std::size_t const count{n < capacity ? n : capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	::fast_io::details::scatter_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+	return ::fast_io::details::scatter_pwrite_some_cold_impl(outsm, converted, count, offset);
+}
+
+/// @brief Completes byte-scatter output through typed positional chunks while preserving the one-byte coordinate.
+template <typename outstmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr void scatter_pwrite_all_bytes_via_typed_cold_impl(
+	outstmtype &outsm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n,
+	::fast_io::intfpos_t offset)
+{
+	using char_type = typename outstmtype::output_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_byte_conversion_stack_capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	while (n != 0u)
+	{
+		::std::size_t const count{n < capacity ? n : capacity};
+		::fast_io::details::scatter_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+		::fast_io::details::scatter_pwrite_all_cold_impl(outsm, converted, count, offset);
+		offset = ::fast_io::fposoffadd_scatters(offset, converted, {count, 0u});
+		pscatters += count;
+		n -= count;
+	}
+}
+
+template <typename outstmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
@@ -50,13 +177,9 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 						::fast_io::operations::decay::defines::has_scatter_write_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_write_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		return ::fast_io::details::scatter_write_some_cold_impl(
-			outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n);
+		// One-byte width proves equal payload and status units. The outlined adapter materializes a legal typed prefix
+		// without allowing its bounded descriptor array to inflate this frequently instantiated dispatch function.
+		return ::fast_io::details::scatter_write_some_bytes_via_typed_cold_impl(outsm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_seek_bytes_define<outstmtype> &&
 					   (::fast_io::operations::decay::defines::has_pwrite_all_bytes_overflow_define<outstmtype> ||
@@ -66,7 +189,12 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_bytes_overflow_define<
 							outstmtype>))
 	{
-		auto ret{scatter_pwrite_some_bytes_cold_impl(outsm, pscatters, n, 0)};
+		auto const current_position{
+			::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
+		auto ret{scatter_pwrite_some_bytes_cold_impl(outsm, pscatters, n, current_position)};
+		// The branch concepts prove byte seek plus byte-positional output, and scatter status semantically denotes a
+		// prefix of this descriptor array. Using the queried origin for pwrite and then seeking by that prefix's checked
+		// byte length is exactly the state transition of sequential scatter output.
 		::fast_io::operations::decay::output_stream_seek_bytes_decay(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, ret), ::fast_io::seekdir::cur);
 		return ret;
@@ -78,12 +206,13 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 						::fast_io::operations::decay::defines::has_pwrite_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		auto ret{scatter_pwrite_some_cold_impl(outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n, 0)};
+		auto const current_position{
+			::fast_io::operations::decay::output_stream_seek_decay(outsm, 0, ::fast_io::seekdir::cur)};
+		auto ret{::fast_io::details::scatter_pwrite_some_bytes_via_typed_cold_impl(
+			outsm, pscatters, n, current_position)};
+		// `sizeof(char_type)==1` proves byte and character offsets are identical. Together with the exact typed pwrite
+		// result/status protocol, member-wise descriptor conversion proves that the final prefix delta has the seek
+		// operation's character unit without relying on layout aliasing.
 		::fast_io::operations::decay::output_stream_seek_decay(outsm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
 															   ::fast_io::seekdir::cur);
 		return ret;
@@ -98,7 +227,7 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 
 template <typename outstmtype>
 inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype &outsm, io_scatter_t const *pscatters,
-															   ::std::size_t n)
+																   ::std::size_t n)
 {
 	if (n == 0u)
 	{
@@ -250,12 +379,9 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 						::fast_io::operations::decay::defines::has_scatter_write_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_write_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		::fast_io::details::scatter_write_all_impl(outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n);
+		// Complete typed chunks preserve ordering and exact one-byte lengths. The outlined conversion boundary is part
+		// of the performance contract: the fixed descriptor workspace must remain outside hot buffered callers.
+		::fast_io::details::scatter_write_all_bytes_via_typed_cold_impl(outsm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_seek_bytes_define<outstmtype> &&
 					   (::fast_io::operations::decay::defines::has_pwrite_all_bytes_overflow_define<outstmtype> ||
@@ -265,7 +391,11 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_bytes_overflow_define<
 							outstmtype>))
 	{
-		scatter_pwrite_all_bytes_cold_impl(outsm, pscatters, n, 0);
+		auto const current_position{
+			::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
+		scatter_pwrite_all_bytes_cold_impl(outsm, pscatters, n, current_position);
+		// Normal return proves complete positional byte output and positional I/O preserves current position. Advancing
+		// from the queried origin by the checked full scatter extent therefore publishes exactly the sequential result.
 		::fast_io::operations::decay::output_stream_seek_bytes_decay(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
@@ -276,12 +406,13 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 						::fast_io::operations::decay::defines::has_pwrite_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		scatter_pwrite_all_cold_impl(outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n, 0);
+		auto const current_position{
+			::fast_io::operations::decay::output_stream_seek_decay(outsm, 0, ::fast_io::seekdir::cur)};
+		::fast_io::details::scatter_pwrite_all_bytes_via_typed_cold_impl(
+			outsm, pscatters, n, current_position);
+		// One-byte character width proves descriptor lengths and offsets retain their values under the typed view. The
+		// member-wise conversion gives that view its correct effective type, and typed positional all consumes the full
+		// range without moving current position. The following complete extent is therefore the exact sequential delta.
 		::fast_io::operations::decay::output_stream_seek_decay(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}

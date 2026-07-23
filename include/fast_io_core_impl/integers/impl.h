@@ -4695,6 +4695,30 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+/// @brief Records the permanent query/deletion classification for the raw integral provider graph.
+/// @details Paired constant/unknown roots cover the scalar payload, while print, concat, and conversion consumers retain
+///          independent compiler/version admission. This type-only marker carries no value and selects no consumer.
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies a raw integer as one flat compiler-constant scalar source.
+/// @details Its query reads only the integer value, and materialization creates one scalar proxy with the default flags;
+///          no semantic condition, dynamic width, or precision state is introduced.
+template <::std::integral char_type, typename T>
+	requires(::fast_io::details::non_character_integral<T>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_simple_scalar_source(
+	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
 	requires((details::my_integral<T> ||
 			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
@@ -4719,6 +4743,42 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 				 ::fast_io::manipulators::percentage_flag::none)
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
+	io_reserve_type_t<char_type,
+		manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+/// @brief Records the same permanent classification for the flagged integral/boolalpha provider graph.
+/// @details The type-owned flags are immutable; the only value-bearing field is `reference`, whose unknown query root
+///          must return false. Consumer gates remain responsible for proving deletion of the selected spelling.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<char_type,
+		manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies an explicitly flagged integer or boolalpha value as one flat scalar source.
+/// @details The immutable flag object is part of the type and materialization copies only `reference` into one scalar
+///          proxy. Percentage and non-bool alphabet modes are excluded by the same constraints as the source protocol.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet ||
+			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_simple_scalar_source(
 	io_reserve_type_t<char_type,
 		manipulators::scalar_manip_t<flags, T>>) noexcept
 {
@@ -5273,6 +5333,25 @@ print_reserve_precise_define(
 {
 	(void)precise_size;
 	return print_reserve_define(tag, iter, value);
+}
+
+/// @brief Proves that this materialized proxy owns one bounded integer writer graph.
+/// @details The immutable flags are part of the type and `reference` is the only value-bearing field. The exact writer
+///          delegates directly to the integral compiler-constant leaf above; it cannot enter a precision planner,
+///          dynamic-width policy, semantic condition, allocation, or the native source formatter.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  typename T>
+	requires((details::my_integral<T> ||
+			  ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 !flags.alphabet &&
+			 flags.percentage ==
+				 ::fast_io::manipulators::percentage_flag::none)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_flat_integer_replacement(
+	io_reserve_type_t<char_type,
+		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
 }
 
 /// @brief Selects the exact-size compact protocol for a proven-constant integer proxy.

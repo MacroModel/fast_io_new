@@ -114,26 +114,31 @@ inline constexpr void append_win32_quoted_arg_common(
 template <::std::integral replace_char_type, typename T>
 inline constexpr void construct_win32_process_args_decay_singal(bool is_first, ::fast_io::containers::basic_string<replace_char_type, ::fast_io::native_global_allocator> &str, T t)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<replace_char_type>, T>};
+	using output_type = ::fast_io::basic_obuffer_view<replace_char_type>;
+	constexpr bool source_printable{
+		::fast_io::operations::defines::print_freestanding_okay_for_line<
+			false, output_type &, T &>};
 
-	if constexpr (type_error)
+	if constexpr (source_printable)
 	{
 		replace_char_type buf[32767];
 		::fast_io::basic_obuffer_view<replace_char_type> obf{buf, buf + 32767};
-		::fast_io::operations::decay::print_freestanding_decay<false>(::fast_io::operations::output_stream_ref(obf), t);
+		// Admission models this exact public print call. Entering the public source boundary is required because a raw
+		// decayed call would consume `T` without the alias/status normalization which made the proof succeed.
+		::fast_io::operations::print_freestanding<false>(obf, t);
 		append_win32_quoted_arg_common<replace_char_type>(is_first, str, obf.cbegin(), obf.cend());
 	}
 	else if constexpr (requires { ::fast_io::mnp::code_cvt(t); })
 	{
 		replace_char_type buf[32767];
 		::fast_io::basic_obuffer_view<replace_char_type> obf{buf, buf + 32767};
-		// need decay
+		// The codecvt manipulator is the alternate source and enters the same public normalization boundary.
 		::fast_io::operations::print_freestanding<false>(obf, ::fast_io::mnp::code_cvt(t));
 		append_win32_quoted_arg_common<replace_char_type>(is_first, str, obf.cbegin(), obf.cend());
 	}
 	else
 	{
-		static_assert(type_error, "some types are not printable or codecvt printable, so we cannot construct basic_win32_process_args");
+		static_assert(source_printable, "some types are not printable or codecvt printable, so we cannot construct basic_win32_process_args");
 	}
 }
 
@@ -153,21 +158,30 @@ template <::std::integral replace_char_type, typename T>
 inline constexpr void construct_win32_process_envs_decay_singal(
 	::fast_io::containers::basic_string<replace_char_type, ::fast_io::native_global_allocator> &str, T t)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<replace_char_type>, T>};
+	using string_type = ::fast_io::containers::basic_string<
+		replace_char_type, ::fast_io::native_global_allocator>;
+	using output_type = ::fast_io::io_strlike_reference_wrapper<
+		replace_char_type, string_type>;
+	using terminator_type = decltype(::fast_io::mnp::chvw(
+		::fast_io::char_literal_v<u8'\0', replace_char_type>));
+	constexpr bool source_printable{
+		::fast_io::operations::defines::print_freestanding_okay_for_line<
+			false, output_type &, T &, terminator_type>};
 
-	if constexpr (type_error)
+	if constexpr (source_printable)
 	{
-		::fast_io::io_strlike_reference_wrapper<replace_char_type, ::fast_io::containers::basic_string<replace_char_type, ::fast_io::native_global_allocator>> wrapper{__builtin_addressof(str)};
+		output_type wrapper{__builtin_addressof(str)};
+		// The proof includes both the source and the terminator on the actual string adapter, exactly as this run emits.
 		::fast_io::operations::print_freestanding<false>(wrapper, t, ::fast_io::mnp::chvw(::fast_io::char_literal_v<u8'\0', replace_char_type>));
 	}
 	else if constexpr (requires { ::fast_io::mnp::code_cvt(t); })
 	{
-		::fast_io::io_strlike_reference_wrapper<replace_char_type, ::fast_io::containers::basic_string<replace_char_type, ::fast_io::native_global_allocator>> wrapper{__builtin_addressof(str)};
+		output_type wrapper{__builtin_addressof(str)};
 		::fast_io::operations::print_freestanding<false>(wrapper, ::fast_io::mnp::code_cvt(t), ::fast_io::mnp::chvw(::fast_io::char_literal_v<u8'\0', replace_char_type>));
 	}
 	else
 	{
-		static_assert(type_error, "some types are not printable or codecvt printable, so we cannot construct basic_win32_process_envs");
+		static_assert(source_printable, "some types are not printable or codecvt printable, so we cannot construct basic_win32_process_envs");
 	}
 }
 
@@ -425,13 +439,20 @@ template <::std::size_t N, ::std::integral replace_char_type, typename T>
 inline constexpr void construct_posix_process_argenvs_decay_singal(
 	::fast_io::containers::vector<cstr_guard<replace_char_type>, ::fast_io::native_global_allocator> &str, T t)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<replace_char_type>, T>};
+	using string_type = ::fast_io::containers::basic_string<
+		replace_char_type, ::fast_io::native_global_allocator>;
+	constexpr bool source_printable{
+		::fast_io::basic_general_concat_checked_available<
+			false, replace_char_type, string_type, T &>()};
 
 	cstr_guard<replace_char_type> cstrg;
 
-	if constexpr (type_error)
+	if constexpr (source_printable)
 	{
-		auto cstr{::fast_io::basic_general_concat<false, replace_char_type, ::fast_io::containers::basic_string<replace_char_type, ::fast_io::native_global_allocator>>(t)};
+		// Concat proves and executes its selected string destination. A public print proof against a dummy stream does
+		// not describe concat's raw source normalization or its direct-versus-staging destination choice.
+		auto cstr{::fast_io::basic_general_concat_checked<
+			false, replace_char_type, string_type>(t)};
 		cstrg.cstr = cstr.imp.begin_ptr;
 		cstr.imp = {};
 		str.push_back(::std::move(cstrg));
@@ -445,7 +466,7 @@ inline constexpr void construct_posix_process_argenvs_decay_singal(
 	}
 	else
 	{
-		static_assert(type_error, "some types are not printable or codecvt printable, so we cannot construct posix_process_envs");
+		static_assert(source_printable, "some types are not printable or codecvt printable, so we cannot construct posix_process_envs");
 	}
 }
 

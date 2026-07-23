@@ -250,8 +250,11 @@ struct power10_cache
 // borrow out of the low word when a correction bit is applied.
 [[nodiscard]] inline constexpr bool verify_power10_seed_invariants() noexcept
 {
-	if ((power10_cache::size - 1u + 10u) / power10_minor_size >= power10_major_size ||
-		(power10_cache::size - 1u) / 32u >= power10_fixup_size)
+	// These table extents are type-level invariants. Expressing the guard as a
+	// discarded compile-time branch avoids MSVC 19.29's C4127 diagnostic under
+	// /W4 /WX without weakening the failure result or adding a runtime branch.
+	if constexpr ((power10_cache::size - 1u + 10u) / power10_minor_size >= power10_major_size ||
+				  (power10_cache::size - 1u) / 32u >= power10_fixup_size)
 	{
 		return false;
 	}

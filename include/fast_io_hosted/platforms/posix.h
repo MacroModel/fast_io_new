@@ -1041,16 +1041,10 @@ using dos_path_tlc_string = ::fast_io::containers::basic_string<char, ::fast_io:
 template <typename... Args>
 constexpr inline dos_path_tlc_string concat_dos_path_tlc_string(Args &&...args)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<char>, Args...>};
-	if constexpr (type_error)
-	{
-		return ::fast_io::basic_general_concat<false, char, dos_path_tlc_string>(::fast_io::io_print_forward<char>(::fast_io::io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(type_error, "some types are not printable, so we cannot concat dos_path_tlc_string");
-		return {};
-	}
+	// The DOS path helper is a concat boundary, not a print-to-dummy-stream boundary. The checked concat entry proves
+	// its actual destination and owns the only alias/status normalization of these named lvalue arguments.
+	return ::fast_io::basic_general_concat_checked<
+		false, char, dos_path_tlc_string>(args...);
 }
 
 struct my_dos_concat_tlc_path_common_result

@@ -2160,10 +2160,11 @@ template <bool showbase, bool showpos, bool nan_show_sign, bool nan_show_type,
 			++binary_exponent;
 		}
 		auto const aligned_mantissa{static_cast<mantissa_type>(mantissa << makeup_bits)};
-		auto const hex_digit_at = [aligned_mantissa, exponent](::std::size_t index) constexpr noexcept {
+		// Init-capture transports the structured-binding scalar while preserving the exact sizing observation.
+		auto const hex_digit_at = [aligned_mantissa, exponent_value = exponent](::std::size_t index) constexpr noexcept {
 			if (!index)
 			{
-				return static_cast<::std::uint_least32_t>(exponent ? 1u : 0u);
+				return static_cast<::std::uint_least32_t>(exponent_value ? 1u : 0u);
 			}
 			if (fractional_hex_digits < index)
 			{

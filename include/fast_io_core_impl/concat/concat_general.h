@@ -55,7 +55,15 @@ inline constexpr ::std::size_t calculate_concat_scatter_reserve_size_or_unavaila
 	}
 }
 
+/// @brief Folds an already-selected reserve leaf run into one contiguous concat destination.
+/// @details The recursive `%.*f` condition-record deletion matrix proves this local fold jointly necessary with the
+///          materialized builder and active-record selector on Clang 21--23. Deleting only this edge makes a successful
+///          constant root reach the native precision formatter again. Unknown condition arms never enter this helper,
+///          and the complete candidate fails while growing text on Clang 16--20, so no earlier Clang inherits it.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
+#if defined(__clang__) && 21 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *print_reserve_define_chain_impl(char_type *p, T &t, Args &...args)
 {
 	if constexpr (sizeof...(Args) == 0)
@@ -2495,12 +2503,91 @@ basic_general_concat_compiler_constant_status_safe_for_types() noexcept
 	return true;
 }
 
+/// @brief Proves that this compiler can erase concat's complete replacement graph after a successful query.
+/// @details A successful builtin query is useful only when this compiler can erase the complete replacement graph.
+///          GCC 11 cannot do so for an exact-preferred replacement across concat result construction: recursive
+///          assembly retains the precision planner/native exact formatter and a 1,280-byte frame. GCC 12--17 erase the
+///          same graph. One flat integer proxy is the sole proved exception: its precise writer delegates directly to
+///          one bounded integer leaf and has no planner graph. Paired GCC 11 percent-format roots erase the native
+///          writer only for the literal while the unknown source retains that exact writer. Multi-leaf and mixed packs
+///          remain rejected because the proof does not compose beyond that measured root. Rejecting every other
+///          exact-preferred replacement keeps its query unexecuted and routes the source through concat's historical
+///          run-time formatter; later compilers retain their independently proved materialization paths.
+template <::std::integral ch_type, typename... ReplacementArgs>
+inline consteval bool
+basic_general_concat_compiler_constant_replacement_codegen_supported() noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 11
+	if constexpr (
+		sizeof...(ReplacementArgs) == 1u &&
+		(::fast_io::compiler_constant_flat_integer_replacement<
+			ch_type, ::std::remove_cvref_t<ReplacementArgs>> && ...))
+	{
+		return true;
+	}
+	else
+	{
+		return !(false || ... ||
+			::fast_io::compiler_constant_precise_compact_preferred<
+				ch_type, ::std::remove_cvref_t<ReplacementArgs>>);
+	}
+#else
+	return true;
+#endif
+}
+
+/// @brief Closes compiler-constant concat for destination/source pairs whose successful graph is not erasable.
+/// @details GCC 11 retains the dynamic-precision replacement for every audited concat destination. GCC 12--17 erase
+///          the same source for fast_io's writable string, but a construct-only default standard string retains proxy
+///          and native formatter nodes after a successful query. That destination already owns a measured bounded
+///          one-pass formatter, so this type-only proof keeps the query unexecuted and selects that ordinary strategy.
+template <::std::integral ch_type, typename T, typename... Args>
+inline consteval bool
+basic_general_concat_compiler_constant_source_codegen_supported() noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+	if constexpr (
+		(false || ... ||
+		 ::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+			 ch_type, Args>))
+	{
+		return __GNUC__ != 11 &&
+			!::fast_io::details::decay::
+				basic_general_concat_single_pass_bounded_destination<ch_type, T>;
+	}
+#endif
+	return true;
+}
+
 /// @brief Tests whether concat's active normalized leaf run has a useful compiler-constant replacement.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline consteval bool basic_general_concat_compiler_constant_materialization_available() noexcept
 {
-	if constexpr (!(::fast_io::compiler_constant_printable<ch_type, Args> && ...))
+	if constexpr (!::fast_io::details::decay::
+		basic_general_concat_compiler_constant_source_codegen_supported<
+			ch_type, T, Args...>())
 	{
+		return false;
+	}
+	else if constexpr (
+		!(::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			ch_type, Args> && ...))
+	{
+		// A semantically complete but unclassified provider has no consumer deletion proof. Keep concat's value query,
+		// replacement type, and proxy writer structurally absent until the provider supplies the permanent graph proof.
+		return false;
+	}
+	else if constexpr (!(::fast_io::compiler_constant_printable<ch_type, Args> && ...))
+	{
+		return false;
+	}
+	else if constexpr (!::fast_io::details::decay::
+		basic_general_concat_compiler_constant_replacement_codegen_supported<
+			ch_type,
+			::fast_io::details::compiler_constant_materialized_t<
+				ch_type, Args>...>())
+	{
+		// A rejected code-generation proof must be decided before the value query; a true query may never fall back.
 		return false;
 	}
 	else
@@ -2540,7 +2627,9 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 				::fast_io::details::compiler_constant_materialization_max_bytes /
 					sizeof(ch_type)};
 			::std::size_t total{};
-			((total = [](::std::size_t current) consteval {
+			// The enclosing immediate proof owns evaluation.  A constexpr leaf
+			// also accepts its evolving accumulator on pre-DR20 Clang 13--15.
+			((total = [](::std::size_t current) constexpr {
 				using source_type = ::std::remove_cvref_t<Args>;
 				using replacement_type =
 					::fast_io::details::compiler_constant_materialized_t<
@@ -2579,13 +2668,88 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 	}
 }
 
+/// @brief Emits one exact-preferred compiler-constant replacement into a fresh writable concat result.
+/// @details This is the narrow consumer promised by `compiler_constant_precise_compact_preferred`: it queries the exact
+///          size once, establishes that complete destination extent, invokes only the precise writer, verifies a
+///          pointer-reporting endpoint, and publishes the cursor once. The ordinary reserve writer is intentionally not
+///          named. GCC 12--17 otherwise outline this proxy-only bridge and leave it reachable from the successful
+///          public concat symbol; GCC 11 is rejected by the availability proof above. Clang 21--23 have the same
+///          measured proxy boundary. Native run-time scalar types cannot satisfy the constraint.
+template <bool line, ::std::integral ch_type, typename T, typename Arg>
+	requires(
+		::fast_io::buffer_strlike<ch_type, T> &&
+		::fast_io::compiler_constant_precise_compact_preferred<ch_type, Arg>)
+#if (defined(__GNUC__) && !defined(__clang__) && 12 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void
+basic_general_concat_compiler_constant_decay_ref_impl_precise(
+	T &result, Arg &arg)
+{
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	::std::size_t const payload_size{print_reserve_precise_size(
+		::fast_io::io_reserve_type<ch_type, arg_type>, arg)};
+	::std::size_t const total_size{
+		::fast_io::details::decay::concat_precise_size_with_line<line>(
+			payload_size)};
+	if constexpr (::fast_io::sso_buffer_strlike<ch_type, T>)
+	{
+		constexpr ::std::size_t local_capacity{
+			strlike_sso_size(::fast_io::io_strlike_type<ch_type, T>)};
+		if (local_capacity < total_size)
+		{
+			strlike_reserve(
+				::fast_io::io_strlike_type<ch_type, T>, result, total_size);
+		}
+	}
+	else
+	{
+		strlike_reserve(
+			::fast_io::io_strlike_type<ch_type, T>, result, total_size);
+	}
+	ch_type *const first{
+		strlike_begin(::fast_io::io_strlike_type<ch_type, T>, result)};
+	ch_type *const expected_payload_end{first + payload_size};
+	using define_result = decltype(print_reserve_precise_define(
+		::fast_io::io_reserve_type<ch_type, arg_type>, first, payload_size,
+		arg));
+	if constexpr (::std::same_as<define_result, ch_type *>)
+	{
+		ch_type *const actual_end{print_reserve_precise_define(
+			::fast_io::io_reserve_type<ch_type, arg_type>, first,
+			payload_size, arg)};
+		if (actual_end != expected_payload_end) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	}
+	else
+	{
+		print_reserve_precise_define(
+			::fast_io::io_reserve_type<ch_type, arg_type>, first,
+			payload_size, arg);
+	}
+	ch_type *published_end{expected_payload_end};
+	if constexpr (line)
+	{
+		*published_end++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
+	}
+	strlike_set_curr(
+		::fast_io::io_strlike_type<ch_type, T>, result, published_end);
+}
+
 /// @brief Constructs a concat result from an already-proved compiler-constant replacement pack.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
-#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
 // GCC 11--16 otherwise separates the already-proved proxy pack from result
 // construction.  The complete deletion matrix requires this edge together
 // with the local fold below; it also reduces every tested unknown-value facade
 // aggregate, so this is not a constant win bought with runtime text growth.
+// On Clang 21--23, deleting this builder alone from the complete condition
+// chain restores a reachable proxy/native formatter graph. Clang 16--20 fail
+// the complete candidate and grow text, so they deliberately remain unforced.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr T
@@ -2604,8 +2768,25 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 		reserve_size_with_line <=
 			::fast_io::details::compiler_constant_materialization_max_bytes /
 				sizeof(ch_type)};
+	constexpr bool precise_compact_preferred{
+		sizeof...(Args) == 1u &&
+		(::fast_io::compiler_constant_precise_compact_preferred<
+			ch_type, Args> && ...)};
 	if constexpr (
-		!compact_reserve_plan &&
+		precise_compact_preferred &&
+		::fast_io::buffer_strlike<ch_type, T>)
+	{
+		// The replacement marker promises an exact cheap spelling. Substituting its conservative ordinary reserve writer
+		// would discard that provider proof and may instantiate the native fallback after the constant gate succeeded.
+		T result;
+		(::fast_io::details::decay::
+			 basic_general_concat_compiler_constant_decay_ref_impl_precise<
+			 line, ch_type, T>(result, args),
+		 ...);
+		return result;
+	}
+	else if constexpr (
+		(precise_compact_preferred || !compact_reserve_plan) &&
 		::fast_io::details::decay::
 			basic_general_concat_precise_resize_destination_run_v<
 				ch_type, T, Args...>)
@@ -2616,6 +2797,20 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 		// reserve capacity is intentionally much larger than the constant-materialization byte budget.
 		return ::fast_io::details::decay::basic_general_concat_precise_resize_run<
 			line, ch_type, T>(args...);
+	}
+	else if constexpr (precise_compact_preferred)
+	{
+		// A construct-only result has no exact writable extent. Materialize the proved exact proxy in concat's owned
+		// staging string, then construct the destination from the completed range. The ordinary reserve writer remains
+		// forbidden for this marker even though its conservative capacity happens to fit the byte budget.
+		::fast_io::details::basic_concat_buffer<ch_type> buffer;
+		(::fast_io::details::decay::
+			 basic_general_concat_compiler_constant_decay_ref_impl_precise<
+			 line, ch_type>(buffer, args),
+		 ...);
+		return strlike_construct_define(
+			::fast_io::io_strlike_type<ch_type, T>, buffer.buffer_begin,
+			buffer.buffer_curr);
 	}
 	else if constexpr (compact_reserve_plan &&
 					 ::fast_io::buffer_strlike<ch_type, T>)
@@ -2695,12 +2890,135 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 	}
 }
 
+/// @brief Proves that concat may query the exact active source shapes on this compiler.
+/// @details Recursive assembly and IR audits show that Clang 13--20 retain integer replacement helpers, and Clang 14--20
+///          also retain timestamp proxies. Those releases are therefore rejected as complete source records before any
+///          replacement type is formed. Clang 21--23 fully erase integer, timestamp, ordinary floating, and simple
+///          condition records, but retain both the exact-precision planner and native formatter for dynamic-precision
+///          floating sources. This source-only predicate is shared by normalized and specialized condition consumers
+///          without inheriting either consumer's later replacement policy. A borrowed-text spelling is rejected on every
+///          compiler: its public source gate already classifies it as passive, but a format wrapper survives ordinary
+///          normalization and reaches this later gate unchanged. Repeating the type-only rejection here prevents that
+///          normalized record from reopening a query whose proxy would merely copy the same borrowed range.
+template <::std::integral ch_type, typename... Args>
+inline consteval bool
+basic_general_concat_active_source_codegen_supported() noexcept
+{
+	if constexpr (
+		(false || ... ||
+		 ::fast_io::compiler_constant_borrowed_text_source_shape<
+			 ch_type, Args>))
+	{
+		return false;
+	}
+#if defined(__clang__) && __clang_major__ < 21
+	else
+	{
+		return false;
+	}
+#elif defined(__clang__)
+	else
+	{
+		return !(false || ... ||
+			::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+				ch_type, Args>);
+	}
+#else
+	else
+	{
+		return true;
+	}
+#endif
+}
+
+/// @brief Proves that the post-decay concat gate can erase a precise-preferred replacement graph.
+/// @details This proof is deliberately narrower than source admission. GCC 12 and GCC 13 retain the precise-preferred
+///          true arm when the same query is instantiated in the later normalized phase-1 helper.
+///          On GCC 12, paired object analysis found two 15,043/14,793-byte helpers; rejecting only this late query
+///          removed 30,154 text bytes without changing any focused constant, run-time, or volatile caller. On GCC 13,
+///          the brace-format constant caller remained byte-identical and its run-time peer became proxy-clean while
+///          aggregate text fell by 13,654 bytes. The run-time wrapper itself grew from 0x1b to 0x30 bytes because it now
+///          passes the normalized record by reference, but the hidden query/proxy helper disappeared, so this local
+///          0x15-byte cost is not an inlining justification. GCC 11 admits the proved flat integer only at the public
+///          source gate and rejects its duplicate post-decay query; GCC 14 and later retain the late optimization until
+///          a measured reversal.
+///          The independent source-shape proof above rejects Clang dynamic-precision leaves while preserving timestamp
+///          and flat-scalar paths. Later consumers apply their replacement-specific proofs here.
+///          The printable guard is evaluated first so an unsupported leaf never forms its materialized replacement type.
+template <::std::integral ch_type, typename... Args>
+inline consteval bool
+basic_general_concat_normalized_compiler_constant_codegen_supported() noexcept
+{
+	if constexpr (!::fast_io::details::decay::
+					   basic_general_concat_active_source_codegen_supported<
+						   ch_type, Args...>())
+	{
+		return false;
+	}
+	else if constexpr (
+		!(::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			ch_type, Args> && ...))
+	{
+		// This normalized consumer may not infer deletion merely from semantic printability. Reject the whole active
+		// record before a replacement type or optimizer query is formed.
+		return false;
+	}
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 11
+	else if constexpr (!(::fast_io::compiler_constant_printable<
+		ch_type, Args> && ...))
+	{
+		return true;
+	}
+	else
+	{
+		// GCC 11 proves the flat public source gate below but perturbs the historical unknown continuation if the same
+		// query is repeated after decay. Keep this later consumer closed for that exact replacement.
+		return !(false || ... ||
+			::fast_io::compiler_constant_flat_integer_replacement<
+				ch_type,
+				::fast_io::details::compiler_constant_materialized_t<
+					ch_type, Args>>);
+	}
+#elif defined(__GNUC__) && !defined(__clang__) && 12 <= __GNUC__ && __GNUC__ <= 13
+	else if constexpr (!(::fast_io::compiler_constant_printable<ch_type, Args> && ...))
+	{
+		return true;
+	}
+	else
+	{
+		return !(false || ... ||
+			::fast_io::compiler_constant_precise_compact_preferred<
+				ch_type,
+				::fast_io::details::compiler_constant_materialized_t<
+					ch_type, Args>>);
+	}
+#else
+	else
+	{
+		return true;
+	}
+#endif
+}
+
 /// @brief Keeps concat's original phase-1 body as the sole unknown-value continuation.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+// Condition selection has now produced the exact active IO record.  This is
+// therefore the first semantically valid point at which a dynamic-star printf
+// leaf may be queried for compiler constancy.  Outlining this function makes
+// every source opaque and retains both the constant proxy and runtime formatter;
+// forced placement affects only the query boundary, while its false arm remains
+// the original phase-1 concat body below.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr T
 basic_general_concat_compiler_constant_dispatch(Args &...args)
 {
 	if constexpr (
+		::fast_io::details::decay::
+			basic_general_concat_normalized_compiler_constant_codegen_supported<
+				ch_type, Args...>() &&
 		::fast_io::details::decay::
 			basic_general_concat_compiler_constant_materialization_available<
 				line, ch_type, T, Args...>())
@@ -2803,8 +3121,8 @@ basic_general_concat_compiler_constant_source_status_safe() noexcept
 			line, ch_type, T, source_types, replacement_types>();
 }
 
-/// @brief Proves that concat may select a compiler-constant source replacement before alias normalization.
-/// @details This is intentionally a flat-run gate. Semantic packs, conditions, and value-owning transports retain the
+/// @brief Completes source availability after the destination/source code-generation pair has been proved.
+/// @details This is intentionally a flat-run proof. Semantic packs, conditions, and value-owning transports retain the
 ///          established normalization graph and may still use the normalized phase-1 gate. For a flat run, every
 ///          replacement is normalized exactly as the true-arm expression below, every resulting leaf must have a
 ///          contiguous reserve protocol, and the compact proxy state remains independently bounded. A floating proxy's
@@ -2812,7 +3130,7 @@ basic_general_concat_compiler_constant_source_status_safe() noexcept
 ///          can establish the corresponding live destination range.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline consteval bool
-basic_general_concat_compiler_constant_source_available() noexcept
+basic_general_concat_compiler_constant_source_available_after_codegen_supported() noexcept
 {
 	constexpr bool has_candidate{
 		(false || ... ||
@@ -2839,6 +3157,17 @@ basic_general_concat_compiler_constant_source_available() noexcept
 	else if constexpr (!::fast_io::details::decay::
 		basic_general_concat_compiler_constant_source_status_safe<
 			line, ch_type, T, Args...>())
+	{
+		return false;
+	}
+	// A compiler-specific rejection belongs before the source query for the same reason as the normalized gate: after a
+	// true query, concat may not recover by invoking the native formatter.
+	else if constexpr (!::fast_io::details::decay::
+		basic_general_concat_compiler_constant_replacement_codegen_supported<
+			ch_type,
+			::fast_io::details::decay::
+				basic_general_concat_compiler_constant_source_normalized_t<
+					ch_type, Args>...>())
 	{
 		return false;
 	}
@@ -2888,7 +3217,9 @@ basic_general_concat_compiler_constant_source_available() noexcept
 				::fast_io::details::compiler_constant_materialization_max_bytes /
 					sizeof(ch_type)};
 			::std::size_t total{};
-			((total = [](::std::size_t current) consteval {
+			// The enclosing immediate proof owns evaluation.  A constexpr leaf
+			// also accepts its evolving accumulator on pre-DR20 Clang 13--15.
+			((total = [](::std::size_t current) constexpr {
 				if constexpr (!::fast_io::operations::decay::
 					print_compiler_constant_pre_normalization_candidate_v<
 						ch_type, Args>)
@@ -2921,6 +3252,28 @@ basic_general_concat_compiler_constant_source_available() noexcept
 		return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum_bytes &&
 			(compact_reserve_plan ||
 			 (exact_destination_plan && retained_reserve_size != SIZE_MAX));
+	}
+}
+
+/// @brief Proves independently that concat may query and replace one public flat source run.
+/// @details The destination/source code-generation partition is evaluated before the implementation above can name a
+///          replacement type. This makes the availability predicate itself fail closed, so future consumers cannot
+///          accidentally bypass the checked-entry short circuit and instantiate a rejected replacement graph.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline consteval bool
+basic_general_concat_compiler_constant_source_available() noexcept
+{
+	if constexpr (!::fast_io::details::decay::
+		basic_general_concat_compiler_constant_source_codegen_supported<
+			ch_type, T, Args...>())
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::details::decay::
+			basic_general_concat_compiler_constant_source_available_after_codegen_supported<
+				line, ch_type, T, Args...>();
 	}
 }
 
@@ -3046,9 +3399,14 @@ basic_general_concat_compiler_constant_compact_source_run(
 
 /// @brief Materializes public compiler-constant sources through the compiler-specific compact construction edge.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
-#if defined(__clang__) && 21 <= __clang_major__
-// Clang 21--23 alone require the source edge as well as the compact edge above.
-// GCC 11--16 make the same constant stores without forcing this larger frame.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+// A strict per-symbol precision gate supersedes the earlier scalar-only result:
+// GCC 11--16 outline this true-only source edge after forming the precision
+// proxy, which leaves a compiler-constant helper call in the public concat
+// symbol. Clang 21--23 require the same edge together with the compact edge
+// above. Unknown sources cannot enter this function because the public builtin
+// query is evaluated before it is called.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr T
@@ -3089,6 +3447,10 @@ struct basic_general_concat_normalized_phase1_continuation
 {
 	/// @brief Sizes and materializes the normalized leaf sequence.
 	template <typename... Args>
+	#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+		(defined(__clang__) && 13 <= __clang_major__)
+	FAST_IO_GNU_ALWAYS_INLINE
+	#endif
 	inline constexpr T operator()(Args &&...args) const
 	{
 		// Every argument is now a named object owned by an enclosing normalization/selection frame. The complete phase-1
@@ -3116,13 +3478,234 @@ struct basic_general_concat_select_conditions_continuation
 	}
 };
 
+/// @brief Proves that one selected condition arm can own concat's value query at the active-record boundary.
+/// @details The arm must normalize to one ordinary non-null leaf whose query is explicitly safe to evaluate in its
+///          caller.  The existing materialization proof independently checks the source/replacement status protocols,
+///          proxy budget, and every physical destination which concat may select.  Reusing that complete proof keeps
+///          this source-shape specialization from turning format lowering into a concat policy decision.
+template <bool line, ::std::integral ch_type, typename T, typename Branch>
+inline consteval bool
+basic_general_concat_single_condition_active_branch_available() noexcept
+{
+	using active_result = decltype(
+		::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+			::std::declval<Branch>()));
+	using active_type = ::std::remove_cvref_t<active_result>;
+	if constexpr (
+		::fast_io::details::decay::
+			print_semantic_execution_node_v<active_result> ||
+		::std::same_as<active_type, ::fast_io::io_null_t>)
+	{
+		return false;
+	}
+	else if constexpr (!::fast_io::details::decay::
+						basic_general_concat_active_source_codegen_supported<
+							ch_type, active_type>())
+	{
+		return false;
+	}
+	else if constexpr (!::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_candidate_v<
+								ch_type, active_result>)
+	{
+		return false;
+	}
+	else
+	{
+			using replacement_type =
+				::fast_io::details::compiler_constant_materialized_t<
+					ch_type, active_type>;
+			constexpr bool codegen_supported{
+				::fast_io::details::decay::
+					basic_general_concat_compiler_constant_replacement_codegen_supported<
+						ch_type, replacement_type>()};
+			if constexpr (!codegen_supported)
+			{
+				// A rejected replacement still benefits from this one-leaf condition selector. It enters only the historical
+				// phase-1 continuation below, so no query, proxy, or replacement-status proof is required or evaluated.
+				return true;
+			}
+			else
+			{
+				return ::fast_io::compiler_constant_query_inline_safe<
+						   ch_type, active_type> &&
+					   ::fast_io::details::decay::
+						   basic_general_concat_compiler_constant_materialization_available<
+							   line, ch_type, T, active_type>();
+			}
+	}
+}
+
+/// @brief Proves the exact one-condition source shape whose active concat record can be queried before generic phase 1.
+/// @details Source normalization is modeled with the same forwarding CPO used by the implementation.  Both alternatives
+///          must independently satisfy the complete active-leaf proof because the run-time predicate is not a type-level
+///          fact.  Packs, nested conditions, null alternatives, volatile sources, and multi-source records fail closed
+///          and retain recursive semantic normalization.
+template <bool line, ::std::integral ch_type, typename T, typename Source>
+inline consteval bool
+basic_general_concat_single_condition_active_record_available_one() noexcept
+{
+	if constexpr (::std::is_volatile_v<::std::remove_reference_t<Source>>)
+	{
+		return false;
+	}
+	else
+	{
+		using normalized_result = decltype(
+			::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+				::std::declval<Source>()));
+		using normalized_expression = ::std::add_lvalue_reference_t<
+			::std::remove_reference_t<normalized_result>>;
+		if constexpr (!::fast_io::details::decay::
+					   print_semantic_top_level_condition_v<normalized_expression>)
+		{
+			return false;
+		}
+		else
+		{
+			using node_reference = decltype(
+				::fast_io::details::decay::print_semantic_node_ref(
+					::std::declval<normalized_expression>()));
+			using named_node_reference = ::std::add_lvalue_reference_t<
+				::std::remove_reference_t<node_reference>>;
+			using first_arm_reference = decltype(
+				(::std::declval<named_node_reference>().t1));
+			using second_arm_reference = decltype(
+				(::std::declval<named_node_reference>().t2));
+			return ::fast_io::details::decay::
+					   basic_general_concat_single_condition_active_branch_available<
+						   line, ch_type, T, first_arm_reference>() &&
+				   ::fast_io::details::decay::
+					   basic_general_concat_single_condition_active_branch_available<
+						   line, ch_type, T, second_arm_reference>();
+		}
+	}
+}
+
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline consteval bool
+basic_general_concat_single_condition_active_record_available() noexcept
+{
+	if constexpr (sizeof...(Args) != 1u)
+	{
+		return false;
+	}
+	else
+	{
+		return (false || ... ||
+				::fast_io::details::decay::
+					basic_general_concat_single_condition_active_record_available_one<
+						line, ch_type, T, Args>());
+	}
+}
+
+/// @brief Executes one selected concat arm with mutually exclusive constant and run-time continuations.
+/// @details Forwarding occurs once.  A successful query constructs the replacement and enters concat's already-proved
+///          contiguous result builder; the rejected query passes the same named active leaf directly to the historical
+///          phase-1 body.  The false arm therefore constructs no proxy and the true arm has no edge back to the native
+///          formatter. Clang deliberately leaves this branch ordinary inline: forcing it reduced 214--242 text bytes
+///          and 30 root instructions but slowed the paired run-time concat geomean by 4.67--5.52%, with one case losing
+///          10.04%. The smaller graph is therefore not a profitability proof.
+template <bool line, ::std::integral ch_type, typename T, typename Branch>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr T
+basic_general_concat_single_condition_active_branch(Branch &&branch)
+{
+	decltype(auto) active{
+		::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+			::std::forward<Branch>(branch))};
+	if constexpr (
+		::fast_io::details::decay::
+			basic_general_concat_active_source_codegen_supported<
+				ch_type, ::std::remove_cvref_t<decltype(active)>>() &&
+		::fast_io::details::decay::
+			basic_general_concat_compiler_constant_materialization_available<
+				line, ch_type, T, ::std::remove_cvref_t<decltype(active)>>())
+	{
+		if (::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_gate<ch_type>(active))
+		{
+			return ::fast_io::details::decay::
+				basic_general_concat_compiler_constant_materialized<
+					line, ch_type, T>(
+						::fast_io::operations::decay::
+							print_compiler_constant_active_record_materialize_one<
+								ch_type>(active));
+		}
+	}
+	return ::fast_io::details::decay::
+		basic_general_concat_phase1_decay_ref_impl<line, ch_type, T>(active);
+}
+
+/// @brief Normalizes one concat condition and evaluates the optimizer query on the selected IO-level leaf.
+/// @details The format layer may create the condition node, but it contributes no strategy here.  Selection, status
+///          proof, replacement, result allocation, and the native run-time continuation are all concat/IO policies.
+///          A recursive deletion matrix proves this record selector jointly necessary on Clang 21--23: deleting it
+///          alone restores the forbidden proxy/native graph from a successful constant root. This proof does not apply
+///          to the branch helper above, whose independent paired benchmark rejects forced placement.
+template <bool line, ::std::integral ch_type, typename T, typename Source>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr T
+basic_general_concat_single_condition_active_record(Source &&source)
+{
+	static_assert(
+		::fast_io::details::decay::
+			basic_general_concat_single_condition_active_record_available_one<
+				line, ch_type, T, Source>());
+	decltype(auto) normalized_condition{
+		::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+			::std::forward<Source>(source))};
+	auto &&node_ref{
+		::fast_io::details::decay::print_semantic_node_ref(
+			normalized_condition)};
+	if (node_ref.pred)
+	{
+		return ::fast_io::details::decay::
+			basic_general_concat_single_condition_active_branch<
+				line, ch_type, T>(node_ref.t1);
+	}
+	return ::fast_io::details::decay::
+		basic_general_concat_single_condition_active_branch<
+			line, ch_type, T>(node_ref.t2);
+}
+
 } // namespace fast_io::details::decay
 
 namespace fast_io
 {
 
+/// @brief Concat overload for one formally proved active compiler-constant condition record.
+/// @details Keeping this overload structurally separate prevents the generic pack/condition continuation graph from
+///          sharing an out-of-line helper between literal and unknown values.  The selected active leaf owns the only
+///          value query; all other source shapes retain the established general overload below.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
-	requires strlike<char_type, T>
+	requires(
+		strlike<char_type, T> &&
+		::fast_io::details::decay::
+			basic_general_concat_single_condition_active_record_available<
+				line, char_type, T, Args &&...>())
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr T basic_general_concat(Args &&...args)
+{
+	return (::fast_io::details::decay::
+				basic_general_concat_single_condition_active_record<
+					line, char_type, T>(::std::forward<Args>(args)),
+			...);
+}
+
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires(
+		strlike<char_type, T> &&
+		!::fast_io::details::decay::
+			basic_general_concat_single_condition_active_record_available<
+				line, char_type, T, Args &&...>())
 inline constexpr T basic_general_concat(Args &&...args)
 {
 	// Normalization order is part of the allocation proof: alias/forward first, expand packs and remove nulls, select
@@ -3228,6 +3811,17 @@ inline constexpr T basic_general_concat_checked(Args &&...args)
 ///          fields already translated to print/concat leaves; it owns no independent materialization policy.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires strlike<char_type, T>
+// This is the concat-level builtin-query boundary, not an implementation
+// detail which may be outlined.  A GCC 11--16 paired symbol audit found both
+// literal and unknown precision callers invoking this function out of line;
+// the builtin then observes only opaque parameters and necessarily retains the
+// wrong branch graph.  Clang 13--23 has the same source-visibility obligation.
+// The false arm enters the unchanged checked concat implementation and never
+// constructs a compiler-constant proxy.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr T
 basic_general_concat_compiler_constant_checked_entry(Args &&...args)
 {
@@ -3237,16 +3831,65 @@ basic_general_concat_compiler_constant_checked_entry(Args &&...args)
 	{
 		if constexpr (
 			::fast_io::details::decay::
+				basic_general_concat_single_condition_active_record_available<
+					line, char_type, T, Args &&...>())
+		{
+			// The checked source proof covers both alternatives, while the
+			// specialized proof above covers exact active-record status and
+			// replacement safety. Keep the builtin query in this public concat
+			// boundary so a literal never becomes an opaque callee parameter.
+			return (::fast_io::details::decay::
+						basic_general_concat_single_condition_active_record<
+							line, char_type, T>(::std::forward<Args>(args)),
+					...);
+		}
+		else if constexpr (
+			!::fast_io::details::decay::
+				basic_general_concat_compiler_constant_source_codegen_supported<
+					char_type, T, Args &&...>())
+		{
+			// This destination/source pair is closed before source availability can form or query a replacement.
+		}
+		else if constexpr (
+			::fast_io::details::decay::
 				basic_general_concat_compiler_constant_source_available<
 					line, char_type, T, Args &&...>())
 		{
-			if (::fast_io::operations::decay::
-					print_compiler_constant_pre_normalization_gate<char_type>(
-						args...))
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 11
+			if constexpr (
+				sizeof...(Args) == 1u &&
+				(::fast_io::compiler_constant_flat_integer_replacement<
+					char_type,
+					::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_normalized_t<
+							char_type, Args &&>> && ...))
 			{
-				return ::fast_io::details::decay::
-					basic_general_concat_compiler_constant_source_materialized<
-						line, char_type, T>(::std::forward<Args>(args)...);
+				// GCC 11 otherwise schedules the unknown continuation through a spill after admitting this new
+				// exact-integer arm. Paired `%u` roots prove the cold edge restores its historical instructions while
+				// the literal erases the native writer. The attribute is confined to the newly admitted graph, so
+				// unrelated compiler-constant categories retain their independently audited schedules.
+				if (::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_gate<
+							char_type>(args...)) [[unlikely]]
+				{
+					return ::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_materialized<
+							line, char_type, T>(
+							::std::forward<Args>(args)...);
+				}
+			}
+			else
+#endif
+			{
+				if (::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_gate<
+							char_type>(args...))
+				{
+					return ::fast_io::details::decay::
+						basic_general_concat_compiler_constant_source_materialized<
+							line, char_type, T>(
+							::std::forward<Args>(args)...);
+				}
 			}
 		}
 	}

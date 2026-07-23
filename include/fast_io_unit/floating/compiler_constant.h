@@ -207,7 +207,7 @@ template <::fast_io::manipulators::scalar_flags flags, typename floating_type,
 			flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
 			::fast_io::details::compiler_constant_floating_precision_supported<
 				flags, floating_type>)
-inline constexpr char_type *
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 compiler_constant_floating_decimal_precision_fields_define(
 	char_type *iter,
 	::fast_io::details::punning_result<floating_type> fields,
@@ -309,7 +309,7 @@ template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 			flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
 			::fast_io::details::compiler_constant_floating_precision_supported<
 				flags, floating_type>)
-[[nodiscard]] inline constexpr ::std::size_t
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_floating_decimal_precision_fields_size(
 	::fast_io::details::punning_result<floating_type> fields,
 	::std::size_t precision) noexcept
@@ -1605,19 +1605,39 @@ using compiler_constant_floating_limits_type = ::std::conditional_t<
 		 ::fast_io::details::iec559_traits<floating_type>::ebits == 11u),
 		double, floating_type>>;
 
+/// @brief Stores every power of five representable by the constant carrier proof.
+/// @details `5^27` is the largest power representable by uint64_t and `5^55`
+///          is the largest one representable by uint128.  Constructing the table
+///          in constant evaluation removes a value-dependent multiply/divide
+///          loop from the optimizer query.  An out-of-domain exponent is rejected
+///          conservatively by the caller, so no overflowing entry is formed.
 template <typename unsigned_type>
-[[nodiscard]] inline constexpr ::std::int_least32_t
-compiler_constant_floating_remove_binary_zeroes(
-	unsigned_type &value) noexcept
+struct compiler_constant_floating_power5_table
 {
-	::std::int_least32_t count{};
-	for (; (value & static_cast<unsigned_type>(1u)) == 0u;
-		 value = static_cast<unsigned_type>(value >> 1u))
+	inline static constexpr ::std::size_t maximum_exponent{
+		sizeof(unsigned_type) <= sizeof(::std::uint_least64_t) ? 27u : 55u};
+	unsigned_type values[maximum_exponent + 1u]{};
+
+	inline constexpr compiler_constant_floating_power5_table() noexcept
 	{
-		++count;
+		values[0] = static_cast<unsigned_type>(1u);
+		for (::std::size_t index{1u}; index != maximum_exponent + 1u; ++index)
+		{
+			values[index] = static_cast<unsigned_type>(
+				values[index - 1u] * static_cast<unsigned_type>(5u));
+		}
 	}
-	return count;
-}
+
+	[[nodiscard]] inline constexpr unsigned_type operator[](
+		::std::size_t index) const noexcept
+	{
+		return values[index];
+	}
+};
+
+template <typename unsigned_type>
+inline constexpr compiler_constant_floating_power5_table<unsigned_type>
+	compiler_constant_floating_power5_values{};
 
 /// @brief Proves that a shortest decimal carrier is the exact binary value.
 /// @details The run-time predicate intentionally stops at uint64_t because its
@@ -1626,7 +1646,7 @@ compiler_constant_floating_remove_binary_zeroes(
 ///          same factorization proof to native uint128 when available.  It may
 ///          conservatively reject on a power-of-five overflow.
 template <typename floating_type>
-[[nodiscard]] inline constexpr bool
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
 compiler_constant_floating_decimal_carrier_is_binary_exact(
 	typename ::fast_io::details::iec559_traits<floating_type>::mantissa_type
 		binary_mantissa,
@@ -1676,51 +1696,71 @@ compiler_constant_floating_decimal_carrier_is_binary_exact(
 
 	work_type decimal{static_cast<work_type>(decimal_mantissa)};
 	auto decimal_binary_exponent{decimal_exponent};
+	constexpr auto power5_maximum{
+		::fast_io::details::compiler_constant_floating_power5_table<
+			work_type>::maximum_exponent};
+	::std::size_t power5_exponent{};
 	if (decimal_exponent < 0)
 	{
-		auto count{static_cast<::std::uint_least32_t>(-decimal_exponent)};
-		for (; count; --count)
+		// Check the signed range before negation, including INT_MIN.  A larger
+		// reciprocal power cannot be represented by the proof's work integer and
+		// is therefore a conservative miss rather than an approximate decision.
+		if (decimal_exponent <
+			-static_cast<::std::int_least32_t>(power5_maximum))
 		{
-			if (decimal % 5u)
-			{
-				return false;
-			}
-			decimal = static_cast<work_type>(decimal / 5u);
+			return false;
 		}
+		power5_exponent = static_cast<::std::size_t>(-decimal_exponent);
+		auto const divisor{
+			::fast_io::details::compiler_constant_floating_power5_values<
+				work_type>[power5_exponent]};
+		if (decimal % divisor)
+		{
+			return false;
+		}
+		decimal = static_cast<work_type>(decimal / divisor);
 	}
 	else
 	{
-		constexpr work_type maximum{static_cast<work_type>(~work_type{})};
-		auto count{static_cast<::std::uint_least32_t>(decimal_exponent)};
-		for (; count; --count)
+		if (static_cast<::std::uint_least32_t>(decimal_exponent) >
+			power5_maximum)
 		{
-			if (maximum / 5u < decimal)
-			{
-				return false;
-			}
-			decimal = static_cast<work_type>(decimal * 5u);
+			return false;
 		}
+		power5_exponent = static_cast<::std::size_t>(decimal_exponent);
+		auto const multiplier{
+			::fast_io::details::compiler_constant_floating_power5_values<
+				work_type>[power5_exponent]};
+		constexpr work_type maximum{static_cast<work_type>(~work_type{})};
+		if (maximum / multiplier < decimal)
+		{
+			return false;
+		}
+		decimal = static_cast<work_type>(decimal * multiplier);
 	}
-	decimal_binary_exponent +=
-		::fast_io::details::compiler_constant_floating_remove_binary_zeroes(
-			decimal);
-	binary_exponent +=
-		::fast_io::details::compiler_constant_floating_remove_binary_zeroes(
-			binary);
+	auto const decimal_binary_zeroes{static_cast<::std::int_least32_t>(
+		::fast_io::details::my_countr_zero_unchecked(decimal))};
+	decimal = static_cast<work_type>(decimal >> decimal_binary_zeroes);
+	decimal_binary_exponent += decimal_binary_zeroes;
+	auto const binary_zeroes{static_cast<::std::int_least32_t>(
+		::fast_io::details::my_countr_zero_unchecked(binary))};
+	binary = static_cast<work_type>(binary >> binary_zeroes);
+	binary_exponent += binary_zeroes;
 	return decimal == binary && decimal_binary_exponent == binary_exponent;
 }
 
 /// @brief Produces the canonical nearest decimal carrier used by the
 ///        compiler-constant precision planner.
-/// @details This leaf is not part of runtime ftoa. A pinned deletion A/B was
+/// @details This leaf is not part of runtime ftoa. An earlier aggregate deletion A/B was
 ///          neutral on GCC 11/12, while GCC 13--16 saved 1.2--14 KiB and avoided
 ///          GCC 15/16 width-wrapper expansions from 44/54 to 2,909/2,489
 ///          instructions. Clang 17--20 saved 62--64 KiB and Clang 21--23 saved
-///          about 5.2 KiB. Every unknown-value wrapper was instruction-identical.
-///          GCC 11 and Clang 17 are the oldest tested endpoints. Both positive
-///          policies remain future-open until a measured reversal.
+///          about 5.2 KiB. The stricter constant/runtime symbol audit then showed
+///          that ordinary placement leaves this call in GCC 11/12's literal
+///          precision function; expose it there as well. Every unknown-value
+///          wrapper is rejected before this constant-only leaf.
 template <typename floating_type>
-#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 17 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -1767,15 +1807,17 @@ compiler_constant_floating_nearest_decimal_from_fields(
 /// @details This predicate is used only by compiler-constant precision
 ///          planning. In a pinned 16-callsite deletion A/B, forcing this leaf
 ///          reduced GCC 13--16 text by 304/320/320/768 bytes by eliminating
-///          out-of-line grid/exact-carrier clones; GCC 11/12 instead grew by
-///          64/96 bytes with no caller change. Clang 21--23 also need this first
+///          out-of-line grid/exact-carrier clones. The earlier aggregate probe
+///          let GCC 11/12 grow by 64/96 bytes because their caller still failed
+///          the complete constant gate; after fixing that gate, a strict symbol
+///          audit identifies this remaining call as the next opaque boundary.
+///          Clang 21--23 also need this first
 ///          constant-only leaf exposed before the companion carrier-size leaf
-///          can eliminate unavailable precision branches. Every GCC 11--16
-///          unknown-value wrapper was instruction-identical. Both positive
-///          GCC 11 and Clang 17 are the oldest tested endpoints. Both positive
-///          policies remain future-open until a measured reversal.
+///          can eliminate unavailable precision branches. Unknown values are
+///          rejected before the planner is formed, so this marker cannot expand
+///          the native runtime ftoa arm.
 template <typename floating_type>
-#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -2672,12 +2714,18 @@ compiler_constant_floating_round_to_significant(
 /// @brief Rounds a decimal carrier without re-entering the native run-time ftoa leaf.
 /// @details Compiler-constant fixed formatting needs an integer-only expression graph that the optimizer can fold all
 ///          the way to character stores. The native shortcut remains in the ordinary wrapper below; this helper is
-///          selected only after the compiler-constant protocol has proved both the value and precision constant. Tested
-///          GCC 13--16 need forced placement, and that positive policy remains open until a newer compiler reverses it.
+///          selected only after the compiler-constant protocol has proved both the value and precision constant. A
+///          strict per-symbol audit extends the required range to GCC 11/12: leaving this helper outlined retains two
+///          rounding calls and the complete mutually-exclusive presentation graph in a literal fixed-precision caller.
+///          The unknown-value arm rejects before this helper is instantiated. A recursive `%.*f` deletion matrix also
+///          requires this exact portable rounding edge on Clang 21--23: without it the successful constant root retains
+///          the proxy helper, while a run-time precision root can reach the same proxy implementation. Clang 16--20
+///          fail the complete six-edge candidate and therefore retain ordinary placement.
 template <typename floating_type,
 	::fast_io::manipulators::floating_rounding rounding,
 	typename mantissa_type>
-#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void
@@ -2873,7 +2921,7 @@ template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr ::std::size_t
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::size_t
 compiler_constant_floating_decimal_precision_carrier_size(
 	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
 		floating_type> mantissa,
@@ -3021,7 +3069,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 #elif defined(__clang__) && 21 <= __clang_major__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr char_type *
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 compiler_constant_floating_decimal_precision_carrier_define(
 	char_type *iter,
 	::fast_io::details::compiler_constant_floating_precision_mantissa_type<
@@ -4022,6 +4070,11 @@ compiler_constant_floating_fragment_special(
 
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, typename unsigned_type>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// Required third edge of the GCC expanded-fragment deletion chain. Without it the successful `to<double>` root still
+// calls this fixed-notation planner and retains the complete 32-slot frame; it accepts only integer proxy fields.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr
 	::fast_io::basic_io_scatter_t<char_type> *
 compiler_constant_floating_fragment_fixed(
@@ -4218,6 +4271,12 @@ compiler_constant_floating_fragment_hex(
 template <::fast_io::manipulators::scalar_flags flags,
 	::std::integral char_type, ::std::integral proxy_char_type,
 	typename floating_type>
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// This is the algorithm leaf behind the proxy-only CPO. The complete `to` deletion test requires both edges: forcing
+// only the public CPO still leaves this helper outlined and preserves the 32-slot descriptor frame. Unknown native
+// floats cannot name this integer-field proxy overload.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr
 	::fast_io::basic_io_scatter_t<char_type> *
 compiler_constant_floating_scalar_static_fragments_define(
@@ -4501,6 +4560,52 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+/// @brief Records the permanent scalar-query and replacement-graph classification for raw floating sources.
+/// @details The matrix distinguishes literal values from opaque values and consumer-specific fragment/precise writers;
+///          this type-only marker itself grants no destination permission.
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type, floating_type>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies a raw floating source whose replacement prefers the bounded fragment spelling.
+/// @details The materializer below produces the same scalar proxy that owns the expanded-fragment marker. Consumers
+///          use this source-side classification only to reject an unproved compiler/destination pair before forming
+///          that proxy or evaluating `__builtin_constant_p`; it does not select an output strategy by itself.
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_source_prefer_expanded_fragments(
+	::fast_io::io_reserve_type_t<char_type, floating_type>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies a raw floating value as one flat compiler-constant scalar source.
+/// @details The query observes only the source scalar and the successful materializer produces one integer-field proxy;
+///          dynamic precision and semantic formatting wrappers have separate source types and cannot satisfy this CPO.
+template <::std::integral char_type, typename floating_type>
+	requires(
+		::fast_io::details::my_floating_point<floating_type> &&
+		::fast_io::details::compiler_constant_floating_type_supported<
+			::fast_io::details::float_alias_type<floating_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_simple_scalar_source(
+	::fast_io::io_reserve_type_t<char_type, floating_type>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
@@ -4525,6 +4630,61 @@ template <::std::integral char_type,
 		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Records the permanent classification for a type-flagged floating scalar graph.
+/// @details Formatting flags are type-owned, so the paired query roots vary only `reference`; consumers still prove
+///          whether their selected exact or expanded-fragment writer is completely erased.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies an explicit floating scalar source before its replacement type is formed.
+/// @details The flags are preserved verbatim by materialization, so the resulting scalar proxy satisfies the same
+///          expanded-fragment preference as a raw floating source. Precision manipulators intentionally use a separate
+///          replacement protocol and do not satisfy this source marker.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_source_prefer_expanded_fragments(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Classifies a type-flagged floating scalar without admitting dynamic precision state.
+/// @details All formatting flags are compile-time members of the type, while the query reads only `reference` and the
+///          materializer returns one scalar proxy. The separate precision manipulator deliberately has no such marker.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<floating_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, floating_type> &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
+		flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_simple_scalar_source(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::scalar_manip_t<flags, floating_type>>) noexcept
 {
@@ -4823,6 +4983,28 @@ print_compiler_constant_prefer_precise_compact(
 	return {};
 }
 
+/// @brief Selects expanded immutable fragments when an IO consumer must materialize a GCC constant float contiguously.
+/// @details GCC 11/12 retain the scalar proxy's decimal digit loop when its precise writer feeds `to`, even after the
+///          builtin query succeeds. Expanding the provider-declared fragment slots instead reduces `3.125` to five
+///          immediate stores on every tested GCC 11--17. The consumer remains responsible for a type-level reserve
+///          bound and an aggregate descriptor bound, so large fixed spellings cannot enter this strategy. Clang does
+///          not use this marker: its independently proved 21+ path selects the precise writer.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags,
+	::std::integral proxy_char_type, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_type_supported<
+			floating_type> &&
+		::std::same_as<char_type, proxy_char_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_expanded_fragments(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::compiler_constant_floating_scalar_manip_t<
+			proxy_char_type, flags, floating_type>>) noexcept
+{
+	return {};
+}
+
 /// @brief Maximum immutable-fragment descriptor count for one constant float.
 /// @details Decimal and hexadecimal coefficient digits are emitted in pairs;
 ///          sign, radix point, base prefix, exponent prefix and special text
@@ -4849,6 +5031,12 @@ template <::std::integral char_type,
 		requires(
 			::fast_io::details::compiler_constant_floating_type_supported<
 				floating_type>)
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// GCC outlines this proxy-only bridge after `to` expands the bounded fragment slots, retaining a 1,048-byte frame,
+// 540 instructions, and the complete fragment formatter in the literal caller. Forced placement is confined to the
+// already-materialized proxy CPO; unknown native floats cannot select this overload.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr
 	::fast_io::basic_io_scatter_t<char_type> *
 print_compiler_constant_static_fragments_define(
@@ -4885,6 +5073,47 @@ template <::std::integral char_type,
 			flags, floating_type>)
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<
+			flags, floating_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Records the field-complete classification for dynamic-precision floating sources.
+/// @details Value and precision have independent negative roots. Most consumers deliberately FCO this shape because a
+///          successful query still leaves the planner; only an explicitly measured compiler/destination pair may admit
+///          it. Clang 13--23 retain 146--292 instructions and planner calls even in the direct literal query root, so
+///          no Clang frontend receives this provider proof and every semantic wrapper around it remains query-free.
+///          GCC 11 through trunk reduce the same literal and independently unknown roots to immediate one/zero results.
+#if defined(__GNUC__) && !defined(__clang__)
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<
+			flags, floating_type>>) noexcept
+{
+	return {};
+}
+#endif
+
+/// @brief Classifies a source-level dynamic-precision floating leaf without forming its replacement type.
+/// @details This type-only CPO carries no formatting or output policy. An active-condition consumer can use it before
+///          the value query to apply a compiler code-generation proof to the complete condition record. Keeping the
+///          classification on the source type is essential: after condition selection, the omitted-precision arm is an
+///          ordinary floating scalar and no longer records that it shares a dynamic-star source with this leaf.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_flags flags, typename floating_type>
+	requires(
+		::fast_io::details::compiler_constant_floating_precision_supported<
+			flags, floating_type>)
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::scalar_manip_precision_t<
 			flags, floating_type>>) noexcept
@@ -5087,17 +5316,18 @@ print_compiler_constant_materialize(
 }
 
 /// @brief Preserves a proved constant precision-float graph through GCC's forwarding boundary.
-/// @details Precision materialization has a larger integer-only planning graph than the raw scalar form. Tested GCC
-///          13--16 and Clang 21--23 otherwise outline this final forwarding edge, preventing compact print/concat from
-///          seeing a completed proxy. The positive policy remains open for newer frontends until a measured reversal.
-///          The overload cannot be selected by the native run-time precision formatter because core invokes it only
+/// @details Precision materialization has a larger integer-only planning graph than the raw scalar form. A strict
+///          paired assembly audit extends the required GCC interval down to 11: without this marker GCC 11/12 retain
+///          the complete precision planner and its runtime fallback after the builtin query has already succeeded.
+///          GCC 13--16 and Clang 21--23 likewise need this final forwarding edge to expose the completed proxy to compact
+///          print/concat. The overload cannot be selected by the native runtime formatter because core invokes it only
 ///          after this exact source object's compiler-constant eligibility query returned true.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type>
 	requires(
 		::fast_io::details::compiler_constant_floating_precision_supported<
 			flags, floating_type>)
-#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif

@@ -1,9 +1,25 @@
 #pragma once
 
 #include "lower.h"
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
 
 #include <type_traits>
 #include <utility>
+
+// Format concat owns syntax translation only, but every translated scalar must
+// reach concat's IO-level builtin query while its original caller value is
+// still visible. GCC 11--16 and Clang 13--23 otherwise outline at least one of
+// these three stateless forwarding links. The marker selects no allocation or
+// formatting strategy; the callback still delegates the complete typed record
+// to the ordinary checked concat entry.
+#pragma push_macro("FAST_IO_FMT_CONCAT_CONSTANT_INLINE")
+#undef FAST_IO_FMT_CONCAT_CONSTANT_INLINE
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+#define FAST_IO_FMT_CONCAT_CONSTANT_INLINE FAST_IO_GNU_ALWAYS_INLINE
+#else
+#define FAST_IO_FMT_CONCAT_CONSTANT_INLINE
+#endif
 
 namespace fast_io::fmt::details
 {
@@ -13,7 +29,7 @@ template <typename result_type, ::std::integral char_type>
 struct concat_lowered_components
 {
 	template <typename... component_types>
-	[[nodiscard]] inline constexpr result_type
+	[[nodiscard]] FAST_IO_FMT_CONCAT_CONSTANT_INLINE inline constexpr result_type
 	operator()(component_types &&...components) const
 	{
 		if constexpr (sizeof...(component_types) == 0u)
@@ -29,20 +45,6 @@ struct concat_lowered_components
 	}
 };
 
-/** Named continuation which appends one separately proved terminal line feed. */
-template <typename result_type, ::std::integral char_type>
-struct concat_line_lowered_components
-{
-	template <typename... component_types>
-	[[nodiscard]] inline constexpr result_type
-	operator()(component_types &&...components) const
-	{
-		return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
-			true, char_type, result_type>(
-			::std::forward<component_types>(components)...);
-	}
-};
-
 /**
  * Materializes one compiled grammar into an explicitly selected string type.
  *
@@ -53,40 +55,32 @@ struct concat_line_lowered_components
  * component is forwarded to fast_io's checked concat front door. Consequently
  * the ordinary concat concepts retain sole ownership of allocation, sizing,
  * alias normalization, and ABI transport decisions.
+ *
+ * The complete lowered program is always forwarded with `line == false`.
+ * A terminal literal line feed is syntax data, not permission for the format
+ * layer to select concat's line operation: changing that template argument can
+ * select a different whole-run status CPO and is therefore observable even
+ * when the emitted character sequence would be identical.
  */
 template <typename result_type, basic_fixed_string format_literal,
 		  format_grammar grammar_type, typename... argument_types>
-[[nodiscard]] inline constexpr result_type concat_with_rule(
+[[nodiscard]] FAST_IO_FMT_CONCAT_CONSTANT_INLINE inline constexpr result_type concat_with_rule(
 	grammar_type, argument_types &&...arguments)
 {
 	using char_type = typename decltype(format_literal)::value_type;
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
-	constexpr bool program_has_terminal_literal_line_feed{
-		::fast_io::fmt::details::format_program_has_terminal_literal_line_feed<
-			format_literal, rule_type>()};
-	if constexpr (program_has_terminal_literal_line_feed)
-	{
-		return ::fast_io::fmt::details::lower_format_program_trim_terminal_line_feed<
-			format_literal, rule_type>(
-			::fast_io::fmt::details::concat_line_lowered_components<
-				result_type, char_type>{},
-			arguments...);
-	}
-	else
-	{
-		return ::fast_io::fmt::details::lower_format_program<
-			format_literal, rule_type>(
-			::fast_io::fmt::details::concat_lowered_components<
-				result_type, char_type>{},
-			arguments...);
-	}
+	return ::fast_io::fmt::details::lower_format_program<
+		format_literal, rule_type>(
+		::fast_io::fmt::details::concat_lowered_components<
+			result_type, char_type>{},
+		arguments...);
 }
 
 /** Applies one named character-domain facade to the common concat kernel. */
 template <typename expected_char_type, typename result_type,
 		  basic_fixed_string format_literal, format_grammar grammar_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type concat_builtin_with_rule(
+[[nodiscard]] FAST_IO_FMT_CONCAT_CONSTANT_INLINE inline constexpr result_type concat_builtin_with_rule(
 	grammar_type grammar, argument_types &&...arguments)
 {
 	using literal_char_type = typename decltype(format_literal)::value_type;
@@ -98,3 +92,6 @@ template <typename expected_char_type, typename result_type,
 }
 
 } // namespace fast_io::fmt::details
+
+#pragma pop_macro("FAST_IO_FMT_CONCAT_CONSTANT_INLINE")
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

@@ -168,37 +168,12 @@ inline constexpr void perr_after_source_pre_normalization(Args &&...args)
 			outref, args...);
 }
 
-/// @brief Attempts only the proven compiler-constant arm for a panic output whose observer is already known.
-/// @details A false result has not normalized a source and has not touched the output. This lets the public panic
-///          wrapper hand the complete historical perr operation to its dedicated cold fallback. The function is
-///          ordinary inline by design: diagnostic front doors must remain cold and must not impose forced inlining on
-///          callers.
-template <bool line, typename outputstmtype, typename... Args>
-inline constexpr bool panic_try_compiler_constant_output(
-	outputstmtype &outref, Args &...args)
-{
-	using char_type = typename outputstmtype::output_char_type;
-	if constexpr (
-		::fast_io::operations::decay::
-			print_compiler_constant_pre_normalization_available<
-				line, outputstmtype, Args &...>())
-	{
-		if (::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_gate<char_type>(args...))
-		{
-			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
-					outref, args...);
-			return true;
-		}
-	}
-	return false;
-}
-
 /// @brief Tries panic's constant arm using the same device-first classification as public perr/perrln.
 /// @details Every source is observed through this helper's named parameter, matching the normalization category in the
-///          subsequent public perr frame. Invalid operations are left untouched so the established front door emits
-///          its existing targeted diagnostic from the cold fallback.
+///          subsequent public perr frame. Type-only strategy admission and the optimizer query both precede output
+///          normalization. Therefore a false result has touched neither the output object nor a source-normalization
+///          CPO, and the cold fallback remains the sole owner of those observable operations. Only a proven true arm
+///          obtains the output reference and emits through it exactly once.
 template <bool line, typename T, typename... Args>
 inline constexpr bool panic_try_compiler_constant_pre_normalization(
 	T &&t, Args &&...args)
@@ -208,10 +183,34 @@ inline constexpr bool panic_try_compiler_constant_pre_normalization(
 			line, T, Args...>};
 	if constexpr (device_and_type_ok)
 	{
-		decltype(auto) outref{
-			::fast_io::operations::output_stream_ref(t)};
-		return ::fast_io::details::panic_try_compiler_constant_output<line>(
-			outref, args...);
+		using output_type = ::std::remove_cvref_t<decltype(
+			::fast_io::operations::output_stream_ref(
+				::std::declval<::std::remove_reference_t<T> &>()))>;
+		using char_type = typename output_type::output_char_type;
+		if constexpr (
+			::fast_io::operations::decay::
+				print_compiler_constant_pre_normalization_cold_codegen_supported<
+					output_type, Args &...>())
+		{
+			if constexpr (
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_available<
+						line, output_type, Args &...>())
+			{
+				if (::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_gate<char_type>(
+							args...))
+				{
+					decltype(auto) outref{
+						::fast_io::operations::output_stream_ref(t)};
+					::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
+							outref, args...);
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 	else
 	{
@@ -228,14 +227,42 @@ inline constexpr bool panic_try_compiler_constant_pre_normalization(
 		if constexpr (!device_ok && type_ok)
 		{
 #if defined(__AVR__)
-			auto output{c_stderr()};
+			using output_owner = decltype(c_stderr());
 #else
-			auto output{err()};
+			using output_owner = decltype(err());
 #endif
-			decltype(auto) outref{
-				::fast_io::operations::output_stream_ref(output)};
-			return ::fast_io::details::panic_try_compiler_constant_output<line>(
-				outref, t, args...);
+			using output_type = ::std::remove_cvref_t<decltype(
+				::fast_io::operations::output_stream_ref(
+					::std::declval<output_owner &>()))>;
+			using char_type = typename output_type::output_char_type;
+			if constexpr (
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_cold_codegen_supported<
+						output_type, T &, Args &...>())
+			{
+				if constexpr (
+					::fast_io::operations::decay::
+						print_compiler_constant_pre_normalization_available<
+							line, output_type, T &, Args &...>())
+				{
+					if (::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_gate<char_type>(
+								t, args...))
+					{
+#if defined(__AVR__)
+						auto output{c_stderr()};
+#else
+						auto output{err()};
+#endif
+						decltype(auto) outref{
+							::fast_io::operations::output_stream_ref(output)};
+						::fast_io::operations::decay::
+							print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
+								outref, t, args...);
+						return true;
+					}
+				}
+			}
 		}
 #endif
 		return false;
@@ -255,17 +282,16 @@ inline constexpr void debug_print_after_io_print_forward(Args... args)
 #endif
 }
 
-/// @brief Attempts the caller-visible compiler-constant arm for the native debug sink.
-/// @details GCC 11--16 otherwise outline the ordinary source-normalization bridge before it can inspect a caller
-///          literal. Only this query-and-emit leaf is forced into the public facade; a false query returns without
-///          normalizing the pack, so the established ordinary runtime continuation remains available. The complete
-///          GCC 11--16 A/B matrix recovered default-sink literal floating output. On GCC 16 the unknown-double path kept
-///          the same instruction, call, and stack topology, while 400 serial ABBA samples were neutral (232.34 ns versus
-///          232.29 ns median). GCC 16 is the newest tested positive endpoint, so the upper bound remains open; untested
-///          GCC 10 and earlier retain ordinary inline. Clang 17--23 propagated the same evidence without an attribute
-///          and produced identical objects, so their inliner remains unconstrained.
+/// @brief Attempts only a cold-level-proved compiler-constant arm for the native debug sink.
+/// @details The diagnostic code-generation predicate is evaluated before the ordinary availability proof. This nested
+///          ordering makes replacement formation impossible for a rejected cold record; a false result then leaves the
+///          established debug continuation as the sole owner of aliasing, status, and output normalization. GCC 12/13
+///          require this one forced boundary to propagate all four line/non-line, constant/runtime roots into
+///          .text.unlikely. A 35-case A/B audit found no instruction, call-graph, proxy, planner, native-writer, or total
+///          text-size change on GCC 11--17; therefore the attribute is restricted to the only releases with a measured
+///          cold-layout effect and is deliberately absent from the public debug facades.
 template <bool line, typename... Args>
-#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+#if defined(__GNUC__) && !defined(__clang__) && 12 <= __GNUC__ && __GNUC__ <= 13
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr bool debug_print_try_default_compiler_constant(Args &...args)
@@ -281,35 +307,40 @@ inline constexpr bool debug_print_try_default_compiler_constant(Args &...args)
 	using char_type = typename output_type::output_char_type;
 	if constexpr (
 		::fast_io::operations::decay::
-			print_compiler_constant_pre_normalization_available<
-				line, output_type, decltype((args))...>())
+			print_compiler_constant_pre_normalization_cold_codegen_supported<
+				output_type, decltype((args))...>())
 	{
-		if (::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_gate<char_type>(args...))
-		{
-#if defined(__AVR__)
-			auto output{c_stdout()};
-#else
-			auto output{out()};
-#endif
-			decltype(auto) outref{
-				::fast_io::operations::output_stream_ref(output)};
+		if constexpr (
 			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
-					outref, args...);
-			return true;
+				print_compiler_constant_pre_normalization_available<
+					line, output_type, decltype((args))...>())
+		{
+			if (::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_gate<char_type>(args...))
+			{
+#if defined(__AVR__)
+				auto output{c_stdout()};
+#else
+				auto output{out()};
+#endif
+				decltype(auto) outref{
+					::fast_io::operations::output_stream_ref(output)};
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
+						outref, args...);
+				return true;
+			}
 		}
 	}
 	return false;
 }
 
-/// @brief Sends default debug-output sources through the compiler-constant gate before the cold continuation.
+/// @brief Applies the default debug sink's cold-level proof before the historical source-normalization continuation.
 /// @details This mirrors `debug_print_after_io_print_forward`'s AVR/native sink choice. Its named arguments preserve the
-///          legacy alias/status category, and an unknown run still enters that exact pre-existing cold helper. Optimized
-///          callers inline the small constant query naturally; keeping an ordinary inline boundary avoids imposing a
-///          code-size policy on diagnostic call sites. A proven constant is emitted only after acquiring a complete
-///          output mutex, matching ordinary print and panic; explicitly unlocked observers retain caller-managed
-///          synchronization.
+///          legacy alias/status category. On a compiler/version whose cold proof rejects a value-query record, the
+///          discarded branch cannot form the replacement type or name the optimizer query; the exact historical helper
+///          remains the sole continuation. An admitted true arm obtains the sink only after the query and emits once
+///          through the same output-level mutex protocol used by print and panic.
 template <bool line, typename... Args>
 inline constexpr void debug_print_after_source_pre_normalization(Args &&...args)
 {
@@ -324,23 +355,29 @@ inline constexpr void debug_print_after_source_pre_normalization(Args &&...args)
 	using char_type = typename output_type::output_char_type;
 	if constexpr (
 		::fast_io::operations::decay::
-			print_compiler_constant_pre_normalization_available<
-				line, output_type, decltype((args))...>())
+			print_compiler_constant_pre_normalization_cold_codegen_supported<
+				output_type, decltype((args))...>())
 	{
-		if (::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_gate<char_type>(args...))
-		{
-#if defined(__AVR__)
-			auto output{c_stdout()};
-#else
-			auto output{out()};
-#endif
-			decltype(auto) outref{
-				::fast_io::operations::output_stream_ref(output)};
+		if constexpr (
 			::fast_io::operations::decay::
-				print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
-					outref, args...);
-			return;
+				print_compiler_constant_pre_normalization_available<
+					line, output_type, decltype((args))...>())
+		{
+			if (::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_gate<char_type>(args...))
+			{
+#if defined(__AVR__)
+				auto output{c_stdout()};
+#else
+				auto output{out()};
+#endif
+				decltype(auto) outref{
+					::fast_io::operations::output_stream_ref(output)};
+				::fast_io::operations::decay::
+					print_compiler_constant_pre_normalization_true_emit_after_lock<line>(
+						outref, args...);
+				return;
+			}
 		}
 	}
 	::fast_io::details::debug_print_after_io_print_forward<line>(

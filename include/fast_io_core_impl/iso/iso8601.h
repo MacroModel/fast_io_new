@@ -827,6 +827,16 @@ print_reserve_compiler_constant_iso8601_year_impl(
 }
 
 template <::std::integral char_type>
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 11 || 13 <= __GNUC__)
+// GCC 11 and GCC 13--17 otherwise retain this timezone leaf after a successful ISO replacement in at least one
+// audited print/concat category translation unit: the roots reach 171--563 instructions plus proxy/native nodes
+// instead of a fully folded record. On GCC 13, forcing the two record edges alone still leaves this timezone call;
+// forcing all three cuts the combined roots from 529/563/541 to 19/26/32 instructions and reduces translation-unit
+// text from 47,983 to 42,191 bytes (-12.07%). The focused full-category object grows by 0.60--4.79% on the originally
+// measured GCC 11/14--17 islands, which is the accepted deletion cost there. GCC 12 remains excluded because it erases
+// unaided. Unknown timestamps never enter this replacement-only function.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *
 print_reserve_compiler_constant_iso8601_timezone_impl(
 	char_type *iter, ::std::int_least32_t timezone) noexcept
@@ -866,15 +876,16 @@ print_reserve_compiler_constant_iso8601_timezone_impl(
 }
 
 /// @brief Constant-materialization copy of the default ISO 8601 spelling pipeline.
-/// @details This body intentionally mirrors `print_reserve_iso8601_timestamp_impl`. GCC 11, GCC 14--16, and Clang 17--23
+/// @details This body intentionally mirrors `print_reserve_iso8601_timestamp_impl`. GCC 11, GCC 13--16, and Clang 17--23
 ///          otherwise retain the complete general date writer behind this proxy-only boundary at `-O3`. Forcing both
-///          record-level links removes about 2.3 KiB in the measured constant-record translation units while the
-///          noinline unknown-record formatter is unchanged on GCC 11 and GCC 14--16 and byte-identical on Clang 17--23.
-///          GCC 12 is a direct code-size reversal and GCC 13 already fuses the ordinary pair, so GCC 11 remains an
-///          independently measured positive island. The year and timezone leaves inline naturally and deliberately
-///          remain ordinary inline. The positive policies remain open for newer frontends until a measured reversal.
+///          record-level links removes about 2.3 KiB in focused constant-record translation units and prevents GCC 13's
+///          combined print/concat category translation unit from retaining a 529--563-instruction proxy/native graph.
+///          With the separately proved timezone edge, those roots shrink to 19--32 instructions and combined text falls
+///          by 12.07%. The noinline unknown-record formatter is unchanged. GCC 12 remains excluded because its focused
+///          object is a direct code-size reversal. The year and timezone leaves retain their independent proofs.
+///          The positive policies remain open for newer frontends until a measured reversal.
 template <::std::integral char_type>
-#if (defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 11 || 14 <= __GNUC__)) || \
+#if (defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 11 || 13 <= __GNUC__)) || \
 	(defined(__clang__) && 17 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -961,6 +972,17 @@ print_compiler_constant_materialization_query_inline_safe(
 template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
+	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>) noexcept
+{
+	return {};
+}
+
+/// @brief Records the permanent two-field query classification for basic timestamps.
+/// @details Constant and independently unknown seconds/subseconds roots establish provider behavior; each IO consumer
+///          separately decides whether its compiler erases the timestamp replacement writer.
+template <::std::integral char_type, ::std::int_least64_t off_to_epoch>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
 	io_reserve_type_t<char_type, basic_timestamp<off_to_epoch>>) noexcept
 {
 	return {};
@@ -1061,6 +1083,17 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+/// @brief Records the permanent field-complete query classification for the ISO-8601 provider.
+/// @details Every calendar, subsecond, and timezone field has an independently unknown negative root; successful roots
+///          are admitted only by consumers whose recursive graph audit removes the complete ISO formatter.
+template <::std::integral char_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<char_type, iso8601_timestamp>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type>
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
@@ -1101,12 +1134,13 @@ inline constexpr ::std::size_t print_reserve_size(
 
 template <::std::integral char_type>
 /// @brief Writes one already-selected constant ISO record into its caller-owned reserve range.
-/// @details Tested GCC 11, GCC 14--16, and Clang 17--23 otherwise outline the record-level constant helper from this proxy.
+/// @details Tested GCC 11, GCC 13--16, and Clang 17--23 otherwise outline the record-level constant helper from this proxy.
 ///          Keeping both links visible folds the eight proved fields and removes the general date writer from constant
-///          endpoints without changing the noinline unknown-record formatter. GCC 12 is a direct code-size reversal;
-///          GCC 13 fuses the ordinary pair unaided, leaving GCC 11 as an independently measured positive island. The
-///          positive policies remain open for newer frontends until a measured reversal.
-#if (defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 11 || 14 <= __GNUC__)) || \
+///          endpoints without changing the noinline unknown-record formatter. GCC 13 needs this edge in a combined
+///          print/concat category translation unit even though it fuses the smaller isolated pair unaided; without it,
+///          three successful-query roots retain 529--563 instructions. GCC 12 remains a direct code-size reversal.
+///          The positive policies remain open for newer frontends until a measured reversal.
+#if (defined(__GNUC__) && !defined(__clang__) && (__GNUC__ == 11 || 13 <= __GNUC__)) || \
 	(defined(__clang__) && 17 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif

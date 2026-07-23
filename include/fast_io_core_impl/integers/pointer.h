@@ -342,8 +342,13 @@ struct my_constant_passer
 };
 
 template <::std::integral char_type, ::std::size_t n>
-inline consteval my_constant_passer<char_type, n> compute_char_literal_array_type(char_type (&)[n]) noexcept
+inline constexpr my_constant_passer<char_type, n> compute_char_literal_array_type(char_type (&)[n]) noexcept
 {
+	// The result depends only on the reference type and its extent; no array
+	// value is observed.  constexpr keeps this type proof usable in Clang 13,
+	// whose pre-DR20 immediate-call rules reject an otherwise unknown reference
+	// inside a requires-expression, while every consumer still obtains the same
+	// compile-time `my_constant_passer` type.
 	return {};
 }
 
@@ -556,6 +561,15 @@ print_compiler_constant_materialization_query_inline_safe(
 }
 
 template <::std::integral char_type, ::std::integral pchar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>) noexcept
+{
+	// This identity provider has no replacement graph: its materializer returns the same fixed reserve leaf.
+	return {};
+}
+
+template <::std::integral char_type, ::std::integral pchar_type>
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>,
@@ -616,6 +630,18 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+/// @brief Records the bounded C-string provider's permanent field-by-field query classification.
+/// @details The matrix proves both `len` and every admitted character independently unknown, and consumers still decide
+///          whether copying the bounded spelling removes work for their concrete destination.
+template <::std::integral char_type, ::std::size_t extent>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, ::std::size_t extent>
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
@@ -658,6 +684,16 @@ print_compiler_constant_materialization_query_inline_safe(
 }
 
 template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<
+		char_type, manipulators::static_scatter_t<char_type, N>>) noexcept
+{
+	// Static scatters are identity providers whose payload already has static lifetime.
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t N>
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::static_scatter_t<char_type, N>>,
@@ -681,6 +717,16 @@ print_compiler_constant_materialization_query_inline_safe(
 	io_reserve_type_t<
 		char_type, manipulators::small_scatter_t<char_type, N>>) noexcept
 {
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t N>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	io_reserve_type_t<
+		char_type, manipulators::small_scatter_t<char_type, N>>) noexcept
+{
+	// The bounded small-scatter materializer is also an identity operation; consumer size gates remain unchanged.
 	return {};
 }
 

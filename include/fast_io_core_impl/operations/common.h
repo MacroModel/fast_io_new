@@ -104,21 +104,10 @@ template <typename T>
 inline constexpr scatter_total_size_overflow_result find_scatter_total_size_overflow(basic_io_scatter_t<T> const *base,
 																					 ::std::size_t len) noexcept
 {
-	if (__builtin_is_constant_evaluated())
-	{
-		return ::fast_io::details::find_scatter_total_size_overflow_impl<::std::size_t>(base, len);
-	}
-	else
-	{
-		using io_scatter_alias_ptr
-
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= io_scatter_t const *;
-		return ::fast_io::details::find_scatter_total_size_overflow_impl<::std::size_t>(
-			reinterpret_cast<io_scatter_alias_ptr>(base), len);
-	}
+	// The implementation is type-generic and observes only `len`; retaining T therefore has identical arithmetic while
+	// preserving the descriptor array's effective type. A runtime reinterpretation to basic_io_scatter_t<void> was not
+	// justified by layout equality and became undefined on implementations without GNU may_alias, notably MSVC.
+	return ::fast_io::details::find_scatter_total_size_overflow_impl<::std::size_t>(base, len);
 }
 
 namespace details
@@ -181,21 +170,26 @@ inline constexpr ::fast_io::intfpos_t fposoffadd(::fast_io::intfpos_t off, dftyp
 		if (df < 0)
 		{
 			constexpr ::fast_io::intfpos_t mnv{::std::numeric_limits<::fast_io::intfpos_t>::min()};
-			if constexpr (::std::numeric_limits<dftype>::min() < mxv)
+			// A wider signed delta may be below the positional domain before conversion. Comparing with the minimum (not
+			// the maximum) is the necessary representability proof; the old maximum comparison saturated every negative
+			// delta, including fposoffadd(10,-3), to INTFPOS_MIN.
+			if constexpr (::std::numeric_limits<dftype>::min() < mnv)
 			{
-				if (df < mxv)
+				if (df < mnv)
 				{
 					return mnv;
 				}
 			}
-			auto ddf{mnv - df};
-			if (off < ddf)
+			::fast_io::intfpos_t const positional_delta{static_cast<::fast_io::intfpos_t>(df)};
+			::fast_io::intfpos_t const minimum_origin{mnv - positional_delta};
+			if (off < minimum_origin)
 			{
 				return mnv;
 			}
 			else
 			{
-				return off + df;
+				// Both operands are now intfpos_t and the preceding inequality proves their sum is representable.
+				return off + positional_delta;
 			}
 		}
 	}
@@ -206,7 +200,9 @@ inline constexpr ::fast_io::intfpos_t fposoffadd(::fast_io::intfpos_t off, dftyp
 	}
 	else
 	{
-		return off + df;
+		// The upper-bound proof also proves df is representable as intfpos_t. Converting before addition avoids the usual
+		// arithmetic conversions turning a negative origin into an unsigned value when dftype is unsigned.
+		return off + static_cast<::fast_io::intfpos_t>(df);
 	}
 }
 
@@ -235,21 +231,9 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t fposoffadd_scatters(::fast_io::intfpos_t off, basic_io_scatter_t<T> const *base,
 														  io_scatter_status_t status) noexcept
 {
-	if (__builtin_is_constant_evaluated())
-	{
-		return ::fast_io::details::fposoffadd_scatters_impl(off, base, status.position, status.position_in_scatter);
-	}
-	else
-	{
-		using io_scatter_alias_ptr
-
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= io_scatter_t const *;
-		return ::fast_io::details::fposoffadd_scatters_impl(off, reinterpret_cast<io_scatter_alias_ptr>(base),
-															status.position, status.position_in_scatter);
-	}
+	// Status and length arithmetic is independent of the descriptor payload type. Passing the original typed array
+	// proves every member access names a live object of its declared type in both constant and runtime evaluation.
+	return ::fast_io::details::fposoffadd_scatters_impl(off, base, status.position, status.position_in_scatter);
 }
 
 namespace details
@@ -258,15 +242,26 @@ namespace details
 template <::std::integral char_type>
 inline constexpr ::fast_io::intfpos_t scatter_fpos_mul(::fast_io::intfpos_t ofd) noexcept
 {
-	constexpr ::fast_io::intfpos_t mx{::std::numeric_limits<::fast_io::intfpos_t>::max()};
-	constexpr ::fast_io::intfpos_t ofs{mx / sizeof(char_type)};
-	if (ofd > ofs)
+	constexpr ::fast_io::intfpos_t maximum{::std::numeric_limits<::fast_io::intfpos_t>::max()};
+	constexpr ::fast_io::intfpos_t minimum{::std::numeric_limits<::fast_io::intfpos_t>::min()};
+	static_assert(sizeof(char_type) <= static_cast<::fast_io::uintfpos_t>(maximum));
+	constexpr ::fast_io::intfpos_t multiplier{static_cast<::fast_io::intfpos_t>(sizeof(char_type))};
+	static_assert(multiplier > 0);
+	// The static assertion proves the unsigned sizeof result is representable before conversion to the positional type.
+	// This positive byte-per-element unit then defines, by division, the exact closed interval in which multiplication is
+	// representable. Both ends are required because positional APIs do not prove nonnegativity; only after these checks
+	// is the signed multiplication valid, with no further unsigned conversion involved.
+	if (ofd > maximum / multiplier)
 	{
-		return mx;
+		return maximum;
+	}
+	else if (ofd < minimum / multiplier)
+	{
+		return minimum;
 	}
 	else
 	{
-		return ofd * static_cast<intfpos_t>(sizeof(char_type));
+		return ofd * multiplier;
 	}
 }
 

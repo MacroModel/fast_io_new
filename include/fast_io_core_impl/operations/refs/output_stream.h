@@ -3,6 +3,15 @@
 namespace fast_io
 {
 
+/// @brief Seeds explicit-template-id parsing without supplying a viable status-print operation.
+/// @details MSVC 19.35 and 19.36 reject a dependent `status_print_define<line>(...)` before late ADL when ordinary
+///          lookup has not yet found a template; 19.34 and 19.37 accept the standard expression. This deleted
+///          zero-parameter declaration gives those two frontends a template-name while remaining non-viable for every
+///          real call, which always passes an output object. Provider overloads are still discovered and selected
+///          exclusively by ADL, so capability identity and generated code are unchanged.
+template <bool>
+void status_print_define() = delete;
+
 namespace operations::decay::defines
 {
 
@@ -39,6 +48,12 @@ concept has_obuffer_basic_operations = requires(T instm) {
 /// at the call site are provably the same operation. Status printing is a completion
 /// operation, so its result is exactly void; accepting an unrelated value would make
 /// this branch disagree with every ordinary print strategy.
+///
+/// For an empty `Args...` pack, `status_print_define<line>(stream)` is also the
+/// provider's explicit opt-in to observing an otherwise empty logical record.
+/// Without that exact expression the non-line dispatcher performs no primitive
+/// output. Frontends which lower to an empty component pack must still enter the
+/// IO dispatcher so this destination-owned decision is neither invented nor lost.
 template <bool line, typename T, typename... Args>
 concept has_status_print_define = requires(T optstm, Args... args) {
 	{

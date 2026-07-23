@@ -63,9 +63,10 @@ inline constexpr char_type *print_reserve_define(
 	return iter;
 }
 
-// Deliberately adversarial: this unmarked query is both opaque and violates
-// the side-effect-free protocol.  The conservative gate must not call it at
-// all, even though it lies by returning true.
+// Deliberately adversarial: this graph-unclassified query is opaque and
+// violates the side-effect-free semantic protocol. Consumers must reject the
+// provider before the query exists, even though the function lies by returning
+// true.
 template <::std::integral char_type>
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
@@ -147,6 +148,16 @@ template <::std::integral char_type>
 	return oversized_proxy{};
 }
 
+template <::std::integral char_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type, oversized_proxy_source>) noexcept
+{
+	// Provider admission is intentional here: the consumer must reject the
+	// 257-byte proxy at its independent aggregate-state bound.
+	return {};
+}
+
 static_assert(::fast_io::compiler_constant_printable<char, decimal_scalar>);
 static_assert(::fast_io::compiler_constant_query_inline_safe<
 	char, decimal_scalar>);
@@ -167,6 +178,9 @@ static_assert(::fast_io::compiler_constant_printable<
 	char, opaque_query_value>);
 static_assert(!::fast_io::compiler_constant_query_inline_safe<
 	char, opaque_query_value>);
+static_assert(
+	!::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+		char, opaque_query_value>);
 static_assert(::fast_io::compiler_constant_printable<
 	char, oversized_proxy_source>);
 static_assert(
@@ -178,7 +192,7 @@ static_assert(!::fast_io::details::decay::
 					   false, char, ::std::string,
 					   oversized_proxy_source>());
 
-[[nodiscard]] bool opaque_unmarked_query_is_never_called()
+[[nodiscard]] bool unclassified_query_is_never_called()
 {
 	opaque_query_call_count = 0u;
 	volatile unsigned runtime_digit{7u};
@@ -319,7 +333,7 @@ int main()
 		   direct_format_output_is_correct<char8_t>() &&
 		   direct_format_output_is_correct<char16_t>() &&
 		   direct_format_output_is_correct<char32_t>() &&
-		   opaque_unmarked_query_is_never_called()
+		   unclassified_query_is_never_called()
 			? 0
 			: 1;
 }

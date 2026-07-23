@@ -60,13 +60,9 @@ inline constexpr io_scatter_status_t scatter_pread_some_bytes_cold_impl(instmtyp
 						::fast_io::operations::decay::defines::has_scatter_pread_some_underflow_define<instmtype> ||
 						::fast_io::operations::decay::defines::has_pread_some_underflow_define<instmtype>))
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		return ::fast_io::details::scatter_pread_some_cold_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)),
-																n, off);
+		// Some semantics admit this bounded prefix. One-byte width preserves status units, and the outlined adapter
+		// supplies real typed descriptors without propagating its fixed workspace into dispatch callers.
+		return ::fast_io::details::scatter_pread_some_bytes_via_typed_cold_impl(insm, pscatters, n, off);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_seek_bytes_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_read_bytes_operations<instmtype>))
@@ -193,12 +189,9 @@ inline constexpr void scatter_pread_all_bytes_cold_impl(instmtype &insm, io_scat
 	else if constexpr (sizeof(char_type) == 1 &&
 					   ::fast_io::operations::decay::defines::has_any_of_read_operations<instmtype>)
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		::fast_io::details::scatter_pread_all_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)), n, off);
+		// Consecutive materialized typed chunks initialize the byte ranges in order; checked advancement preserves the
+		// one-byte positional coordinate without an unrelated-descriptor effective-type assumption.
+		::fast_io::details::scatter_pread_all_bytes_via_typed_cold_impl(insm, pscatters, n, off);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_seek_bytes_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_read_bytes_operations<instmtype>))
@@ -221,7 +214,7 @@ inline constexpr void scatter_pread_all_bytes_cold_impl(instmtype &insm, io_scat
 
 template <typename instmtype>
 inline constexpr void scatter_pread_all_bytes_impl(instmtype &insm, io_scatter_t const *pscatters, ::std::size_t n,
-															   ::fast_io::intfpos_t off)
+												   ::fast_io::intfpos_t off)
 {
 	if (n == 0u)
 	{

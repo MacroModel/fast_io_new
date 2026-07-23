@@ -236,11 +236,12 @@ inline constexpr char_type *print_reserve_define(
 	return end;
 }
 
-/// Keeps the integer-fields hexadecimal precision proxy visible through the
-/// same format spelling wrapper. This is the precision counterpart of the
-/// scalar overload above; it also remains ordinary inline after identical
-/// GCC/Clang O3 code-generation checks. Format translates syntax only, while
-/// print/concat owns constant recognition and materialization.
+/// Keeps the integer-fields precision proxy visible through the same format spelling wrapper.
+/// @details A former print-only check found ordinary placement neutral, but the complete concat-level symbol audit
+///          exposes the missing consumer: GCC 15 retains this exact wrapper call after every numeric field is already
+///          constant. The overload's argument type can be formed only in a proven compiler-constant true arm, so
+///          forcing this spelling-only leaf cannot expand the native runtime formatter. Format still translates syntax
+///          only; print/concat owns recognition, materialization, allocation, and final strategy selection.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename floating_type,
 	::std::size_t base_prefix_size, bool space_sign>
@@ -255,6 +256,10 @@ template <::std::integral char_type,
 					char_type, flags, floating_type>>,
 			iter, scalar);
 	}
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<
 		char_type,
@@ -319,6 +324,92 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+/// @brief Propagates an already-classified provider graph through format's bounded spelling wrapper.
+/// @details The wrapper's query is exactly the child's query, its materializer owns exactly one child proxy, and its
+///          additional work is the type-bounded prefix/space-sign spelling covered by the permanent format-scalar
+///          matrix. This marker does not turn an unclassified child into a candidate and does not authorize any format
+///          policy: the lowered value still reaches the independent IO consumer proof. A novel child graph must first
+///          satisfy its own field-complete query and recursive deletion contract.
+template <::std::integral char_type, typename scalar_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Preserves the child's flat-scalar source classification through a type-owned format spelling.
+/// @details Prefix width and space-sign policy are compile-time members and introduce no condition, dynamic
+///          width/precision owner, or nested value query. Materialization still produces one wrapper around one child
+///          proxy. Clang 21--23 assembly A/B tests use this exact shape to reduce a literal printf integer from a
+///          formatter call graph to one immediate byte store while leaving every unknown-value root byte-identical.
+///          Older Clang versions remain closed by the IO-level compiler gate; this type-only CPO selects no strategy.
+template <::std::integral char_type, typename scalar_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_simple_scalar_source_shape<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_simple_scalar_source(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Preserves a borrowed-text leaf classification through the format spelling wrapper.
+/// @details Only the identity spelling (`base_prefix_size == 0` and no sign rewrite) can preserve the child's proof that
+///          ordinary output is exactly its borrowed `[data, data + size)` range. A prefix or space-sign policy adds
+///          formatting state and must not satisfy that contract merely because its child is borrowed. This type-only
+///          CPO reads no characters and grants no replacement permission; it lets each IO-level consumer fail closed
+///          before forming a redundant compiler-constant text proxy.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires(base_prefix_size == 0u && !space_sign) && requires {
+		{
+			print_compiler_constant_borrowed_text_leaf(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_borrowed_text_leaf(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Preserves the child's dynamic-precision floating classification through the spelling-only wrapper.
+/// @details This forwarding CPO exposes no value and chooses no materialization strategy. It lets the IO-level
+///          condition consumer apply its compiler-specific fail-closed proof to the original floating leaf before a
+///          replacement type or optimizer query exists.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			print_compiler_constant_dynamic_precision_floating_leaf(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
 /// @brief Forwards the child's proof that a successful eligibility query already enforces the compact byte budget.
 /// @details Width consumes this type-only fact to avoid materializing and exactly sizing an expensive precision float a
 ///          second time merely to repeat the same bound. Format itself makes no value-level decision here.
@@ -343,15 +434,16 @@ print_compiler_constant_eligible_implies_compact_size(
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
 	 requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
-// Tested GCC 13--16 otherwise outline this three-byte spelling query. That is not just
+// Tested GCC 11--16 otherwise outline this three-byte spelling query. That is not just
 // a call-cost difference: `__builtin_constant_p` then observes the callee's
 // parameter instead of the caller's expression, and the focused constant-fixed
 // benchmark regresses from 11.8 ns to 21.6 ns. Keep the query attached to the
 // source frame while leaving the underlying floating algorithm untouched. The
-// GCC 11--12 produce the same constant and unknown-value wrappers with or without the attribute, so forcing begins at
-// the first measured code-generation boundary. The positive GCC policy remains open until a newer compiler measures a
-// reversal.
-#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+// active-condition recursive audit supersedes the former GCC 13 lower bound:
+// GCC 11/12 otherwise emit an out-of-line query in both literal and unknown
+// callers, retaining the mutually exclusive proxy and native graphs. The
+// positive GCC policy remains open until a newer compiler measures a reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 [[nodiscard]] inline constexpr bool
@@ -401,13 +493,14 @@ print_compiler_constant_materialize(
 ///
 /// The wrapper's eligibility query is exactly the child's query, so its true arm may use the child's optional
 /// gate-proven materializer. The ordinary ADL CPO above deliberately remains the independently callable checked path.
-/// Tested GCC 13--16 and Clang 21--23 need this bridge in the caller. GCC 11--12 and Clang 17--20 produce byte-identical
-/// objects with ordinary or forced placement, establishing the lower boundaries. The positive policies remain open for
-/// newer frontends until a measured reversal; MSVC retains ordinary placement.
+/// Tested GCC 11--16 and Clang 21--23 need this bridge in the caller. In particular, the exact active-condition audit
+/// shows GCC 11/12 otherwise retaining this true-arm call beside the native false arm even after all syntax lowering
+/// has completed. Clang 17--20 retains its independently measured ordinary boundary. The positive policies remain open
+/// for newer frontends until a measured reversal; MSVC retains ordinary placement.
 template <::std::integral char_type, typename scalar_type,
 		  ::std::size_t base_prefix_size, bool space_sign>
 	requires ::fast_io::compiler_constant_printable<char_type, scalar_type>
-#if (defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__) || \
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -478,6 +571,51 @@ print_compiler_constant_static_fragments_define(
 	return last;
 }
 
+/// @brief Preserves the child's expanded-fragment source classification through format's spelling wrapper.
+/// @details A successful wrapper materialization contains exactly the child's materialized proxy and retains the same
+///          type-level sign/prefix policy. The companion proxy marker below proves that this complete wrapped replacement
+///          still expands to the wrapper's ordinary reserve spelling. This source CPO deliberately inspects only the
+///          child's primitive type-only marker; it forms neither the replacement type nor a value query, so an IO
+///          consumer can reject an unsupported source/compiler pair before either graph exists.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires requires {
+		{
+			print_compiler_constant_source_prefer_expanded_fragments(
+				::fast_io::io_reserve_type<char_type, scalar_type>)
+		} -> ::std::same_as<::std::true_type>;
+	}
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_source_prefer_expanded_fragments(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
+/// @brief Preserves the child's expanded immutable-fragment preference through format's spelling wrapper.
+/// @details The wrapper forwards the child's descriptor bound and fragment order without creating payload storage.
+///          Its only payload change, a leading plus-to-space substitution, is applied identically by the ordinary
+///          reserve writer and by the fragment writer above; the replacement descriptor names static storage. The
+///          `base_prefix_size` member affects only internal-padding placement and neither spelling. Consequently copying
+///          the wrapped fragment sequence is exactly equivalent to the wrapped reserve spelling, while allocation and
+///          destination selection remain exclusively owned by the consuming IO level.
+template <::std::integral char_type, typename scalar_type,
+		  ::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_expanded_fragment_preferred<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_prefer_expanded_fragments(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 	requires requires {
 		print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, scalar_type>);
@@ -510,10 +648,11 @@ template <::std::integral char_type,
 	}
 // Clang 21--23 otherwise retain a precise-size call and two stack-pointer adjustments in the static-precision caller;
 // exposing this carrier leaf reduces it to 21 instructions, no calls, and no stack frame. Clang 17--20 produce the
-// same object with ordinary or forced placement, establishing the lower boundary. GCC 13--16 need the corresponding
-// source-frame visibility while GCC 11--12 are byte-identical. Both latest tested compilers are positive, so their
-// policies remain open until a measured reversal.
-#if defined(__GNUC__) && !defined(__clang__) && 13 <= __GNUC__
+// same object with ordinary or forced placement, establishing the lower boundary. The recursive active-record audit
+// finds the equivalent retained proxy-size edge on GCC 11--16 after the source gate has succeeded. Unknown values
+// cannot construct this proxy type. Both latest tested compilers are positive, so their policies remain open until a
+// measured reversal.
+#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #elif defined(__clang__) && 21 <= __clang_major__
 FAST_IO_GNU_ALWAYS_INLINE
@@ -626,11 +765,12 @@ template <::std::integral char_type, ::std::random_access_iterator iterator,
 							proxy_char_type, flags, floating_type>>,
 				iter, size, scalar);
 		}
-// Tested GCC 15--16 and Clang 21--23 need this precise emitter exposed to its caller at `-O3`. GCC 11--14 and
-// Clang 17--20 leave the constant and unknown-value wrappers instruction-identical; older GCC only suppresses 405--529
-// bytes of incidental template emission. The positive policies therefore begin at the first caller-code boundary and
-// remain open for newer frontends until a measured reversal; MSVC retains ordinary placement.
-#if (defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__) || \
+// The active-record paired audit supersedes the former flat-source boundary. GCC 11/12 retain this exact proxy writer
+// once the narrowly measured format source bridge is exposed; GCC 13--16 require the same leaf. The corresponding
+// unknown and volatile symbols cannot select this replacement type and remain on their native formatter with no proxy
+// reference. Clang 21--23 retain their independently measured positive range; Clang 17--20 remain ordinary. Both
+// positive endpoints stay future-open until a measured reversal.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
@@ -683,6 +823,23 @@ print_reserve_precise_define(
 		}
 		return result;
 	}
+}
+
+/// Propagates the child's flat integer replacement proof through format's spelling-only wrapper.
+/// Format adds only compile-time prefix and space-sign spelling. It introduces no value field, loop, planner, dynamic
+/// width, semantic branch, allocation, or native fallback, so the child's bounded integer graph remains complete.
+template <::std::integral char_type, typename scalar_type,
+	::std::size_t base_prefix_size, bool space_sign>
+	requires ::fast_io::compiler_constant_flat_integer_replacement<
+		char_type, scalar_type>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_flat_integer_replacement(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::format_scalar_t<
+			scalar_type, base_prefix_size, space_sign>>) noexcept
+{
+	return {};
 }
 
 /// Propagates print's compact-before-fragments profitability marker through format's spelling-only wrapper.

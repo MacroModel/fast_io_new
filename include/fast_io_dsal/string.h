@@ -82,6 +82,10 @@ basic_concat_fast_io(Args &&...args)
 }
 
 template <typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 constexpr inline ::fast_io::string concat_fast_io(Args &&...args)
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::fast_io::string>(

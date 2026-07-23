@@ -60,13 +60,9 @@ scatter_pwrite_some_bytes_cold_impl(outstmtype &outsm, io_scatter_t const *pscat
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_pwrite_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		return ::fast_io::details::scatter_pwrite_some_cold_impl(
-			outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n, off);
+		// A bounded materialized prefix preserves native typed positional scatter and exact one-byte status units. The
+		// outlined adapter also keeps its descriptor workspace out of callers of this dispatch function.
+		return ::fast_io::details::scatter_pwrite_some_bytes_via_typed_cold_impl(outsm, pscatters, n, off);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_seek_bytes_define<outstmtype> &&
 					   (::fast_io::operations::decay::defines::has_write_all_bytes_overflow_define<outstmtype> ||
@@ -208,13 +204,9 @@ inline constexpr void scatter_pwrite_all_bytes_cold_impl(outstmtype &outsm, io_s
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype> ||
 						::fast_io::operations::decay::defines::has_pwrite_some_overflow_define<outstmtype>))
 	{
-		using scattermayalias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> const *;
-		::fast_io::details::scatter_pwrite_all_impl(outsm, reinterpret_cast<scattermayalias_const_ptr>(pscatters), n,
-													off);
+		// One-byte width proves identical offset and extent units; the adapter completes consecutive materialized chunks
+		// and advances their checked positional origin without descriptor type punning.
+		::fast_io::details::scatter_pwrite_all_bytes_via_typed_cold_impl(outsm, pscatters, n, off);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_seek_bytes_define<outstmtype> &&
 					   (::fast_io::operations::decay::defines::has_write_all_bytes_overflow_define<outstmtype> ||
@@ -245,7 +237,7 @@ inline constexpr void scatter_pwrite_all_bytes_cold_impl(outstmtype &outsm, io_s
 
 template <typename outstmtype>
 inline constexpr void scatter_pwrite_all_bytes_impl(outstmtype &outsm, io_scatter_t const *pscatters, ::std::size_t n,
-												::fast_io::intfpos_t off)
+													::fast_io::intfpos_t off)
 {
 	if (n == 0u)
 	{

@@ -272,7 +272,8 @@ inline
 	// for reduce some warning purpose
 	constexpr
 #endif
-	::fast_io::win32::nt::nt_thread<zw>::id get_id()
+	// `nt_thread<zw>` remains dependent until instantiation, so its nested ID type requires an explicit type marker.
+	typename ::fast_io::win32::nt::nt_thread<zw>::id get_id()
 {
 	::fast_io::win32::nt::thread_basic_information tbi;
 	::std::uint_least32_t status{::fast_io::win32::nt::nt_query_information_thread<zw>(

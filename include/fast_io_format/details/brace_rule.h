@@ -29,13 +29,14 @@ struct brace_argument_list_validation
 /** Marks one resolved brace reference without routing an immediate call through a local lambda.
  *
  * GCC 13 incorrectly diagnoses a call to an immediate function made from a
- * consteval generic/local lambda as taking that function's address.  Keeping
- * the operation in an ordinary immediate function is equivalent and retains
- * the whole-program validation on every supported C++20 frontend.
+ * consteval generic/local lambda as taking that function's address. Keeping
+ * the parameterized operation in an ordinary constexpr function lets the
+ * outer immediate validator supply its values and retains whole-program
+ * validation on every supported C++20 frontend.
  */
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline consteval bool mark_brace_argument_reference(
+[[nodiscard]] inline constexpr bool mark_brace_argument_reference(
 	argument_reference reference, ::std::size_t source_position,
 	bool *referenced, brace_argument_list_validation &result) noexcept
 {
@@ -57,7 +58,7 @@ template <::fast_io::fmt::basic_fixed_string format_literal,
 /** Resolves every ordinary and nested brace reference into one exact argument domain. */
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline consteval brace_argument_list_validation
+[[nodiscard]] inline constexpr brace_argument_list_validation
 validate_brace_argument_list() noexcept
 {
 	constexpr auto const &program{
@@ -149,22 +150,6 @@ validate_brace_argument_list() noexcept
 	return result;
 }
 
-template <auto format_literal, brace_argument_list_error error,
-		  ::std::size_t argument_index>
-inline consteval void diagnose_brace_argument_list()
-{
-	if constexpr (error == brace_argument_list_error::unreferenced_argument)
-	{
-		static_assert(error == brace_argument_list_error::none,
-					  "fast_io format: brace format does not reference every supplied argument");
-	}
-	else
-	{
-		static_assert(error == brace_argument_list_error::none);
-	}
-	(void)argument_index;
-}
-
 } // namespace fast_io::fmt::details
 
 namespace fast_io::fmt
@@ -198,24 +183,20 @@ concept brace_format_rule = format_rule_for<format_literal, brace_fmt_t>;
 
 /** Enforces the exact brace argument domain before syntax-neutral lowering. */
 template <basic_fixed_string format_literal, typename... argument_types>
-inline consteval void validate_format_argument_list(
-	brace_fmt_t,
-	::fast_io::fmt::details::format_argument_list_validation_adl::
-		argument_type_list<argument_types...>) noexcept
+[[nodiscard]] inline constexpr bool validate_format_argument_list(
+	brace_fmt_t) noexcept
 {
 	constexpr auto validation{
 		::fast_io::fmt::details::validate_brace_argument_list<
 			format_literal, argument_types...>()};
 	// Per-reference lowering retains its established diagnostics for missing,
-	// ambiguous, and out-of-range references.  Only this whole-program pass can
-	// observe a supplied argument which no field selected.
-	if constexpr (validation.error ==
-				  ::fast_io::fmt::details::brace_argument_list_error::
-					  unreferenced_argument)
-	{
-		::fast_io::fmt::details::diagnose_brace_argument_list<
-			format_literal, validation.error, validation.argument_index>();
-	}
+	// ambiguous, and out-of-range references. Only this whole-program pass can
+	// observe a supplied argument which no field selected. Returning an exact
+	// bool keeps the CPO well-formed even when the proof is false; the generic
+	// consumer must then assert the value instead of treating a failed immediate
+	// diagnostic as if this optional protocol did not exist on early Clang.
+	return validation.error ==
+		   ::fast_io::fmt::details::brace_argument_list_error::none;
 }
 
 /** Registers brace argument selection and value-rule lowering through ADL. */

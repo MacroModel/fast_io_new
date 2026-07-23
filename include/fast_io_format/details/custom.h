@@ -15,10 +15,12 @@ namespace fast_io::fmt
  *
  * `format_literal` and `source` are non-type template arguments, so neither a
  * pointer to the format string nor a parse cursor is stored in a runtime
- * object.  All observers are `consteval` for the same reason: the context is a
- * parser interface, not a runtime string view.  The caller chooses the slice;
- * the brace frontend normally supplies the type-specific suffix which remains
- * after its common field grammar.
+ * object.  The type-only observers are `consteval`; indexed access is
+ * `constexpr` so a portable C++20 provider can be called through dependent ADL
+ * on early frontends.  Core still invokes that provider only while proving its
+ * structural result as an NTTP, so this does not create a runtime parse path.
+ * The caller chooses the slice; the brace frontend normally supplies the
+ * type-specific suffix which remains after its common field grammar.
  *
  * The interface deliberately exposes code units without interpreting them as
  * ASCII.  A customization can consequently compare against
@@ -68,7 +70,7 @@ struct basic_custom_format_parse_context
 	 * precondition: an invalid access is diagnosed while the CPO is evaluated
 	 * and cannot become undefined behaviour in generated code.
 	 */
-	[[nodiscard]] inline consteval char_type operator[](::std::size_t index) const
+	[[nodiscard]] inline constexpr char_type operator[](::std::size_t index) const
 	{
 		if (index >= source.size)
 		{
@@ -169,11 +171,6 @@ inline constexpr ::std::size_t static_format_recursion_limit{8u};
 namespace static_format_output_adl
 {
 
-// Poison pills retain ADL while preventing an unrelated declaration found by
-// ordinary lookup from becoming an implicit static-rendering opt-in.
-void format_static_reserve_size() = delete;
-void format_static_reserve_define() = delete;
-
 template <typename formatter_type, typename = void>
 struct formatter_character_probe
 {
@@ -202,10 +199,14 @@ using formatter_char_type =
  *
  * Both CPOs must be found by ADL, use the formatter's exact character domain,
  * return exactly size_t / Char*, and be noexcept.  Constant evaluability is
- * deliberately not tested here: finding the correctly shaped protocol is an
- * explicit opt-in.  The consteval wrappers below then turn a non-constant CPO
- * body into a contract diagnostic instead of silently selecting a dynamic
- * formatter.
+ * deliberately not tested by this shape concept: finding the correctly shaped
+ * protocol is an explicit opt-in. A portable provider declares both functions
+ * `constexpr`; the consteval wrappers below then prove the selected calls and
+ * turn a non-constant body into a contract diagnostic instead of silently
+ * selecting a dynamic formatter. No ordinary-lookup seed is declared here:
+ * these are dependent calls inside an isolated namespace, so ADL is the only
+ * candidate source. This also avoids GCC 11 suppressing ADL after seeing a
+ * deleted zero-argument declaration in the requires-expression.
  */
 template <typename context_type, typename formatter_type, typename value_type>
 concept expression =
@@ -219,15 +220,17 @@ concept expression =
 	(context_type::depth < static_format_recursion_limit) &&
 	requires(value_type value,
 			 formatter_char_type<formatter_type> *output) {
-		{ format_static_reserve_size(context_type{}, formatter_type{}, value) }
-		-> ::std::same_as<::std::size_t>;
-		{ format_static_reserve_define(
-			context_type{}, formatter_type{}, output, value) }
-		-> ::std::same_as<formatter_char_type<formatter_type> *>;
-		requires noexcept(format_static_reserve_size(
-			context_type{}, formatter_type{}, value));
-		requires noexcept(format_static_reserve_define(
-			context_type{}, formatter_type{}, output, value));
+		// Compound requirements perform dependent ADL and prove both exact result
+		// type and non-throwing shape without evaluating a fabricated value.
+		{
+			format_static_reserve_size(
+				context_type{}, formatter_type{}, value)
+		} noexcept -> ::std::same_as<::std::size_t>;
+		{
+			format_static_reserve_define(
+				context_type{}, formatter_type{}, output, value)
+		} noexcept -> ::std::same_as<
+			formatter_char_type<formatter_type> *>;
 	};
 
 template <typename context_type, typename formatter_type, typename value_type>

@@ -46,6 +46,61 @@ inline constexpr output_chain_inner output_stream_unlocked_ref_define(output_cha
 	return {};
 }
 
+struct const_edge_incomplete_inner
+{
+	using output_char_type = char;
+};
+
+struct const_edge_complete_inner
+{
+	using output_char_type = char;
+};
+
+template <typename inner_type>
+struct const_edge_outer
+{
+	using output_char_type = char;
+	inner_type *inner{};
+};
+
+inline constexpr lock_proxy output_stream_mutex_ref_define(
+	const_edge_incomplete_inner const &) noexcept
+{
+	return {};
+}
+
+inline constexpr output_terminal output_stream_unlocked_ref_define(
+	const_edge_incomplete_inner &) noexcept
+{
+	return {};
+}
+
+inline constexpr lock_proxy output_stream_mutex_ref_define(
+	const_edge_complete_inner const &) noexcept
+{
+	return {};
+}
+
+inline constexpr output_terminal output_stream_unlocked_ref_define(
+	const_edge_complete_inner const &) noexcept
+{
+	return {};
+}
+
+template <typename inner_type>
+inline constexpr lock_proxy output_stream_mutex_ref_define(
+	const_edge_outer<inner_type>) noexcept
+{
+	return {};
+}
+
+template <typename inner_type>
+inline constexpr inner_type const &output_stream_unlocked_ref_define(
+	const_edge_outer<inner_type> outer) noexcept
+{
+	return *outer.inner;
+}
+
 // Both edges are locally well-formed and preserve the character domain. Only the composed visited-type proof can
 // distinguish this graph from the terminating two-edge chain above.
 struct output_cycle_a
@@ -163,6 +218,16 @@ using ::fast_io::operations::decay::defines::has_locally_complete_output_stream_
 
 static_assert(has_complete_output_stream_mutex_protocol<output_chain_inner>);
 static_assert(has_complete_output_stream_mutex_protocol<output_chain_outer>);
+
+// The unlocked CPO result is named with `decltype(auto)` by runtime. A const
+// intermediate may expose a mutex marker while withholding its unlocked CPO;
+// chain admission must not remove const and prove the mutable protocol instead.
+static_assert(has_locally_complete_output_stream_mutex_protocol<
+			  const_edge_outer<const_edge_incomplete_inner>>);
+static_assert(!has_complete_output_stream_mutex_protocol<
+			  const_edge_outer<const_edge_incomplete_inner>>);
+static_assert(has_complete_output_stream_mutex_protocol<
+			  const_edge_outer<const_edge_complete_inner>>);
 
 static_assert(has_locally_complete_output_stream_mutex_protocol<output_cycle_a>);
 static_assert(has_locally_complete_output_stream_mutex_protocol<output_cycle_b>);

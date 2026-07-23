@@ -19,42 +19,6 @@
 namespace fast_io::fmt::details
 {
 
-/** Proves that the compiled grammar leaves one line feed in its final literal operation. */
-template <auto format_literal, typename grammar_tag>
-[[nodiscard]] inline consteval bool
-format_program_has_terminal_literal_line_feed() noexcept
-{
-	constexpr auto const &program{
-		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>};
-	if constexpr (program.operation_count == 0u)
-	{
-		return false;
-	}
-	else
-	{
-		constexpr auto operation{
-			program.operations[program.operation_count - 1u]};
-		if constexpr (operation.kind != format_operation_kind::literal)
-		{
-			return false;
-		}
-		else
-		{
-			constexpr auto run{program.literal_runs[operation.payload_index]};
-			if constexpr (run.size == 0u)
-			{
-				return false;
-			}
-			else
-			{
-				using char_type = typename decltype(format_literal)::value_type;
-				return program.literal_storage[run.offset + run.size - 1u] ==
-					   ::fast_io::char_literal_v<u8'\n', char_type>;
-			}
-		}
-	}
-}
-
 /** Carries one structural replacement descriptor to a grammar-lowering CPO. */
 template <auto field>
 struct compiled_replacement_t
@@ -89,7 +53,7 @@ struct compiled_literal_content_provider
 	using char_type = typename literal_type::value_type;
 	static inline constexpr ::std::size_t size{literal_type::size};
 
-	[[nodiscard]] inline static consteval char_type *emit(
+	[[nodiscard]] inline static constexpr char_type *emit(
 		char_type *output) noexcept
 	{
 		for (::std::size_t index{}; index != size; ++index)
@@ -100,9 +64,16 @@ struct compiled_literal_content_provider
 	}
 };
 
+/**
+ * Lowers one proved nonempty literal operation without changing its extent.
+ *
+ * `checked_program` proves that the operation selects a valid literal run and
+ * that `[run.offset, run.offset + run.size)` lies in decoded literal storage.
+ * Both carrier forms therefore expose exactly `[0, run.size)`; preserving the
+ * provider identity changes representation only and cannot change semantics.
+ */
 template <auto format_literal, typename grammar_tag,
 		  ::std::size_t operation_index,
-		  bool trim_terminal_literal_line_feed = false,
 		  bool preserve_provider_identity = false>
 [[nodiscard]] inline constexpr decltype(auto) make_literal_operation() noexcept
 {
@@ -131,38 +102,21 @@ template <auto format_literal, typename grammar_tag,
 		return result;
 	}()};
 	using provider_type = compiled_literal_content_provider<literal_value>;
-	static_assert(!trim_terminal_literal_line_feed ||
-					  program.literal_storage[run.offset + run.size - 1u] ==
-						  ::fast_io::char_literal_v<
-							  u8'\n', typename provider_type::char_type>,
-				  "fast_io format: only a proved terminal literal line feed may be trimmed");
-	constexpr ::std::size_t exposed_size{
-		run.size -
-		static_cast<::std::size_t>(trim_terminal_literal_line_feed)};
-	if constexpr (exposed_size == 0u)
+	if constexpr (preserve_provider_identity)
 	{
-		// Preserve the established empty-operation protocol. A zero-length
-		// provider is intentionally not reserve-printable, because the reserve
-		// concept uses a positive extent as its progress proof. `io_null` keeps
-		// status/customization dispatch observable while core may still erase it
-		// from an ordinary write record.
-		return ::fast_io::io_null;
-	}
-	else if constexpr (preserve_provider_identity)
-	{
-		// A static-argument program keeps its recipe identity so core IO can merge
-		// adjacent literal and replacement nodes without format-owned storage.
+		// A static-argument program keeps its recipe identity and exposes the
+		// complete decoded run. Core IO may merge adjacent literal and replacement
+		// nodes, but format lowering never removes semantic output code units.
 		return ::fast_io::manipulators::static_provider_node<
-			provider_type, 0u, exposed_size>{};
+			provider_type, 0u, run.size>{};
 	}
 	else
 	{
-		// Ordinary literals carry only their content-canonical provider type. The
-		// stateless core transport avoids repeating a pointer-bearing value at each
-		// lowering boundary while leaving buffered, contiguous, and scatter policy
-		// entirely to core IO.
+		// Ordinary literals carry their complete content-canonical provider type.
+		// The stateless core transport avoids a pointer-bearing value at each
+		// boundary while leaving all output policy, including line handling, to IO.
 		return ::fast_io::manipulators::syntax_transport_details::static_provider_scatter_node<
-			provider_type, 0u, exposed_size>{};
+			provider_type, 0u, run.size>{};
 	}
 }
 
@@ -399,7 +353,9 @@ struct static_output_replacement_traits
 		::std::same_as<::std::remove_cvref_t<grammar_type>,
 					   ::fast_io::fmt::brace_fmt_t>};
 
-	[[nodiscard]] inline static consteval bool has_rule() noexcept
+	// `rule_available` below is the mandatory constant-evaluation boundary. A constexpr helper avoids an early-Clang
+	// immediate-member lookup bug without permitting a run-time rule decision.
+	[[nodiscard]] inline static constexpr bool has_rule() noexcept
 	{
 		if constexpr (!brace_grammar ||
 					  field.specification.locale_specific ||
@@ -1313,7 +1269,7 @@ inline constexpr void write_all_overflow_define(
 }
 
 template <::std::integral char_type, typename range_view_type>
-[[nodiscard]] inline consteval ::std::size_t
+[[nodiscard]] inline constexpr ::std::size_t
 measure_static_brace_range_view(range_view_type &value)
 {
 	static_format_count_output<char_type> output{};
@@ -1326,7 +1282,7 @@ measure_static_brace_range_view(range_view_type &value)
 }
 
 template <::std::integral char_type, typename range_view_type>
-[[nodiscard]] inline consteval char_type *emit_static_brace_range_view(
+[[nodiscard]] inline constexpr char_type *emit_static_brace_range_view(
 	char_type *output, range_view_type &value)
 {
 	static_format_emit_output<char_type> stream{output};
@@ -1342,9 +1298,18 @@ template <::std::integral char_type>
 struct measure_static_format_component
 {
 	template <typename value_type>
-	[[nodiscard]] inline consteval ::std::size_t operator()(
+	[[nodiscard]] inline constexpr ::std::size_t operator()(
 		value_type &value) const
 	{
+		// The proof must model the exact expression that reaches print semantics.
+		// A raw const scalar may not own a precise-size CPO, while its stable
+		// forwarded manipulator does. Testing the raw type would misclassify an
+		// exact replacement as bounded scratch and makes GCC 11--13 attempt an
+		// invalid consteval copy. The extent and emitter below mirror this rule.
+		using forwarded_expression =
+			::fast_io::details::decay::
+				print_semantic_stable_input_forwarded_arg_t<
+					char_type, value_type &>;
 		if constexpr (static_brace_range_view_traits<
 						  ::std::remove_cvref_t<value_type>>::value)
 		{
@@ -1356,8 +1321,8 @@ struct measure_static_format_component
 			return 1u;
 		}
 		else if constexpr (::fast_io::details::decay::
-							   print_semantic_precise_size_ok<
-								   char_type, value_type &>::value)
+								   print_semantic_precise_size_ok<
+									   char_type, forwarded_expression>::value)
 		{
 			return ::fast_io::operations::decay::
 				print_semantic_precise_size_arg<char_type>(value);
@@ -1375,10 +1340,14 @@ template <::std::integral char_type>
 struct static_format_component_exact_extent
 {
 	template <typename value_type>
-	[[nodiscard]] inline consteval bool operator()(
+	[[nodiscard]] inline constexpr bool operator()(
 		value_type &) const noexcept
 	{
 		using clean_type = ::std::remove_cvref_t<value_type>;
+		using forwarded_expression =
+			::fast_io::details::decay::
+				print_semantic_stable_input_forwarded_arg_t<
+					char_type, value_type &>;
 		return static_brace_range_view_traits<clean_type>::value ||
 			   ::std::same_as<clean_type, char_type> ||
 			   (::std::is_bounded_array_v<clean_type> &&
@@ -1386,7 +1355,7 @@ struct static_format_component_exact_extent
 					::std::remove_cv_t<::std::remove_extent_t<clean_type>>,
 					::std::remove_cv_t<char_type>>) ||
 			   ::fast_io::details::decay::print_semantic_precise_size_ok<
-				   char_type, value_type &>::value;
+				   char_type, forwarded_expression>::value;
 	}
 };
 
@@ -1396,9 +1365,13 @@ struct emit_static_format_component
 	char_type *output;
 
 	template <typename value_type>
-	[[nodiscard]] inline consteval char_type *operator()(
+	[[nodiscard]] inline constexpr char_type *operator()(
 		value_type &value) const
 	{
+		using forwarded_expression =
+			::fast_io::details::decay::
+				print_semantic_stable_input_forwarded_arg_t<
+					char_type, value_type &>;
 		if constexpr (static_brace_range_view_traits<
 						  ::std::remove_cvref_t<value_type>>::value)
 		{
@@ -1411,8 +1384,8 @@ struct emit_static_format_component
 			return output + 1u;
 		}
 		else if constexpr (::fast_io::details::decay::
-							   print_semantic_precise_size_ok<
-								   char_type, value_type &>::value)
+								   print_semantic_precise_size_ok<
+									   char_type, forwarded_expression>::value)
 		{
 			return ::fast_io::operations::decay::
 				print_semantic_emit_unchecked_run<false, char_type>(
@@ -1427,11 +1400,31 @@ struct emit_static_format_component
 	}
 };
 
-/** Measures one NTTP-backed replacement without instantiating its byte storage. */
+/** Owns one bounded replacement spelling while it is proved in constant evaluation. */
+template <::std::integral char_type, ::std::size_t bound>
+struct static_replacement_render_result
+{
+	// Invalid and empty bounds still need a real object so their diagnostic path
+	// never forms a null pointer or an unrepresentable std::array extent.
+	static inline constexpr ::std::size_t capacity{
+		bound != SIZE_MAX && bound <= static_format_output_code_unit_limit &&
+			bound != 0u
+			? bound
+			: 1u};
+	::std::array<char_type, capacity> storage{};
+	::std::size_t size{};
+};
+
+/** Measures and renders one NTTP-backed replacement under a single proof boundary. */
 template <auto format_literal, replacement_field field, typename grammar_type,
 		  typename... argument_types>
 struct static_replacement_evaluation
 {
+	// Generic semantic callbacks remain constexpr so early Clang can transport
+	// locally owned arguments. The terminal renderer below is immediate and owns
+	// its destination array itself. A portable provider CPO is constexpr; core's
+	// immediate boundary proves the actual call without transporting its pointer
+	// through an opaque dependent function parameter.
 	using char_type = typename decltype(format_literal)::value_type;
 	using static_output = static_output_replacement<
 		format_literal, field, grammar_type, 0u, argument_types...>;
@@ -1442,7 +1435,7 @@ struct static_replacement_evaluation
 		static_evaluation_argument_t<argument_types>...>;
 
 	template <typename callback_type, ::std::size_t... index>
-	[[nodiscard]] inline static consteval decltype(auto) evaluate(
+	[[nodiscard]] inline static constexpr decltype(auto) evaluate(
 		callback_type callback, ::std::index_sequence<index...>)
 	{
 		owned_argument_pack owned_arguments{};
@@ -1478,31 +1471,10 @@ struct static_replacement_evaluation
 			typename protocol::formatter_type>(context, value);
 	}
 
-	template <::std::size_t... index>
-	[[nodiscard]] inline static consteval char_type *emit_static_output(
-		char_type *output, ::std::index_sequence<index...>) noexcept
-	{
-		using descriptor = typename static_output::descriptor;
-		using protocol = typename static_output::protocol;
-		owned_argument_pack owned_arguments{};
-		auto arguments{make_indexed_argument_pack(
-			static_evaluation_argument_get<index>(owned_arguments)...)};
-		auto &holder{
-			indexed_argument_get<descriptor::resolution.index>(arguments)};
-		decltype(auto) value{unwrap_static_named_argument(holder)};
-		auto const width{resolve_format_parameter<
-			format_literal, field.specification.width>(arguments)};
-		auto const precision{resolve_format_parameter<
-			format_literal, field.specification.precision>(arguments)};
-		typename protocol::context_type context{
-			{width.value, width.present, width.negative},
-			{precision.value, precision.present, precision.negative}};
-		return static_format_output_adl::define<
-			typename protocol::context_type,
-			typename protocol::formatter_type>(context, output, value);
-	}
-
-	[[nodiscard]] inline static consteval ::std::size_t calculate_bound()
+	// The inline constexpr data member below is the proof boundary.  Keeping the
+	// parameter-free member constexpr avoids an early-Clang lookup defect for a
+	// consteval member invoked before its enclosing class is complete.
+	[[nodiscard]] inline static constexpr ::std::size_t calculate_bound()
 	{
 		if constexpr (uses_static_output)
 		{
@@ -1516,24 +1488,7 @@ struct static_replacement_evaluation
 		}
 	}
 
-	[[nodiscard]] inline static consteval char_type *emit(
-		char_type *output) noexcept
-	{
-		if constexpr (uses_static_output)
-		{
-			return emit_static_output(
-				output,
-				::std::index_sequence_for<argument_types...>{});
-		}
-		else
-		{
-			return evaluate(
-				emit_static_format_component<char_type>{output},
-				::std::index_sequence_for<argument_types...>{});
-		}
-	}
-
-	[[nodiscard]] inline static consteval bool calculate_exact_extent()
+	[[nodiscard]] inline static constexpr bool calculate_exact_extent()
 	{
 		if constexpr (uses_static_output)
 		{
@@ -1552,17 +1507,69 @@ struct static_replacement_evaluation
 	// algorithms retain the scratch path below because some intentionally write
 	// their full reserve bound before returning a shorter visible suffix.
 	static inline constexpr bool exact_extent{calculate_exact_extent()};
+
+	template <::std::size_t... index>
+	[[nodiscard]] inline static consteval auto render_impl(
+		::std::index_sequence<index...>) noexcept
+	{
+		static_replacement_render_result<char_type, bound> result{};
+		if constexpr (bound == SIZE_MAX ||
+					  bound > static_format_output_code_unit_limit)
+		{
+			return result;
+		}
+		else
+		{
+			auto *const begin{result.storage.data()};
+			char_type *end{};
+			if constexpr (uses_static_output)
+			{
+				using descriptor = typename static_output::descriptor;
+				using protocol = typename static_output::protocol;
+				owned_argument_pack owned_arguments{};
+				auto arguments{make_indexed_argument_pack(
+					static_evaluation_argument_get<index>(owned_arguments)...)};
+				auto &holder{indexed_argument_get<
+					descriptor::resolution.index>(arguments)};
+				decltype(auto) value{unwrap_static_named_argument(holder)};
+				auto const width{resolve_format_parameter<
+					format_literal, field.specification.width>(arguments)};
+				auto const precision{resolve_format_parameter<
+					format_literal, field.specification.precision>(arguments)};
+				typename protocol::context_type context{
+					{width.value, width.present, width.negative},
+					{precision.value, precision.present, precision.negative}};
+				end = static_format_output_adl::define<
+					typename protocol::context_type,
+					typename protocol::formatter_type>(context, begin, value);
+			}
+			else
+			{
+				end = evaluate(
+					emit_static_format_component<char_type>{begin},
+					::std::index_sequence<index...>{});
+			}
+			if (end < begin || end > begin + bound)
+			{
+				::fast_io::fast_terminate();
+			}
+			result.size = static_cast<::std::size_t>(end - begin);
+			return result;
+		}
+	}
+
+	/** Renders only while the provider's owned destination is in immediate scope. */
+	[[nodiscard]] inline static consteval auto render() noexcept
+	{
+		return render_impl(::std::index_sequence_for<argument_types...>{});
+	}
 };
 
 template <typename evaluation_type, ::std::size_t bound>
 [[nodiscard]] inline consteval bool
 validate_automatic_static_replacement_emit() noexcept
 {
-	using char_type = typename evaluation_type::char_type;
-	::std::array<char_type, bound == 0u ? 1u : bound> scratch{};
-	auto *const begin{scratch.data()};
-	auto *const end{evaluation_type::emit(begin)};
-	return end >= begin && end <= begin + bound;
+	return evaluation_type::render().size <= bound;
 }
 
 template <bool within_budget, typename evaluation_type,
@@ -1816,6 +1823,17 @@ static_format_replacement_after_dependencies() noexcept
  * Arbitrary grammar and custom-formatter rules remain fail-closed unless they
  * provide the strict terminal static-output CPO.
  */
+template <typename value_reference>
+inline constexpr bool static_format_direct_provider_frontend_safe{
+#if defined(_MSC_VER) && !defined(__clang__)
+	// Native MSVC ICEs only for a directly selected floating provider. A
+	// floating aggregate is independently supported and must remain eligible.
+	!::std::floating_point<::std::remove_cvref_t<value_reference>>
+#else
+	true
+#endif
+};
+
 template <auto format_literal, replacement_field field, typename grammar_type,
 		  typename... argument_types>
 [[nodiscard]] inline consteval bool static_format_replacement() noexcept
@@ -1838,6 +1856,15 @@ template <auto format_literal, replacement_field field, typename grammar_type,
 		// Resolve dependencies before probing an emitter.  In particular, a
 		// runtime width or precision must not instantiate a compile-time rule
 		// with the placeholder used for dynamic argument-pack members.
+		return false;
+	}
+	else if constexpr (!static_format_direct_provider_frontend_safe<
+						  typename static_format_argument_descriptor<
+							  format_literal, field.argument,
+							  argument_types...>::value_reference>)
+	{
+		// Fail before compiled_static_replacement_provider instantiation; the
+		// ordinary lowered IO operation preserves the exact formatting contract.
 		return false;
 	}
 	else
@@ -2057,8 +2084,12 @@ struct compiled_static_replacement_provider
 				  "fast_io format: a static replacement must have a finite contiguous bound");
 	static_assert(bound <= static_format_output_code_unit_limit,
 				  "fast_io format: a static replacement exceeds the compile-time output budget");
+	static inline constexpr auto rendering{evaluation_type::render()};
 
-	[[nodiscard]] inline static consteval ::std::size_t calculate_size()
+	// `size` below forces constant evaluation; constexpr is required here for
+	// Clang 13--15, which cannot invoke this immediate member while completing
+	// the provider specialization.
+	[[nodiscard]] inline static constexpr ::std::size_t calculate_size()
 	{
 		if constexpr (bound == SIZE_MAX ||
 					  bound > static_format_output_code_unit_limit)
@@ -2068,8 +2099,9 @@ struct compiled_static_replacement_provider
 		else if constexpr (evaluation_type::exact_extent)
 		{
 			// A terminal static-output CPO or the precise semantic protocol makes
-			// the measured bound exact. Its single emission below verifies the end.
-			return bound;
+			// the measured bound exact. The owned rendering independently verifies
+			// that the CPO returned the corresponding one-past-end pointer.
+			return rendering.size == bound ? bound : SIZE_MAX;
 		}
 		else if constexpr (bound == 0u)
 		{
@@ -2077,15 +2109,19 @@ struct compiled_static_replacement_provider
 		}
 		else
 		{
-			::std::array<char_type, bound> scratch{};
-			auto const end{evaluation_type::emit(scratch.data())};
-			return static_cast<::std::size_t>(end - scratch.data());
+			return rendering.size;
 		}
 	}
 
 	static inline constexpr ::std::size_t size{calculate_size()};
+	static_assert(size != SIZE_MAX,
+		"fast_io format: a static replacement emitted an extent inconsistent with its proof");
 
-	[[nodiscard]] inline static consteval char_type *emit(
+	// The user CPO has already run in `render`, where the immediate function owns
+	// its array. This provider operation is deliberately constexpr: core can pass
+	// its local destination through every C++20 frontend without creating a
+	// second immediate-call boundary around an opaque function parameter.
+	[[nodiscard]] inline static constexpr char_type *emit(
 		char_type *output) noexcept
 	{
 		if constexpr (bound == SIZE_MAX ||
@@ -2097,33 +2133,14 @@ struct compiled_static_replacement_provider
 		{
 			return output;
 		}
-		else if constexpr (evaluation_type::exact_extent)
-		{
-			auto const end{evaluation_type::emit(output)};
-			if (end != output + size)
-			{
-				::fast_io::fast_terminate();
-			}
-			return end;
-		}
 		else
 		{
-			// Integer and floating reserve algorithms are allowed to use their
-			// advertised bound as scratch (for example, the two-digit integer
-			// leaf stores a complete pair before returning a one-digit suffix).
-			// A core provider owns only the exact visible spelling, so evaluate in
-			// bound-sized temporary storage and copy precisely the returned range.
-			// This preserves the runtime algorithm contract without teaching it
-			// anything about compiler-constant providers.
-			::std::array<char_type, bound> scratch{};
-			auto const end{evaluation_type::emit(scratch.data())};
-			if (end != scratch.data() + size)
-			{
-				::fast_io::fast_terminate();
-			}
+			// Integer and floating reserve algorithms may use their advertised
+			// bound as scratch. `rendering.size` identifies only their visible
+			// prefix, which becomes the canonical provider object below.
 			for (::std::size_t index{}; index != size; ++index)
 			{
-				output[index] = scratch[index];
+				output[index] = rendering.storage[index];
 			}
 			return output + size;
 		}
@@ -2156,7 +2173,6 @@ concept compilable_format_replacement =
 
 template <auto format_literal, typename grammar_tag,
 		  ::std::size_t operation_index,
-		  bool trim_terminal_literal_line_feed = false,
 		  ::std::size_t... index, typename... argument_types>
 // This operation constructor is intentionally forced only where the compiler's
 // own O3 decision leaves duplicated lowering support behind.  A GCC 11--16 and
@@ -2176,8 +2192,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	if constexpr (operation.kind == format_operation_kind::literal)
 	{
 		return make_literal_operation<
-			format_literal, grammar_tag, operation_index,
-			trim_terminal_literal_line_feed>();
+			format_literal, grammar_tag, operation_index>();
 	}
 	else
 	{
@@ -2203,7 +2218,6 @@ FAST_IO_GNU_ALWAYS_INLINE
 
 template <auto format_literal, typename grammar_tag,
 		  ::std::size_t operation_index,
-		  bool trim_terminal_literal_line_feed = false,
 		  ::std::size_t... index,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr decltype(auto) make_static_format_operation(
@@ -2232,15 +2246,38 @@ template <auto format_literal, typename grammar_tag,
 	else
 	{
 		return make_literal_operation<
-			format_literal, grammar_tag, operation_index,
-			trim_terminal_literal_line_feed, true>();
+			format_literal, grammar_tag, operation_index, true>();
 	}
 }
 
 template <auto format_literal, typename grammar_tag,
-		  bool trim_terminal_literal_line_feed = false,
 		  typename callback_type, typename argument_pack,
 		  ::std::size_t... operation_index>
+requires(sizeof...(operation_index) <= 8u)
+// A small compiled program must stay in the public source frame: that is where
+// `__builtin_constant_p` can still observe literal scalar fields.  GCC 15's
+// two-operation brace probe otherwise retained an outlined lowering call after
+// the constant gate had succeeded.  The eight-operation ceiling keeps this
+// obligation away from the measured 64-field code-size reversal; optimizer-
+// unknown arguments use the identical callback and runtime formatter after
+// this syntax-only expansion.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	defined(__clang__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+	inline constexpr decltype(auto) lower_format_program_impl(
+		callback_type &&callback, argument_pack &arguments,
+		::std::index_sequence<operation_index...>)
+{
+	return ::std::forward<callback_type>(callback)(
+		make_format_operation<
+			format_literal, grammar_tag, operation_index>(arguments)...);
+}
+
+template <auto format_literal, typename grammar_tag,
+		  typename callback_type, typename argument_pack,
+		  ::std::size_t... operation_index>
+requires(8u < sizeof...(operation_index))
 // Clang 21--23 require all three operation-pack bridge links to remain visible:
 // on a 64-field record the complete bridge saves 2,592 bytes and about 4--6%
 // direct-output time, while removing this link alone returns to the ordinary
@@ -2254,21 +2291,15 @@ FAST_IO_GNU_ALWAYS_INLINE
 		callback_type &&callback, argument_pack &arguments,
 		::std::index_sequence<operation_index...>)
 {
-	static_assert(!trim_terminal_literal_line_feed ||
-					  format_program_has_terminal_literal_line_feed<
-						  format_literal, grammar_tag>(),
-				  "fast_io format: terminal LF trimming requires a compiled-program proof");
-	// This is the only type expansion in the emitter.  There is no recursive AST walk,
-	// token-kind switch, parser cursor, or type-erased argument visit in generated code.
+	// This is the only type expansion in the emitter. Every compiled operation is
+	// lowered exactly once; generated code contains no recursive AST walk,
+	// token-kind switch, parser cursor, or type-erased argument visit.
 	return ::std::forward<callback_type>(callback)(
 		make_format_operation<
-			format_literal, grammar_tag, operation_index,
-			(trim_terminal_literal_line_feed &&
-			 operation_index + 1u == sizeof...(operation_index))>(arguments)...);
+			format_literal, grammar_tag, operation_index>(arguments)...);
 }
 
 template <auto format_literal, typename grammar_tag,
-		  bool trim_terminal_literal_line_feed = false,
 		  typename callback_type, typename argument_pack,
 		  ::std::size_t... operation_index>
 inline constexpr decltype(auto) lower_static_format_program_impl(
@@ -2277,39 +2308,117 @@ inline constexpr decltype(auto) lower_static_format_program_impl(
 {
 	return ::std::forward<callback_type>(callback)(
 		make_static_format_operation<
-			format_literal, grammar_tag, operation_index,
-			(trim_terminal_literal_line_feed &&
-			 operation_index + 1u == sizeof...(operation_index))>(arguments)...);
+			format_literal, grammar_tag, operation_index>(arguments)...);
 }
 
 template <auto format_literal, typename grammar_tag,
-		  bool trim_terminal_literal_line_feed,
 		  typename callback_type, typename... argument_types>
-// This selector and the public entry below form the profitable GCC 13 bridge
+requires(
+	::fast_io::fmt::details::checked_program<format_literal, grammar_tag>
+		.operation_count <= 8u)
+// Keep the small syntax dispatcher in the caller for the same reason as its
+// operation-pack leaf above.  This wrapper performs no formatting decision: it
+// validates the grammar, creates the indexed argument view, and immediately
+// transfers the translated leaves to the IO callback.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	defined(__clang__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr decltype(auto) lower_format_program_dispatch(
+	callback_type &&callback, argument_types &...arguments)
+{
+	constexpr bool has_argument_list_validation{
+		::fast_io::fmt::details::format_argument_list_validation_adl::
+			expression<format_literal, grammar_tag, argument_types...>};
+	if constexpr (
+		::std::same_as<::std::remove_cvref_t<grammar_tag>,
+			::fast_io::fmt::brace_fmt_t> ||
+		::std::same_as<::std::remove_cvref_t<grammar_tag>,
+			::fast_io::fmt::printf_fmt_t>)
+	{
+		static_assert(has_argument_list_validation,
+			"fast_io format: a built-in grammar is missing its exact argument-domain validator");
+	}
+	if constexpr (has_argument_list_validation)
+	{
+		static_assert(
+			::fast_io::fmt::details::format_argument_list_validation_adl::invoke<
+				format_literal, grammar_tag, argument_types...>(),
+			"fast_io format: the grammar rejected the supplied argument domain");
+	}
+	if constexpr (!(::fast_io::fmt::
+						is_static_format_argument_holder_v<argument_types> ||
+					...))
+	{
+		auto indexed_arguments{make_indexed_argument_pack(arguments...)};
+		constexpr auto operation_count{
+			::fast_io::fmt::details::checked_program<format_literal,
+											 grammar_tag>
+				.operation_count};
+		return lower_format_program_impl<format_literal, grammar_tag>(
+			::std::forward<callback_type>(callback), indexed_arguments,
+			::std::make_index_sequence<operation_count>{});
+	}
+	else if constexpr (automatic_static_format_output_budget_exceeded<
+						   format_literal, grammar_tag,
+						   argument_types...>())
+	{
+		static_assert(!automatic_static_format_output_budget_exceeded<
+						  format_literal, grammar_tag,
+						  argument_types...>(),
+					  "fast_io format: an automatically static replacement has no finite output within the compile-time budget");
+		return ::std::forward<callback_type>(callback)();
+	}
+	else
+	{
+		auto indexed_arguments{make_indexed_argument_pack(arguments...)};
+		constexpr auto operation_count{
+			::fast_io::fmt::details::checked_program<format_literal, grammar_tag>
+				.operation_count};
+		return lower_static_format_program_impl<format_literal, grammar_tag>(
+			::std::forward<callback_type>(callback), indexed_arguments,
+			::std::make_index_sequence<operation_count>{});
+	}
+}
+
+template <auto format_literal, typename grammar_tag,
+		  typename callback_type, typename... argument_types>
+requires(
+	8u < ::fast_io::fmt::details::checked_program<format_literal, grammar_tag>
+			  .operation_count)
+// This dispatcher and the public entry below form the profitable GCC 13 bridge
 // when the pack-expansion implementation itself remains ordinary: the audited
 // 64-field direct record falls from about 519 ns to 414 ns.  GCC 14 is a direct
 // reversal (more text and no speedup), so that compiler interval is deliberately
-// closed.  Clang needs the complete three-link bridge from version 21 onward;
-// Clang 20 reverses and Clang 23 remains positive.  The terminal-LF concat entry
-// has no source query and remains ordinary inline.
+// closed. Clang needs the complete three-link bridge from version 21 onward;
+// Clang 20 reverses and Clang 23 remains positive. The dispatcher remains a
+// caller-side bridge and does not own formatting or IO policy.
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-	inline constexpr decltype(auto) lower_format_program_with_trim_policy(
-		callback_type &&callback, argument_types &...arguments)
+inline constexpr decltype(auto) lower_format_program_dispatch(
+	callback_type &&callback, argument_types &...arguments)
 {
-	if constexpr (::fast_io::fmt::details::format_argument_list_validation_adl::
-					  expression<format_literal, grammar_tag,
-								 argument_types...>)
+	constexpr bool has_argument_list_validation{
+		::fast_io::fmt::details::format_argument_list_validation_adl::
+			expression<format_literal, grammar_tag, argument_types...>};
+	if constexpr (
+		::std::same_as<::std::remove_cvref_t<grammar_tag>,
+			::fast_io::fmt::brace_fmt_t> ||
+		::std::same_as<::std::remove_cvref_t<grammar_tag>,
+			::fast_io::fmt::printf_fmt_t>)
 	{
-		::fast_io::fmt::details::format_argument_list_validation_adl::invoke<
-			format_literal, grammar_tag, argument_types...>();
+		static_assert(has_argument_list_validation,
+			"fast_io format: a built-in grammar is missing its exact argument-domain validator");
 	}
-	static_assert(!trim_terminal_literal_line_feed ||
-					  format_program_has_terminal_literal_line_feed<
-						  format_literal, grammar_tag>(),
-				  "fast_io format: terminal LF trimming requires a compiled-program proof");
+	if constexpr (has_argument_list_validation)
+	{
+		static_assert(
+			::fast_io::fmt::details::format_argument_list_validation_adl::invoke<
+				format_literal, grammar_tag, argument_types...>(),
+			"fast_io format: the grammar rejected the supplied argument domain");
+	}
 	if constexpr (!(::fast_io::fmt::
 						is_static_format_argument_holder_v<argument_types> ||
 					...))
@@ -2323,8 +2432,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 													 grammar_tag>
 				.operation_count};
 		return lower_format_program_impl<
-			format_literal, grammar_tag,
-			trim_terminal_literal_line_feed>(
+			format_literal, grammar_tag>(
 			::std::forward<callback_type>(callback), indexed_arguments,
 			::std::make_index_sequence<operation_count>{});
 	}
@@ -2347,23 +2455,43 @@ FAST_IO_GNU_ALWAYS_INLINE
 		// operation is still lowered separately; the IO continuation alone decides
 		// whether adjacent providers become one immutable object or are copied.
 		return lower_static_format_program_impl<
-			format_literal, grammar_tag,
-			trim_terminal_literal_line_feed>(
+			format_literal, grammar_tag>(
 			::std::forward<callback_type>(callback), indexed_arguments,
 			::std::make_index_sequence<operation_count>{});
 	}
 }
 
 /**
- * Preserves the original public lowering entry and its explicit template-argument order.
+ * Lowers the complete compiled operation sequence in source order.
  *
- * This final ordinary-print entry mirrors the measured selector policy above.
- * GCC 13 benefits only from the selector/public pair and GCC 14 reverses;
+ * The explicit template-argument order is part of the public lowering contract.
+ * This final ordinary-print entry mirrors the measured dispatcher policy above.
+ * GCC 13 benefits only from the dispatcher/public pair and GCC 14 reverses;
  * Clang 21--23 benefit from the complete three-link bridge and Clang 20
  * reverses.  Because Clang 23 is still positive, its interval remains open.
  */
 template <auto format_literal, typename grammar_tag, typename callback_type,
 		  typename... argument_types>
+requires(
+	::fast_io::fmt::details::checked_program<format_literal, grammar_tag>
+		.operation_count <= 8u)
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	defined(__clang__)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+	inline constexpr decltype(auto) lower_format_program(
+		callback_type &&callback, argument_types &...arguments)
+{
+	return ::fast_io::fmt::details::lower_format_program_dispatch<
+		format_literal, grammar_tag>(
+		::std::forward<callback_type>(callback), arguments...);
+}
+
+template <auto format_literal, typename grammar_tag, typename callback_type,
+		  typename... argument_types>
+requires(
+	8u < ::fast_io::fmt::details::checked_program<format_literal, grammar_tag>
+			  .operation_count)
 #if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 13) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
@@ -2371,19 +2499,8 @@ FAST_IO_GNU_ALWAYS_INLINE
 	inline constexpr decltype(auto) lower_format_program(
 		callback_type &&callback, argument_types &...arguments)
 {
-	return ::fast_io::fmt::details::lower_format_program_with_trim_policy<
-		format_literal, grammar_tag, false>(
-		::std::forward<callback_type>(callback), arguments...);
-}
-
-/** Lowers a proved terminal literal LF as concat's separate line flag. */
-template <auto format_literal, typename grammar_tag, typename callback_type,
-		  typename... argument_types>
-inline constexpr decltype(auto) lower_format_program_trim_terminal_line_feed(
-	callback_type &&callback, argument_types &...arguments)
-{
-	return ::fast_io::fmt::details::lower_format_program_with_trim_policy<
-		format_literal, grammar_tag, true>(
+	return ::fast_io::fmt::details::lower_format_program_dispatch<
+		format_literal, grammar_tag>(
 		::std::forward<callback_type>(callback), arguments...);
 }
 

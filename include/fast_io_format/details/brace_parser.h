@@ -10,15 +10,17 @@
 namespace fast_io::fmt::details
 {
 
+// `parse_brace_format` is the single immediate boundary. Its parameterized helpers are constexpr so early C++20
+// frontends do not reject nested immediate calls whose values become known only when that boundary is invoked.
 template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval bool is_brace_alignment(char_type value) noexcept
+[[nodiscard]] constexpr bool is_brace_alignment(char_type value) noexcept
 {
 	return is_syntax_character<u8'<'>(value) || is_syntax_character<u8'>'>(value) ||
 		   is_syntax_character<u8'^'>(value);
 }
 
 template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval format_alignment brace_alignment(char_type value) noexcept
+[[nodiscard]] constexpr format_alignment brace_alignment(char_type value) noexcept
 {
 	if (is_syntax_character<u8'<'>(value))
 	{
@@ -38,7 +40,7 @@ struct decoded_fill_scalar
 };
 
 template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval ::std::uint_least32_t unicode_code_unit_value(char_type value) noexcept
+[[nodiscard]] constexpr ::std::uint_least32_t unicode_code_unit_value(char_type value) noexcept
 {
 	using unsigned_type = ::std::make_unsigned_t<char_type>;
 	auto unsigned_value{static_cast<unsigned_type>(value)};
@@ -51,7 +53,7 @@ template <::fast_io::fmt::format_character char_type>
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string>
-[[nodiscard]] consteval decoded_fill_scalar decode_fill_scalar(::std::size_t cursor) noexcept
+[[nodiscard]] constexpr decoded_fill_scalar decode_fill_scalar(::std::size_t cursor) noexcept
 {
 	using fixed_string_type = ::std::remove_cv_t<decltype(format_string)>;
 	using char_type = typename fixed_string_type::value_type;
@@ -136,7 +138,7 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 }
 
 template <::fast_io::fmt::format_character char_type>
-[[nodiscard]] consteval bool brace_presentation(char_type value, presentation_type &result) noexcept
+[[nodiscard]] constexpr bool brace_presentation(char_type value, presentation_type &result) noexcept
 {
 	if (is_syntax_character<u8'a'>(value))
 	{
@@ -218,7 +220,7 @@ template <::fast_io::fmt::format_character char_type>
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool brace_select_automatic_argument(result_type &result,
+constexpr bool brace_select_automatic_argument(result_type &result,
 											   argument_reference &reference, brace_indexing_state &indexing_state,
 											   ::std::size_t &next_automatic_index, ::std::size_t position) noexcept
 {
@@ -238,7 +240,7 @@ consteval bool brace_select_automatic_argument(result_type &result,
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool brace_select_manual_argument(result_type &result,
+constexpr bool brace_select_manual_argument(result_type &result,
 											argument_reference &reference, brace_indexing_state &indexing_state,
 											::std::size_t index, ::std::size_t position) noexcept
 {
@@ -259,7 +261,7 @@ consteval bool brace_select_manual_argument(result_type &result,
  * neither hashing nor character-set-dependent identifier normalization occurs.
  */
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool parse_brace_argument_reference(result_type &result,
+constexpr bool parse_brace_argument_reference(result_type &result,
 											  ::std::size_t &cursor, bool allow_colon, argument_reference &reference,
 											  brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {
@@ -334,7 +336,7 @@ consteval bool parse_brace_argument_reference(result_type &result,
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool parse_brace_dynamic_parameter(result_type &result,
+constexpr bool parse_brace_dynamic_parameter(result_type &result,
 											 ::std::size_t &cursor, format_parameter &parameter,
 											 brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {
@@ -356,7 +358,7 @@ consteval bool parse_brace_dynamic_parameter(result_type &result,
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool parse_brace_unsigned(result_type &result, ::std::size_t &cursor,
+constexpr bool parse_brace_unsigned(result_type &result, ::std::size_t &cursor,
 									::std::size_t &value, format_parse_error overflow_error) noexcept
 {
 	constexpr ::std::size_t size{format_string.size()};
@@ -374,7 +376,7 @@ consteval bool parse_brace_unsigned(result_type &result, ::std::size_t &cursor,
 }
 
 template <::fast_io::fmt::basic_fixed_string format_string, typename result_type>
-consteval bool parse_brace_specification(result_type &result, ::std::size_t &cursor,
+constexpr bool parse_brace_specification(result_type &result, ::std::size_t &cursor,
 										 format_specification<typename decltype(format_string)::value_type> &specification,
 										 brace_indexing_state &indexing_state, ::std::size_t &next_automatic_index) noexcept
 {

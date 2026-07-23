@@ -178,7 +178,12 @@ inline constexpr bool is_basic_static_c_array_value_v{
  * A parser or semantic adapter may define the recipe, but it never owns the
  * resulting character object. The core node below is the sole owner of that
  * object and consequently keeps materialization, provider lifetime, and output
- * selection below every syntax front end.
+ * selection below every syntax front end. `emit` must be usable in a constant
+ * expression, must write exactly `size` code units, and must return the
+ * one-past-end pointer. The core invokes it from an immediate materializer and
+ * verifies that returned pointer; declaring the provider operation `constexpr`
+ * is the portable C++20 spelling because early frontends cannot pass a local
+ * buffer through a dependent consteval call.
  */
 template <typename provider_type>
 concept static_provider_recipe = requires(
@@ -204,6 +209,24 @@ concept static_provider_recipe = requires(
 inline constexpr ::std::size_t static_provider_materialization_code_unit_limit{
 	1u << 16u};
 
+/** Materializes one provider recipe in a namespace-scope immediate context. */
+template <static_provider_recipe provider_type>
+[[nodiscard]] inline consteval auto static_provider_make_storage() noexcept
+{
+	using char_type = typename provider_type::char_type;
+	constexpr ::std::size_t size{provider_type::size};
+	// A real one-element object keeps the empty-provider case free of null
+	// pointer arithmetic while exposing an empty range to every consumer.
+	::fast_io::freestanding::array<
+		char_type, size == 0u ? 1u : size> result{};
+	auto const end{provider_type::emit(result.data())};
+	if (end != result.data() + size)
+	{
+		::fast_io::fast_terminate();
+	}
+	return result;
+}
+
 /** Core-owned immutable object obtained from one semantic provider recipe. */
 template <static_provider_recipe provider_type>
 struct static_provider_storage_t
@@ -219,28 +242,18 @@ struct static_provider_storage_t
 		sizeof(char_type),
 		"fast_io static provider: byte extent is not representable");
 
-	[[nodiscard]] inline static consteval auto make_storage() noexcept
-	{
-		// A real one-element object keeps the empty-provider case free of null
-		// pointer arithmetic while exposing an empty range to every consumer.
-		::fast_io::freestanding::array<
-			char_type, size == 0u ? 1u : size> result{};
-		auto const end{provider_type::emit(result.data())};
-		if (end != result.data() + size)
-		{
-			::fast_io::fast_terminate();
-		}
-		return result;
-	}
-
 	// Hidden visibility prevents an ELF interposition/GOT boundary from being
 	// introduced for this implementation-owned COMDAT. It does not request
-	// inlining and therefore has no effect on the caller's text-size policy.
+	// inlining and therefore has no effect on the caller's text-size policy. The
+	// namespace-scope immediate helper is intentional: early Clang rejects the
+	// equivalent static-member call, while GCC 12 rejects a dependent provider
+	// call inside the otherwise equivalent immediate lambda. This form keeps
+	// both calls in one mandatory constant-evaluation context.
 	static inline constexpr auto storage
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
 		__attribute__((visibility("hidden")))
 #endif
-		{make_storage()};
+		{::fast_io::manipulators::static_provider_make_storage<provider_type>()};
 };
 
 /**
@@ -888,9 +901,27 @@ template <auto>
 struct structural_value_token
 {};
 
+/**
+ * Native-MSVC direct floating provider materialization is frontend-unsafe.
+ *
+ * MSVC 19.44, both 19.50 releases, 19.51, and the current 19.latest backend
+ * ICE while forming `make_native_storage` for a direct floating NTTP. Keep
+ * the requires-expression uninstantiated on those frontends; the ordinary
+ * static-argument alias remains the semantics-preserving run-time fallback.
+ */
+template <static_argument_constant value_literal>
+inline constexpr bool native_static_argument_frontend_safe{
+#if defined(_MSC_VER) && !defined(__clang__)
+	!::std::floating_point<::std::remove_cv_t<decltype(value_literal.value)>>
+#else
+	true
+#endif
+};
+
 /** Substitution-safe proof that native lowering can produce a constant record. */
 template <typename char_type, static_argument_constant value_literal>
-concept native_materializable = ::std::integral<char_type> && requires {
+concept native_materializable = ::std::integral<char_type> &&
+	native_static_argument_frontend_safe<value_literal> && requires {
 	typename structural_value_token<
 		::fast_io::manipulators::static_argument_details::
 			make_native_storage<char_type, value_literal>()>;
@@ -910,7 +941,7 @@ struct static_argument_native_provider
 		::fast_io::manipulators::static_argument_details::native_exact_size<
 			output_char_type, value_literal>()};
 
-	[[nodiscard]] inline static consteval char_type *emit(
+	[[nodiscard]] inline static constexpr char_type *emit(
 		char_type *output) noexcept
 	{
 		constexpr auto spelling{
@@ -1057,12 +1088,39 @@ print_compiler_constant_pre_normalization_safe(
 	return {};
 }
 
+
+/// @brief Classifies an unnamed static argument as a type-owned, graph-proven constant provider.
+/// @details Its value is an NTTP rather than an optimizer-discovered field, so this proof is valid even on native MSVC;
+///          the native-materializable constraint still rejects unsupported representations before proxy formation.
+template <::std::integral char_type, static_argument_constant value_literal>
+	requires ::fast_io::manipulators::static_argument_details::
+		native_materializable<char_type, value_literal>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type, static_arg_t<value_literal>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, static_argument_constant name_literal,
 	static_argument_constant value_literal>
 	requires ::fast_io::manipulators::static_argument_details::
 		native_materializable<char_type, value_literal>
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
+	::fast_io::io_reserve_type_t<
+		char_type, static_named_arg_t<name_literal, value_literal>>) noexcept
+{
+	return {};
+}
+
+/// @brief Applies the same type-owned graph proof to a named static argument.
+template <::std::integral char_type, static_argument_constant name_literal,
+	static_argument_constant value_literal>
+	requires ::fast_io::manipulators::static_argument_details::
+		native_materializable<char_type, value_literal>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
 	::fast_io::io_reserve_type_t<
 		char_type, static_named_arg_t<name_literal, value_literal>>) noexcept
 {

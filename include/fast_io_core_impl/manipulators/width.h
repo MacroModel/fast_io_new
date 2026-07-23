@@ -547,8 +547,67 @@ inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 		value.reference, value.width, maximum_size);
 }
 
-// Width is a semantic/layout node, so its compiler-constant protocol recursively replaces only its child.  The
-// ordinary width types and format lowering remain algorithm-neutral; print/concat decide whether the complete bounded
+/// @brief Exposes a dynamic-precision descendant through fixed-placement width layout.
+/// @details Width necessarily executes its stored child exactly once before applying padding. Forwarding this type-only
+///          negative marker lets each IO consumer reject a compiler/version whose successful constant path retains the
+///          child's precision planner. It evaluates neither width nor child and grants no materialization permission.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+		char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	return {};
+}
+
+/// @brief Exposes the same descendant when fixed placement owns an explicit fill code unit.
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<
+			placement, T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Exposes a dynamic-precision descendant through run-time placement layout.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+		char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	return {};
+}
+
+/// @brief Exposes the same descendant when run-time placement owns an explicit fill code unit.
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_dynamic_precision_floating_leaf(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<
+			T, width_char_type>>) noexcept
+{
+	return {};
+}
+
+// Width is a semantic/layout node, so its compiler-constant protocol recursively replaces only its child. The ordinary
+// width types and format lowering remain algorithm-neutral; print/concat decide whether the complete bounded
 // replacement is profitable for the destination.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T>
@@ -569,6 +628,20 @@ print_compiler_constant_pre_normalization_safe(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_t<placement, T>>) noexcept
 {
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T> &&
+		::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_t<placement, T>>) noexcept
+{
+	// The child graph is independently proven; the width matrix adds the fixed placement and width fields.
 	return {};
 }
 
@@ -663,6 +736,23 @@ template <::std::integral char_type,
 	::fast_io::manipulators::scalar_placement placement, typename T,
 	::std::integral width_char_type>
 	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T> &&
+		::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_ch_t<
+			placement, T, width_char_type>>) noexcept
+{
+	// The explicit fill character has its own unknown-field query root in addition to the proven child and width.
+	return {};
+}
+
+template <::std::integral char_type,
+	::fast_io::manipulators::scalar_placement placement, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
 		::fast_io::details::compiler_constant_width_child<char_type, T>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
 print_compiler_constant_materialization_eligible(
@@ -734,6 +824,19 @@ print_compiler_constant_pre_normalization_safe(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_t<T>>) noexcept
 {
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::compiler_constant_width_child<char_type, T> &&
+		::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_t<T>>) noexcept
+{
+	// Runtime placement and width are independently covered negative fields; consumer profitability is still separate.
 	return {};
 }
 
@@ -813,6 +916,22 @@ print_compiler_constant_pre_normalization_safe(
 	::fast_io::io_reserve_type_t<char_type,
 		::fast_io::manipulators::width_runtime_ch_t<T, width_char_type>>) noexcept
 {
+	return {};
+}
+
+template <::std::integral char_type, typename T,
+	::std::integral width_char_type>
+	requires ::std::same_as<char_type, width_char_type> &&
+		::fast_io::details::compiler_constant_width_child<char_type, T> &&
+		::fast_io::compiler_constant_materialization_graph_proven_source_shape<
+			char_type, T>
+[[nodiscard]] inline constexpr ::std::true_type
+print_compiler_constant_materialization_graph_proven(
+	::fast_io::io_reserve_type_t<char_type,
+		::fast_io::manipulators::width_runtime_ch_t<
+			T, width_char_type>>) noexcept
+{
+	// The complete placement/width/fill/child field product is classified before any IO consumer may query it.
 	return {};
 }
 

@@ -5,6 +5,116 @@
 #include <string>
 #include <string_view>
 
+namespace
+{
+
+struct dual_protocol_pattern_child
+{};
+
+inline constexpr char dual_protocol_scatter[]{'s', 'c', 'a', 't', 't', 'e', 'r'};
+
+[[maybe_unused]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char, dual_protocol_pattern_child>) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] inline constexpr char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char, dual_protocol_pattern_child>,
+	char *output, dual_protocol_pattern_child) noexcept
+{
+	*output = 'r';
+	return output + 1u;
+}
+
+inline constexpr ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, dual_protocol_pattern_child>,
+	dual_protocol_pattern_child) noexcept
+{
+	return {dual_protocol_scatter, sizeof(dual_protocol_scatter)};
+}
+
+struct rvalue_only_pattern_child
+{};
+
+[[maybe_unused]] inline constexpr ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, rvalue_only_pattern_child>,
+	rvalue_only_pattern_child &&) noexcept
+{
+	return {dual_protocol_scatter, sizeof(dual_protocol_scatter)};
+}
+
+struct throwing_pattern_child
+{};
+
+inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, throwing_pattern_child>,
+	throwing_pattern_child &)
+{
+	throw 17;
+}
+
+struct throwing_shift_pattern_child
+{};
+
+inline constexpr char throwing_shift_scatter[]{'-', '1'};
+
+inline constexpr ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, throwing_shift_pattern_child>,
+	throwing_shift_pattern_child &) noexcept
+{
+	return {throwing_shift_scatter, sizeof(throwing_shift_scatter)};
+}
+
+inline ::std::size_t print_define_internal_shift(
+	::fast_io::io_reserve_type_t<char, throwing_shift_pattern_child>,
+	throwing_shift_pattern_child &)
+{
+	throw 23;
+}
+
+using dual_protocol_pattern_field =
+	::fast_io::fmt::details::basic_pattern_width<
+		char, 2u, dual_protocol_pattern_child>;
+using rvalue_only_pattern_field =
+	::fast_io::fmt::details::basic_pattern_width<
+		char, 2u, rvalue_only_pattern_child>;
+using throwing_pattern_field =
+	::fast_io::fmt::details::basic_pattern_width<
+		char, 2u, throwing_pattern_child>;
+using throwing_shift_pattern_field =
+	::fast_io::fmt::details::basic_pattern_width<
+		char, 2u, throwing_shift_pattern_child>;
+
+constexpr bool dual_protocol_pattern_capacity_test()
+{
+	dual_protocol_pattern_field const field{
+		{}, 1u, ::fast_io::manipulators::scalar_placement::right,
+		{'x', 'y'}};
+	auto const capacity{::fast_io::print_reserve_size(
+		::fast_io::io_reserve_type<char, dual_protocol_pattern_field>, field)};
+	::std::array<char, 16u> output{};
+	auto const end{::fast_io::print_reserve_define(
+		::fast_io::io_reserve_type<char, dual_protocol_pattern_field>,
+		output.data(), field)};
+	return capacity == sizeof(dual_protocol_scatter) + 2u &&
+		end == output.data() + sizeof(dual_protocol_scatter) &&
+		::std::string_view{output.data(), sizeof(dual_protocol_scatter)} ==
+			"scatter";
+}
+
+static_assert(dual_protocol_pattern_capacity_test());
+static_assert(!::fast_io::dynamic_reserve_printable<
+	char, rvalue_only_pattern_field>);
+static_assert(!noexcept(::fast_io::print_reserve_size(
+	::fast_io::io_reserve_type<char, throwing_pattern_field>,
+	throwing_pattern_field{})));
+static_assert(!noexcept(::fast_io::print_reserve_define(
+	::fast_io::io_reserve_type<char, throwing_shift_pattern_field>,
+	static_cast<char *>(nullptr), throwing_shift_pattern_field{})));
+
+} // namespace
+
 template <typename char_type, ::std::size_t output_size, ::std::size_t fill_size>
 constexpr bool direct_format_fill_test(
 	::std::array<char_type, output_size> expected,
@@ -53,6 +163,40 @@ static_assert(ascii_precision.storage_size == 1u &&
 
 int main()
 {
+	try
+	{
+		(void)::fast_io::print_reserve_size(
+			::fast_io::io_reserve_type<char, throwing_pattern_field>,
+			throwing_pattern_field{});
+		return 9;
+	}
+	catch (int error)
+	{
+		if (error != 17)
+		{
+			return 10;
+		}
+	}
+
+	try
+	{
+		throwing_shift_pattern_field const field{
+			{}, 4u, ::fast_io::manipulators::scalar_placement::internal,
+			{'x', 'y'}};
+		char output[8u]{};
+		(void)::fast_io::print_reserve_define(
+			::fast_io::io_reserve_type<char, throwing_shift_pattern_field>,
+			output, field);
+		return 11;
+	}
+	catch (int error)
+	{
+		if (error != 23)
+		{
+			return 12;
+		}
+	}
+
 	auto const ascii{::fast_io::fmt::concat_std<"[{:*>{}}]">(
 		::std::string_view{"xy"}, 4095u)};
 	if (ascii.size() != 4097u || ascii.front() != '[' || ascii.back() != ']' ||

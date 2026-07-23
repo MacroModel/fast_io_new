@@ -23,33 +23,18 @@ using nt_alpc_communication_tlc_strvw = ::fast_io::containers::basic_string_view
 template <typename... Args>
 constexpr inline nt_alpc_internal_str concat_nt_alpc_internal_str(Args &&...args)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<nt_alpc_internal_char_type>, Args...>};
-	if constexpr (type_error)
-	{
-		return ::fast_io::basic_general_concat<false, nt_alpc_internal_char_type, nt_alpc_internal_str>(
-			::fast_io::io_print_forward<nt_alpc_internal_char_type>(::fast_io::io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(type_error, "some types are not printable, so we cannot concat ::fast_io::win32::nt::details::nt_alpc_internal_str");
-		return {};
-	}
+	// Concat, rather than a dummy print destination, owns both source normalization and the selected string adapter.
+	// Passing the named arguments preserves this wrapper's established lvalue observation without normalizing twice.
+	return ::fast_io::basic_general_concat_checked<
+		false, nt_alpc_internal_char_type, nt_alpc_internal_str>(args...);
 }
 
 template <typename... Args>
 constexpr inline nt_alpc_internal_tlc_str concat_nt_alpc_internal_tlc_str(Args &&...args)
 {
-	constexpr bool type_error{::fast_io::operations::defines::print_freestanding_okay<::fast_io::details::dummy_buffer_output_stream<nt_alpc_internal_char_type>, Args...>};
-	if constexpr (type_error)
-	{
-		return ::fast_io::basic_general_concat<false, nt_alpc_internal_char_type, nt_alpc_internal_tlc_str>(
-			::fast_io::io_print_forward<nt_alpc_internal_char_type>(::fast_io::io_print_alias(args))...);
-	}
-	else
-	{
-		static_assert(type_error, "some types are not printable, so we cannot concat ::fast_io::win32::nt::details::nt_alpc_internal_tlc_str");
-		return {};
-	}
+	// The thread-local result uses the identical checked concat boundary and therefore the identical executable proof.
+	return ::fast_io::basic_general_concat_checked<
+		false, nt_alpc_internal_char_type, nt_alpc_internal_tlc_str>(args...);
 }
 
 struct nt_alpc_connect_handle

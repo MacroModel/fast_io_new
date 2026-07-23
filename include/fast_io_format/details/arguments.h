@@ -184,9 +184,15 @@ template <auto format_literal, argument_reference reference, typename... argumen
 	}
 }
 
-/** Resolves a consteval reference value when a grammar-wide pass cannot name it as an NTTP. */
+/** Resolves a reference value when a grammar-wide pass cannot name it as an NTTP.
+ *
+ * The grammar-wide validator is the immediate proof boundary.  This helper is
+ * deliberately constexpr: its reference is a local value inside that proof,
+ * and early C++20 frontends reject forwarding such a value into a nested
+ * immediate invocation even though the complete evaluation is mandatory.
+ */
 template <auto format_literal, typename... argument_types>
-[[nodiscard]] inline consteval argument_resolution
+[[nodiscard]] inline constexpr argument_resolution
 resolve_argument_reference_value(argument_reference reference) noexcept
 {
 	if (reference.kind != argument_reference_kind::name)
@@ -202,7 +208,7 @@ resolve_argument_reference_value(argument_reference reference) noexcept
 	[[maybe_unused]] ::std::size_t current_index{};
 	::std::size_t selected_index{};
 	::std::size_t match_count{};
-	([&]<typename argument_type>() consteval {
+	([&]<typename argument_type>() constexpr {
 		using clean_type = ::std::remove_cvref_t<argument_type>;
 		if constexpr (::fast_io::fmt::is_static_named_arg_v<clean_type>)
 		{

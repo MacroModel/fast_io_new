@@ -64,8 +64,12 @@ struct printf_decimal_scan
 };
 
 template <::fast_io::fmt::basic_fixed_string format_string>
-[[nodiscard]] consteval printf_decimal_scan scan_printf_decimal(::std::size_t cursor) noexcept
+[[nodiscard]] constexpr printf_decimal_scan scan_printf_decimal(::std::size_t cursor) noexcept
 {
+	// This helper is evaluated only by the enclosing consteval parser.  Keeping
+	// the leaf constexpr avoids the pre-DR20 Clang 13--15 rule that rejects a
+	// mutable parser cursor as an argument to a nested immediate invocation;
+	// the outer parser still proves that no runtime parsing path can exist.
 	constexpr ::std::size_t size{format_string.size()};
 	printf_decimal_scan result{};
 	result.end = cursor;

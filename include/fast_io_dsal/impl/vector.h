@@ -1168,21 +1168,21 @@ inline constexpr void swap(vector<T, allocator> &lhs, vector<T, allocator> &rhs)
 }
 
 template <typename ValueType, typename Alloc, typename U>
-inline constexpr ::fast_io::containers::vector<ValueType, Alloc>::size_type erase(::fast_io::containers::vector<ValueType, Alloc> &c, U const &value)
+inline constexpr typename ::fast_io::containers::vector<ValueType, Alloc>::size_type erase(::fast_io::containers::vector<ValueType, Alloc> &c, U const &value)
 {
 	auto it = ::std::remove(c.begin(), c.end(), value);
 	auto r = c.end() - it;
 	c.erase(it, c.end());
-	return static_cast<::fast_io::containers::vector<ValueType, Alloc>::size_type>(r);
+	return static_cast<typename ::fast_io::containers::vector<ValueType, Alloc>::size_type>(r);
 }
 
 template <typename ValueType, typename Alloc, typename Pred>
-inline constexpr ::fast_io::containers::vector<ValueType, Alloc>::size_type erase_if(::fast_io::containers::vector<ValueType, Alloc> &c, Pred pred)
+inline constexpr typename ::fast_io::containers::vector<ValueType, Alloc>::size_type erase_if(::fast_io::containers::vector<ValueType, Alloc> &c, Pred pred)
 {
 	auto it = ::std::remove_if(c.begin(), c.end(), pred);
 	auto r = c.end() - it;
 	c.erase(it, c.end());
-	return static_cast<::fast_io::containers::vector<ValueType, Alloc>::size_type>(r);
+	return static_cast<typename ::fast_io::containers::vector<ValueType, Alloc>::size_type>(r);
 }
 
 

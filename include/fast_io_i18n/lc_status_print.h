@@ -815,28 +815,59 @@ template <typename char_type, typename output, typename T>
 concept lc_bind_one_well_formed_for_output =
 	::std::integral<char_type> &&
 	requires(::fast_io::basic_lc_all<char_type> const *lc, T &value) {
-		::fast_io::details::decay::lc_bind_one<char_type, ::std::remove_cvref_t<output>>(
+		::fast_io::details::decay::lc_bind_one<char_type, ::std::remove_reference_t<output>>(
 			lc, value);
 	};
 
+/// @brief Proves the exact locale-bound operation after every mandatory output-mutex unwrap.
+/// @details Runtime acquires each wrapper lock and recurses to its named unlocked observer before it asks whether a
+///          locale leaf has an output-specific CPO. The proof follows that same type chain, preserving const at every
+///          edge. At the terminal it forms each `lc_bind_one` result from a named source lvalue and removes only the
+///          transport reference; this retains a const leaf which ordinary dispatch cannot legally mutate.
 template <bool line, ::std::integral char_type, typename output, typename... Args>
-inline constexpr bool lc_status_print_output_run_okay = []() constexpr {
-	using normalized_output = ::std::remove_cvref_t<output>;
-	if constexpr ((::fast_io::details::decay::lc_bind_one_well_formed_for_output<
-					  char_type, normalized_output, Args> && ...))
+inline consteval bool lc_status_print_output_run_okay_impl() noexcept
+{
+	using normalized_output = ::std::remove_reference_t<output>;
+	if constexpr (
+		::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			normalized_output>)
+	{
+		if constexpr (
+			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
+				normalized_output>)
+		{
+			using unlocked_output = ::std::remove_reference_t<decltype(
+				::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+					::std::declval<normalized_output &>()))>;
+			return ::fast_io::details::decay::lc_status_print_output_run_okay_impl<
+				line, char_type, unlocked_output, Args...>();
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else if constexpr (
+		(::fast_io::details::decay::lc_bind_one_well_formed_for_output<
+			 char_type, normalized_output, Args> && ...))
 	{
 		return ::fast_io::operations::decay::defines::print_freestanding_okay_for_line<
 			line, normalized_output,
-			::std::remove_cvref_t<decltype(::fast_io::details::decay::lc_bind_one<
-				char_type, normalized_output>(
-				::std::declval<::fast_io::basic_lc_all<char_type> const *>(),
-				::std::declval<Args &>()))>...>;
+			::std::remove_reference_t<decltype(
+				::fast_io::details::decay::lc_bind_one<char_type, normalized_output>(
+					::std::declval<::fast_io::basic_lc_all<char_type> const *>(),
+					::std::declval<Args &>()))>...>;
 	}
 	else
 	{
 		return false;
 	}
-}();
+}
+
+template <bool line, ::std::integral char_type, typename output, typename... Args>
+inline constexpr bool lc_status_print_output_run_okay{
+	::fast_io::details::decay::lc_status_print_output_run_okay_impl<
+		line, char_type, output, Args...>()};
 
 template <bool line, ::std::integral char_type, typename output>
 struct lc_bound_emit_continuation
@@ -899,7 +930,16 @@ template <bool line, typename output, typename... Args>
 inline constexpr void lc_status_print_define_decay(
 	::fast_io::basic_lc_all<typename output::output_char_type> const *lc, output &out, Args &...args)
 {
-	if constexpr (
+	if constexpr (!line && sizeof...(Args) == 0u)
+	{
+		// A source-free non-line record has no locale-dependent work. Resolve the print-level empty-record contract
+		// before forming the locale selection graph or acquiring a destination mutex: the shared dispatcher ignores
+		// an unobservable destination and follows a complete mutex protocol exactly once when the effective output
+		// supplies `status_print_define<false>()`. Keeping the remaining graph in a discarded branch is part of the
+		// proof, because neither locale CPO discovery nor synchronization may be instantiated for an ignored record.
+		return ::fast_io::operations::decay::print_freestanding_empty_run(out);
+	}
+	else if constexpr (
 		::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<output>)
 	{
 		// Locale binding does not weaken the stream synchronization protocol. In particular, a mutex marker alone
@@ -913,6 +953,25 @@ inline constexpr void lc_status_print_define_decay(
 		if constexpr (
 			::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<output>)
 		{
+			// The surrounding `lc_imbuer::status_print_define` already owns the complete source record. An underlying
+			// pre-binding `status_print_define<line>(output, Args...)` is not an alternative locale execution branch: active
+			// leaves are locale-bound first and only the rebound record enters ordinary IO status selection. Consequently
+			// this structural zero-leaf proof needs no core-style exclusion for an underlying source-graph status owner.
+			constexpr bool structural_graph_can_select_empty{
+				(false || ... ||
+				 (::fast_io::details::decay::print_semantic_pack_argument_v<Args> ||
+				  ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>))};
+			if constexpr (!line && structural_graph_can_select_empty)
+			{
+				// Locale binding has no leaf to translate when the selected fast_io-owned semantic graph is empty. Resolve
+				// the derived zero-argument record through the shared print-level contract before synchronization. The
+				// conservative structural proof invokes no provider CPO; an ordinary or width leaf remains inconclusive and
+				// therefore preserves the established lock-before-locale-forwarding order.
+				if (::fast_io::details::decay::print_semantic_run_provably_empty(args...))
+				{
+					return ::fast_io::operations::decay::print_freestanding_empty_run(out);
+				}
+			}
 			::fast_io::operations::decay::stream_ref_decay_lock_guard guard{
 				::fast_io::operations::decay::output_stream_mutex_ref_decay(out)};
 			// Preserve a stable lvalue result or materialize a prvalue unlocked observer exactly once, then borrow that
@@ -937,11 +996,24 @@ inline constexpr void lc_status_print_define_decay(
 } // namespace operations::decay
 
 template <bool line, typename output, typename... Args>
+	requires(
+		(!line && sizeof...(Args) == 0u &&
+		 ::fast_io::operations::decay::defines::empty_print_observable<
+			 ::std::remove_reference_t<output>>) ||
+		((line || sizeof...(Args) != 0u) &&
+		 ::fast_io::details::decay::lc_status_print_output_run_okay<
+			 line,
+			 typename ::std::remove_reference_t<output>::output_char_type,
+			 output, Args...>))
 inline constexpr void status_print_define(::fast_io::lc_imbuer<output> &imb, Args &...args)
 {
 	// The `lc_imbuer` wrapper and normalized argument owners belong to the enclosing ordinary print operation. Borrowing
 	// all of them keeps a reference handle exact, avoids copying a value handle, and leaves the locale plus every
-	// borrowed scatter alive until this synchronous status customization returns.
+	// borrowed scatter alive until this synchronous status customization returns. A non-line zero-source record has no
+	// locale work of its own, so this forwarding CPO may exist only when the normalized handle's effective output already
+	// proves empty-record observability. Otherwise merely adding a locale wrapper would manufacture that capability and
+	// could acquire an underlying mutex for a record which the unwrapped destination must ignore. Line mode retains this
+	// overload because either an exact line-status operation or the required newline remains observable.
 	::fast_io::operations::decay::lc_status_print_define_decay<line>(
 		__builtin_addressof(imb.locale->all), imb.handle, args...);
 }

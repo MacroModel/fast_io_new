@@ -292,10 +292,11 @@ concept has_locally_complete_io_stream_mutex_protocol =
 namespace mutex_protocol_details
 {
 
-/// @brief Reports whether normalization has already visited the same stream wrapper type.
-/// @details Dispatch selects mutex and unlocked CPOs from the normalized stream type, so cv/ref spelling cannot alter
-///          the next branch. Comparing `remove_cvref_t` identities is therefore the exact recurrence test: revisiting
-///          one identity would select the same CPOs again and cannot make progress at run time.
+/// @brief Reports whether normalization has already visited the same stream wrapper identity.
+/// @details Capability discovery itself preserves cv-qualification because a const observer may expose a different CPO
+///          set. The visited set has the narrower termination role: local protocol admission already forbids progress
+///          which changes only cv/ref spelling, so comparing `remove_cvref_t` identities detects every permitted cycle
+///          without inventing mutability for the next executable edge.
 template <typename T, typename... visited_types>
 inline constexpr bool type_was_visited =
 	(::std::same_as<::std::remove_cvref_t<T>, ::std::remove_cvref_t<visited_types>> || ...);
@@ -311,20 +312,23 @@ inline constexpr bool type_was_visited =
 template <typename T, typename... visited_types>
 inline consteval bool has_complete_input_stream_mutex_protocol_chain() noexcept
 {
-	using normalized_type = ::std::remove_cvref_t<T>;
-	if constexpr (type_was_visited<normalized_type, visited_types...>)
+	using execution_type = ::std::remove_reference_t<T>;
+	if constexpr (type_was_visited<execution_type, visited_types...>)
 	{
 		return false;
 	}
 	else if constexpr (!::fast_io::operations::decay::defines::has_locally_complete_input_stream_mutex_protocol<
-						   normalized_type>)
+						   execution_type>)
 	{
 		return false;
 	}
 	else
 	{
-		using unlocked_type = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::input_stream_unlocked_ref_decay(
-			::std::declval<normalized_type &>()))>;
+		// Runtime binds this result with `decltype(auto)`. Removing only its reference reproduces the cv-qualified
+		// template argument used by the next recursive dispatcher instead of probing a mutable surrogate.
+		using unlocked_type = ::std::remove_reference_t<decltype(
+			::fast_io::operations::decay::input_stream_unlocked_ref_decay(
+				::std::declval<execution_type &>()))>;
 		if constexpr (!::fast_io::operations::decay::defines::has_input_or_io_stream_mutex_ref_define<
 						  unlocked_type>)
 		{
@@ -333,7 +337,7 @@ inline consteval bool has_complete_input_stream_mutex_protocol_chain() noexcept
 		else
 		{
 			return has_complete_input_stream_mutex_protocol_chain<
-				unlocked_type, visited_types..., normalized_type>();
+				unlocked_type, visited_types..., execution_type>();
 		}
 	}
 }
@@ -345,20 +349,22 @@ inline consteval bool has_complete_input_stream_mutex_protocol_chain() noexcept
 template <typename T, typename... visited_types>
 inline consteval bool has_complete_output_stream_mutex_protocol_chain() noexcept
 {
-	using normalized_type = ::std::remove_cvref_t<T>;
-	if constexpr (type_was_visited<normalized_type, visited_types...>)
+	using execution_type = ::std::remove_reference_t<T>;
+	if constexpr (type_was_visited<execution_type, visited_types...>)
 	{
 		return false;
 	}
 	else if constexpr (!::fast_io::operations::decay::defines::has_locally_complete_output_stream_mutex_protocol<
-						   normalized_type>)
+						   execution_type>)
 	{
 		return false;
 	}
 	else
 	{
-		using unlocked_type = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::output_stream_unlocked_ref_decay(
-			::std::declval<normalized_type &>()))>;
+		// Preserve the constness of the named unlocked result exactly as output execution does at this edge.
+		using unlocked_type = ::std::remove_reference_t<decltype(
+			::fast_io::operations::decay::output_stream_unlocked_ref_decay(
+				::std::declval<execution_type &>()))>;
 		if constexpr (!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
 						  unlocked_type>)
 		{
@@ -367,7 +373,7 @@ inline consteval bool has_complete_output_stream_mutex_protocol_chain() noexcept
 		else
 		{
 			return has_complete_output_stream_mutex_protocol_chain<
-				unlocked_type, visited_types..., normalized_type>();
+				unlocked_type, visited_types..., execution_type>();
 		}
 	}
 }
@@ -380,20 +386,22 @@ inline consteval bool has_complete_output_stream_mutex_protocol_chain() noexcept
 template <typename T, typename... visited_types>
 inline consteval bool has_complete_io_stream_mutex_protocol_chain() noexcept
 {
-	using normalized_type = ::std::remove_cvref_t<T>;
-	if constexpr (type_was_visited<normalized_type, visited_types...>)
+	using execution_type = ::std::remove_reference_t<T>;
+	if constexpr (type_was_visited<execution_type, visited_types...>)
 	{
 		return false;
 	}
 	else if constexpr (!::fast_io::operations::decay::defines::has_locally_complete_io_stream_mutex_protocol<
-						   normalized_type>)
+						   execution_type>)
 	{
 		return false;
 	}
 	else
 	{
-		using unlocked_type = ::std::remove_cvref_t<decltype(::fast_io::operations::decay::io_stream_unlocked_ref_decay(
-			::std::declval<normalized_type &>()))>;
+		// Joint recursion has the same named-result rule; both directional capabilities belong to this exact cv type.
+		using unlocked_type = ::std::remove_reference_t<decltype(
+			::fast_io::operations::decay::io_stream_unlocked_ref_decay(
+				::std::declval<execution_type &>()))>;
 		if constexpr (!::fast_io::operations::decay::defines::has_io_stream_mutex_ref_define<unlocked_type>)
 		{
 			return true;
@@ -401,7 +409,7 @@ inline consteval bool has_complete_io_stream_mutex_protocol_chain() noexcept
 		else
 		{
 			return has_complete_io_stream_mutex_protocol_chain<
-				unlocked_type, visited_types..., normalized_type>();
+				unlocked_type, visited_types..., execution_type>();
 		}
 	}
 }

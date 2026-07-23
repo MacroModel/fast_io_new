@@ -4,6 +4,133 @@
 namespace details
 {
 
+template <typename instmtype>
+inline constexpr io_scatter_status_t scatter_pread_some_bytes_cold_impl(
+	instmtype &insm, io_scatter_t const *pscatters, ::std::size_t n, ::fast_io::intfpos_t offset);
+
+template <typename instmtype>
+inline constexpr void scatter_pread_all_bytes_cold_impl(
+	instmtype &insm, io_scatter_t const *pscatters, ::std::size_t n, ::fast_io::intfpos_t offset);
+
+/// @brief Converts byte input descriptors to one-byte typed descriptors by value.
+/// @details Equal element width proves equal length units only. Constructing each typed descriptor member-wise gives
+///          the callee objects of its declared type and retains the writable payload address later recovered by the
+///          typed read protocol; reinterpreting the descriptor array would not establish that effective type.
+template <::std::integral char_type>
+inline constexpr void scatter_read_materialize_one_byte_typed_descriptors(
+	::fast_io::basic_io_scatter_t<char_type> *destination, ::fast_io::io_scatter_t const *source,
+	::std::size_t count) noexcept
+{
+	static_assert(sizeof(char_type) == 1u);
+	for (::std::size_t i{}; i != count; ++i)
+	{
+		destination[i] = {static_cast<char_type const *>(source[i].base), source[i].len};
+	}
+}
+
+/// @brief Executes one byte-scatter some request through a one-byte typed input protocol.
+/// @details Some semantics allow a bounded prefix. The noinline cold boundary keeps the fixed conversion workspace
+///          outside hot scalar and buffered callers while member-wise construction establishes descriptor type safety.
+template <typename instmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr io_scatter_status_t scatter_read_some_bytes_via_typed_cold_impl(
+	instmtype &insm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n)
+{
+	using char_type = typename instmtype::input_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_read_byte_conversion_stack_capacity};
+	::std::size_t const count{n < capacity ? n : capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	::fast_io::details::scatter_read_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+	return ::fast_io::details::scatter_read_some_cold_impl(insm, converted, count);
+}
+
+/// @brief Completes byte-scatter input through consecutive one-byte typed descriptor chunks.
+template <typename instmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr void scatter_read_all_bytes_via_typed_cold_impl(
+	instmtype &insm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n)
+{
+	using char_type = typename instmtype::input_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_read_byte_conversion_stack_capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	while (n != 0u)
+	{
+		::std::size_t const count{n < capacity ? n : capacity};
+		::fast_io::details::scatter_read_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+		::fast_io::details::scatter_read_all_impl(insm, converted, count);
+		pscatters += count;
+		n -= count;
+	}
+}
+
+/// @brief Executes one byte-scatter some request through typed positional input at an equal-unit offset.
+template <typename instmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr io_scatter_status_t scatter_pread_some_bytes_via_typed_cold_impl(
+	instmtype &insm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n,
+	::fast_io::intfpos_t offset)
+{
+	using char_type = typename instmtype::input_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_read_byte_conversion_stack_capacity};
+	::std::size_t const count{n < capacity ? n : capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	::fast_io::details::scatter_read_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+	return ::fast_io::details::scatter_pread_some_cold_impl(insm, converted, count, offset);
+}
+
+/// @brief Completes byte-scatter input through typed positional chunks while preserving one-byte coordinates.
+template <typename instmtype>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr void scatter_pread_all_bytes_via_typed_cold_impl(
+	instmtype &insm, ::fast_io::io_scatter_t const *pscatters, ::std::size_t n,
+	::fast_io::intfpos_t offset)
+{
+	using char_type = typename instmtype::input_char_type;
+	static_assert(sizeof(char_type) == 1u);
+	constexpr ::std::size_t capacity{::fast_io::details::scatter_read_byte_conversion_stack_capacity};
+	::fast_io::basic_io_scatter_t<char_type> converted[capacity];
+	while (n != 0u)
+	{
+		::std::size_t const count{n < capacity ? n : capacity};
+		::fast_io::details::scatter_read_materialize_one_byte_typed_descriptors(converted, pscatters, count);
+		::fast_io::details::scatter_pread_all_cold_impl(insm, converted, count, offset);
+		offset = ::fast_io::fposoffadd_scatters(offset, converted, {count, 0u});
+		pscatters += count;
+		n -= count;
+	}
+}
+
 // Byte scatter adaptation preserves the owner established by the public entry point. Reinterpreting descriptors may
 // change the payload unit, but never the lifetime or transport policy of the normalized input observer.
 
@@ -48,18 +175,19 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype
 	else if constexpr (sizeof(char_type) == 1 &&
 					   ::fast_io::operations::decay::defines::has_any_of_read_operations<instmtype>)
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		return ::fast_io::details::scatter_read_some_cold_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)),
-															   n);
+		// One-byte width proves equal payload and status units. The outlined adapter materializes a legal typed prefix
+		// without allowing its bounded descriptor array to inflate this frequently instantiated dispatch function.
+		return ::fast_io::details::scatter_read_some_bytes_via_typed_cold_impl(insm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_seek_bytes_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_pread_bytes_operations<instmtype>))
 	{
-		auto ret{scatter_pread_some_bytes_cold_impl(insm, pscatters, n, 0)};
+		auto const current_position{
+			::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, 0, ::fast_io::seekdir::cur)};
+		auto ret{scatter_pread_some_bytes_cold_impl(insm, pscatters, n, current_position)};
+		// Byte seek and byte-pread concepts share one coordinate, while status semantically proves a prefix of the
+		// submitted writable ranges. Reading at the queried origin and advancing by that checked prefix exactly simulates
+		// sequential scatter input without exposing positional I/O's unchanged cursor.
 		::fast_io::operations::decay::input_stream_seek_bytes_decay(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, ret), ::fast_io::seekdir::cur);
 		return ret;
@@ -68,12 +196,13 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype
 					   ::fast_io::operations::decay::defines::has_input_or_io_stream_seek_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_pread_operations<instmtype>))
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		auto ret{scatter_pread_some_cold_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)), n, 0)};
+		auto const current_position{
+			::fast_io::operations::decay::input_stream_seek_decay(insm, 0, ::fast_io::seekdir::cur)};
+		auto ret{::fast_io::details::scatter_pread_some_bytes_via_typed_cold_impl(
+			insm, pscatters, n, current_position)};
+		// One-byte character width proves equality of byte and typed coordinates and descriptor extents. The typed pread
+		// status over member-wise converted descriptors is therefore also a valid byte-prefix proof, so the final seek
+		// publishes exactly initialized input progress without a layout-aliasing assumption.
 		::fast_io::operations::decay::input_stream_seek_decay(insm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
 															  ::fast_io::seekdir::cur);
 		return ret;
@@ -221,17 +350,18 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 	else if constexpr (sizeof(char_type) == 1 &&
 					   ::fast_io::operations::decay::defines::has_any_of_read_operations<instmtype>)
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		::fast_io::details::scatter_read_all_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)), n);
+		// Complete typed chunks initialize exactly the original byte ranges. The outlined conversion boundary is part of
+		// the performance contract: the fixed descriptor workspace must remain outside hot buffered callers.
+		::fast_io::details::scatter_read_all_bytes_via_typed_cold_impl(insm, pscatters, n);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_seek_bytes_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_pread_bytes_operations<instmtype>))
 	{
-		scatter_pread_all_bytes_cold_impl(insm, pscatters, n, 0);
+		auto const current_position{
+			::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, 0, ::fast_io::seekdir::cur)};
+		scatter_pread_all_bytes_cold_impl(insm, pscatters, n, current_position);
+		// Byte all-pread completion proves every destination byte initialized from the queried origin while leaving the
+		// stream cursor unchanged. The complete checked scatter extent is consequently the exact sequential advance.
 		::fast_io::operations::decay::input_stream_seek_bytes_decay(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
@@ -239,12 +369,13 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 					   ::fast_io::operations::decay::defines::has_input_or_io_stream_seek_define<instmtype> &&
 					   (::fast_io::operations::decay::defines::has_any_of_pread_operations<instmtype>))
 	{
-		using scattermayalias_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-			[[__gnu__::__may_alias__]]
-#endif
-			= basic_io_scatter_t<char_type> *;
-		scatter_pread_all_cold_impl(insm, reinterpret_cast<scattermayalias_ptr>(const_cast<::fast_io::io_scatter_t *>(pscatters)), n, 0);
+		auto const current_position{
+			::fast_io::operations::decay::input_stream_seek_decay(insm, 0, ::fast_io::seekdir::cur)};
+		::fast_io::details::scatter_pread_all_bytes_via_typed_cold_impl(
+			insm, pscatters, n, current_position);
+		// With one-byte characters, the typed positional all-contract initializes precisely the byte descriptor ranges at
+		// the queried character origin. Member-wise conversion proves descriptor typing; positional input does not move
+		// current position, so advancing by the complete scatter extent reconstructs the sequential operation.
 		::fast_io::operations::decay::input_stream_seek_decay(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}

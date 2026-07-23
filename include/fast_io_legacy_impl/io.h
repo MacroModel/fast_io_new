@@ -156,9 +156,13 @@ template <typename T, typename... Args>
 // int/double obuffer loop by 10--12%. This is a measured compile-time tradeoff: at sixteen call sites forcing costs
 // roughly 1.5--2.8x compilation across GCC 11--16, but runtime text changes by only about -1.5% to +3% because the
 // compiler still shares the lower continuation. An explicitly noinline continuation was rejected because it reproduced
-// an approximately 12% runtime regression. Clang 17--23 performs the facade decision unaided, so the force attribute
-// is deliberately restricted to the future-open GCC range with demonstrated code-generation benefit.
-#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
+// an approximately 12% runtime regression. Clang 17--23 performs that direct-scalar facade decision unaided. A separate
+// recursive dynamic-star condition audit proves that this same facade is jointly necessary in the six-edge chain on
+// Clang 21--23: deleting it restores a reachable proxy/native formatter graph after the format level has selected the
+// active IO record. Clang 16--20 still fail with the complete chain and add 6.8--22.1 KiB of text, so the Clang range
+// starts at the first proved endpoint and remains future-open.
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void print(T &&t, Args &&...args)
@@ -438,7 +442,20 @@ template <bool line, typename... Args>
 	try
 	{
 #endif
-		if constexpr (line)
+		if constexpr (sizeof...(Args) == 0u)
+		{
+			// A hosted source-free panic still owns one diagnostic print record.
+			// The default error sink is normalized once, after which the print
+			// level invokes an exact empty-status operation, emits a requested
+			// newline, or discards an unobservable non-line record. A freestanding
+			// build has no library-owned default error sink and terminates directly.
+#if ((__STDC_HOSTED__ == 1 && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED == 1) && \
+	  !defined(_LIBCPP_FREESTANDING)) ||                                             \
+	 defined(FAST_IO_ENABLE_HOSTED_FEATURES))
+			::fast_io::details::perr_after_source_pre_normalization<line>();
+#endif
+		}
+		else if constexpr (line)
 		{
 			::fast_io::io::perrln(::std::forward<Args>(args)...);
 		}
@@ -464,15 +481,20 @@ template <bool line, typename... Args>
 ///          to recover that optional strategy; the structural gate remains here for callers/targets which inline it
 ///          naturally and for future source representations carrying compile-time storage in their type. Consequently
 ///          this interface promises neither caller-literal folding nor a single generated call frame on current tools.
+///          A source-free call still enters the same cold print-level fallback: ordinary native error output ignores
+///          the empty record, while a future default sink with an exact zero-argument status operation may observe it.
 template <typename... Args>
 [[noreturn]] inline constexpr void panic(Args &&...args) noexcept
 {
 	if constexpr (sizeof...(Args) == 0u)
 	{
-		::fast_io::fast_terminate();
+		::fast_io::io::panic_details::fallback<false>();
 	}
 	else
 	{
+#if ((__STDC_HOSTED__ == 1 && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED == 1) && \
+	  !defined(_LIBCPP_FREESTANDING)) ||                                             \
+	 defined(FAST_IO_ENABLE_HOSTED_FEATURES))
 #ifdef __cpp_exceptions
 		try
 		{
@@ -489,6 +511,7 @@ template <typename... Args>
 			::fast_io::fast_terminate();
 		}
 #endif
+#endif
 		::fast_io::io::panic_details::fallback<false>(
 			::std::forward<Args>(args)...);
 	}
@@ -498,6 +521,9 @@ template <typename... Args>
 	requires(sizeof...(Args) != 0)
 [[noreturn]] inline constexpr void panicln(Args &&...args) noexcept
 {
+#if ((__STDC_HOSTED__ == 1 && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED == 1) && \
+	  !defined(_LIBCPP_FREESTANDING)) ||                                             \
+	 defined(FAST_IO_ENABLE_HOSTED_FEATURES))
 #ifdef __cpp_exceptions
 	try
 	{
@@ -514,6 +540,7 @@ template <typename... Args>
 		::fast_io::fast_terminate();
 	}
 #endif
+#endif
 	::fast_io::io::panic_details::fallback<true>(
 		::std::forward<Args>(args)...);
 }
@@ -521,13 +548,7 @@ template <typename... Args>
 // Allow debug print
 #ifndef FAST_IO_DISABLE_DEBUG_PRINT
 // With debugging. We output to POSIX fd or Win32 Handle directly instead of C's stdout.
-/// GCC 11--16 need the public default-sink facade inlined so caller literals reach the narrowly forced constant
-/// prescan; the false arm still enters the ordinary bridge. Clang 17--23 need no override. See the prescan's measured
-/// comment for the full compile and unknown-value A/B results.
 template <typename T, typename... Args>
-#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
-FAST_IO_GNU_ALWAYS_INLINE
-#endif
 inline constexpr void debug_print(T &&t, Args &&...args)
 {
 	constexpr bool device_and_type_ok{
@@ -597,9 +618,6 @@ static_assert(device_and_type_ok, "some types are not printable for debug_print 
 }
 
 template <typename T, typename... Args>
-#if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
-FAST_IO_GNU_ALWAYS_INLINE
-#endif
 inline constexpr void debug_println(T &&t, Args &&...args)
 {
 	constexpr bool device_and_type_ok{

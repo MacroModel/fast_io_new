@@ -308,11 +308,12 @@ compiler_constant_hex_make_precision_plan(
 		fractional_hex_digits * 4u - trait::mbits};
 	auto const aligned_mantissa{
 		static_cast<mantissa_type>(mantissa << padding_bits)};
-	auto const source_digit_at = [aligned_mantissa, exponent](
+	// Init-capture keeps this C++20 path usable on frontends which cannot directly capture a structured-binding name.
+	auto const source_digit_at = [aligned_mantissa, exponent_value = exponent](
 		::std::size_t index) constexpr noexcept -> ::std::uint_least32_t {
 		if (index == 0u)
 		{
-			return exponent == 0u ? 0u : 1u;
+			return exponent_value == 0u ? 0u : 1u;
 		}
 		if (fractional_hex_digits < index)
 		{

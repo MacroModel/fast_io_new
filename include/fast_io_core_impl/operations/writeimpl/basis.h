@@ -156,11 +156,37 @@ write_some_cold_impl(outstmtype &outsm, typename outstmtype::output_char_type co
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_bytes_overflow_define<
 							outstmtype>))
 	{
-		auto current_position{::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
-		auto ret{::fast_io::details::pwrite_some_cold_impl(outsm, first, last, current_position / sizeof(char_type))};
-		::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, (ret - first + current_position) * sizeof(char_type),
-																	 ::fast_io::seekdir::cur);
-		return ret;
+		auto const current_position{
+			::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
+		::std::byte const *const first_bytes{reinterpret_cast<::std::byte const *>(first)};
+		::std::byte const *const last_bytes{reinterpret_cast<::std::byte const *>(last)};
+		::std::byte const *written{
+			::fast_io::details::pwrite_some_bytes_cold_impl(outsm, first_bytes, last_bytes, current_position)};
+		::std::ptrdiff_t const byte_difference{written - first_bytes};
+		::std::size_t const complete_characters{
+			static_cast<::std::size_t>(byte_difference) / sizeof(char_type)};
+		::std::size_t const partial_bytes{
+			static_cast<::std::size_t>(byte_difference) % sizeof(char_type)};
+		::std::size_t character_progress{complete_characters};
+		if (partial_bytes != 0u)
+		{
+			::std::size_t const remaining_bytes{sizeof(char_type) - partial_bytes};
+			auto const continuation_position{
+				::fast_io::fposoffadd_nonegative(current_position, byte_difference)};
+			::fast_io::details::pwrite_all_bytes_cold_impl(
+				outsm, written, written + remaining_bytes, continuation_position);
+			++character_progress;
+		}
+		// The selected concepts prove an exact byte seek result and at least one byte-positional output primitive.
+		// The primitive progress contract keeps `written` in [first_bytes,last_bytes]. Passing the queried byte
+		// position directly therefore preserves an unaligned current position; rounding through a character offset
+		// would target preceding storage. Completing a partial character makes `character_progress` a typed cursor,
+		// and the checked conversion below advances the sequential position by exactly that emitted prefix.
+		auto const byte_progress{::fast_io::details::scatter_fpos_mul<char_type>(
+			::fast_io::fposoffadd_nonegative(0, character_progress))};
+		::fast_io::operations::decay::output_stream_seek_bytes_decay(
+			outsm, byte_progress, ::fast_io::seekdir::cur);
+		return first + character_progress;
 	}
 }
 
@@ -193,7 +219,7 @@ inline constexpr ::std::byte const *write_some_bytes_cold_impl(outstmtype &outsm
 #endif
 			= char_type const *;
 		auto const result{write_some_overflow_define(outsm, reinterpret_cast<char_type_const_ptr>(first),
-											 reinterpret_cast<char_type_const_ptr>(last))};
+													 reinterpret_cast<char_type_const_ptr>(last))};
 		return reinterpret_cast<::std::byte const *>(result);
 	}
 	else if constexpr (sizeof(char_type) == 1 &&
@@ -596,7 +622,7 @@ inline constexpr ::std::byte const *write_some_bytes_impl(outstmtype &outsm, ::s
 #endif
 					= char_type const *;
 				obuffer_set_curr(outsm, non_overlapped_copy_n(reinterpret_cast<char_type_const_ptr>(first),
-														static_cast<::std::size_t>(itdiff), curr));
+															  static_cast<::std::size_t>(itdiff), curr));
 				return last;
 			}
 		}
