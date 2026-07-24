@@ -849,8 +849,8 @@ namespace details
 {
 
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64)) && \
-	!defined(__AVX512BF16__) && \
+	(defined(__x86_64__) || defined(_M_X64)) &&                       \
+	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename T>
 inline constexpr bool floating_scalar_requires_integer_proxy{
@@ -882,8 +882,8 @@ capture_bfloat16_representation(scalar_type &&value) noexcept
 	auto representation{
 		::fast_io::bit_cast<::std::uint_least16_t>(value)};
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64)) && \
-	!defined(__AVX512BF16__) && \
+	(defined(__x86_64__) || defined(_M_X64)) &&                       \
+	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	FAST_IO_IF_NOT_CONSTEVAL
 	{
@@ -913,7 +913,7 @@ make_floating_scalar_manip(scalar_type &&value) noexcept
 				::std::forward<scalar_type>(value))};
 		return ::fast_io::manipulators::floating_scalar_field_manip_t<
 			flags, floating_type>{
-				representation};
+			representation};
 	}
 	else
 	{
@@ -939,7 +939,7 @@ make_floating_scalar_manip_precision(
 				::std::forward<scalar_type>(value))};
 		return ::fast_io::manipulators::floating_scalar_field_manip_precision_t<
 			flags, floating_type>{
-				representation, precision};
+			representation, precision};
 	}
 	else
 	{
@@ -973,7 +973,8 @@ rounding(floating_scalar_field_manip_t<flags, T> value) noexcept
 {
 	return floating_scalar_field_manip_t<
 		::fast_io::details::floating_rounding_mani_flags_cache<
-			flags, rounding_policy>, T>{value.representation};
+			flags, rounding_policy>,
+		T>{value.representation};
 }
 
 template <floating_rounding rounding_policy, scalar_flags flags, typename T>
@@ -982,7 +983,8 @@ rounding(floating_scalar_field_manip_precision_t<flags, T> value) noexcept
 {
 	return floating_scalar_field_manip_precision_t<
 		::fast_io::details::floating_rounding_mani_flags_cache<
-			flags, rounding_policy>, T>{value.representation, value.precision};
+			flags, rounding_policy>,
+		T>{value.representation, value.precision};
 }
 
 template <bool enabled = true, scalar_flags flags, typename T>
@@ -1007,7 +1009,7 @@ json_float(floating_scalar_field_manip_t<flags, T> value) noexcept
 {
 	return floating_scalar_field_manip_t<
 		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
-			value.representation};
+		value.representation};
 }
 
 template <bool enabled = true, scalar_flags flags, typename T>
@@ -1017,7 +1019,7 @@ json_float(floating_scalar_field_manip_precision_t<flags, T> value) noexcept
 {
 	return floating_scalar_field_manip_precision_t<
 		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
-			value.representation, value.precision};
+		value.representation, value.precision};
 }
 
 template <floating_rounding rounding_policy, bool allow_leading_plus = false, typename scalar_type>
@@ -1447,7 +1449,7 @@ inline constexpr scalar_manip_t<::fast_io::details::boolalpha_mani_flags_cache<u
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1456,7 +1458,7 @@ inline constexpr auto hexfloat(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1468,7 +1470,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1481,7 +1483,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
 	return hexfloat<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1492,7 +1494,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1505,7 +1507,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
 	return hexfloat0x<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1513,7 +1515,7 @@ inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1522,7 +1524,7 @@ inline constexpr auto comma_hexfloat(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1534,7 +1536,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1547,7 +1549,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_hexfloat<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1558,7 +1560,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1571,7 +1573,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_hexfloat0x<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1579,7 +1581,7 @@ inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1589,7 +1591,7 @@ inline constexpr auto decimal(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1602,7 +1604,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1616,7 +1618,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t, ::std::size_t n) noexcept
 {
 	return decimal<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1627,7 +1629,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1641,7 +1643,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_decimal<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1649,7 +1651,7 @@ inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1659,7 +1661,7 @@ inline constexpr auto general(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1672,7 +1674,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1686,7 +1688,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t, ::std::size_t n) noexcept
 {
 	return general<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1697,7 +1699,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1711,7 +1713,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_general<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1719,7 +1721,7 @@ inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1729,7 +1731,7 @@ inline constexpr auto fixed(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1742,7 +1744,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1756,7 +1758,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t, ::std::size_t n) noexcept
 {
 	return fixed<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1767,7 +1769,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1781,7 +1783,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_fixed<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1789,7 +1791,7 @@ inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1799,7 +1801,7 @@ inline constexpr auto scientific(scalar_type t) noexcept
 
 template <bool uppercase = false, typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
@@ -1812,7 +1814,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1826,7 +1828,7 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t, ::std::size_t n) noexcept
 {
 	return scientific<uppercase, precision_mode, rounding_policy>(t, n);
@@ -1837,7 +1839,7 @@ template <bool uppercase = false,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t, ::std::size_t n) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip_precision<
@@ -1851,15 +1853,15 @@ template <floating_precision precision_mode,
 		  bool uppercase = false,
 		  typename scalar_type>
 	requires(::fast_io::details::my_floating_point<scalar_type> &&
-		 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
+			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_scientific<uppercase, precision_mode, rounding_policy>(t, n);
 }
 
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64)) && \
-	!defined(__AVX512BF16__) && \
+	(defined(__x86_64__) || defined(_M_X64)) &&                       \
+	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 // Clang/x86 without AVX512BF16 may retain a bfloat16 object as its exact
 // binary32 extension and retruncate it at a by-value inline boundary. These
@@ -1986,7 +1988,7 @@ inline constexpr auto scalar_generic(
 	// exact scalar_flags NTTP accepted by the ordinary scalar_generic overload.
 	return ::fast_io::details::make_floating_scalar_manip<
 		flags>(
-			::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <bool uppercase = false>
@@ -1995,7 +1997,7 @@ inline constexpr auto hexfloat0x(
 {
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::hexafloat_mani_flags_cache<uppercase, false, true>>(
-			::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <bool uppercase = false,
@@ -2009,7 +2011,7 @@ inline constexpr auto hexfloat(
 		::fast_io::details::floating_precision_rounding_mani_flags_cache<
 			::fast_io::details::hexafloat_mani_flags_cache<uppercase, false>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2040,7 +2042,7 @@ inline constexpr auto comma_hexfloat(
 {
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::hexafloat_mani_flags_cache<uppercase, true>>(
-			::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <bool uppercase = false>
@@ -2049,7 +2051,7 @@ inline constexpr auto comma_hexfloat0x(
 {
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::hexafloat_mani_flags_cache<uppercase, true, true>>(
-			::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <bool uppercase = false,
@@ -2063,7 +2065,7 @@ inline constexpr auto comma_hexfloat(
 		::fast_io::details::floating_precision_rounding_mani_flags_cache<
 			::fast_io::details::hexafloat_mani_flags_cache<uppercase, true>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2088,7 +2090,7 @@ inline constexpr auto comma_hexfloat0x(
 		::fast_io::details::floating_precision_rounding_mani_flags_cache<
 			::fast_io::details::hexafloat_mani_flags_cache<uppercase, true, true>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2109,7 +2111,7 @@ inline constexpr auto comma_decimal(
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::dcmfloat_mani_flags_cache<
 			uppercase, true, floating_format::decimal>>(
-				::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <floating_precision precision_mode,
@@ -2141,7 +2143,7 @@ inline constexpr auto comma_general(
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::dcmfloat_mani_flags_cache<
 			uppercase, true, floating_format::general>>(
-				::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <floating_precision precision_mode,
@@ -2167,7 +2169,7 @@ inline constexpr auto comma_general(
 			::fast_io::details::dcmfloat_mani_flags_cache<
 				uppercase, true, floating_format::general>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2188,7 +2190,7 @@ inline constexpr auto comma_fixed(
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::dcmfloat_mani_flags_cache<
 			uppercase, true, floating_format::fixed>>(
-				::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <floating_precision precision_mode,
@@ -2214,7 +2216,7 @@ inline constexpr auto comma_fixed(
 			::fast_io::details::dcmfloat_mani_flags_cache<
 				uppercase, true, floating_format::fixed>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2235,7 +2237,7 @@ inline constexpr auto comma_scientific(
 	return ::fast_io::details::make_floating_scalar_manip<
 		::fast_io::details::dcmfloat_mani_flags_cache<
 			uppercase, true, floating_format::scientific>>(
-				::std::forward<decltype(value)>(value));
+		::std::forward<decltype(value)>(value));
 }
 
 template <floating_precision precision_mode,
@@ -2261,7 +2263,7 @@ inline constexpr auto comma_scientific(
 			::fast_io::details::dcmfloat_mani_flags_cache<
 				uppercase, true, floating_format::scientific>,
 			precision_mode, rounding_policy>>(
-				::std::forward<decltype(value)>(value), precision);
+		::std::forward<decltype(value)>(value), precision);
 }
 
 template <floating_precision precision_mode,
@@ -2480,14 +2482,14 @@ inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) 
 	using v2du [[__gnu__::__vector_size__(16)]] = unsigned long long;
 	constexpr v16qi duplicate_bytes{7, 7, 6, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0};
 	constexpr v16qi high_nibble_mask{15, 0, 15, 0, 15, 0, 15, 0,
-									15, 0, 15, 0, 15, 0, 15, 0};
+									 15, 0, 15, 0, 15, 0, 15, 0};
 	constexpr v16qi low_nibble_mask{0, 15, 0, 15, 0, 15, 0, 15,
-								   0, 15, 0, 15, 0, 15, 0, 15};
+									0, 15, 0, 15, 0, 15, 0, 15};
 	constexpr char alpha_a{uppercase ? 65 : 97};
 	constexpr v16qi digit_lookup{48, 49, 50, 51, 52, 53, 54, 55,
-								56, 57, alpha_a, static_cast<char>(alpha_a + 1),
-								static_cast<char>(alpha_a + 2), static_cast<char>(alpha_a + 3),
-								static_cast<char>(alpha_a + 4), static_cast<char>(alpha_a + 5)};
+								 56, 57, alpha_a, static_cast<char>(alpha_a + 1),
+								 static_cast<char>(alpha_a + 2), static_cast<char>(alpha_a + 3),
+								 static_cast<char>(alpha_a + 4), static_cast<char>(alpha_a + 5)};
 	v2du const source{static_cast<unsigned long long>(value), 0u};
 	auto const duplicated{__builtin_ia32_pshufb128(
 		__builtin_bit_cast(v16qi, source), duplicate_bytes)};
@@ -2501,13 +2503,6 @@ inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) 
 
 #endif
 
-#if defined(__GNUC__) && !defined(__clang__)
-// GCC 13--15 can lose the enclosing reserve proof after inlining the two-digit table copies below and diagnose their
-// destination as a zero-sized region. Keep the warning visible, but do not let this known false positive inherit the
-// translation unit's -Werror policy. The diagnostic scope is limited to this formatter.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic warning "-Wstringop-overflow"
-#endif
 
 template <::std::size_t base, bool uppercase = false, ::std::integral char_type,
 		  typename result_type = char_type *, my_unsigned_integral T>
@@ -3202,9 +3197,6 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 	return ::fast_io::details::print_reserve_power_of_two_result<result_type>(last);
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 template <::std::size_t base, bool uppercase_showbase, bool oct_c2y, ::std::integral char_type>
 inline constexpr char_type *print_reserve_show_base_impl(char_type *iter)
@@ -4491,7 +4483,7 @@ print_alias_define(io_alias_t, scalar_type &&value) noexcept
 {
 	return ::fast_io::details::make_floating_scalar_manip<
 		manipulators::floating_point_default_scalar_flags>(
-			::std::forward<scalar_type>(value));
+		::std::forward<scalar_type>(value));
 }
 
 template <::std::integral char_type, typename T>
@@ -4510,8 +4502,8 @@ inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, T
 
 template <::std::integral char_type, typename T>
 	requires(details::non_character_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
-	// This attribute consumes the wrapper-placement policy documented above; the
-	// ordinary-inline fallback calls the same print_reserve_integral_define arm.
+// This attribute consumes the wrapper-placement policy documented above; the
+// ordinary-inline fallback calls the same print_reserve_integral_define arm.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]] // always inline to reduce inline depth in GCC and LLVM clang
 #endif
@@ -4578,8 +4570,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 	requires(details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte> ||
 			 ::std::same_as<::std::remove_cvref_t<T>, ::std::nullptr_t> ||
 			 ::std::same_as<::std::remove_cv_t<T>, ::fast_io::manipulators::member_function_pointer_holder_t>)
-	// As above, force-inlining changes only the reserve-wrapper boundary; every
-	// attribute-disabled build retains the same compile-time flag dispatch.
+// As above, force-inlining changes only the reserve-wrapper boundary; every
+// attribute-disabled build retains the same compile-time flag dispatch.
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]] // always inline to reduce inline depth in GCC and LLVM clang
 #endif
@@ -4650,8 +4642,8 @@ inline constexpr ::std::true_type print_extended_bounded_passive_companion_safe(
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
 [[nodiscard]] inline constexpr ::std::true_type
-print_compiler_constant_materialization_query_inline_safe(
-	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+	print_compiler_constant_materialization_query_inline_safe(
+		::fast_io::io_reserve_type_t<char_type, T>) noexcept
 {
 	return {};
 }
@@ -4689,8 +4681,8 @@ print_compiler_constant_materialize(
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
 [[nodiscard]] inline constexpr ::std::true_type
-print_compiler_constant_pre_normalization_safe(
-	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+	print_compiler_constant_pre_normalization_safe(
+		::fast_io::io_reserve_type_t<char_type, T>) noexcept
 {
 	return {};
 }
@@ -4701,8 +4693,8 @@ print_compiler_constant_pre_normalization_safe(
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
 [[nodiscard]] inline constexpr ::std::true_type
-print_compiler_constant_materialization_graph_proven(
-	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+	print_compiler_constant_materialization_graph_proven(
+		::fast_io::io_reserve_type_t<char_type, T>) noexcept
 {
 	return {};
 }
@@ -4713,8 +4705,8 @@ print_compiler_constant_materialization_graph_proven(
 template <::std::integral char_type, typename T>
 	requires(::fast_io::details::non_character_integral<T>)
 [[nodiscard]] inline constexpr ::std::true_type
-print_compiler_constant_simple_scalar_source(
-	::fast_io::io_reserve_type_t<char_type, T>) noexcept
+	print_compiler_constant_simple_scalar_source(
+		::fast_io::io_reserve_type_t<char_type, T>) noexcept
 {
 	return {};
 }
@@ -4729,7 +4721,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_materialization_query_inline_safe(
 	io_reserve_type_t<char_type,
-		manipulators::scalar_manip_t<flags, T>>) noexcept
+					  manipulators::scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
@@ -4744,7 +4736,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_pre_normalization_safe(
 	io_reserve_type_t<char_type,
-		manipulators::scalar_manip_t<flags, T>>) noexcept
+					  manipulators::scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
@@ -4762,7 +4754,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_materialization_graph_proven(
 	io_reserve_type_t<char_type,
-		manipulators::scalar_manip_t<flags, T>>) noexcept
+					  manipulators::scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
@@ -4780,15 +4772,15 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_simple_scalar_source(
 	io_reserve_type_t<char_type,
-		manipulators::scalar_manip_t<flags, T>>) noexcept
+					  manipulators::scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
-	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
-			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
-			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
 [[nodiscard]] inline constexpr bool
 print_compiler_constant_materialization_eligible(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
@@ -4804,9 +4796,9 @@ print_compiler_constant_materialization_eligible(
 
 /// @brief Rebinds a proven constant scalar to its isolated reserve formatter.
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
-	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
-			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
-			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
 [[nodiscard]] inline constexpr auto
 print_compiler_constant_materialize(
 	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>,
@@ -4816,12 +4808,12 @@ print_compiler_constant_materialize(
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
-	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
-			  (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
-			  flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
 inline constexpr ::std::size_t print_reserve_size(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
 {
 	return print_reserve_size(
 		io_reserve_type<char_type, manipulators::scalar_manip_t<flags, T>>);
@@ -5237,7 +5229,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 [[nodiscard]] inline constexpr ::std::size_t
 print_reserve_precise_size(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
 	manipulators::compiler_constant_scalar_manip_t<flags, T> const &value) noexcept
 {
 	if constexpr (flags.alphabet)
@@ -5252,7 +5244,7 @@ print_reserve_precise_size(
 		using unsigned_type = ::fast_io::details::
 			compiler_constant_integral_unsigned_type_t<integer_type>;
 		integer_type const signed_value{[](auto const &source) constexpr
-												 -> integer_type {
+											-> integer_type {
 			if constexpr (
 				::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
 			{
@@ -5294,7 +5286,7 @@ print_reserve_precise_size(
 		else if constexpr (flags.full)
 		{
 			return size + ::fast_io::details::cal_max_int_size<
-				unsigned_type, flags.base>();
+							  unsigned_type, flags.base>();
 		}
 		else
 		{
@@ -5327,7 +5319,8 @@ template <::std::integral char_type, manipulators::scalar_flags flags, typename 
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 print_reserve_precise_define(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>> tag,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>
+		tag,
 	char_type *iter, ::std::size_t precise_size,
 	manipulators::compiler_constant_scalar_manip_t<flags, T> value) noexcept
 {
@@ -5349,7 +5342,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags,
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_flat_integer_replacement(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
@@ -5369,7 +5362,7 @@ template <::std::integral char_type, manipulators::scalar_flags flags,
 [[nodiscard]] inline constexpr ::std::true_type
 print_compiler_constant_prefer_precise_compact(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
 {
 	return {};
 }
@@ -5388,11 +5381,10 @@ template <::std::integral char_type, manipulators::scalar_flags flags,
 			  ::std::same_as<::std::remove_cv_t<T>, bool>) &&
 			 flags.percentage ==
 				 ::fast_io::manipulators::percentage_flag::none)
-[[nodiscard]] inline constexpr
-	::fast_io::basic_io_scatter_t<char_type>
+[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char_type>
 print_compiler_constant_single_static_fragment(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
 	manipulators::compiler_constant_scalar_manip_t<flags, T> const &value) noexcept
 {
 	if constexpr (flags.alphabet)
@@ -5417,7 +5409,7 @@ print_compiler_constant_single_static_fragment(
 		using unsigned_type = ::fast_io::details::
 			compiler_constant_integral_unsigned_type_t<integer_type>;
 		integer_type const signed_value{[](auto const &source) constexpr
-											 -> integer_type {
+											-> integer_type {
 			if constexpr (
 				::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
 			{
@@ -5477,7 +5469,7 @@ print_compiler_constant_single_static_fragment(
 				::fast_io::details::compiler_constant_integral_digit_fragments<
 					char_type, effective_uppercase>};
 			return {storage.data() + static_cast<::std::size_t>(magnitude),
-				1u};
+					1u};
 		}
 		if (digits == 2u)
 		{
@@ -5496,13 +5488,13 @@ print_compiler_constant_single_static_fragment(
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
-	 requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
-			  !flags.alphabet &&
-			  (flags.showpos || (details::my_signed_integral<T> &&
-							 !::std::same_as<::std::remove_cv_t<T>, bool>)))
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 !flags.alphabet &&
+			 (flags.showpos || (details::my_signed_integral<T> &&
+								!::std::same_as<::std::remove_cv_t<T>, bool>)))
 inline constexpr ::std::size_t print_define_internal_shift(
 	io_reserve_type_t<char_type,
-		manipulators::compiler_constant_scalar_manip_t<flags, T>>,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>,
 	manipulators::compiler_constant_scalar_manip_t<flags, T> value) noexcept
 {
 	if constexpr (flags.showpos)

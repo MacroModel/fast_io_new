@@ -373,6 +373,14 @@ inline
 		(dest, src, count);
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC 13--15 can lose the enclosing reserve proof after inlining the two-digit table copies below and diagnose their
+// destination as a zero-sized region. Keep the warning visible, but do not let this known false positive inherit the
+// translation unit's -Werror policy. The diagnostic scope is limited to this formatter.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic warning "-Wstringop-overflow"
+#endif
+
 template <::std::input_iterator input_iter, ::std::input_or_output_iterator output_iter>
 inline constexpr output_iter non_overlapped_copy_n(input_iter first, ::std::size_t count, output_iter result)
 {
@@ -404,6 +412,10 @@ inline constexpr output_iter non_overlapped_copy_n(input_iter first, ::std::size
 		}
 	}
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 template <::std::input_iterator input_iter, ::std::input_or_output_iterator output_iter>
 inline constexpr output_iter non_overlapped_copy(input_iter first, input_iter last, output_iter result)
