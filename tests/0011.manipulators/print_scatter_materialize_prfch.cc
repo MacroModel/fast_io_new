@@ -91,6 +91,14 @@ struct aarch64_server_platform
 	inline static constexpr bool instruction_available{true};
 };
 
+struct apple_aarch64_platform
+{
+	inline static constexpr ::fast_io::prfch_isa isa{::fast_io::prfch_isa::aarch64};
+	inline static constexpr ::fast_io::prfch_tune tune{::fast_io::prfch_tune::arm_apple};
+	inline static constexpr bool data_available{true};
+	inline static constexpr bool instruction_available{true};
+};
+
 template <typename platform_type, typename source_type, ::std::size_t... indices>
 inline consteval bool repeated_source_strategy(::std::index_sequence<indices...>) noexcept
 {
@@ -122,6 +130,7 @@ static_assert(!::fast_io::print_scatter_materialize_read_prfch_platform<x86_core
 static_assert(!::fast_io::print_scatter_materialize_read_prfch_platform<x86_zen_platform>);
 static_assert(!::fast_io::print_scatter_materialize_read_prfch_platform<x86_generic_platform>);
 static_assert(!::fast_io::print_scatter_materialize_read_prfch_platform<aarch64_server_platform>);
+static_assert(!::fast_io::print_scatter_materialize_read_prfch_platform<apple_aarch64_platform>);
 static_assert(repeated_source_strategy<x86_hybrid_platform, cacheable_scatter>(
 	::std::make_index_sequence<descriptor_count>{}));
 static_assert(!repeated_source_strategy<x86_hybrid_platform, cacheable_scatter>(

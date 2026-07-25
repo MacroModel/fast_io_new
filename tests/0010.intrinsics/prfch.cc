@@ -90,6 +90,16 @@ static_assert(!::fast_io::data_prfch_platform<synthetic_unknown_platform>);
 static_assert(!::fast_io::instruction_prfch_platform<synthetic_unknown_platform>);
 static_assert(!::fast_io::tuned_prfch_platform<synthetic_unknown_platform>);
 
+#if defined(__APPLE__) && \
+	(defined(__aarch64__) || defined(__arm64__) || defined(__arm64))
+static_assert(::fast_io::details::native_prfch_isa == ::fast_io::prfch_isa::aarch64);
+static_assert(::fast_io::details::native_prfch_tune == ::fast_io::prfch_tune::arm_apple);
+static_assert(::fast_io::conservative_read_prfch_platform<
+			  ::fast_io::details::native_prfch_platform>);
+static_assert(::fast_io::conservative_write_prfch_platform<
+			  ::fast_io::details::native_prfch_platform>);
+#endif
+
 #if defined(__has_builtin)
 #if defined(__x86_64__) && defined(__PREFETCHI__) && __has_builtin(__builtin_ia32_prefetchi)
 #if defined(__clang__) && !defined(__INTEL_LLVM_COMPILER)

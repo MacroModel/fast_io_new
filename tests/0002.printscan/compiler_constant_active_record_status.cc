@@ -205,6 +205,22 @@ using modeled_replacement = ::fast_io::operations::decay::
 	print_compiler_constant_pre_normalization_replacement_normalized_t<
 		char, false, source &>;
 
+// Prefix classification must ignore a preserved proxy outside the proven contiguous run and admit the identical proxy
+// when the run reaches it. These assertions cover the zero, strict-prefix, and complete-prefix boundaries of the
+// position fold without relying on any output strategy selected later.
+static_assert(!::fast_io::details::decay::
+	print_first_n_contains_static_fragment<
+		0u, char, preserved_wrapper, normalized_suffix>::value);
+static_assert(::fast_io::details::decay::
+	print_first_n_contains_static_fragment<
+		1u, char, preserved_wrapper, normalized_suffix>::value);
+static_assert(!::fast_io::details::decay::
+	print_first_n_contains_static_fragment<
+		1u, char, normalized_suffix, preserved_wrapper>::value);
+static_assert(::fast_io::details::decay::
+	print_first_n_contains_static_fragment<
+		2u, char, normalized_suffix, preserved_wrapper>::value);
+
 template <bool line>
 [[maybe_unused]] inline void status_print_define(
 	status_sink sink, preserved_wrapper &, normalized_suffix &) noexcept

@@ -101,6 +101,14 @@ struct aarch64_server_platform
 	inline static constexpr bool instruction_available{true};
 };
 
+struct apple_aarch64_platform
+{
+	inline static constexpr ::fast_io::prfch_isa isa{::fast_io::prfch_isa::aarch64};
+	inline static constexpr ::fast_io::prfch_tune tune{::fast_io::prfch_tune::arm_apple};
+	inline static constexpr bool data_available{true};
+	inline static constexpr bool instruction_available{true};
+};
+
 struct unavailable_platform
 {
 	inline static constexpr ::fast_io::prfch_isa isa{::fast_io::prfch_isa::x86};
@@ -131,6 +139,8 @@ static_assert(::fast_io::conservative_read_prfch_platform<policy_test::x86_core_
 static_assert(::fast_io::conservative_write_prfch_platform<policy_test::x86_hybrid_platform>);
 static_assert(::fast_io::conservative_read_prfch_platform<policy_test::x86_zen_platform>);
 static_assert(::fast_io::conservative_read_prfch_platform<policy_test::aarch64_server_platform>);
+static_assert(::fast_io::conservative_read_prfch_platform<policy_test::apple_aarch64_platform>);
+static_assert(::fast_io::conservative_write_prfch_platform<policy_test::apple_aarch64_platform>);
 static_assert(!::fast_io::conservative_read_prfch_platform<int>);
 static_assert(!::fast_io::conservative_read_prfch_platform<policy_test::x86_generic_platform>);
 static_assert(!::fast_io::conservative_write_prfch_platform<policy_test::x86_atom_platform>);
