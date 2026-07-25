@@ -1035,6 +1035,33 @@ io_bytes_stream_ref_define(basic_nt_family_alpc_ipc_universal_observer<family, c
 	return {other.handle};
 }
 
+template <nt_family family, ::std::integral char_type>
+inline constexpr ::std::true_type print_semantic_optional_scatter_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_nt_family_alpc_ipc_universal_observer<
+			family, char_type>>) noexcept
+{
+	// The exact ALPC observer has no associated whole-record status customization. It exposes no native scatter or
+	// fallback-coalescing policy, so the consumer cannot combine independently framed messages. Any admitted bounded
+	// segment therefore retains the ordinary write CPO, handle state, message attributes, and exception-visible prefix.
+	return {};
+}
+
+template <nt_family family, ::std::integral char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_barrier_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_nt_family_alpc_ipc_universal_observer<
+			family, char_type>>) noexcept
+{
+	// Ordinary control dispatch completes the preceding prefix before a direct-only barrier. Segment dispatch uses the
+	// same named observer and reaches the same ALPC status and byte-vector state afterward, preserving message calls,
+	// failure prefixes, and line ownership without granting wrappers or transcoders this proof.
+	return {};
+}
+
 template <nt_family family, ::std::integral ch_type>
 using basic_nt_family_alpc_ipc_server_observer = basic_nt_family_alpc_ipc_universal_observer<family, ch_type>;
 

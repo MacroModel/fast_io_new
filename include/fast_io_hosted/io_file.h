@@ -221,6 +221,33 @@ io_stream_ref_define(basic_general_io_io_observer<inchar_type, outchar_type> bio
 }
 
 template <::std::integral inchar_type, ::std::integral outchar_type>
+inline constexpr ::std::true_type print_semantic_optional_scatter_plan_stream(
+	::fast_io::io_reserve_type_t<
+		outchar_type,
+		::fast_io::basic_general_io_io_observer<
+			inchar_type, outchar_type>>) noexcept
+{
+	// Type erasure removes the underlying object's associated namespaces, and the exact observer owns no status-print
+	// overload. Its virtual scatter operation receives the same ordered nonempty descriptor sequence as ordinary active-
+	// record dispatch, so partial status, exceptions, primitive call boundaries, and line ownership remain identical.
+	return {};
+}
+
+template <::std::integral inchar_type, ::std::integral outchar_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_barrier_plan_stream(
+	::fast_io::io_reserve_type_t<
+		outchar_type,
+		::fast_io::basic_general_io_io_observer<
+			inchar_type, outchar_type>>) noexcept
+{
+	// The generic scanner already completes the virtual scatter prefix before a direct-only barrier and continues through
+	// the same handle pointer. Segmenting only at that boundary preserves virtual-call order, state, exception prefixes,
+	// and final-line ownership; mutex, buffer, decorator, and transcoder wrappers remain independently unmarked.
+	return {};
+}
+
+template <::std::integral inchar_type, ::std::integral outchar_type>
 inline constexpr ::fast_io::io_scatter_status_t
 scatter_read_some_underflow_define(basic_general_io_io_observer<inchar_type, outchar_type> biob,
 								   ::fast_io::basic_io_scatter_t<inchar_type> const *pst, ::std::size_t n)
