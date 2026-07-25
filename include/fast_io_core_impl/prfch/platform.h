@@ -26,6 +26,73 @@ enum class prfch_isa
 	other
 };
 
+// clang-format off
+/*
+New-architecture data-prefetch qualification protocol
+=====================================================
+
+Keep compiler capability, microarchitectural cost, and production profitability as three independent proofs. A new
+ISA, vendor family, or tuning family must be evaluated in the following order:
+
+1. Target identity
+   - Find a documented, stable preprocessor contract for the ISA and tune family. Inspect the macro set for every
+     supported compiler and every relevant `-march`, `-mcpu`, or `-mtune` value.
+   - Reject compatibility macros which do not uniquely describe the selected backend tune. If no stable contract
+     exists, leave `native_prfch_tune` as `generic`; do not infer a processor from the host at run time in this header.
+
+2. Primitive lowering
+   - Compile focused, externally visible, noinline probes for read and write at every supported cache level and
+     retention value. Instruction-prefetch probes are separate because their address-form constraints may differ.
+   - Inspect final assembly or disassembly, not LLVM IR. Verify the exact opcode, cache/retention encoding, address
+     form, and absence of an unintended read-for-write degradation. Repeat at the optimization levels and relocation
+     models used by production builds.
+   - Add compile-time assertions for `native_prfch_isa`, `native_prfch_tune`, and the advertised capability concepts.
+     A code-generation checker should fail if the expected instruction count changes.
+
+3. Static scheduling analysis
+   - Feed only the extracted production kernel or focused opcode sequence to `llvm-mca`, using the same target CPU as
+     the compiled probe. Record micro-op count, modeled latency, reciprocal throughput, and execution-resource pressure.
+   - Treat `llvm-mca` as instruction-cost and contention evidence only. It does not model cache residency, TLB state,
+     DRAM latency, memory bandwidth, hardware-prefetch behavior, OS migration, or whether the hint arrives in time.
+     Identical scheduling models across product names are not evidence of identical memory systems.
+
+4. Runtime experiment
+   - Compare a semantics-identical baseline and candidate. Keep allocation, randomization, validation, checksums, and
+     cache scrubbing outside the timed region. Preserve noinline kernel boundaries and compiler memory barriers so the
+     real copies remain observable without adding artificial work to one side.
+   - Test read and write independently. Cover payloads below, at, and above each proposed threshold; short and long
+     chains; contiguous and deliberately discontinuous layouts; hot-resident and cache-pressure states; empty entries;
+     and every relevant core class. The hinted address must remain inside a live, ordinary-cacheable object.
+   - Make the benchmark's run-time hint threshold equal to the candidate production threshold and record it in every
+     result row. Inspect the timed candidate assembly and confirm that every admitted boundary case actually executes
+     the intended hint. Timing a compile-time-present but run-time-skipped instruction is control-flow evidence, not
+     prefetch evidence.
+   - Bind the process to one idle core when the OS supports affinity, leave SMT siblings idle, and record topology,
+     compiler version, target flags, macros, and operating-system context. When affinity is unavailable, disclose that
+     limitation and require additional independent processes. If the OS exposes the current CPU, sample it immediately
+     before and after each timed operation and retain a pair only when both kernels used the same accepted core. Do not
+     reject a useful sample merely because untimed cache scrubbing migrated before that observation window.
+   - Use alternating paired baseline/candidate samples and at least three independent process-level seeds. Retain the
+     paired ratios and their complete ranges, not only independently rounded medians. A cache-pressure improvement cannot
+     admit a policy if the matching hot negative control has a repeatable regression.
+   - Interpolate between proposed endpoints. If any intermediate cell fails the retained rule, encode only the tested
+     discrete values or narrow the domain; never present endpoint measurements as proof of a continuous interval. Test
+     mixed payload sizes separately before permitting them through a policy established with uniform-payload fixtures.
+
+5. Promotion boundary
+   - Successful lowering admits `data_available`. Stable family identification plus conservative cost evidence may
+     admit `conservative_read_prfch_platform` or `conservative_write_prfch_platform` independently.
+   - Only repeated measurements of the complete production memory operation may admit a print, concat, scan, or other
+     site gate. Before activation, compile proved and unproved inputs through the public entry point and require the
+     expected hint only in the proved final assembly; also run the public operation's boundary and output tests. Carry
+     the measured minimum work, lookahead distance, cache level, retention, provenance, lifetime, and range proof into
+     that site. Evidence from one direction, call site, core class, or product must not widen another by analogy.
+   - Preserve the commands, raw-result location, aggregates, negative controls, and rejected regions under
+     `benchmark/0022.prfch/`. For a future architecture, complete the applicable evidence stage before changing its
+     classifier, capability flag, broad experimental permission, or site-specific allow-list predicate.
+*/
+// clang-format on
+
 /// @brief Conservative compiler-tuning families used only to choose measured prefetch policies.
 /// @details GCC exposes selected x86 `-mtune` choices as `__tune_*` macros, often canonicalizing multiple CPU names to
 ///          one macro. Clang and MSVC generally do not provide an equivalent preprocessor contract. `generic` therefore
@@ -42,7 +109,8 @@ enum class prfch_tune
 	x86_amd_legacy,
 	arm_application,
 	arm_server,
-	other_known
+	other_known,
+	arm_apple
 };
 
 namespace details
@@ -86,11 +154,19 @@ inline constexpr prfch_tune native_prfch_tune =
 // GCC's target backend defines `__tune_*` according to the selected x86 tuning model. Clang intentionally exposes
 // compatibility macros such as `__tune_k8__` even when `-mtune` names an unrelated Intel or AMD core; treating those
 // macros as evidence misclassifies every Clang x86-64 translation unit. Unknown compiler families therefore remain
-// generic unless they acquire a documented, tested contract of their own. Genuine MSVC x86 is one narrow exception:
-// `/favor:ATOM` has the documented `__ATOM__ == 1` preprocessor contract. Other `/favor` modes remain unclassified,
-// and ARM64EC is explicitly excluded because x64 compatibility macros do not prove that its native ISA is x86.
-#if defined(_MSC_VER) && !defined(__clang__) && defined(__ATOM__) && __ATOM__ == 1 && \
-	(defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86)) &&                     \
+// generic unless they acquire a documented, tested contract of their own. Apple AArch64 is a platform-family
+// exception rather than a per-core tune, because every supported M-generation target exposes the same stable macro
+// pair. Genuine MSVC x86 is another narrow exception: `/favor:ATOM` has the documented `__ATOM__ == 1` preprocessor
+// contract. Other `/favor` modes remain unclassified, and ARM64EC is explicitly excluded because x64 compatibility
+// macros do not prove that its native ISA is x86.
+#if defined(__APPLE__) && \
+	(defined(__aarch64__) || defined(__arm64__) || defined(__arm64))
+	// Apple Clang exposes no stable per-M-generation preprocessor contract: `-mcpu=apple-m1` through `apple-m5`
+	// define the same Apple/AArch64 platform macros. This family therefore records the common Apple-silicon ABI
+	// envelope, not a claim that M-series cache sizes, memory bandwidth, or prefetch profitability are identical.
+	prfch_tune::arm_apple;
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(__ATOM__) && __ATOM__ == 1 && \
+	(defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86)) &&                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	prfch_tune::x86_intel_atom;
 #elif defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && \

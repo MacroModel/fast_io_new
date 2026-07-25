@@ -9,6 +9,19 @@ namespace fast_io
 namespace details
 {
 
+/*
+Policy-maintenance rule for a newly qualified architecture
+----------------------------------------------------------
+`conservative_*_prfch_platform_impl` is the broad experimental permission layer; every later predicate in this file is
+a site-specific profitability layer. Extend the read and write predicates independently, even when the ISA encodes
+both hints symmetrically. A positive broad result must never be copied into a site predicate without retained
+measurements of that exact consuming memory operation and a public-entry code-generation check. When a site is
+admitted, encode its measured trip count, payload, lookahead, cache level, retention, provenance, lifetime, and
+in-range-address premises next to the site predicate. Keep unsupported directions as explicit false predicates so
+later work cannot mistake an absent experiment for an implementation omission. Follow the complete qualification
+protocol beside `prfch_tune` in `platform.h` and retain all evidence in `benchmark/0022.prfch/`.
+*/
+
 /// @brief Forms the initial broad-core allow-list for manually prefetched reads.
 /// @details This is a permission envelope, not a command to emit a hint. The selected tune families describe modern
 ///          out-of-order cores for which the backend has a stable data-prefetch lowering and for which one conservative
@@ -38,7 +51,8 @@ inline consteval bool conservative_read_prfch_platform_impl() noexcept
 		}
 		else if constexpr (isa == ::fast_io::prfch_isa::aarch64)
 		{
-			return tune == ::fast_io::prfch_tune::arm_application ||
+			return tune == ::fast_io::prfch_tune::arm_apple ||
+				   tune == ::fast_io::prfch_tune::arm_application ||
 				   tune == ::fast_io::prfch_tune::arm_server;
 		}
 		else
@@ -72,7 +86,8 @@ inline consteval bool conservative_write_prfch_platform_impl() noexcept
 		}
 		else if constexpr (isa == ::fast_io::prfch_isa::aarch64)
 		{
-			return tune == ::fast_io::prfch_tune::arm_application ||
+			return tune == ::fast_io::prfch_tune::arm_apple ||
+				   tune == ::fast_io::prfch_tune::arm_application ||
 				   tune == ::fast_io::prfch_tune::arm_server;
 		}
 		else
@@ -119,8 +134,46 @@ concept conservative_write_prfch_strategy =
 	::fast_io::conservative_write_prfch_platform<platform_type> &&
 	::fast_io::prfch_cacheable_write_provenance<provenance_type>;
 
+/// @brief Complete bounded envelope for a one-descriptor-ahead scatter-chain prefetch site.
+/// @details Minimum and maximum bounds are both semantic. A maximum is not documentation-only: the sizing traversal
+///          must reject a chain outside the measured envelope before the copy traversal emits a hint. A target may
+///          further restrict the envelope to retained discrete values; callers must use the policy eligibility
+///          predicates below rather than interpreting this aggregate as an automatically continuous rectangle.
+///          Keeping cache level and retention in the same value prevents a platform gate from accidentally reusing
+///          another target's instruction intent.
+struct scatter_chain_prfch_policy
+{
+	::std::size_t minimum_descriptor_count{};
+	::std::size_t maximum_descriptor_count{};
+	::std::size_t minimum_payload_bytes{};
+	::std::size_t maximum_payload_bytes{};
+	::fast_io::prfch_level level{};
+	::fast_io::prfch_retention retention{};
+};
+
 namespace details
 {
+
+template <typename platform_type>
+inline consteval ::fast_io::scatter_chain_prfch_policy
+concat_scatter_chain_read_prfch_policy_impl() noexcept
+{
+	constexpr auto isa{static_cast<::fast_io::prfch_isa>(platform_type::isa)};
+	constexpr auto tune{static_cast<::fast_io::prfch_tune>(platform_type::tune)};
+	if constexpr (isa == ::fast_io::prfch_isa::aarch64 &&
+				  tune == ::fast_io::prfch_tune::arm_apple)
+	{
+		// This is the bounded envelope of the discrete P/E-core grid retained on M4, not the wider P-core-only
+		// rectangle. The eligibility predicates below reject unmeasured intermediate values.
+		return {512u, 1024u, 1024u, 2048u, ::fast_io::prfch_level::L1,
+				::fast_io::prfch_retention::keep};
+	}
+	else
+	{
+		return {32u, SIZE_MAX, 4u * 1024u, SIZE_MAX, ::fast_io::prfch_level::L1,
+				::fast_io::prfch_retention::keep};
+	}
+}
 
 /// @brief Selects the measured platform envelope for concat's materialized scatter-chain read site.
 /// @details This predicate is intentionally narrower than `conservative_read_prfch_platform`. Three paired Linux
@@ -128,8 +181,13 @@ namespace details
 ///          controls stayed within about 0.2 percent. A later three-process E-core confirmation on the same hybrid CPU
 ///          retained neutral-or-better results for every 4/16-KiB hot/cold case. The earlier screen also found 17--31
 ///          percent hot regressions at 256/512 bytes. Those results admit only the measured hybrid tune family and the
-///          all-large threshold: `x86_intel_core`, AMD Zen, and AArch64 remain disabled because an instruction or broad
-///          out-of-order-core classification is not hardware evidence for this exact site.
+///          all-large threshold for `x86_intel_hybrid`; `x86_intel_core`, AMD Zen, and generic AArch64 remain disabled.
+///          Apple uses a separate discrete grid rather than inheriting that rule. The M4 P-core screen retained a
+///          wider L1/keep read window, but corrected dense interpolation rejected a continuous rectangle. The common
+///          P/E-core result contains descriptor counts 512, 768, and 1024, each with a uniform 1024- or 2048-byte
+///          payload. The Apple family admission requested for `__APPLE__` plus AArch64 encodes only those six shapes.
+///          M1--M5 still share one compile-time tune and one llvm-mca model, so this policy must not be described or
+///          widened as cross-product runtime proof.
 template <typename platform_type>
 inline consteval bool concat_scatter_chain_read_prfch_platform_impl() noexcept
 {
@@ -141,15 +199,20 @@ inline consteval bool concat_scatter_chain_read_prfch_platform_impl() noexcept
 	{
 		constexpr auto isa{static_cast<::fast_io::prfch_isa>(platform_type::isa)};
 		constexpr auto tune{static_cast<::fast_io::prfch_tune>(platform_type::tune)};
-		return isa == ::fast_io::prfch_isa::x86 &&
-			   tune == ::fast_io::prfch_tune::x86_intel_hybrid;
+		return (isa == ::fast_io::prfch_isa::x86 &&
+				tune == ::fast_io::prfch_tune::x86_intel_hybrid) ||
+			   (isa == ::fast_io::prfch_isa::aarch64 &&
+				tune == ::fast_io::prfch_tune::arm_apple);
 	}
 }
 
 /// @brief Keeps concat scatter-chain write prefetch disabled pending independent evidence.
 /// @details A write hint can allocate a cache line or lower differently from a read hint. Mirroring a profitable
 ///          producer-read policy into the destination direction would therefore be an unsupported cost inference.
-///          Keeping a separately named predicate makes a future write experiment local to this site and direction.
+///          The initial M4 cross-core screen retained a single PSTL2STRM candidate at 1024 destinations by 8192 bytes,
+///          but a later threshold-matched E-core process produced a 1.002815 hot median-time ratio. The all-process
+///          rule therefore rejects even that exact point. Keeping a separately named false predicate makes a future
+///          write experiment local to this site and direction without publishing a failed candidate as policy.
 template <typename platform_type>
 inline consteval bool concat_scatter_chain_write_prfch_platform_impl() noexcept
 {
@@ -158,23 +221,83 @@ inline consteval bool concat_scatter_chain_write_prfch_platform_impl() noexcept
 
 } // namespace details
 
-/// @brief Minimum retained descriptor capacity admitted by concat's measured read-prefetch site.
+/// @brief Platform-specific bounded policy selected by concat's retained scatter-chain read site.
+template <::fast_io::prfch_platform platform_type>
+inline constexpr ::fast_io::scatter_chain_prfch_policy concat_scatter_chain_read_prfch_policy_for{
+	::fast_io::details::concat_scatter_chain_read_prfch_policy_impl<platform_type>()};
+
+/// @brief Tests the complete descriptor-count domain retained for one platform's concat read policy.
+/// @details Apple M4 interpolation found regressions at intermediate points, so its envelope is deliberately a
+///          discrete set rather than a range. The x86 hybrid policy remains its measured minimum-only interval.
+template <::fast_io::prfch_platform platform_type>
+inline constexpr bool concat_scatter_chain_read_prfch_descriptor_count_eligible(
+	::std::size_t descriptor_count) noexcept
+{
+	auto constexpr policy{
+		::fast_io::concat_scatter_chain_read_prfch_policy_for<platform_type>};
+	if constexpr (static_cast<::fast_io::prfch_isa>(platform_type::isa) ==
+					  ::fast_io::prfch_isa::aarch64 &&
+				  static_cast<::fast_io::prfch_tune>(platform_type::tune) ==
+					  ::fast_io::prfch_tune::arm_apple)
+	{
+		return descriptor_count == 512u || descriptor_count == 768u ||
+			   descriptor_count == 1024u;
+	}
+	else
+	{
+		return policy.minimum_descriptor_count <= descriptor_count &&
+			   descriptor_count <= policy.maximum_descriptor_count;
+	}
+}
+
+/// @brief Tests the complete per-descriptor byte domain retained for one platform's concat read policy.
+/// @details Apple admits only the two payload sizes measured on both M4 core classes. The sizing traversal separately
+///          proves that all nonempty Apple payloads have the same size; mixed 1024/2048-byte chains were not measured.
+template <::fast_io::prfch_platform platform_type>
+inline constexpr bool concat_scatter_chain_read_prfch_payload_bytes_eligible(
+	::std::size_t payload_bytes) noexcept
+{
+	auto constexpr policy{
+		::fast_io::concat_scatter_chain_read_prfch_policy_for<platform_type>};
+	if constexpr (static_cast<::fast_io::prfch_isa>(platform_type::isa) ==
+					  ::fast_io::prfch_isa::aarch64 &&
+				  static_cast<::fast_io::prfch_tune>(platform_type::tune) ==
+					  ::fast_io::prfch_tune::arm_apple)
+	{
+		return payload_bytes == 1024u || payload_bytes == 2048u;
+	}
+	else
+	{
+		return policy.minimum_payload_bytes <= payload_bytes &&
+			   payload_bytes <= policy.maximum_payload_bytes;
+	}
+}
+
+/// @brief Whether the retained platform evidence requires one uniform nonempty payload size across the chain.
+template <::fast_io::prfch_platform platform_type>
+inline constexpr bool concat_scatter_chain_read_prfch_requires_uniform_payload{
+	static_cast<::fast_io::prfch_isa>(platform_type::isa) ==
+		::fast_io::prfch_isa::aarch64 &&
+	static_cast<::fast_io::prfch_tune>(platform_type::tune) ==
+		::fast_io::prfch_tune::arm_apple};
+
+/// @brief Historical x86 minimum retained descriptor capacity admitted by concat's read-prefetch site.
 /// @details Smaller chains do not provide enough repeated irregular work to amortize policy and lookahead overhead in
 ///          the retained Linux experiment. Reserve-scatters plans must still validate their smaller actual prefix at
 ///          run time because a customization may legally return fewer descriptors than its static capacity; zero-
 ///          length descriptors do not count toward the required 32 live payloads.
 inline constexpr ::std::size_t concat_scatter_chain_read_prfch_minimum_descriptor_count{32u};
 
-/// @brief Minimum byte extent required for both the current and next nonempty scatter payloads.
+/// @brief Historical x86 minimum byte extent required for both current and next nonempty scatter payloads.
 /// @details Four KiB retains the positive cold-discontinuous region and excludes the 256/512-byte hot regressions.
 ///          Concat converts this byte bound to character counts by division, never by an overflowing multiplication.
 inline constexpr ::std::size_t concat_scatter_chain_read_prfch_minimum_payload_bytes{4u * 1024u};
 
-/// @brief Cache intent retained by the measured concat scatter-chain read policy.
+/// @brief Historical x86 cache intent retained by the concat scatter-chain read policy.
 inline constexpr ::fast_io::prfch_level concat_scatter_chain_read_prfch_level{
 	::fast_io::prfch_level::L1};
 
-/// @brief Retention intent retained by the measured concat scatter-chain read policy.
+/// @brief Historical x86 retention intent retained by the concat scatter-chain read policy.
 inline constexpr ::fast_io::prfch_retention concat_scatter_chain_read_prfch_retention{
 	::fast_io::prfch_retention::keep};
 
@@ -195,12 +318,13 @@ concept concat_scatter_chain_write_prfch_platform =
 ///          Each source must either carry explicit read provenance or prove that it exposes no external range at all;
 ///          this admits `io_null_t` without turning it into a hint target. One unmarked raw scatter, pointer, view, or
 ///          device mapping still closes the complete strategy. Descriptor capacity is only an upper bound for
-///          reserve-scatters; the existing size pass independently rejects an actual prefix with fewer than 32
-///          nonempty descriptors before the copy helper inspects any payload address.
+///          reserve-scatters; the existing size pass independently checks the platform policy's complete actual-count
+///          and payload domains before the copy helper inspects any payload address.
 template <typename platform_type, ::std::size_t descriptor_capacity, typename... source_types>
 concept concat_scatter_chain_read_prfch_strategy =
 	::fast_io::concat_scatter_chain_read_prfch_platform<platform_type> &&
-	descriptor_capacity >= ::fast_io::concat_scatter_chain_read_prfch_minimum_descriptor_count &&
+	descriptor_capacity >=
+		::fast_io::concat_scatter_chain_read_prfch_policy_for<platform_type>.minimum_descriptor_count &&
 	sizeof...(source_types) != 0u &&
 	(::fast_io::prfch_cacheable_read_or_no_external_range<source_types> && ...);
 
@@ -222,6 +346,10 @@ namespace details
 ///          three-process E-core confirmation found no 4/16-KiB hot/cold regression after the large-copy outline. Print
 ///          nevertheless keeps its own predicate, constants, and public concept so future site-specific evidence can
 ///          change this decision without silently widening concat. Untested Intel Core and AMD Zen tunes remain off.
+///          Apple AArch64 also remains off: the corrected M4 P-core kernel experiment found a repeatable but
+///          differently bounded 512--1024-descriptor, 512--3072-byte L1/keep window, the E-core follow-up did not
+///          preserve the complete rectangle, `arm_apple` covers unmeasured M1--M5 products, and no complete public
+///          print specialization has confirmed that window.
 template <typename platform_type>
 inline consteval bool print_scatter_materialize_read_prfch_platform_impl() noexcept
 {

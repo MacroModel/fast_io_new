@@ -126,10 +126,21 @@ struct cacheable_reserve_scatters
 	::std::size_t len{};
 };
 
+struct cacheable_apple_policy_reserve_scatters
+{
+	char const *base{};
+};
+
 inline constexpr ::fast_io::reserve_scatters_size_result print_reserve_scatters_size(
 	::fast_io::io_reserve_type_t<char, cacheable_reserve_scatters>) noexcept
 {
 	return {1u, 0u};
+}
+
+inline constexpr ::fast_io::reserve_scatters_size_result print_reserve_scatters_size(
+	::fast_io::io_reserve_type_t<char, cacheable_apple_policy_reserve_scatters>) noexcept
+{
+	return {512u, 0u};
 }
 
 inline constexpr ::fast_io::basic_reserve_scatters_define_result<char> print_reserve_scatters_define(
@@ -141,8 +152,26 @@ inline constexpr ::fast_io::basic_reserve_scatters_define_result<char> print_res
 	return {scatters + 1u, reserve};
 }
 
+inline constexpr ::fast_io::basic_reserve_scatters_define_result<char> print_reserve_scatters_define(
+	::fast_io::io_reserve_type_t<char, cacheable_apple_policy_reserve_scatters>,
+	::fast_io::basic_io_scatter_t<char> *scatters, char *reserve,
+	cacheable_apple_policy_reserve_scatters const &source) noexcept
+{
+	for (::std::size_t index{}; index != 512u; ++index)
+	{
+		scatters[index] = {source.base, 1024u};
+	}
+	return {scatters + 512u, reserve};
+}
+
 [[maybe_unused]] inline constexpr ::std::true_type print_borrowed_reserve_scatters_source(
 	::fast_io::io_reserve_type_t<char, cacheable_reserve_scatters>) noexcept
+{
+	return {};
+}
+
+[[maybe_unused]] inline constexpr ::std::true_type print_borrowed_reserve_scatters_source(
+	::fast_io::io_reserve_type_t<char, cacheable_apple_policy_reserve_scatters>) noexcept
 {
 	return {};
 }
@@ -153,12 +182,18 @@ inline constexpr ::fast_io::basic_reserve_scatters_define_result<char> print_res
 	return {};
 }
 
+[[maybe_unused]] inline constexpr ::std::true_type prfch_cacheable_read_provenance_define(
+	::fast_io::io_type_t<cacheable_apple_policy_reserve_scatters>) noexcept
+{
+	return {};
+}
+
 static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<x86_core_platform>);
 static_assert(::fast_io::concat_scatter_chain_read_prfch_platform<x86_hybrid_platform>);
 static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<x86_zen_platform>);
 static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<x86_generic_platform>);
 static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<aarch64_server_platform>);
-static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<apple_aarch64_platform>);
+static_assert(::fast_io::concat_scatter_chain_read_prfch_platform<apple_aarch64_platform>);
 static_assert(!::fast_io::concat_scatter_chain_read_prfch_platform<unavailable_x86_platform>);
 static_assert(!::fast_io::concat_scatter_chain_write_prfch_platform<x86_core_platform>);
 
@@ -174,8 +209,42 @@ static_assert(!::fast_io::concat_scatter_chain_read_prfch_strategy<
 			  x86_hybrid_platform, descriptor_count, ::fast_io::basic_io_scatter_t<char>>);
 static_assert(::fast_io::concat_scatter_chain_read_prfch_strategy<
 			  x86_hybrid_platform, descriptor_count, ::fast_io::basic_prfch_cacheable_io_scatter_t<char>>);
+static_assert(::fast_io::concat_scatter_chain_read_prfch_strategy<
+			  apple_aarch64_platform, 512u, cacheable_generic_scatter>);
+static_assert(!::fast_io::concat_scatter_chain_read_prfch_strategy<
+			  apple_aarch64_platform, 511u, cacheable_generic_scatter>);
 static_assert(!::fast_io::concat_scatter_chain_write_prfch_strategy<
 			  x86_core_platform, descriptor_count, cacheable_generic_scatter>);
+
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.minimum_descriptor_count == 512u);
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.maximum_descriptor_count == 1024u);
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.minimum_payload_bytes == 1024u);
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.maximum_payload_bytes == 2048u);
+static_assert(::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.level ==
+			  ::fast_io::prfch_level::L1);
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_policy_for<apple_aarch64_platform>.retention ==
+	::fast_io::prfch_retention::keep);
+static_assert(::fast_io::concat_scatter_chain_read_prfch_descriptor_count_eligible<
+			  apple_aarch64_platform>(512u));
+static_assert(::fast_io::concat_scatter_chain_read_prfch_descriptor_count_eligible<
+			  apple_aarch64_platform>(768u));
+static_assert(::fast_io::concat_scatter_chain_read_prfch_descriptor_count_eligible<
+			  apple_aarch64_platform>(1024u));
+static_assert(!::fast_io::concat_scatter_chain_read_prfch_descriptor_count_eligible<
+			  apple_aarch64_platform>(640u));
+static_assert(::fast_io::concat_scatter_chain_read_prfch_payload_bytes_eligible<
+			  apple_aarch64_platform>(1024u));
+static_assert(::fast_io::concat_scatter_chain_read_prfch_payload_bytes_eligible<
+			  apple_aarch64_platform>(2048u));
+static_assert(!::fast_io::concat_scatter_chain_read_prfch_payload_bytes_eligible<
+			  apple_aarch64_platform>(1536u));
+static_assert(
+	::fast_io::concat_scatter_chain_read_prfch_requires_uniform_payload<apple_aarch64_platform>);
 
 static_assert(::fast_io::concat_scatter_chain_read_prfch_level == ::fast_io::prfch_level::L1);
 static_assert(::fast_io::concat_scatter_chain_read_prfch_retention == ::fast_io::prfch_retention::keep);
@@ -245,7 +314,8 @@ inline void test_runtime_eligibility_is_folded_into_sizing()
 		small_scatters[index] = {small_source.data() + index * 64u, 64u};
 	}
 	bool small_eligible{true};
-	::std::size_t const small_total{::fast_io::details::decay::calculate_scatter_total_size<true>(
+	::std::size_t const small_total{::fast_io::details::decay::calculate_scatter_total_size<
+		true, x86_hybrid_platform>(
 		small_scatters.data(), small_scatters.data() + small_scatters.size(), small_eligible)};
 	assert(small_total == small_source.size());
 	assert(!small_eligible);
@@ -262,7 +332,8 @@ inline void test_runtime_eligibility_is_folded_into_sizing()
 		large_scatters[index] = {large_source.data() + index * payload_size, payload_size};
 	}
 	bool large_eligible{};
-	::std::size_t const large_total{::fast_io::details::decay::calculate_scatter_total_size<true>(
+	::std::size_t const large_total{::fast_io::details::decay::calculate_scatter_total_size<
+		true, x86_hybrid_platform>(
 		large_scatters.data(), large_scatters.data() + large_scatters.size(), large_eligible)};
 	assert(large_total == large_source.size());
 	assert(large_eligible);
@@ -270,7 +341,7 @@ inline void test_runtime_eligibility_is_folded_into_sizing()
 	// Capacity is still 32, but the actual prefix has only 31 live payloads and must close at run time.
 	large_scatters[descriptor_count - 1u] = {nullptr, 0u};
 	bool sparse_eligible{true};
-	(void)::fast_io::details::decay::calculate_scatter_total_size<true>(
+	(void)::fast_io::details::decay::calculate_scatter_total_size<true, x86_hybrid_platform>(
 		large_scatters.data(), large_scatters.data() + large_scatters.size(), sparse_eligible);
 	assert(!sparse_eligible);
 }
@@ -290,15 +361,85 @@ inline void test_empty_descriptors_never_supply_a_hint_address()
 		scatters[scatter_index] = {source.data() + live_index * payload_size, payload_size};
 	}
 	bool runtime_read_prfch{};
-	::std::size_t const total{::fast_io::details::decay::calculate_scatter_total_size<true>(
+	::std::size_t const total{::fast_io::details::decay::calculate_scatter_total_size<
+		true, x86_hybrid_platform>(
 		scatters.data(), scatters.data() + scatters.size(), runtime_read_prfch)};
 	assert(total == source.size());
 	assert(runtime_read_prfch);
 	::std::array<char, payload_size * descriptor_count> destination{};
-	char *const end{::fast_io::details::decay::copy_scatter_chain_to_buffer<true>(
+	char *const end{::fast_io::details::decay::copy_scatter_chain_to_buffer<
+		true, x86_hybrid_platform>(
 		destination.data(), scatters.data(), scatters.data() + scatters.size(), runtime_read_prfch)};
 	assert(end == destination.data() + destination.size());
 	assert(source == destination);
+}
+
+inline void test_apple_policy_enforces_the_retained_discrete_grid()
+{
+	::std::array<char, 2049u> live_payload{};
+	::std::array<::fast_io::basic_io_scatter_t<char>, 1025u> scatters{};
+	for (auto &scatter : scatters)
+	{
+		scatter = {live_payload.data(), 1024u};
+	}
+
+	bool eligible{};
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(eligible);
+
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 511u, eligible);
+	assert(!eligible);
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 640u, eligible);
+	assert(!eligible);
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 1025u, eligible);
+	assert(!eligible);
+
+	scatters[0].len = 1023u;
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(!eligible);
+	scatters[0].len = 2049u;
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(!eligible);
+	scatters[0].len = 1536u;
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(!eligible);
+	for (::std::size_t index{}; index != 512u; ++index)
+	{
+		scatters[index].len = 2048u;
+	}
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(eligible);
+	scatters[0].len = 1024u;
+	(void)::fast_io::details::decay::calculate_scatter_total_size<
+		true, apple_aarch64_platform>(scatters.data(), scatters.data() + 512u, eligible);
+	assert(!eligible);
+}
+
+inline void test_public_concat_accepts_the_apple_policy_shape()
+{
+	::std::array<char, 1024u> payload{};
+	for (::std::size_t index{}; index != payload.size(); ++index)
+	{
+		payload[index] = static_cast<char>('a' + index % 23u);
+	}
+	auto const result{
+		::fast_io::concat_fast_io(cacheable_apple_policy_reserve_scatters{payload.data()})};
+	assert(result.size() == 512u * payload.size());
+	for (::std::size_t descriptor{}; descriptor != 512u; ++descriptor)
+	{
+		for (::std::size_t offset{}; offset != payload.size(); ++offset)
+		{
+			assert(result[descriptor * payload.size() + offset] == payload[offset]);
+		}
+	}
 }
 
 } // namespace
@@ -307,6 +448,8 @@ int main()
 {
 	test_runtime_eligibility_is_folded_into_sizing();
 	test_empty_descriptors_never_supply_a_hint_address();
+	test_apple_policy_enforces_the_retained_discrete_grid();
+	test_public_concat_accepts_the_apple_policy_shape();
 	verify_materialized_concat<cacheable_generic_scatter, 64u>();
 	verify_materialized_concat<cacheable_reserve_scatters, 64u>();
 	verify_materialized_concat<cacheable_generic_scatter, payload_size>();

@@ -360,18 +360,38 @@ inline constexpr bool concat_scatter_payload_meets_read_prfch_threshold(::std::s
 	return minimum_characters <= length;
 }
 
+/// @brief Tests the complete payload-byte domain selected for one concrete platform.
+/// @details The multiplication is performed only after a division guard, so an adversarial character count cannot
+///          overflow. The historical minimum-only helper above remains available for source compatibility; production
+///          concat uses this complete predicate, including Apple's retained discrete payload sizes.
+template <::fast_io::prfch_platform platform_type, ::std::integral ch_type>
+inline constexpr bool concat_scatter_payload_meets_read_prfch_policy(
+	::std::size_t length) noexcept
+{
+	constexpr ::std::size_t character_width{sizeof(ch_type)};
+	if (SIZE_MAX / character_width < length)
+	{
+		return false;
+	}
+	return ::fast_io::concat_scatter_chain_read_prfch_payload_bytes_eligible<platform_type>(
+		length * character_width);
+}
+
 /// @brief Sums an exact scatter prefix and, when admitted, classifies read-prefetch eligibility in the same traversal.
-/// @details The strategy-enabled run counts nonempty descriptors up to the retained threshold and rejects the complete
-///          chain if any nonempty payload is smaller than four KiB. This conservative all-large rule is intentional:
-///          it prevents 32 ordinary 64-byte strings from paying the next-descriptor search whose isolated hot control
-///          regressed by about 7--9 percent. No payload base is inspected here. The count saturates at 32 and the byte
-///          predicate uses division, so neither statistic can overflow.
+/// @details The strategy-enabled run checks the platform policy's complete nonempty-descriptor and payload domains.
+///          The x86 hybrid rule is a minimum-only 32 by four-KiB boundary. Apple admits only counts 512/768/1024 with
+///          one uniform payload size of 1024 or 2048 bytes. No payload base is inspected here. A count at the platform
+///          maximum saturates and separately records any later nonempty descriptor, while the byte predicate guards
+///          multiplication, so neither statistic can overflow.
 ///
 ///          Constant evaluation and compile-time-disabled policies execute the historical summation loop below. They
 ///          construct no eligibility counters and perform no lookahead; `runtime_read_prfch` remains false. At run time
 ///          an admitted policy folds the two statistics into the summation that concat already required, avoiding a
 ///          third descriptor pass before copying.
-template <bool read_prfch, ::std::integral ch_type>
+template <bool read_prfch,
+		  typename platform_type = ::fast_io::details::native_prfch_platform,
+		  ::std::integral ch_type>
+	requires(::fast_io::prfch_platform<platform_type>)
 inline constexpr ::std::size_t calculate_scatter_total_size(
 	basic_io_scatter_t<ch_type> const *first, basic_io_scatter_t<ch_type> const *last,
 	bool &runtime_read_prfch)
@@ -381,9 +401,14 @@ inline constexpr ::std::size_t calculate_scatter_total_size(
 	{
 		if (!::std::is_constant_evaluated())
 		{
+			auto constexpr policy{
+				::fast_io::concat_scatter_chain_read_prfch_policy_for<platform_type>};
 			::std::size_t total_size{};
 			::std::size_t nonempty_count{};
-			bool every_nonempty_payload_is_large{true};
+			[[maybe_unused]] ::std::size_t first_nonempty_length{};
+			bool descriptor_count_did_not_exceed_maximum{true};
+			bool every_nonempty_payload_is_in_range{true};
+			bool every_nonempty_payload_has_one_size{true};
 			for (; first != last; ++first)
 			{
 				::std::size_t const length{first->len};
@@ -395,19 +420,39 @@ inline constexpr ::std::size_t calculate_scatter_total_size(
 				}
 				if (length != 0u)
 				{
-					if (nonempty_count < ::fast_io::concat_scatter_chain_read_prfch_minimum_descriptor_count)
+					if constexpr (
+						::fast_io::concat_scatter_chain_read_prfch_requires_uniform_payload<platform_type>)
+					{
+						if (nonempty_count == 0u)
+						{
+							first_nonempty_length = length;
+						}
+						else
+						{
+							every_nonempty_payload_has_one_size =
+								every_nonempty_payload_has_one_size && length == first_nonempty_length;
+						}
+					}
+					if (nonempty_count == policy.maximum_descriptor_count)
+					{
+						descriptor_count_did_not_exceed_maximum = false;
+					}
+					else
 					{
 						++nonempty_count;
 					}
-					every_nonempty_payload_is_large =
-						every_nonempty_payload_is_large &&
-						::fast_io::details::decay::concat_scatter_payload_meets_read_prfch_threshold<ch_type>(
-							length);
+					every_nonempty_payload_is_in_range =
+						every_nonempty_payload_is_in_range &&
+						::fast_io::details::decay::concat_scatter_payload_meets_read_prfch_policy<
+							platform_type, ch_type>(length);
 				}
 			}
 			runtime_read_prfch =
-				every_nonempty_payload_is_large &&
-				nonempty_count == ::fast_io::concat_scatter_chain_read_prfch_minimum_descriptor_count;
+				descriptor_count_did_not_exceed_maximum && every_nonempty_payload_is_in_range &&
+				(!::fast_io::concat_scatter_chain_read_prfch_requires_uniform_payload<platform_type> ||
+				 every_nonempty_payload_has_one_size) &&
+				::fast_io::concat_scatter_chain_read_prfch_descriptor_count_eligible<platform_type>(
+					nonempty_count);
 			return total_size;
 		}
 	}
@@ -429,17 +474,21 @@ inline constexpr ::std::size_t calculate_scatter_total_size(
 /// @brief Copies an exact retained scatter prefix, optionally applying concat's measured next-source read hint.
 /// @details The optimized loop is instantiated only after the caller proves platform, descriptor-capacity, and every
 ///          normalized producer's cacheable-read provenance. The explicit run-time gate comes from the existing size
-///          traversal and proves at least 32 nonempty descriptors with every nonempty payload at least four KiB. A
-///          false gate therefore enters the original loop without executing a next-descriptor search. When true, empty
-///          descriptors are skipped by length before their `base` member is ever evaluated, and the only hinted
-///          expression is exactly the next nonempty descriptor's live-range base.
+///          traversal and proves the actual chain lies inside the selected platform's complete descriptor/payload
+///          domain. A false gate therefore enters the original loop without executing a next-descriptor search.
+///          When true, empty descriptors are skipped by length before their `base` member is ever evaluated, and the
+///          only hinted expression is exactly the next nonempty descriptor's live-range base.
 ///
 ///          Constant evaluation deliberately executes the original single traversal: it performs neither a prefetch
 ///          nor the next-nonempty search. At run time, three Linux P-core seeds retained about 1--2.4 percent for cold
-///          discontinuous 4--16 KiB chains and about +/-0.2 percent for the hot controls. Earlier 256/512-byte hot
-///          policies regressed by 17--31 percent, which is why this threshold and site remain independent from the
-///          broad platform capability and why no write hint is mirrored here.
-template <bool read_prfch, ::std::integral ch_type>
+///          discontinuous 4--16 KiB chains and about +/-0.2 percent for the hot controls. The independent M4 P/E-core
+///          intersection uses only counts 512/768/1024 with uniform 1024- or 2048-byte payloads. These different
+///          domains are why site policy remains independent from broad platform capability and why no write hint is
+///          mirrored here.
+template <bool read_prfch,
+		  typename platform_type = ::fast_io::details::native_prfch_platform,
+		  ::std::integral ch_type>
+	requires(::fast_io::prfch_platform<platform_type>)
 inline constexpr ch_type *copy_scatter_chain_to_buffer(ch_type *iter, basic_io_scatter_t<ch_type> const *first,
 													   basic_io_scatter_t<ch_type> const *last,
 													   bool runtime_read_prfch)
@@ -448,6 +497,8 @@ inline constexpr ch_type *copy_scatter_chain_to_buffer(ch_type *iter, basic_io_s
 	{
 		if (!::std::is_constant_evaluated() && runtime_read_prfch)
 		{
+			auto constexpr policy{
+				::fast_io::concat_scatter_chain_read_prfch_policy_for<platform_type>};
 			auto current{first};
 			while (current != last && current->len == 0u)
 			{
@@ -463,9 +514,8 @@ inline constexpr ch_type *copy_scatter_chain_to_buffer(ch_type *iter, basic_io_s
 				}
 				if (next != last)
 				{
-					::fast_io::prfch<
-						::fast_io::prfch_mode::read, ::fast_io::concat_scatter_chain_read_prfch_level,
-						::fast_io::concat_scatter_chain_read_prfch_retention>(next->base);
+					::fast_io::prfch<::fast_io::prfch_mode::read, policy.level,
+									 policy.retention>(next->base);
 				}
 				iter = ::fast_io::details::decay::small_scatter_copy_n(current->base, current->len, iter);
 				current = next;
