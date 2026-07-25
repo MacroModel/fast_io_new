@@ -26,6 +26,22 @@ struct basic_timestamp
 	}
 };
 
+template <::std::integral char_type,
+		  ::std::int_least64_t off_to_epoch>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<
+		char_type, basic_timestamp<off_to_epoch>>) noexcept
+{
+	// basic_timestamp is a fast_io-owned pair of fundamental scalar fields; its non-type epoch parameter contributes no
+	// associated namespace. The ordinary reserve operation reads the same named value and writes only into caller-owned
+	// storage, so compacting adjacent optional descriptors cannot acquire a whole-record status owner, change output
+	// order, retain source storage, or change an exception-visible prefix. This proof does not authorize suppression of
+	// a compiler-constant query; the optional-scatter consumer remains available only where the active-record query is
+	// structurally disabled before any value test is formed.
+	return {};
+}
+
 namespace manipulators
 {
 
@@ -427,6 +443,19 @@ struct iso8601_timestamp
 	::std::uint_least64_t subseconds{};
 	::std::int_least32_t timezone{};
 };
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<char_type, iso8601_timestamp>) noexcept
+{
+	// Every field and formatting decision is owned by fast_io and no field introduces an associated user namespace. The
+	// reserve writer observes the same named record, emits into caller-owned storage, retains no source pointer, and is
+	// non-throwing. A transparent parameter<T&> transport is recursively unwrapped to that exact lvalue by the consumer,
+	// so optional descriptor compaction preserves spelling, operation order, lifetimes, and exception-visible prefixes.
+	// Compiler-constant materialization remains governed independently by its existing whole-record gate.
+	return {};
+}
 
 namespace manipulators
 {

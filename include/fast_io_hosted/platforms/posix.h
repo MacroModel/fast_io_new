@@ -545,6 +545,32 @@ io_bytes_stream_ref_define(basic_posix_family_io_observer<family, ch_type> other
 	return {other.fd};
 }
 
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::true_type print_semantic_optional_scatter_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// The exact POSIX observer is a closed fast_io type whose native writer consumes the compact nonempty iovec
+	// sequence. It owns no status-print overload for the library-owned leaf set. File owners, mutex wrappers, buffers,
+	// decorators, and transcoders reach this marker only if output-reference normalization has produced this observer.
+	return {};
+}
+
+template <::fast_io::posix_family family, ::std::integral char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_barrier_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
+{
+	// The observer namespace owns no whole-record status operation involving a marked direct-only barrier. The ordinary
+	// POSIX control scanner drains each admitted scatter/reserve prefix before it invokes that barrier, then resumes on
+	// the same descriptor-backed observer. Segmenting at that existing boundary therefore preserves iovec grouping,
+	// syscall order, exception-visible prefixes, and final-line ownership. Owners and wrappers remain unmarked.
+	return {};
+}
+
 #if 0
 template <::fast_io::posix_family family, ::std::integral char_type>
 inline constexpr ::std::size_t scatter_fallback_full_output_threshold(

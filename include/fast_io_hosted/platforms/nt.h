@@ -765,6 +765,32 @@ io_bytes_stream_ref_define(basic_nt_family_io_observer<family, ch_type> other) n
 }
 
 template <nt_family family, ::std::integral char_type>
+inline constexpr ::std::true_type print_semantic_optional_scatter_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_nt_family_io_observer<family, char_type>>) noexcept
+{
+	// The exact NT observer owns no status-print overload for the admitted closed leaf set. Its descriptor fallback
+	// compacts empty entries, coalesces the ordinary small record into one NtWriteFile operation, and preserves ordered
+	// direct writes for a record outside that declared policy. Owners, mutexes, buffers, and decorators are not marked.
+	return {};
+}
+
+template <nt_family family, ::std::integral char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_barrier_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_nt_family_io_observer<family, char_type>>) noexcept
+{
+	// The exact NT observer owns no whole-record status operation involving a marked direct-only barrier. Its ordinary
+	// control scanner already completes the preceding descriptor/coalesced prefix before direct printing and resumes on
+	// the same handle observer afterward. Splitting only there retains NtWriteFile order, exception prefixes, and line
+	// ownership; file owners, buffers, mutexes, decorators, and transcoders do not inherit this marker.
+	return {};
+}
+
+template <nt_family family, ::std::integral char_type>
 inline constexpr ::std::size_t scatter_fallback_full_output_threshold(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::basic_nt_family_io_observer<family, char_type>>) noexcept

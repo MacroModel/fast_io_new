@@ -386,6 +386,22 @@ print_alias_define(io_alias_t, iptype t) noexcept
 	return {t};
 }
 
+template <::std::integral char_type,
+		  ::fast_io::manipulators::ip_flags flags,
+		  ::fast_io::details::iptypesimpl iptype>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::ip_manip_t<flags, iptype>>) noexcept
+{
+	// iptypesimpl is a closed set of fast_io and platform address values, so neither the wrapper nor its value can add
+	// a user-associated status_print_define. The reserve formatter below reads its by-value address fields, writes at
+	// most the type-static bound, is non-throwing, and retains no source pointer. Its named-lvalue and compacted-plan
+	// representations therefore have identical characters, lifetime, and cursor meaning in every active record.
+	return {};
+}
+
 /// @feature concept:runtime_precise_size
 template <::std::integral char_type, ::fast_io::manipulators::ip_flags flags, ::fast_io::details::iptypesimpl iptype>
 #if __has_cpp_attribute(__gnu__::__always_inline__)

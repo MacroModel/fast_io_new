@@ -893,6 +893,32 @@ io_bytes_stream_ref_define(basic_win32_family_io_observer<family, ch_type> other
 }
 
 template <win32_family family, ::std::integral char_type>
+inline constexpr ::std::true_type print_semantic_optional_scatter_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_win32_family_io_observer<family, char_type>>) noexcept
+{
+	// The exact Win32 observer owns no status-print overload for the admitted closed leaf set. Its descriptor fallback
+	// compacts empty entries, coalesces the ordinary small record into one WriteFile operation, and preserves ordered
+	// direct writes for a record outside that declared policy. Owners, mutexes, buffers, and decorators are not marked.
+	return {};
+}
+
+template <win32_family family, ::std::integral char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_barrier_plan_stream(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::basic_win32_family_io_observer<family, char_type>>) noexcept
+{
+	// The exact Win32 observer owns no whole-record status operation involving a marked direct-only barrier. Its generic
+	// scanner already completes the preceding descriptor/coalesced prefix before direct printing and resumes with the
+	// same handle afterward. Segmenting at that boundary preserves WriteFile order, exception prefixes, and final-line
+	// ownership; owners, mutexes, buffers, decorators, and transcoders remain deliberately unmarked.
+	return {};
+}
+
+template <win32_family family, ::std::integral char_type>
 inline constexpr ::std::size_t scatter_fallback_full_output_threshold(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::basic_win32_family_io_observer<family, char_type>>) noexcept

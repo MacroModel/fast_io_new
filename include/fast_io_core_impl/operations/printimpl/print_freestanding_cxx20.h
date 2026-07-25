@@ -17,6 +17,14 @@ template <::std::integral char_type, ::std::size_t extent>
 struct bounded_cstr_scatter_t;
 } // namespace manipulators
 
+namespace operations::decay
+{
+template <bool line, ::std::integral char_type, typename output,
+		  typename... Args>
+inline consteval bool
+print_semantic_optional_scatter_width_coalescing_plan_available() noexcept;
+}
+
 namespace details::decay
 {
 
@@ -192,25 +200,21 @@ inline constexpr ::std::true_type print_borrowed_reserve_scatters_source(
 /// @details Ordinary `static_scatter_t` format literals do not activate this policy: a mixed run whose scalar query
 ///          was rejected must retain the historical contiguous materializer. Complete literal-only runs already take
 ///          the earlier immutable-fragment endpoint. Only a proxy created by a successful per-leaf/full true arm needs
-///          the mature dispatcher to preserve its provider-owned character storage.
+///          the mature dispatcher to preserve its provider-owned character storage. The position fold denotes the same
+///          closed prefix as recursive head removal, but forms the source pack once. This avoids quadratic
+///          template-argument metadata for large records and remains a portable C++20 proof without compiler pack-indexing
+///          support.
 template <::std::size_t count, ::std::integral char_type, typename... Args>
-struct print_first_n_contains_static_fragment;
-
-template <::std::integral char_type, typename... Args>
-struct print_first_n_contains_static_fragment<0u, char_type, Args...>
-	: ::std::false_type
-{};
-
-template <::std::size_t count, ::std::integral char_type, typename T,
-		  typename... Args>
-	requires(count != 0u)
-struct print_first_n_contains_static_fragment<count, char_type, T, Args...>
-	: ::std::bool_constant<
-		  ::fast_io::details::decay::
-			  print_compiler_constant_static_fragment_proxy_traits<
-				  ::std::remove_cvref_t<T>>::value ||
-		  ::fast_io::details::decay::print_first_n_contains_static_fragment<
-			  count - 1u, char_type, Args...>::value>
+	requires(count <= sizeof...(Args))
+struct print_first_n_contains_static_fragment
+	: ::std::bool_constant<[]() consteval {
+		  ::std::size_t position{};
+		  return (false || ... ||
+				  (position++ < count &&
+				   ::fast_io::details::decay::
+					   print_compiler_constant_static_fragment_proxy_traits<
+						   ::std::remove_cvref_t<Args>>::value));
+	  }()>
 {};
 
 /// @brief    Describes the first contiguous print run that can be represented by scatters and reserve buffers.
@@ -8294,6 +8298,815 @@ inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&
 	}
 }
 
+/// @brief Classifies the closed fast_io leaf set admitted by the optional-scatter source plan.
+/// @details The primary template fails closed. Exact specializations below contain no user-associated type argument;
+///          therefore their ADL set cannot introduce a user `status_print_define` after a condition disappears. This
+///          is a semantic ownership proof, not an inference from structural reserve/scatter printability.
+template <typename T>
+struct print_semantic_optional_scatter_closed_leaf : ::std::false_type
+{};
+
+template <::std::integral char_type>
+struct print_semantic_optional_scatter_closed_leaf<
+	::fast_io::basic_io_scatter_t<char_type>> : ::std::true_type
+{};
+
+template <::std::integral char_type>
+struct print_semantic_optional_scatter_closed_leaf<
+	::fast_io::basic_prfch_cacheable_io_scatter_t<char_type>>
+	: ::std::true_type
+{
+	// This fast_io-owned descriptor differs from basic_io_scatter_t only by an explicit cacheable-read provenance
+	// assertion. Its existing scatter, borrowed-source, output-independence, direct-equivalence, and copy-stability
+	// proofs establish the identical retained character range required by the closed semantic plan. No template
+	// argument can add an associated user namespace because the sole argument is the integral output character type.
+};
+
+template <::std::integral char_type, ::std::size_t extent>
+struct print_semantic_optional_scatter_closed_leaf<
+	::fast_io::manipulators::static_scatter_t<char_type, extent>> : ::std::true_type
+{};
+
+template <::std::integral char_type>
+struct print_semantic_optional_scatter_closed_leaf<
+	::fast_io::manipulators::chvw_t<char_type>> : ::std::true_type
+{};
+
+template <::std::integral char_type, typename T>
+inline consteval bool print_semantic_optional_scatter_argument() noexcept;
+
+/// @brief Proves one condition arm recursively selects the exact null identity or one retained closed scatter leaf.
+/// @details A nested condition is another value-level selector, not an additional active-record leaf. Recursing through
+///          it therefore preserves the original predicate order while proving the same single terminal leaf set without
+///          forming its type product. A non-null terminal must expose its descriptor through the same named-lvalue
+///          expression used by condition selection. Fixed scatters carry the established stable-storage contract. An
+///          exact same-character `chvw_t` stores its only code unit inside the enclosing condition tree, whose semantic
+///          frame outlives synchronous plan emission. Every other descriptor requires the explicit borrowed marker
+///          which keeps its payload alive through later component materialization.
+template <::std::integral char_type, typename T>
+inline consteval bool print_semantic_optional_scatter_branch() noexcept
+{
+	using branch_type = ::std::remove_cvref_t<T>;
+	if constexpr (::std::same_as<branch_type, ::fast_io::io_null_t>)
+	{
+		return true;
+	}
+	else if constexpr (
+		::fast_io::details::decay::
+			print_semantic_top_level_condition_v<T>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_optional_scatter_argument<char_type, T>();
+	}
+	else
+	{
+		return ::fast_io::details::decay::
+				   print_semantic_optional_scatter_closed_leaf<
+					   branch_type>::value &&
+			   (::std::same_as<
+					branch_type,
+					::fast_io::manipulators::chvw_t<char_type>> ||
+				::fast_io::details::decay::print_static_scatter_traits<
+					char_type, branch_type>::available ||
+				::fast_io::details::decay::retained_scatter_printable_v<
+					char_type, T>);
+	}
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_optional_scatter_branch_v =
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_branch<char_type, T>();
+
+/// @brief Detects a closed scatter selection after semantic input normalization.
+/// @details The condition factory may physically reorder its arms to reduce padding and invert the predicate. Each arm
+///          is therefore proved independently and may be either the exact null identity or one closed, stable scatter
+///          leaf. At least one arm must be non-null. A two-scatter choice still contributes exactly the single selected
+///          leaf to the active record, so it has the same descriptor and contiguous representations as an optional arm.
+template <::std::integral char_type, typename T>
+inline consteval bool print_semantic_optional_scatter_argument() noexcept
+{
+	if constexpr (!::fast_io::details::decay::print_semantic_top_level_condition_v<T>)
+	{
+		return false;
+	}
+	else
+	{
+		using node_result = decltype(
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::declval<T>()));
+		using node_expression = ::std::add_lvalue_reference_t<
+			::std::remove_reference_t<node_result>>;
+		using first_expression = decltype(
+			(::std::declval<node_expression>().t1));
+		using second_expression = decltype(
+			(::std::declval<node_expression>().t2));
+		constexpr bool first_null{
+			::std::same_as<::std::remove_cvref_t<first_expression>,
+						   ::fast_io::io_null_t>};
+		constexpr bool second_null{
+			::std::same_as<::std::remove_cvref_t<second_expression>,
+						   ::fast_io::io_null_t>};
+		return !(first_null && second_null) &&
+			   ::fast_io::details::decay::
+				   print_semantic_optional_scatter_branch_v<
+					   char_type, first_expression> &&
+			   ::fast_io::details::decay::
+				   print_semantic_optional_scatter_branch_v<
+					   char_type, second_expression>;
+	}
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_optional_scatter_argument_v{
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_argument<char_type, T>()};
+
+/// @brief Proves one mandatory source leaf is closed and compatible with the existing run-time scatter plan.
+/// @details Public parameter transports are recursively unwrapped by the plan itself. Classifying that same effective
+///          type keeps ownership and CPO category identical between this proof and materialization.
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_optional_scatter_plain_argument_v =
+	!::fast_io::details::decay::print_semantic_execution_node_v<T> &&
+	(::fast_io::details::decay::
+		 print_semantic_optional_scatter_closed_leaf<
+			 ::fast_io::details::decay::
+				 print_runtime_scatter_plan_unwrapped_t<T>>::value ||
+	 ::fast_io::semantic_optional_scatter_status_transparent_leaf<
+		 char_type,
+		 ::fast_io::details::decay::
+			 print_runtime_scatter_plan_unwrapped_t<T>>) &&
+	::fast_io::details::decay::print_runtime_scatter_plan_component_v<
+		char_type, T>;
+
+/// @brief Borrows one normalized closed scatter condition as a dynamic descriptor component.
+/// @details The enclosing semantic frame owns `source` until synchronous scatter emission completes. No branch is
+///          copied or forwarded again, which is valid only because admission restricted both arms to trivial,
+///          fast_io-owned scatter/null identities whose alias and print-forward operations are representation identities.
+template <::std::integral char_type, typename T>
+struct print_semantic_optional_scatter_component
+{
+	T *source;
+};
+
+/// @brief Obtains the descriptor selected by one admitted closed scatter condition.
+/// @details The returned empty descriptor represents a selected exact null arm only inside the private compacting plan;
+///          it is never exposed to public printable concepts or to status dispatch. The materializer omits it before
+///          the destination's scatter CPO is called. Two non-null arms produce the one descriptor selected by `pred`.
+template <::std::integral char_type, typename T>
+[[nodiscard]] inline constexpr ::fast_io::basic_io_scatter_t<char_type>
+print_semantic_optional_scatter_select(T &source)
+{
+	auto &&node{
+		::fast_io::details::decay::print_semantic_node_ref(source)};
+		auto select_branch = []<typename Branch>(Branch &branch) constexpr
+		-> ::fast_io::basic_io_scatter_t<char_type> {
+		using branch_type = ::std::remove_cvref_t<Branch>;
+		if constexpr (
+			::std::same_as<branch_type,
+						   ::fast_io::io_null_t>)
+		{
+			return {};
+		}
+		else if constexpr (
+			::fast_io::details::decay::
+				print_semantic_top_level_condition_v<Branch &>)
+		{
+			// A nested selector contributes exactly its recursively selected terminal leaf. No intermediate condition
+			// object escapes this call, and the enclosing source tree remains alive through synchronous materialization.
+			return ::fast_io::details::decay::
+				print_semantic_optional_scatter_select<char_type>(branch);
+		}
+		else if constexpr (
+			::std::same_as<branch_type,
+						   ::fast_io::manipulators::chvw_t<char_type>>)
+		{
+			// The enclosing condition remains a named source object until the synchronous writer returns. Borrowing its
+			// one character therefore preserves the exact chvw spelling without allocating reserve storage or extending a
+			// pointer beyond the member's lifetime.
+			return {__builtin_addressof(branch.reference), 1u};
+		}
+		else if constexpr (
+			::fast_io::details::decay::print_static_scatter_traits<
+				char_type, branch_type>::available)
+		{
+			// A fixed scatter is a descriptor already; unlike a general scatter CPO it needs no borrowed-source marker
+			// because this call merely copies the descriptor from the condition-owned branch and never reinvokes a producer.
+			return ::fast_io::details::decay::print_static_scatter_traits<
+				char_type, branch_type>::define(branch);
+		}
+		else
+		{
+			return print_scatter_define(
+				::fast_io::io_reserve_type<
+					char_type, branch_type>,
+				branch);
+		}
+	};
+	if (node.pred)
+	{
+		return select_branch(node.t1);
+	}
+	return select_branch(node.t2);
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::decay::
+		print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>>,
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_component<char_type, T> value)
+{
+	return ::fast_io::details::decay::
+		print_semantic_optional_scatter_select<char_type>(*value.source).len;
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::decay::
+		print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>>,
+	char_type *destination,
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_component<char_type, T> value)
+{
+	auto const scatter{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_select<char_type>(*value.source)};
+	if (scatter.len == 0u)
+	{
+		return destination;
+	}
+	return ::fast_io::details::decay::small_scatter_copy_n(
+		scatter.base, scatter.len, destination);
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::decay::
+		print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr ::fast_io::reserve_scatters_size_result
+print_reserve_scatters_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>>,
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_component<char_type, T>) noexcept
+{
+	// Capacity is deliberately predicate-independent. Materialization evaluates the condition once and may consume
+	// zero of this one descriptor, avoiding a separate value-dependent sizing pass.
+	return {1u, 0u};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::decay::
+		print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr ::fast_io::basic_reserve_scatters_define_result<char_type>
+print_reserve_scatters_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>>,
+	::fast_io::basic_io_scatter_t<char_type> *scatters,
+	char_type *reserve,
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_component<char_type, T> value)
+{
+	auto const scatter{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_select<char_type>(*value.source)};
+	if (scatter.len != 0u)
+	{
+		*scatters++ = scatter;
+	}
+	return {scatters, reserve};
+}
+
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::decay::
+		print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr ::std::true_type print_borrowed_reserve_scatters_source(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>>) noexcept
+{
+	// Admission required the selected non-null descriptor to remain valid across every later component producer.
+	return {};
+}
+
+template <::std::integral char_type, typename T>
+[[nodiscard]] inline constexpr decltype(auto)
+print_semantic_optional_scatter_adapt(T &value) noexcept
+{
+	if constexpr (
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_optional_scatter_component<char_type, T>{
+				__builtin_addressof(value)};
+	}
+	else
+	{
+		return (value);
+	}
+}
+
+/// @brief Represents one closed scatter selection as a dynamic contiguous control for strategy-neutral compaction.
+/// @details The view owns no payload. Its source condition remains alive for the complete synchronous dispatcher call,
+///          and the selected non-null descriptor is copied into storage already owned by the ordinary control scanner.
+///          Unlike the descriptor component above, this type intentionally exposes no scatter protocol: the existing
+///          scanner remains responsible for choosing contiguous write versus native scatter from the complete adapted
+///          segment, exactly as it does after ordinary condition selection.
+template <::std::integral char_type, typename T>
+struct print_semantic_optional_contiguous_component
+{
+	T *source;
+};
+
+template <::std::integral char_type, typename T>
+		requires ::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_contiguous_component<char_type, T>>,
+	::fast_io::details::decay::
+		print_semantic_optional_contiguous_component<char_type, T> value)
+{
+	return ::fast_io::details::decay::
+		print_semantic_optional_scatter_select<char_type>(
+			*value.source).len;
+}
+
+template <::std::integral char_type, typename T>
+		requires ::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_contiguous_component<char_type, T>>,
+	char_type *destination,
+	::fast_io::details::decay::
+		print_semantic_optional_contiguous_component<char_type, T> value)
+{
+	auto const scatter{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_select<char_type>(
+				*value.source)};
+	if (scatter.len == 0u)
+	{
+		return destination;
+	}
+	return ::fast_io::details::decay::small_scatter_copy_n(
+		scatter.base, scatter.len, destination);
+}
+
+/// @brief Returns a finite local-buffer hint when both condition arms have a type-level maximum extent.
+/// @details Fixed scatters and the same-character one-code-unit view are bounded; a general borrowed scatter is not.
+///          `SIZE_MAX` is an internal unavailable sentinel and never becomes a public stack-size customization.
+template <::std::integral char_type, typename Branch>
+inline consteval ::std::size_t
+print_semantic_optional_contiguous_branch_max_size() noexcept
+{
+	using branch_type = ::std::remove_cvref_t<Branch>;
+	if constexpr (::std::same_as<branch_type, ::fast_io::io_null_t>)
+	{
+		return 0u;
+	}
+	else if constexpr (
+		::fast_io::details::decay::
+			print_semantic_top_level_condition_v<Branch &>)
+	{
+		using node_result = decltype(
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::declval<Branch &>()));
+		using node_expression = ::std::add_lvalue_reference_t<
+			::std::remove_reference_t<node_result>>;
+		using first_expression = decltype(
+			(::std::declval<node_expression>().t1));
+		using second_expression = decltype(
+			(::std::declval<node_expression>().t2));
+		constexpr ::std::size_t first{
+			::fast_io::details::decay::
+				print_semantic_optional_contiguous_branch_max_size<
+					char_type, first_expression>()};
+		constexpr ::std::size_t second{
+			::fast_io::details::decay::
+				print_semantic_optional_contiguous_branch_max_size<
+					char_type, second_expression>()};
+		if constexpr (first == SIZE_MAX || second == SIZE_MAX)
+		{
+			return SIZE_MAX;
+		}
+		else
+		{
+			return first < second ? second : first;
+		}
+	}
+	else if constexpr (
+		::std::same_as<
+			branch_type,
+			::fast_io::manipulators::chvw_t<char_type>>)
+	{
+		return 1u;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_static_scatter_traits<
+			char_type, branch_type>::available)
+	{
+		return ::fast_io::details::decay::print_static_scatter_traits<
+			char_type, branch_type>::size;
+	}
+	else
+	{
+		return SIZE_MAX;
+	}
+}
+
+template <::std::integral char_type, typename T>
+inline consteval ::std::size_t
+print_semantic_optional_contiguous_max_size() noexcept
+{
+	static_assert(
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>);
+	using node_result = decltype(
+		::fast_io::details::decay::print_semantic_node_ref(
+			::std::declval<T &>()));
+	using node_expression = ::std::add_lvalue_reference_t<
+		::std::remove_reference_t<node_result>>;
+	using first_expression = decltype(
+		(::std::declval<node_expression>().t1));
+	using second_expression = decltype(
+		(::std::declval<node_expression>().t2));
+	constexpr ::std::size_t first{
+		::fast_io::details::decay::
+			print_semantic_optional_contiguous_branch_max_size<
+				char_type, first_expression>()};
+	constexpr ::std::size_t second{
+		::fast_io::details::decay::
+			print_semantic_optional_contiguous_branch_max_size<
+				char_type, second_expression>()};
+	if constexpr (first == SIZE_MAX || second == SIZE_MAX)
+	{
+		return SIZE_MAX;
+	}
+	else
+	{
+		return first < second ? second : first;
+	}
+}
+
+template <::std::integral char_type, typename T>
+		requires(
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_argument_v<
+					char_type, T &> &&
+			::fast_io::details::decay::
+					print_semantic_optional_contiguous_max_size<
+						char_type, T>() != SIZE_MAX)
+inline constexpr ::std::size_t print_reserve_static_stack_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_contiguous_component<
+				char_type, T>>) noexcept
+{
+	return ::fast_io::details::decay::
+		print_semantic_optional_contiguous_max_size<char_type, T>();
+}
+
+template <::std::integral char_type, typename T>
+[[nodiscard]] inline constexpr decltype(auto)
+print_semantic_optional_contiguous_adapt(T &value) noexcept
+{
+	if constexpr (
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_optional_contiguous_component<char_type, T>{
+				__builtin_addressof(value)};
+	}
+	else
+	{
+		return (value);
+	}
+}
+
+/// @brief Stores the one fixed descriptor selected by a closed condition for whole-record materialization.
+/// @details This value is private to the width/coalescing linear plan. Admission proves that every terminal arm is a
+///          fast_io-owned fixed scatter, one-character view, or null identity, so selecting the descriptor is a pure
+///          field read and the borrowed payload outlives the synchronous print operation. Caching it performs the same
+///          one predicate selection as the ordinary active-record builder; precise sizing and final materialization do
+///          not re-read the condition or introduce a second formatter invocation.
+template <::std::integral char_type>
+struct print_semantic_optional_coalescing_component
+{
+	::fast_io::basic_io_scatter_t<char_type> scatter;
+};
+
+template <::std::integral char_type>
+inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>>,
+	::fast_io::details::decay::
+		print_semantic_optional_coalescing_component<char_type> value) noexcept
+{
+	return value.scatter.len;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *print_reserve_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>>,
+	char_type *destination,
+	::fast_io::details::decay::
+		print_semantic_optional_coalescing_component<char_type> value) noexcept
+{
+	if (value.scatter.len == 0u)
+	{
+		return destination;
+	}
+	return ::fast_io::details::decay::small_scatter_copy_n(
+		value.scatter.base, value.scatter.len, destination);
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::size_t print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>>,
+	::fast_io::details::decay::
+		print_semantic_optional_coalescing_component<char_type> value) noexcept
+{
+	return value.scatter.len;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>>,
+	char_type *destination, ::std::size_t precise_size,
+	::fast_io::details::decay::
+		print_semantic_optional_coalescing_component<char_type> value) noexcept
+{
+	// The cached descriptor is the complete selected arm, so its recorded extent is the exact size established above.
+	if (precise_size == 0u)
+	{
+		return destination;
+	}
+	return ::fast_io::details::decay::small_scatter_copy_n(
+		value.scatter.base, precise_size, destination);
+}
+
+/// @brief Replaces one admitted closed condition by its cached selected descriptor and leaves every other source intact.
+template <::std::integral char_type, typename T>
+[[nodiscard]] inline constexpr decltype(auto)
+print_semantic_optional_coalescing_adapt(T &value)
+{
+	if constexpr (
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>)
+	{
+		return ::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>{
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_select<char_type>(value)};
+	}
+	else
+	{
+		return (value);
+	}
+}
+
+template <::std::integral char_type, typename T>
+using print_semantic_optional_coalescing_adapted_t =
+	::std::conditional_t<
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>,
+		::fast_io::details::decay::
+			print_semantic_optional_coalescing_component<char_type>,
+		T>;
+
+/// @brief Classifies whether one selected closed-condition arm is a scatter source in the ordinary control scanner.
+/// @details Fixed immutable scatters retain scatter identity only for a destination carrying the synchronous direct-
+///          scatter proof; otherwise their established path is contiguous reserve materialization. The one-character
+///          view and null identity are reserve/no-output controls. The remaining admitted closed arm is a borrowed
+///          run-time scatter and therefore keeps scatter identity independently of static-fragment retention.
+template <typename outputstmtype, ::std::integral char_type,
+		  typename Branch>
+inline constexpr bool
+print_semantic_optional_selected_branch_requires_scatter(
+	Branch &branch) noexcept
+{
+	using branch_type = ::std::remove_cvref_t<Branch>;
+	if constexpr (
+		::std::same_as<branch_type, ::fast_io::io_null_t> ||
+		::std::same_as<
+			branch_type,
+			::fast_io::manipulators::chvw_t<char_type>>)
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::details::decay::
+			print_semantic_top_level_condition_v<Branch &>)
+	{
+		auto &&node{
+			::fast_io::details::decay::print_semantic_node_ref(branch)};
+		if (node.pred)
+		{
+			return ::fast_io::details::decay::
+				print_semantic_optional_selected_branch_requires_scatter<
+					outputstmtype, char_type>(node.t1);
+		}
+		return ::fast_io::details::decay::
+			print_semantic_optional_selected_branch_requires_scatter<
+				outputstmtype, char_type>(node.t2);
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_static_scatter_traits<
+			char_type, branch_type>::available)
+	{
+		return ::fast_io::details::decay::
+			print_output_retains_static_scatter<outputstmtype>;
+	}
+	else
+	{
+		static_assert(
+			::fast_io::details::decay::retained_scatter_printable_v<
+				char_type, Branch &>);
+		return true;
+	}
+}
+
+template <typename outputstmtype, ::std::integral char_type, typename T>
+inline constexpr bool
+print_semantic_optional_argument_requires_scatter(T &value) noexcept
+{
+	if constexpr (
+		!::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>)
+	{
+		return false;
+	}
+	else
+	{
+		auto &&node{
+			::fast_io::details::decay::print_semantic_node_ref(value)};
+		if (node.pred)
+		{
+			return ::fast_io::details::decay::
+				print_semantic_optional_selected_branch_requires_scatter<
+					outputstmtype, char_type>(node.t1);
+		}
+		return ::fast_io::details::decay::
+			print_semantic_optional_selected_branch_requires_scatter<
+				outputstmtype, char_type>(node.t2);
+	}
+}
+
+/// @brief Proves that a normalized semantic source run may bypass active-record type enumeration.
+/// @details Four closed scatter selections are the first real-project scaling point; smaller records retain their established
+///          branch-specialized code. Three mandatory leaves keep every active record outside empty, singleton, and
+///          exact-two policies, so compacting conditions cannot change a special output boundary. The destination and
+///          closed-leaf proofs jointly exclude every active-record status owner. Finally, this path is enabled only
+///          when the frontend has no optimizer-constant query, or on GNU/Clang releases for which the existing
+///          active-record compiler-constant policy is structurally query-free. A type-owned static provider has already
+///          normalized to its retained static fragment on a no-builtin frontend, so that independent feature remains
+///          intact; no accepted `__builtin_constant_p` branch is removed or converted into a run-time test.
+template <bool line, ::std::integral char_type, typename outputstmtype,
+		  typename... Args>
+inline consteval bool print_semantic_optional_scatter_plan_available() noexcept
+{
+#if !FAST_IO_HAS_BUILTIN(__builtin_constant_p) || \
+	(defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	constexpr ::std::size_t selection_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::
+				 print_semantic_optional_scatter_argument_v<
+					 char_type, Args &>) +
+		 ... + 0u)};
+	constexpr ::std::size_t mandatory_count{
+		sizeof...(Args) - selection_count};
+	if constexpr (selection_count < 4u || mandatory_count < 3u)
+	{
+		// These cardinalities are necessary for the strategy. Ending the proof here prevents rejected short records from
+		// forming destination and per-source protocol graphs which cannot affect the false result.
+		return false;
+	}
+	else
+	{
+		// Every admitted run contains an adapted optional component, so this destination predicate plus the per-source fold
+		// below is exactly the existing run-time plan's availability proof. A buffered output retains its put-area strategy;
+		// a direct-write-only output must supply the same nonzero coalescing policy used by the plan's ordinary fallback.
+		constexpr bool destination_plan_available{
+			!::fast_io::operations::decay::defines::
+				has_obuffer_basic_operations<outputstmtype> &&
+			(::fast_io::details::decay::
+				 print_has_direct_scatter_write_operations<outputstmtype> ||
+			 (::fast_io::details::decay::
+				  print_has_direct_write_operations<outputstmtype> &&
+			  ::fast_io::details::decay::
+				  print_scatter_fallback_full_output_threshold<
+					  char_type, outputstmtype>() != 0u))};
+		if constexpr (
+			!::fast_io::semantic_optional_scatter_plan_stream<
+				char_type, outputstmtype> ||
+			!destination_plan_available)
+		{
+			return false;
+		}
+		else
+		{
+			return ((::fast_io::details::decay::
+					 print_semantic_optional_scatter_argument_v<
+						 char_type, Args &> ||
+				 ::fast_io::details::decay::
+					 print_semantic_optional_scatter_plain_argument_v<
+						 char_type, Args &>) &&
+				...);
+		}
+	}
+#else
+	(void)line;
+	(void)sizeof(char_type);
+	(void)sizeof(outputstmtype);
+	(void)sizeof...(Args);
+	return false;
+#endif
+}
+
+/// @brief Emits an admitted closed-scatter source graph through the active record's ordinary control strategy.
+/// @details A selected arm is first classified by the same destination-dependent scatter rule as the generic scanner.
+///          If any selected arm is a scatter source, the existing descriptor plan preserves its native-scatter or
+///          declared-coalescing writer. Otherwise each condition becomes a borrowed dynamic contiguous view whose size
+///          is zero for the inactive arm, and the generic scanner keeps the mandatory record's existing contiguous-
+///          versus-scatter decision. Thus predicate values may change the strategy exactly where ordinary active types
+///          change it, without constructing those types. Lambda parameters give temporary adapters a named lifetime
+///          spanning the complete synchronous scan.
+template <bool line, ::std::integral char_type, typename outputstmtype,
+		  typename... Args>
+	requires(
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plan_available<
+				line, char_type, outputstmtype, Args...>())
+inline constexpr void print_semantic_optional_scatter_plan_emit(
+	outputstmtype &optstm, Args &...args)
+{
+	bool const selected_condition_scatter{
+		(false || ... ||
+		 ::fast_io::details::decay::
+			 print_semantic_optional_argument_requires_scatter<
+				 outputstmtype, char_type>(args))};
+	if (selected_condition_scatter)
+	{
+		// Ordinary condition selection exposes at least one active scatter-category arm, so the active generic control
+		// record selects the existing descriptor plan. Retain that same plan and its destination-specific writer.
+		::fast_io::details::decay::print_runtime_scatter_plan_fast_entry<
+			line>(
+				optstm,
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_adapt<
+						char_type>(args)...);
+	}
+	else
+	{
+		// With no selected condition scatter, dynamic contiguous views preserve omission while allowing mandatory plain
+		// leaves to make exactly the same reserve-versus-scatter decision as the ordinary generic control scanner.
+		[]<typename... AdaptedArgs>(
+			 outputstmtype &output,
+			 AdaptedArgs &&...adapted_args) constexpr {
+			::fast_io::details::decay::print_controls_impl<
+				line, outputstmtype, 0u>(output, adapted_args...);
+		}(
+			optstm,
+			::fast_io::details::decay::
+				print_semantic_optional_contiguous_adapt<
+					char_type>(args)...);
+	}
+}
+
 /// @brief    Checks whether one decayed print argument is accepted by the freestanding dispatcher.
 /// @details  The dispatcher receives every normalized argument by value and invokes its CPO through the named local.
 ///           Scatter admission therefore models `remove_cvref_t<T>&`; the public forwarding-expression query would
@@ -9064,6 +9877,494 @@ inline constexpr bool print_semantic_active_record_runs_okay{
 				print_semantic_active_record_stage::already_forwarded,
 				Args &>...>>::value};
 
+/// @brief Proves that one normalized user leaf is an explicitly marked ordinary control-dispatch barrier.
+/// @details A direct-only marker or a context marker supplies the ADL/status and observational proof. Every negative
+///          structural test is a consumer obligation: the ordinary control scanner must reach the same direct or
+///          context branch before any alternative which could retain, size, stage, or materialize the leaf with an
+///          adjacent segment. Rejecting compiler-constant materialization also proves that replacing the complete
+///          active-record value query with query-free segment emission cannot remove a successful
+///          `__builtin_constant_p` path.
+template <typename output, ::std::integral char_type, typename T>
+inline constexpr bool print_semantic_optional_scatter_barrier_argument_v =
+	[]() consteval {
+		using source_type = ::std::remove_cvref_t<T>;
+		using provider_type =
+			::fast_io::details::decay::
+				print_runtime_scatter_plan_unwrapped_t<T &>;
+		// parameter<T> is fast_io's transparent public transport, not a new formatter. Only provider discovery uses the
+		// referent. Every operation check below remains attached to the actual normalized source, and the enclosing plan
+		// independently rejects an exact whole-record status CPO for that wrapper and all of its associated namespaces.
+		constexpr bool common_negative_protocols{
+			!::fast_io::scatter_printable_for<char_type, source_type &> &&
+			!::fast_io::reserve_printable<char_type, source_type> &&
+			!::fast_io::dynamic_reserve_printable<char_type, source_type> &&
+			!::fast_io::reserve_scatters_printable<char_type, source_type> &&
+			!::fast_io::transcode_imaginary_printable<char_type, source_type> &&
+			!::fast_io::staged_printable<char_type, source_type> &&
+			!::fast_io::single_pass_staging_printable<char_type, source_type> &&
+			!::fast_io::compiler_constant_printable<char_type, source_type>};
+		constexpr bool direct_barrier{
+			::fast_io::semantic_optional_scatter_barrier_leaf<
+				char_type, provider_type> &&
+			::fast_io::details::direct_printable_to<
+				char_type, output, source_type> &&
+			!::fast_io::context_printable<char_type, source_type> &&
+			common_negative_protocols};
+		constexpr bool selected_preferred_direct{
+			::fast_io::details::direct_printable_to<
+				char_type, output, source_type> &&
+			((::fast_io::put_area_printable_preferred<
+				  char_type, source_type> &&
+			  ::fast_io::operations::decay::defines::
+				  has_obuffer_basic_operations<output>) ||
+			 (::fast_io::buffered_printable_preferred<
+				  char_type, source_type> &&
+			  (::fast_io::operations::decay::defines::
+				   has_obuffer_basic_operations<output> ||
+			   ::fast_io::buffered_printable_preferred_stream<
+				   char_type, output>)))};
+		constexpr bool context_barrier{
+			::fast_io::semantic_optional_scatter_context_barrier_leaf<
+				char_type, provider_type> &&
+			::fast_io::context_printable<char_type, source_type> &&
+			!selected_preferred_direct &&
+			!::fast_io::details::decay::
+				print_one_pass_direct_streaming_available_v<
+					char_type, output, source_type> &&
+			common_negative_protocols};
+		return !::fast_io::details::decay::
+				   print_semantic_execution_node_v<T> &&
+			   (direct_barrier || context_barrier);
+	}();
+
+/// @brief Proves that one top-level width is already a mandatory flat-fallback boundary for this destination.
+/// @details A retained width suppresses whole-record status and optimizer-constant dispatch in the ordinary semantic
+///          continuation. With no writable put area and both whole-output coalescing policies disabled, precise and
+///          bounded aggregation have no destination. Requiring the exact forwarded width to lack a static bound also
+///          makes the remaining static attempt fail without output, so ordinary execution must flush the preceding
+///          flat prefix, invoke this same width node once, and resume at the following source. The output-expression
+///          proof checks the named child, fill domain, and primitive destination independently. Segmenting only this
+///          mechanically forced boundary therefore preserves characters, primitive calls, exceptions, width strategy,
+///          source lifetime, and every independent compiler-constant path owned inside the width child.
+template <typename output, ::std::integral char_type, typename T>
+inline constexpr bool
+	print_semantic_optional_scatter_width_barrier_argument_v =
+	[]() consteval {
+		if constexpr (
+			!::fast_io::details::decay::print_semantic_execution_node_v<T>)
+		{
+			return false;
+		}
+		else
+		{
+			using node_result = decltype(
+				::fast_io::details::decay::print_semantic_node_ref(
+					::std::declval<T &>()));
+			using node_type = ::std::remove_cvref_t<node_result>;
+			if constexpr (
+				!::fast_io::details::decay::print_semantic_width_v<node_type>)
+			{
+				return false;
+			}
+			else
+			{
+				using forwarded_type =
+					::fast_io::details::decay::
+						print_semantic_forwarded_arg_t<char_type, T &>;
+				return ::fast_io::details::decay::
+						   print_semantic_output_expression_okay<
+							   output, char_type, T &>() &&
+					   !::fast_io::operations::decay::defines::
+						   has_obuffer_basic_operations<output> &&
+					   ::fast_io::details::decay::
+						   print_full_output_coalesce_threshold<
+							   char_type, output>() == 0u &&
+					   ::fast_io::details::decay::
+						   print_full_output_dynamic_coalesce_threshold<
+							   char_type, output>() == 0u &&
+					   !::fast_io::details::decay::
+						   print_semantic_static_bounded_size<
+							   char_type, forwarded_type>::available;
+			}
+		}
+	}();
+
+/// @brief Proves the narrower width shape whose complete-record coalescing can be replayed without active-type products.
+/// @details The width node itself must lack a type-static bound, while its child must be an immutable fixed scatter.
+///          Consequently every active record has the same strategy shape: static whole-record materialization is
+///          unavailable, precise and bounded sizes are both max(runtime_width,fixed_child_size), and formatting the
+///          child has no user callback or multi-pass source observation. The unbuffered requirement keeps a failed
+///          whole-record attempt from changing any cursor state before the ordinary width-delimited fallback begins.
+template <typename output, ::std::integral char_type, typename T>
+inline constexpr bool
+	print_semantic_optional_scatter_coalescing_width_argument_v =
+	[]() consteval {
+		if constexpr (
+			!::fast_io::details::decay::print_semantic_execution_node_v<T>)
+		{
+			return false;
+		}
+		else
+		{
+			using node_result = decltype(
+				::fast_io::details::decay::print_semantic_node_ref(
+					::std::declval<T &>()));
+			using node_expression = ::std::add_lvalue_reference_t<
+				::std::remove_reference_t<node_result>>;
+			using node_type = ::std::remove_cvref_t<node_result>;
+			if constexpr (
+				!::fast_io::details::decay::print_semantic_width_v<node_type>)
+			{
+				return false;
+			}
+			else
+			{
+				using child_expression = decltype(
+					(::std::declval<node_expression>().reference));
+				using child_type = ::std::remove_cvref_t<
+					::fast_io::details::decay::
+						print_semantic_stable_input_forward_t<
+							char_type, child_expression>>;
+				using forwarded_type =
+					::fast_io::details::decay::
+						print_semantic_forwarded_arg_t<char_type, T &>;
+				return ::fast_io::details::decay::
+						   print_semantic_output_expression_okay<
+							   output, char_type, T &>() &&
+					   !::fast_io::operations::decay::defines::
+						   has_obuffer_basic_operations<output> &&
+					   (::std::same_as<
+							child_type,
+							::fast_io::manipulators::chvw_t<char_type>> ||
+						::fast_io::details::decay::
+							print_static_scatter_traits<
+								char_type, child_type>::available) &&
+					   !::fast_io::details::decay::
+						   print_semantic_static_bounded_size<
+							   char_type, forwarded_type>::available;
+			}
+		}
+	}();
+
+/// @brief Accepts only a closed condition whose every terminal descriptor has a finite immutable extent.
+template <::std::integral char_type, typename T>
+inline consteval bool
+print_semantic_optional_fixed_scatter_argument() noexcept
+{
+	if constexpr (
+		!::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::details::decay::
+			print_semantic_optional_contiguous_max_size<
+				char_type, T>() != SIZE_MAX;
+	}
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_optional_fixed_scatter_argument_v{
+	::fast_io::details::decay::
+		print_semantic_optional_fixed_scatter_argument<char_type, T>()};
+
+/// @brief Classifies either an explicitly proved user control barrier or a mechanically forced width boundary.
+template <typename output, ::std::integral char_type, typename T>
+inline constexpr bool
+	print_semantic_optional_scatter_boundary_argument_v =
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_barrier_argument_v<
+			output, char_type, T> ||
+	::fast_io::details::decay::
+		print_semantic_optional_scatter_width_barrier_argument_v<
+			output, char_type, T>;
+
+/// @brief Carries the proof result for one closed-scatter segment between proven dispatch boundaries.
+/// @details A segment with four or more optional leaves must satisfy the existing linear descriptor-plan proof. A
+///          smaller segment deliberately uses the exact active-record evaluator: its Cartesian bound is at most eight,
+///          while retaining the established C++20 capability proof for both arms. Empty and plain-only segments are
+///          likewise covered by that evaluator. `linear` records whether this mixed source graph actually removes an
+///          otherwise unbounded product rather than selecting a new strategy for an already-small record.
+template <bool line, ::std::integral char_type, typename output,
+		  typename segment_list>
+struct print_semantic_optional_scatter_barrier_segment_proof;
+
+template <bool line, ::std::integral char_type, typename output,
+		  typename... SegmentArgs>
+struct print_semantic_optional_scatter_barrier_segment_proof<
+	line, char_type, output,
+	print_semantic_active_record_type_list<SegmentArgs...>>
+{
+	inline static constexpr ::std::size_t selection_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::
+				 print_semantic_optional_scatter_argument_v<
+					 char_type, SegmentArgs &>) +
+		 ... + 0u)};
+	inline static constexpr bool linear{selection_count >= 4u};
+	inline static constexpr bool value{[]() consteval {
+		if constexpr (linear)
+		{
+			return ::fast_io::details::decay::
+				print_semantic_optional_scatter_plan_available<
+					line, char_type, output, SegmentArgs...>();
+		}
+		else
+		{
+			// At most three optional leaves instantiate at most eight active shapes. Keeping the old evaluator here
+			// makes each small suffix retain the same named-lvalue forwarding and primitive-output requirements.
+			return ::fast_io::details::decay::
+				print_semantic_active_record_runs_okay<
+					line, output, SegmentArgs...>;
+		}
+	}()};
+};
+
+/// @brief Scans one normalized source graph and proves every segment and barrier without forming their global product.
+template <bool line, ::std::integral char_type, typename output,
+		  typename segment_list, typename remaining_list>
+struct print_semantic_optional_scatter_barrier_scan;
+
+template <bool line, ::std::integral char_type, typename output,
+		  typename... SegmentArgs>
+struct print_semantic_optional_scatter_barrier_scan<
+	line, char_type, output,
+	print_semantic_active_record_type_list<SegmentArgs...>,
+	print_semantic_active_record_type_list<>>
+{
+	using segment_proof =
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_barrier_segment_proof<
+				line, char_type, output,
+				print_semantic_active_record_type_list<SegmentArgs...>>;
+	inline static constexpr bool value{segment_proof::value};
+};
+
+template <bool line, ::std::integral char_type, typename output,
+		  typename... SegmentArgs, typename T, typename... Args>
+struct print_semantic_optional_scatter_barrier_scan<
+	line, char_type, output,
+	print_semantic_active_record_type_list<SegmentArgs...>,
+	print_semantic_active_record_type_list<T, Args...>>
+{
+	inline static constexpr bool current_is_barrier{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_boundary_argument_v<
+				output, char_type, T>};
+	inline static constexpr bool current_is_segment_source{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_argument_v<char_type, T &> ||
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plain_argument_v<
+				char_type, T &>};
+
+	using result = decltype([]() consteval {
+		if constexpr (current_is_barrier)
+		{
+			using prefix_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_barrier_segment_proof<
+						false, char_type, output,
+						print_semantic_active_record_type_list<
+							SegmentArgs...>>;
+			using tail_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_barrier_scan<
+						line, char_type, output,
+						print_semantic_active_record_type_list<>,
+						print_semantic_active_record_type_list<Args...>>;
+			return ::std::type_identity<::std::bool_constant<
+				prefix_proof::value && tail_proof::value>>{};
+		}
+		else if constexpr (current_is_segment_source)
+		{
+			using tail_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_barrier_scan<
+						line, char_type, output,
+						print_semantic_active_record_type_list<
+							SegmentArgs..., T>,
+						print_semantic_active_record_type_list<Args...>>;
+			return ::std::type_identity<::std::bool_constant<
+				tail_proof::value>>{};
+		}
+		else
+		{
+			return ::std::type_identity<::std::false_type>{};
+		}
+	}());
+
+	inline static constexpr bool value{typename result::type{}};
+};
+
+/// @brief Proves that a normalized source graph may be split only at independently proved dispatch boundaries.
+/// @details The global source record must not own an exact status CPO. User barriers and the destination supply paired
+///          ADL proofs; width boundaries instead satisfy the complete mechanical flat-fallback proof above. Four total
+///          conditions are the first global Cartesian scaling point even when barriers divide them into smaller local
+///          segments: every segment of four or more uses the linear plan, while each smaller segment retains its bounded
+///          active-shape verification. The compiler gate is identical to the optional-scatter plan: no accepted
+///          optimizer-constant record is converted into a run-time query. A user barrier is structurally ineligible for
+///          constant materialization, while a retained width already suppresses that complete-record query in ordinary
+///          dispatch.
+template <bool line, ::std::integral char_type, typename output,
+		  typename... Args>
+inline consteval bool
+print_semantic_optional_scatter_barrier_plan_available() noexcept
+{
+#if !FAST_IO_HAS_BUILTIN(__builtin_constant_p) || \
+	(defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	constexpr ::std::size_t barrier_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::
+				 print_semantic_optional_scatter_boundary_argument_v<
+					 output, char_type, Args>) +
+		 ... + 0u)};
+	constexpr ::std::size_t selection_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::
+				 print_semantic_optional_scatter_argument_v<
+					 char_type, Args &>) +
+			 ... + 0u)};
+	if constexpr (barrier_count == 0u || selection_count < 4u)
+	{
+		// A barrier and four optional selections are independent necessary conditions. A rejected source graph must not
+		// instantiate the recursive segment proof or destination/status protocols merely to rediscover this false result.
+		return false;
+	}
+	else
+	{
+		using scan =
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_barrier_scan<
+					line, char_type, output,
+					print_semantic_active_record_type_list<>,
+					print_semantic_active_record_type_list<Args...>>;
+		if constexpr (!scan::value)
+		{
+			return false;
+		}
+		else
+		{
+			return ::fast_io::semantic_optional_scatter_barrier_plan_stream<
+					   char_type, output> &&
+				   !::fast_io::operations::decay::defines::
+					   has_status_print_define<line, output, Args...>;
+		}
+	}
+#else
+	(void)line;
+	(void)sizeof(char_type);
+	(void)sizeof(output);
+	(void)sizeof...(Args);
+	return false;
+#endif
+}
+
+template <bool value_result, bool has_linear_result>
+struct print_semantic_optional_scatter_width_scan_result
+{
+	inline static constexpr bool value{value_result};
+	inline static constexpr bool has_linear_segment{has_linear_result};
+};
+
+/// @brief Scans segments separated only by the strict fixed-child width shape used by whole-record coalescing.
+/// @details Every segment reuses the existing closed-scatter proof. The scan is linear in source arity and never forms
+///          an active-record type product; `has_linear_segment` ensures this machinery is selected only when it removes
+///          at least one four-condition Cartesian expansion. Validity and profitability share one result type, so each
+///          recursive source suffix is analyzed once while retaining both independent proof bits.
+template <bool line, ::std::integral char_type, typename output,
+		  typename segment_list, typename remaining_list>
+struct print_semantic_optional_scatter_width_coalescing_scan;
+
+template <bool line, ::std::integral char_type, typename output,
+		  typename... SegmentArgs>
+struct print_semantic_optional_scatter_width_coalescing_scan<
+	line, char_type, output,
+	print_semantic_active_record_type_list<SegmentArgs...>,
+	print_semantic_active_record_type_list<>>
+{
+	using segment_proof =
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_barrier_segment_proof<
+				line, char_type, output,
+				print_semantic_active_record_type_list<SegmentArgs...>>;
+	using result = print_semantic_optional_scatter_width_scan_result<
+		segment_proof::value, segment_proof::linear>;
+	inline static constexpr bool value{result::value};
+	inline static constexpr bool has_linear_segment{
+		result::has_linear_segment};
+};
+
+template <bool line, ::std::integral char_type, typename output,
+		  typename... SegmentArgs, typename T, typename... Args>
+struct print_semantic_optional_scatter_width_coalescing_scan<
+	line, char_type, output,
+	print_semantic_active_record_type_list<SegmentArgs...>,
+	print_semantic_active_record_type_list<T, Args...>>
+{
+	inline static constexpr bool current_is_width{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_coalescing_width_argument_v<
+				output, char_type, T>};
+	inline static constexpr bool current_is_segment_source{
+		::fast_io::details::decay::
+			print_semantic_optional_fixed_scatter_argument_v<
+				char_type, T> ||
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plain_argument_v<
+				char_type, T &>};
+
+	using result = typename decltype([]() consteval {
+		if constexpr (current_is_width)
+		{
+			using prefix_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_barrier_segment_proof<
+						false, char_type, output,
+						print_semantic_active_record_type_list<
+							SegmentArgs...>>;
+			using tail_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_width_coalescing_scan<
+						line, char_type, output,
+						print_semantic_active_record_type_list<>,
+						print_semantic_active_record_type_list<Args...>>;
+			return ::std::type_identity<
+				print_semantic_optional_scatter_width_scan_result<
+					prefix_proof::value && tail_proof::value,
+					prefix_proof::linear ||
+						tail_proof::has_linear_segment>>{};
+		}
+		else if constexpr (current_is_segment_source)
+		{
+			using tail_proof =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_width_coalescing_scan<
+						line, char_type, output,
+						print_semantic_active_record_type_list<
+							SegmentArgs..., T>,
+						print_semantic_active_record_type_list<Args...>>;
+			return ::std::type_identity<
+				print_semantic_optional_scatter_width_scan_result<
+					tail_proof::value,
+					tail_proof::has_linear_segment>>{};
+		}
+		else
+		{
+			return ::std::type_identity<
+				print_semantic_optional_scatter_width_scan_result<
+					false, false>>{};
+		}
+	}())::type;
+
+	inline static constexpr bool value{result::value};
+	inline static constexpr bool has_linear_segment{
+		result::has_linear_segment};
+};
+
 /// @brief Validates one complete, already-forwarded print run against the branch selected for its destination.
 /// @details Status printing owns the entire argument pack, so validating every argument first rejects legitimate
 ///          stream-specific records that intentionally have no standalone formatter. Conversely, an outer status CPO
@@ -9126,13 +10427,69 @@ inline consteval bool print_freestanding_output_run_okay() noexcept
 			(false || ... ||
 			 ::fast_io::details::decay::print_semantic_execution_node_v<Args>))
 		{
-			// The source graph itself is not the complete operation pack. Expand
-			// every type-only pack/condition shape and prove the exact record which
-			// the semantic continuation can hand to ordinary status dispatch.
-			return ::fast_io::details::decay::
-				print_semantic_active_record_runs_okay<
-					line, normalized_output,
-					::std::remove_reference_t<Args>...>;
+			if constexpr (
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_plan_available<
+						line, char_type, normalized_output,
+						::std::remove_reference_t<Args>...>())
+			{
+				// The closed-scatter provider proof is sufficient for every active record: each condition contributes exactly
+				// the selected null identity or retained fast_io-owned scatter leaf, every mandatory
+				// leaf independently satisfies the ordinary component protocol, and the effective destination proves that
+				// no record assembled from this closed set can acquire a whole-record status customization. Consequently
+				// enumerating the Cartesian product of condition arms cannot reject an operation already proved here; it can
+				// only repeat the same leaf and destination obligations once per active type sequence.
+				return true;
+			}
+			else if constexpr (
+				::fast_io::operations::decay::
+					print_semantic_optional_scatter_width_coalescing_plan_available<
+						line, char_type, normalized_output,
+						::std::remove_reference_t<Args>...>())
+			{
+				// Every active record has at least nine mandatory leaves, one retained unbounded width, and only fixed
+				// closed-condition descriptors. The later proof replays the identical whole-record strategy before it
+				// permits width-delimited fallback, so enumerating active types supplies no additional operation evidence.
+				return true;
+			}
+			else if constexpr (
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_barrier_plan_available<
+						line, char_type, normalized_output,
+						::std::remove_reference_t<Args>...>())
+			{
+				// Each marked direct-only leaf is the same hard boundary already reached by the generic control scanner.
+				// The paired destination/leaf proofs exclude every associated whole-record status owner, each large segment
+				// reuses the closed scatter-selection proof, and every smaller segment retains a bounded active-record check.
+				// The global Cartesian product therefore adds no capability evidence beyond those independent segments.
+				return true;
+			}
+			else
+			{
+#if defined(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC)
+				// Diagnostic-only fail-fast gate for real-project shape discovery. Admission reaches this point immediately
+				// before the active-record Cartesian product. Keeping the probe here, in addition to the execution-side
+				// probe, makes an unclassified source record report its complete call-site types without first exhausting
+				// front-end memory. The block is absent from normal translation units and cannot affect concepts or codegen.
+				constexpr ::std::size_t diagnostic_top_level_condition_count{
+					(static_cast<::std::size_t>(
+						 ::fast_io::details::decay::
+							 print_semantic_top_level_condition_v<Args>) +
+					 ... + 0u)};
+				static_assert(
+					diagnostic_top_level_condition_count <
+						static_cast<::std::size_t>(
+							FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC),
+					"unclassified large semantic condition record during admission");
+#endif
+				// The source graph itself is not the complete operation pack. Expand
+				// every type-only pack/condition shape and prove the exact record which
+				// the semantic continuation can hand to ordinary status dispatch.
+				return ::fast_io::details::decay::
+					print_semantic_active_record_runs_okay<
+						line, normalized_output,
+						::std::remove_reference_t<Args>...>;
+			}
 		}
 		else
 		{
@@ -12124,6 +13481,118 @@ inline consteval bool print_semantic_precise_coalesce_strategy_selected() noexce
 	}
 }
 
+/// @brief Proves the whole-record-first linear plan for fixed conditions separated by run-time widths.
+/// @details Provider obligations are the existing closed-scatter and barrier-stream proofs. The consumer additionally
+///          establishes all strategy facts which active-record enumeration would otherwise rediscover:
+///
+///          1. every condition arm is a null identity or immutable finite descriptor, so its cached contiguous adapter
+///             has exactly the selected arm's characters, precise size, bounded size, lifetime, and no callback;
+///          2. every admitted width has an immutable fixed child but no type-static whole-field bound, so every active
+///             record rejects static coalescing and retains both the precise and bounded run-time attempts;
+///          3. at least nine mandatory arguments make both compact single-pass probes false for every selection, while
+///             a retained width makes the run semantic and prevents whole-record compiler-constant materialization;
+///          4. the adapted record is precise-size capable, is not a staged group, and has more than one argument, so
+///             fixed and dynamic whole-output policies are identical to those of every active record; and
+///          5. if all unchanged whole-record attempts fail without output, each scanned width is exactly the boundary
+///             reached by ordinary flat fallback and every intervening condition segment has its independent proof.
+///
+///          These obligations preserve characters, primitive operation boundaries, exception-visible prefixes,
+///          allocation policy, line ownership, and every child-owned optimizer-constant path without instantiating the
+///          Cartesian product of condition arms.
+template <bool line, ::std::integral char_type, typename output,
+		  typename... Args>
+inline consteval bool
+print_semantic_optional_scatter_width_coalescing_plan_available() noexcept
+{
+#if !FAST_IO_HAS_BUILTIN(__builtin_constant_p) || \
+	(defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	constexpr ::std::size_t selection_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::
+				 print_semantic_optional_fixed_scatter_argument_v<
+					 char_type, Args>) +
+		 ... + 0u)};
+	constexpr ::std::size_t mandatory_count{
+		sizeof...(Args) - selection_count};
+	if constexpr (selection_count < 4u || mandatory_count < 9u)
+	{
+		// The width strategy cannot be profitable below either cardinality. Keep rejected records outside the recursive
+		// segment scan and adapted coalescing proof graph.
+		return false;
+	}
+	else
+	{
+		constexpr ::std::size_t width_count{
+			(static_cast<::std::size_t>(
+				 ::fast_io::details::decay::
+					 print_semantic_optional_scatter_coalescing_width_argument_v<
+						 output, char_type, Args>) +
+			 ... + 0u)};
+		if constexpr (width_count == 0u)
+		{
+			return false;
+		}
+		else
+		{
+			using scan =
+				::fast_io::details::decay::
+					print_semantic_optional_scatter_width_coalescing_scan<
+						line, char_type, output,
+						::fast_io::details::decay::
+							print_semantic_active_record_type_list<>,
+						::fast_io::details::decay::
+							print_semantic_active_record_type_list<Args...>>;
+			if constexpr (!scan::has_linear_segment || !scan::value)
+			{
+				return false;
+			}
+			else
+			{
+				constexpr bool precise_adapted_record{
+					(::fast_io::details::decay::print_semantic_precise_size_ok<
+						 char_type,
+						 ::fast_io::details::decay::print_semantic_forwarded_arg_t<
+							 char_type,
+							 ::fast_io::details::decay::
+								 print_semantic_optional_coalescing_adapted_t<
+									 char_type, Args> &>>::value &&
+					 ...)};
+				using adapted_staged_group =
+					::fast_io::operations::decay::print_semantic_staged_group<
+						char_type,
+						::std::remove_cvref_t<
+							::fast_io::details::decay::print_semantic_forwarded_arg_t<
+								char_type,
+								::fast_io::details::decay::
+									print_semantic_optional_coalescing_adapted_t<
+										char_type, Args> &>>...>;
+				constexpr bool has_whole_output_target{
+					::fast_io::details::decay::
+						print_full_output_coalesce_threshold<
+							char_type, output>() != 0u ||
+					::fast_io::details::decay::
+						print_full_output_dynamic_coalesce_threshold<
+							char_type, output>() != 0u};
+				return precise_adapted_record &&
+					   !adapted_staged_group::available &&
+					   has_whole_output_target &&
+					   ::fast_io::semantic_optional_scatter_barrier_plan_stream<
+						   char_type, output> &&
+					   !::fast_io::operations::decay::defines::
+						   has_status_print_define<line, output, Args...>;
+			}
+		}
+	}
+#else
+	(void)line;
+	(void)sizeof(char_type);
+	(void)sizeof(output);
+	(void)sizeof...(Args);
+	return false;
+#endif
+}
+
 /// @brief    Emits a precisely measured width child without repeating a leaf-level size calculation.
 /// @details  A direct precise-reserve leaf receives the length already computed by the width dispatcher. Composite
 ///           children retain ordinary semantic emission because their aggregate length cannot describe each leaf.
@@ -13556,6 +15025,357 @@ struct print_semantic_emit_flat_runtime_continuation
 	}
 };
 
+/// @brief Emits one locally selected boundary-delimited segment through the ordinary control scanner.
+/// @details The complete active record contains either a direct-only user barrier or a retained width, so its complete-
+///          record compiler-constant materialization is structurally unavailable and its eventual flat fallback reaches
+///          `print_controls_impl` for each plain prefix. Calling that same status-free inner scanner for a locally
+///          selected segment avoids introducing a subgroup status lookup which the original complete-record dispatcher
+///          never performs. An empty non-line segment is skipped; an empty final line segment emits only the newline
+///          still owned by the complete record.
+template <bool line, ::std::integral char_type, typename outputstmtype>
+struct print_semantic_optional_scatter_barrier_segment_continuation
+{
+	outputstmtype &optstm;
+
+	template <typename... FilteredArgs>
+	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
+	{
+		if constexpr (sizeof...(FilteredArgs) == 0u)
+		{
+			if constexpr (line)
+			{
+				::fast_io::operations::decay::char_put_decay(
+					optstm,
+					::fast_io::char_literal_v<u8'\n', char_type>);
+			}
+		}
+		else
+		{
+			// These named expressions are the same lvalues accumulated by the full generic control dispatcher. Do not
+			// forward them into a new ownership or status boundary.
+			::fast_io::details::decay::print_controls_impl<
+				line, outputstmtype, 0u>(optstm, filtered_args...);
+		}
+	}
+};
+
+/// @brief Finds the next proven dispatch boundary in a tuple of pointers to normalized source arguments.
+/// @details `fast_io::containers::tuple_element` uses C++26 pack indexing when available and its recursive C++20
+///          fallback otherwise. The algorithm and admitted source graph are identical in both language modes.
+template <::std::size_t index, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple>
+inline consteval ::std::size_t
+print_semantic_optional_scatter_find_barrier() noexcept
+{
+	using tuple_type = ::std::remove_cvref_t<source_tuple>;
+	constexpr ::std::size_t count{::std::tuple_size_v<tuple_type>};
+	if constexpr (index == count)
+	{
+		return count;
+	}
+	else
+	{
+		using pointer_type = ::std::tuple_element_t<index, tuple_type>;
+		using source_type = ::std::remove_pointer_t<pointer_type>;
+		if constexpr (
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_boundary_argument_v<
+					outputstmtype, char_type, source_type>)
+		{
+			return index;
+		}
+		else
+		{
+			return ::fast_io::operations::decay::
+				print_semantic_optional_scatter_find_barrier<
+					index + 1u, outputstmtype, char_type,
+					source_tuple>();
+		}
+	}
+}
+
+/// @brief Emits one half-open source segment between two proven dispatch boundaries.
+/// @details A four-condition segment takes the existing linear compacting plan. A smaller segment performs only its
+///          bounded local condition selection and then enters the ordinary status-free control scanner. In particular,
+///          this helper never evaluates the active-record compiler-constant gate: the enclosing barrier proof already
+///          established that the original complete active record could not satisfy that gate.
+template <bool line, ::std::size_t begin, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple,
+		  ::std::size_t... offset>
+inline constexpr void
+print_semantic_optional_scatter_emit_barrier_segment_impl(
+	outputstmtype &optstm, source_tuple &sources,
+	::std::index_sequence<offset...>)
+{
+	using tuple_type = ::std::remove_cvref_t<source_tuple>;
+	if constexpr (sizeof...(offset) == 0u)
+	{
+		if constexpr (line)
+		{
+			::fast_io::operations::decay::char_put_decay(
+				optstm,
+				::fast_io::char_literal_v<u8'\n', char_type>);
+		}
+	}
+	else if constexpr (
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plan_available<
+				line, char_type, outputstmtype,
+				::std::remove_pointer_t<::std::tuple_element_t<
+					begin + offset, tuple_type>>...>())
+	{
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plan_emit<line, char_type>(
+				optstm,
+				*::fast_io::containers::get<begin + offset>(sources)...);
+	}
+	else
+	{
+		::fast_io::details::decay::print_semantic_select_conditions<
+			char_type>(
+			::fast_io::operations::decay::
+				print_semantic_optional_scatter_barrier_segment_continuation<
+					line, char_type, outputstmtype>{optstm},
+			*::fast_io::containers::get<begin + offset>(sources)...);
+	}
+}
+
+template <bool line, ::std::size_t begin, ::std::size_t end,
+		  typename outputstmtype, ::std::integral char_type,
+		  typename source_tuple>
+		requires(begin <= end)
+inline constexpr void print_semantic_optional_scatter_emit_barrier_segment(
+	outputstmtype &optstm, source_tuple &sources)
+{
+	::fast_io::operations::decay::
+		print_semantic_optional_scatter_emit_barrier_segment_impl<
+			line, begin, outputstmtype, char_type>(
+				optstm, sources,
+				::std::make_index_sequence<end - begin>{});
+}
+
+/// @brief Finds the next strict fixed-child width after whole-record coalescing has declined without output.
+template <::std::size_t index, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple>
+inline consteval ::std::size_t
+print_semantic_optional_scatter_find_coalescing_width() noexcept
+{
+	using tuple_type = ::std::remove_cvref_t<source_tuple>;
+	constexpr ::std::size_t count{::std::tuple_size_v<tuple_type>};
+	if constexpr (index == count)
+	{
+		return count;
+	}
+	else
+	{
+		using pointer_type = ::std::tuple_element_t<index, tuple_type>;
+		using source_type = ::std::remove_pointer_t<pointer_type>;
+		if constexpr (
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_coalescing_width_argument_v<
+					outputstmtype, char_type, source_type>)
+		{
+			return index;
+		}
+		else
+		{
+			return ::fast_io::operations::decay::
+				print_semantic_optional_scatter_find_coalescing_width<
+					index + 1u, outputstmtype, char_type,
+					source_tuple>();
+		}
+	}
+}
+
+/// @brief Re-enters semantic emission on the original suffix after one width boundary has been emitted.
+template <bool line, ::std::size_t begin, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple,
+		  ::std::size_t... offset>
+inline constexpr void
+print_semantic_optional_scatter_emit_coalescing_width_runtime_tail_impl(
+	outputstmtype &optstm, source_tuple &sources,
+	::std::index_sequence<offset...>)
+{
+	::fast_io::operations::decay::print_semantic_emit<
+		line, true, char_type>(
+			optstm,
+			*::fast_io::containers::get<begin + offset>(sources)...);
+}
+
+/// @brief Replays the ordinary flat fallback only after every complete-record coalescing attempt returned false.
+/// @details The first prefix uses the already-proved closed-scatter segment emitter and the width is invoked once
+///          without line ownership. The ordinary flat emitter then re-enters the complete semantic dispatcher on its
+///          untouched suffix; doing the same here preserves any suffix-wide coalescing, compiler-constant query, later
+///          width strategy, and final newline ownership. No zero-length adapter crosses the width boundary.
+template <bool line, ::std::size_t begin, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple>
+inline constexpr void
+print_semantic_optional_scatter_emit_coalescing_width_fallback_tail(
+	outputstmtype &optstm, source_tuple &sources)
+{
+	using tuple_type = ::std::remove_cvref_t<source_tuple>;
+	constexpr ::std::size_t count{::std::tuple_size_v<tuple_type>};
+	constexpr ::std::size_t width{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_find_coalescing_width<
+				begin, outputstmtype, char_type, source_tuple>()};
+	if constexpr (width == count)
+	{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_barrier_segment<
+				line, begin, count, outputstmtype, char_type>(
+					optstm, sources);
+	}
+	else
+	{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_barrier_segment<
+				false, begin, width, outputstmtype, char_type>(
+					optstm, sources);
+		::fast_io::operations::decay::print_semantic_emit_node<
+			false, char_type>(
+				optstm,
+				*::fast_io::containers::get<width>(sources));
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_coalescing_width_runtime_tail_impl<
+				line, width + 1u, outputstmtype, char_type>(
+					optstm, sources,
+					::std::make_index_sequence<count - width - 1u>{});
+	}
+}
+
+/// @brief Emits all source segments and their proven dispatch boundaries in original order.
+/// @details A user barrier is invoked once through `print_control_single`, the same terminal reached after the generic
+///          scanner drains its preceding compatible prefix. A mechanically forced width boundary is invoked once
+///          through the ordinary semantic-node emitter with line disabled; the tail retains line ownership exactly as
+///          in flat fallback, including the empty-tail newline case. If a final optional segment selects no leaf, its
+///          retained line ownership is discharged by the segment's one-character empty case.
+template <bool line, ::std::size_t begin, typename outputstmtype,
+		  ::std::integral char_type, typename source_tuple>
+inline constexpr void print_semantic_optional_scatter_emit_barrier_tail(
+	outputstmtype &optstm, source_tuple &sources)
+{
+	using tuple_type = ::std::remove_cvref_t<source_tuple>;
+	constexpr ::std::size_t count{::std::tuple_size_v<tuple_type>};
+	constexpr ::std::size_t barrier{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_find_barrier<
+				begin, outputstmtype, char_type,
+				source_tuple>()};
+	if constexpr (barrier == count)
+	{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_barrier_segment<
+				line, begin, count, outputstmtype, char_type>(
+					optstm, sources);
+	}
+	else
+	{
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_barrier_segment<
+				false, begin, barrier, outputstmtype, char_type>(
+					optstm, sources);
+		using barrier_pointer_type =
+			::std::tuple_element_t<barrier, tuple_type>;
+		using barrier_source_type =
+			::std::remove_pointer_t<barrier_pointer_type>;
+		if constexpr (
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_width_barrier_argument_v<
+					outputstmtype, char_type, barrier_source_type>)
+		{
+			// Ordinary flat fallback always emits a width node without line ownership, then resumes semantic emission on
+			// the tail. Repeating both calls preserves even the final-width newline as a distinct tail operation.
+			::fast_io::operations::decay::print_semantic_emit_node<
+				false, char_type>(
+					optstm,
+					*::fast_io::containers::get<barrier>(sources));
+			::fast_io::operations::decay::
+				print_semantic_optional_scatter_emit_barrier_tail<
+					line, barrier + 1u, outputstmtype, char_type>(
+						optstm, sources);
+		}
+		else
+		{
+			constexpr bool barrier_owns_line{
+				line && barrier + 1u == count};
+			::fast_io::details::decay::print_control_single<
+				barrier_owns_line>(
+					optstm,
+					*::fast_io::containers::get<barrier>(sources));
+			if constexpr (barrier + 1u != count)
+			{
+				::fast_io::operations::decay::
+					print_semantic_optional_scatter_emit_barrier_tail<
+						line, barrier + 1u, outputstmtype, char_type>(
+							optstm, sources);
+			}
+		}
+	}
+}
+
+template <bool line, ::std::integral char_type, typename outputstmtype,
+		  typename... Args>
+		requires(
+			::fast_io::details::decay::
+				print_semantic_optional_scatter_barrier_plan_available<
+					line, char_type, outputstmtype, Args...>())
+inline constexpr void print_semantic_optional_scatter_barrier_plan_emit(
+	outputstmtype &optstm, Args &...args)
+{
+	auto sources{
+		::fast_io::details::decay::print_semantic_pack_pointer_tuple(
+			__builtin_addressof(args)...)};
+	::fast_io::operations::decay::
+		print_semantic_optional_scatter_emit_barrier_tail<
+			line, 0u, outputstmtype, char_type>(optstm, sources);
+}
+
+/// @brief Executes the admitted width plan with the ordinary whole-record strategy taking precedence over segmentation.
+/// @details Closed conditions are selected once into borrowed fixed descriptors. The three calls are deliberately in
+///          the same order as `print_semantic_emit_flat_runtime_continuation`; the plan proof makes both compact bounded
+///          probes and every alternative strategy branch structurally false for all active records. A successful call
+///          therefore commits the identical single contiguous operation. Only three side-effect-free failures permit
+///          the proven width-delimited flat fallback, which receives original sources rather than zero-size adapters.
+template <bool line, ::std::integral char_type, typename outputstmtype,
+		  typename... Args>
+		requires(
+			::fast_io::operations::decay::
+				print_semantic_optional_scatter_width_coalescing_plan_available<
+					line, char_type, outputstmtype, Args...>())
+inline constexpr void
+print_semantic_optional_scatter_width_coalescing_plan_emit(
+	outputstmtype &optstm, Args &...args)
+{
+	bool const emitted{
+		[]<typename... AdaptedArgs>(
+			outputstmtype &output,
+			AdaptedArgs &&...adapted_args) constexpr {
+			return ::fast_io::operations::decay::
+					   print_semantic_try_static_bounded_coalesce<
+						   line, char_type>(output, adapted_args...) ||
+				   ::fast_io::operations::decay::
+					   print_semantic_try_precise_coalesce<
+						   line, char_type>(output, adapted_args...) ||
+				   ::fast_io::operations::decay::
+					   print_semantic_try_bounded_coalesce<
+						   line, char_type>(output, adapted_args...);
+		}(
+			optstm,
+			::fast_io::details::decay::
+				print_semantic_optional_coalescing_adapt<
+					char_type>(args)...)};
+	if (!emitted)
+	{
+		auto sources{
+			::fast_io::details::decay::print_semantic_pack_pointer_tuple(
+				__builtin_addressof(args)...)};
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_emit_coalescing_width_fallback_tail<
+				line, 0u, outputstmtype, char_type>(optstm, sources);
+	}
+}
+
 /// @brief    Applies the value-level constant gate at the exact active-record boundary.
 /// @details  Pack expansion and condition selection have already fixed the operation arity and leaf types.  The small
 ///           wrapper must remain in the expression caller so an accepted `__builtin_constant_p` query disappears with
@@ -13648,6 +15468,72 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 		 ...)};
 	constexpr bool has_top_level_condition{
 		(false || ... || ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>)};
+	constexpr bool use_optional_scatter_source_plan = []() consteval {
+		if constexpr (
+			already_forwarded && sizeof...(Args) >= 7u &&
+			!has_pack_or_null && has_top_level_condition)
+		{
+			// Execution owns named lvalues, while public admission stores the same normalized types with their original
+			// cv-qualification. Removing references only makes both consumers reuse one sufficient-proof specialization;
+			// the helper reconstructs the exact named-lvalue expression for every source protocol internally.
+			return ::fast_io::details::decay::
+				print_semantic_optional_scatter_plan_available<
+					line, char_type, outputstmtype,
+					::std::remove_reference_t<Args>...>();
+		}
+		else
+		{
+			return false;
+		}
+	}();
+	constexpr bool use_optional_scatter_width_coalescing_plan = []() consteval {
+		if constexpr (
+			already_forwarded && sizeof...(Args) >= 13u &&
+			!has_pack_or_null && has_top_level_condition &&
+			!use_optional_scatter_source_plan)
+		{
+			return ::fast_io::operations::decay::
+				print_semantic_optional_scatter_width_coalescing_plan_available<
+					line, char_type, outputstmtype,
+					::std::remove_reference_t<Args>...>();
+		}
+		else
+		{
+			return false;
+		}
+	}();
+	constexpr bool use_optional_scatter_barrier_plan = []() consteval {
+		if constexpr (
+			already_forwarded && sizeof...(Args) >= 8u &&
+			!has_pack_or_null && has_top_level_condition &&
+			!use_optional_scatter_source_plan)
+		{
+			return ::fast_io::details::decay::
+				print_semantic_optional_scatter_barrier_plan_available<
+					line, char_type, outputstmtype,
+					::std::remove_reference_t<Args>...>();
+		}
+		else
+		{
+			return false;
+		}
+	}();
+#if defined(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC)
+	// Diagnostic-only fail-fast gate for real-project shape discovery. It stops before active-record type enumeration and
+	// is absent from normal translation units, so it cannot alter public admission, execution, or optimizer-constant paths.
+	constexpr ::std::size_t diagnostic_top_level_condition_count{
+		(static_cast<::std::size_t>(
+			 ::fast_io::details::decay::print_semantic_top_level_condition_v<Args>) +
+		 ... + 0u)};
+	static_assert(
+		diagnostic_top_level_condition_count <
+			static_cast<::std::size_t>(
+				FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC) ||
+		use_optional_scatter_source_plan ||
+		use_optional_scatter_width_coalescing_plan ||
+		use_optional_scatter_barrier_plan,
+		"unclassified large semantic condition record");
+#endif
 	constexpr bool bypass_condition_selection = []() consteval {
 		if constexpr (sizeof...(Args) >= 41u)
 		{
@@ -13667,7 +15553,36 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 			return false;
 		}
 	}();
-	if constexpr (
+	if constexpr (use_optional_scatter_source_plan)
+	{
+		// This source graph has jointly proved status transparency, ordinary-control equivalence, and a closed leaf set.
+		// Emit it before continuation construction so no active-record type product is instantiated. Mutex unwrapping and
+		// source normalization already occurred in the outer dispatcher; run-time arm classification retains the selected
+		// active record's contiguous/scatter CPO, primitive boundary, and optional newline ownership.
+		::fast_io::details::decay::
+			print_semantic_optional_scatter_plan_emit<line, char_type>(
+				optstm, args...);
+	}
+	else if constexpr (use_optional_scatter_width_coalescing_plan)
+	{
+		// The selected fixed descriptors first replay the active record's complete static, precise, and bounded
+		// coalescing order. Width segmentation is reached only after those attempts fail without touching the observer;
+		// it then uses original sources, preserving the ordinary flat fallback's component and newline boundaries.
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_width_coalescing_plan_emit<
+				line, char_type>(optstm, args...);
+	}
+	else if constexpr (use_optional_scatter_barrier_plan)
+	{
+		// The complete record cannot enter compiler-constant materialization because every admitted direct-only barrier
+		// fails that source protocol. Emit each large optional segment through the existing linear plan, each bounded
+		// segment through local condition selection, and each barrier through the exact control operation already selected
+		// by ordinary flat fallback. No active-record type product spans a barrier.
+		::fast_io::operations::decay::
+			print_semantic_optional_scatter_barrier_plan_emit<
+				line, char_type>(optstm, args...);
+	}
+	else if constexpr (
 		already_forwarded && !has_pack_or_null && !has_top_level_condition &&
 		bypass_condition_selection)
 	{

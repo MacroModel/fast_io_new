@@ -304,6 +304,20 @@ struct scalar_manip_t
 	T reference;
 };
 
+template <::std::integral char_type, scalar_flags flags, typename T>
+	requires(
+		::std::is_integral_v<T> || ::std::is_floating_point_v<T> ||
+		::std::same_as<T, ::std::nullptr_t>)
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<
+		char_type, scalar_manip_t<flags, T>>) noexcept
+{
+	// A scalar_manip_t with a fundamental payload has no user-associated namespace. Its reserve CPO is selected from
+	// fast_io and consumes the same named value whether adjacent optional scatters were flattened or compacted.
+	return {};
+}
+
 /// @brief Print/concat-owned reserve proxy for an optimizer-proven constant scalar.
 /// @details Ordinary scalar formatting deliberately keeps its established integer algorithm.  This distinct type is
 ///          created only by the compiler-constant strategy and selects a compact constant-friendly digit writer without

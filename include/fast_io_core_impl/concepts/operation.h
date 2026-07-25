@@ -1708,6 +1708,139 @@ concept semantic_plain_leaf_coalesce_preferred_stream = ::std::integral<char_typ
 	} -> ::std::same_as<::std::true_type>;
 };
 
+/// @brief      semantic_optional_scatter_plan_stream
+/// @details    Authorizes the IO-level semantic engine to classify library-owned closed scatter conditions without
+///             constructing every active-record type. A closed scatter condition may select null or one of two
+///             independently proven stable scatter leaves. This is a semantic proof, not a structural performance
+///             hint. A provider returning `std::true_type` proves all of the following for its exact stream type and
+///             character type:
+///
+///             1. after mandatory mutex unwrapping, no `status_print_define` owned by the stream's associated
+///                namespaces can acquire a record made exclusively from fast_io's status-transparent scalar,
+///                codecvt, scatter, and closed-scatter-selection leaves;
+///             2. when a selected condition arm has the scatter category selected by the ordinary control scanner, the
+///                stream's native-scatter or declared coalescing operation observes the same ordered nonempty
+///                descriptor sequence; when no selected arm has scatter category, dynamic contiguous views preserve
+///                the scanner's existing reserve-versus-scatter choice; and
+///             3. that run-time category selection followed by the ordinary writer preserves write-CPO precedence,
+///                primitive-operation boundaries, exception-visible prefixes, and line ownership.
+///
+///             The consumer independently proves that every source leaf belongs to fast_io's closed, status-transparent
+///             set and that the destination has every output operation needed by the two existing strategies.
+///             Consequently this marker
+///             cannot suppress a status customization associated with a user argument. Wrappers do not inherit the
+///             proof automatically: locking, locale, decoration, transcoding, or buffering changes at least one stated
+///             obligation.
+/// @fn         print_semantic_optional_scatter_plan_stream
+/// @brief      Returns `std::true_type` when the exact stream satisfies the complete provider proof above.
+template <typename char_type, typename T>
+concept semantic_optional_scatter_plan_stream = ::std::integral<char_type> && requires {
+	{
+		print_semantic_optional_scatter_plan_stream(
+			io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/// @brief      semantic_optional_scatter_status_transparent_leaf
+/// @details    Marks a normalized leaf whose associated namespaces cannot provide `status_print_define` for any active
+///             record composed solely of leaves carrying this proof and a stream carrying
+///             `semantic_optional_scatter_plan_stream`. The provider must also prove that the leaf's ordinary
+///             reserve/scatter CPO has the same named-lvalue meaning before and after optional run-time classification.
+///             When that CPO participates in a retained native-scatter operation, it must not invalidate character
+///             storage retained from an earlier admitted leaf; this is the same cross-producer lifetime obligation
+///             required by the underlying run-time scatter plan. Its contiguous representation must likewise preserve
+///             the ordinary scanner's characters and cursor contract.
+///             This marker does not make a condition, pack, or width node transparent, and it does not make the type
+///             printable; the consumer checks the exact run-time scatter component protocol independently. A provider
+///             that owns a whole-record status customization must not define this marker for the participating type.
+/// @fn         print_semantic_optional_scatter_status_transparent_leaf
+/// @brief      Returns `std::true_type` when the exact normalized leaf satisfies the provider proof above.
+template <typename char_type, typename T>
+concept semantic_optional_scatter_status_transparent_leaf = ::std::integral<char_type> && requires {
+	{
+		print_semantic_optional_scatter_status_transparent_leaf(
+			io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/// @brief      semantic_optional_scatter_barrier_plan_stream
+/// @details    Extends an exact destination's closed-scatter proof to records containing explicitly marked direct-
+///             print barriers. A provider returning `std::true_type` proves all of the following for its exact stream
+///             and character type:
+///
+///             1. the stream's associated namespaces own no `status_print_define` for any active record assembled
+///                from status-transparent closed-scatter selections and marked barrier leaves;
+///             2. an ordinary direct-print barrier terminates the same scatter/reserve prefix in the generic control
+///                dispatcher, so emitting that prefix, invoking the barrier once, and continuing with the suffix
+///                preserves write-CPO precedence and primitive-operation boundaries; and
+///             3. repeated segment dispatch on the same named observer preserves exception-visible prefixes, line
+///                ownership, and all destination state needed by the barrier and the following segment.
+///
+///             The consumer independently requires `semantic_optional_scatter_plan_stream`, proves the exact direct-
+///             only shape of every barrier, and bounds every locally enumerated condition segment. Mutex, buffering,
+///             decoration, locale, and transcoding wrappers do not inherit this stronger proof automatically.
+/// @fn         print_semantic_optional_scatter_barrier_plan_stream
+/// @brief      Returns `std::true_type` when the exact stream satisfies the complete provider proof above.
+template <typename char_type, typename T>
+concept semantic_optional_scatter_barrier_plan_stream =
+	::std::integral<char_type> &&
+	::fast_io::semantic_optional_scatter_plan_stream<char_type, T> && requires {
+		{
+			print_semantic_optional_scatter_barrier_plan_stream(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief      semantic_optional_scatter_barrier_leaf
+/// @details    Marks one normalized direct-print leaf as a status-transparent control-dispatch barrier. The provider
+///             proves that none of the leaf's associated namespaces owns `status_print_define` for an active record
+///             composed from this leaf, other marked barriers, closed-scatter selections, and a destination carrying the
+///             paired barrier-plan proof. It also proves that invoking the ordinary `print_define` once on the same
+///             named leaf and destination after the preceding admitted segment is observationally identical to the
+///             generic control dispatcher reaching that leaf: output order, primitive boundaries, exceptions, and
+///             source lifetimes are unchanged.
+///
+///             This marker does not make a type printable and does not authorize scatter conversion. The consumer
+///             requires the exact destination-specific direct CPO, rejects every reserve/scatter/context/staged and
+///             compiler-constant representation, and therefore proves that the leaf is the same non-coalescible
+///             boundary in both executions. A general wrapper never inherits the marker from its referent. The
+///             consumer may look through fast_io's own transparent `parameter<T>` transport solely to identify this
+///             provider, while checking every actual protocol and the complete-record status lookup on the wrapper.
+/// @fn         print_semantic_optional_scatter_barrier_leaf
+/// @brief      Returns `std::true_type` when the exact normalized leaf satisfies the provider proof above.
+template <typename char_type, typename T>
+concept semantic_optional_scatter_barrier_leaf = ::std::integral<char_type> && requires {
+	{
+		print_semantic_optional_scatter_barrier_leaf(
+			io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/// @brief      semantic_optional_scatter_context_barrier_leaf
+/// @details    Marks one normalized context-print leaf as a status-transparent control-dispatch barrier. A provider
+///             returning `std::true_type` proves that its associated namespaces own no `status_print_define` for an
+///             active record composed from this leaf, other marked barriers, closed-scatter selections, and a paired
+///             destination. It also proves that one ordinary context operation consumes the same source synchronously,
+///             retains no stream or source storage after completion, and exposes the same ordered windows and exception
+///             prefix when invoked after the preceding admitted segment.
+///
+///             The consumer independently requires the exact context protocol and rejects every scatter, reserve,
+///             transcode, staged, compiler-constant, preferred-direct, and one-pass-direct route which precedes context
+///             dispatch for the concrete destination. A later ordinary direct fallback may coexist because it is not
+///             selected by `print_control_single`. Wrappers never inherit this proof automatically; the consumer may
+///             look through fast_io's transparent `parameter<T>` transport only for provider discovery while checking
+///             every actual protocol on the transported source.
+/// @fn         print_semantic_optional_scatter_context_barrier_leaf
+/// @brief      Returns `std::true_type` when the exact normalized context leaf satisfies the provider proof above.
+template <typename char_type, typename T>
+concept semantic_optional_scatter_context_barrier_leaf =
+	::std::integral<char_type> && requires {
+		{
+			print_semantic_optional_scatter_context_barrier_leaf(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief      scatter_printable_for
 /// @details    Proves the scatter customization for one exact call expression, including its cv/ref category.
 ///             Strategy code must use this refinement when its body calls the customization through a named object,

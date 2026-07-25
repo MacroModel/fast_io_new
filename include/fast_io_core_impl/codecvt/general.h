@@ -626,6 +626,9 @@ inline constexpr bool print_alias_test_codecvt_impl() noexcept
 		{
 			using value_type = typename alias_type::value_type;
 			return ::std::same_as<alias_type, basic_io_scatter_t<value_type>> ||
+				   ::std::same_as<
+					   alias_type,
+					   basic_prfch_cacheable_io_scatter_t<value_type>> ||
 				   ::std::convertible_to<alias_type, basic_io_scatter_t<value_type>>;
 		}
 		else
@@ -651,13 +654,41 @@ struct code_cvt_t
 	basic_io_scatter_t<char_type> reference;
 };
 
+template <::std::integral output_char_type, encoding_scheme src_scheme,
+		  encoding_scheme dst_scheme, ::std::integral source_char_type>
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<
+		output_char_type,
+		code_cvt_t<src_scheme, dst_scheme, source_char_type>>) noexcept
+{
+	// The complete specialization is fast_io-owned and carries only a borrowed character scatter. Its codecvt reserve
+	// protocol has no whole-record status overload and remains destination-independent before native scatter dispatch.
+	return {};
+}
+
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, typename T>
 	requires(::fast_io::details::codecvt::print_alias_test_codecvt_impl<T>())
 inline constexpr auto code_cvt(T const &t) noexcept
 {
-	using value_type = typename decltype(print_alias_define(io_alias, t))::value_type;
-	return code_cvt_t<src_scheme, dst_scheme, value_type>{print_alias_define(io_alias, t)};
+	using alias_type = decltype(print_alias_define(io_alias, t));
+	using value_type = typename alias_type::value_type;
+	auto alias{print_alias_define(io_alias, t)};
+	if constexpr (::std::same_as<
+				  alias_type,
+				  basic_prfch_cacheable_io_scatter_t<value_type>>)
+	{
+		// Codecvt consumes the same borrowed range through its established raw-scatter representation. The provenance
+		// wrapper changes only whether generic print planning may prefetch the source; it does not change characters,
+		// lifetime, or bounds, and transcoding already reads the complete range sequentially. Explicit projection keeps
+		// the non-converting provenance type from being accidentally rejected without weakening alias admission.
+		return code_cvt_t<src_scheme, dst_scheme, value_type>{alias.scatter()};
+	}
+	else
+	{
+		return code_cvt_t<src_scheme, dst_scheme, value_type>{alias};
+	}
 }
 
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,

@@ -104,6 +104,20 @@ inline constexpr ::std::true_type print_copy_stable_borrowed_source(
 	return {};
 }
 
+template <::std::integral char_type>
+	requires(sizeof(char_type) == 1)
+inline constexpr ::std::true_type
+print_semantic_optional_scatter_status_transparent_leaf(
+	::fast_io::io_reserve_type_t<char_type, ::std::source_location>) noexcept
+{
+	// source_location has no user-extensible associated namespace, and fast_io owns its complete reserve-scatters
+	// protocol. That protocol is non-throwing, preserves the file/line/column/function order, retains only
+	// implementation-lifetime strings, and writes every generated coordinate into caller-owned reserve storage.
+	// Optional descriptor compaction therefore cannot introduce a whole-record status owner, alter an exception-visible
+	// prefix, or invalidate an earlier retained component.
+	return {};
+}
+
 namespace manipulators
 {
 

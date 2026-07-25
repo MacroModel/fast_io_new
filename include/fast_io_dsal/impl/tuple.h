@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <concepts>
+#include <type_traits>
 #include <utility>
 
 namespace fast_io::containers
@@ -10,22 +11,47 @@ namespace fast_io::containers
 namespace details
 {
 
-#if __cpp_pack_indexing < 202311L
+#if __cpp_pack_indexing < 202311L && \
+	!(defined(__clang__) || \
+	  (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14))
 
-template <::std::size_t I, typename First, typename... Rest>
-	requires(I <= sizeof...(Rest))
+/// @brief Associates one source-pack position with its exact element type.
+/// @details The index is part of the base identity, so repeated element types remain distinct and reference or cv
+///          qualification is preserved without constructing an object.
+template <::std::size_t index, typename T>
+struct pack_indexing_leaf_
+{
+	static ::std::type_identity<T> select(
+		::std::integral_constant<::std::size_t, index>) noexcept;
+};
+
+template <typename index_sequence, typename... Args>
+struct pack_indexing_table_;
+
+/// @brief Builds one reusable overload table for a complete type pack on compilers without direct pack indexing.
+/// @details Every base contributes exactly one overload keyed by its index. Overload resolution selects the requested
+///          type without recursively instantiating every preceding suffix. All `I` queries for the same `Args...` reuse
+///          this specialization, changing the C++20 fallback from a triangular chain of intermediate classes to one
+///          linear table while denoting exactly the same pack element.
+template <::std::size_t... index, typename... Args>
+	requires(sizeof...(index) == sizeof...(Args))
+struct pack_indexing_table_<::std::index_sequence<index...>, Args...>
+	: pack_indexing_leaf_<index, Args>...
+{
+	using pack_indexing_leaf_<index, Args>::select...;
+};
+
+template <::std::size_t I, typename... Args>
+	requires(I < sizeof...(Args))
 struct pack_indexing_before_cxx26_
 {
-	using type = typename pack_indexing_before_cxx26_<I - 1, Rest...>::type;
+	using table_type = pack_indexing_table_<
+		::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	using type = typename decltype(table_type::select(
+		::std::integral_constant<::std::size_t, I>{}))::type;
 };
 
-template <typename First, typename... Rest>
-struct pack_indexing_before_cxx26_<0, First, Rest...>
-{
-	using type = First;
-};
-
-#endif // __cpp_pack_indexing < 202311L
+#endif // no language pack indexing and no compiler type-pack builtin
 
 template <::std::size_t I, typename... Args>
 struct pack_indexing_
@@ -39,9 +65,16 @@ struct pack_indexing_
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
-#else  // ^^^ __cpp_pack_indexing >= 202311L / vvv __cpp_pack_indexing < 202311L
+#elif defined(__clang__) || \
+	(defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14)
+	// The compiler builtin denotes exactly the same Ith type as language pack indexing, but it is also available in
+	// C++20 mode on Clang and newer GCC. Using it avoids the linear chain of intermediate class specializations without
+	// changing tuple layout, overload resolution, expression category, or generated code. Other compilers use the
+	// portable indexed overload table above.
+	using type = __type_pack_element<I, Args...>;
+#else  // language pack indexing and the compiler builtin are both unavailable
 	using type = typename pack_indexing_before_cxx26_<I, Args...>::type;
-#endif // ^^^ __cpp_pack_indexing < 202311L
+#endif
 };
 
 template <::std::size_t I, typename... Args>
