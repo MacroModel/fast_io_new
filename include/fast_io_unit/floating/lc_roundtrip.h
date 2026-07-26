@@ -315,7 +315,17 @@ inline constexpr char_type *lc_print_rsv_fp_decision_impl(basic_lc_all<char_type
 {
 	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
 	{
-		if (-5 < e10 && e10 < 7)
+		auto const length{static_cast<::std::int_least32_t>(
+			chars_len<10, true>(m10))};
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(e10 + length - 1)};
+		/*
+		Locale grouping changes only the code-unit layout of the chosen fixed
+		coefficient; it does not change the abstract decimal exponent.  Therefore
+		the same -4<=X<6 predicate as the non-locale emitter is necessary and
+		sufficient for notation equivalence.
+		*/
+		if (-4 <= scientific_exponent && scientific_exponent < 6)
 		{
 			return lc_print_rsv_fp_fixed_decision_impl<flt>(all, iter, m10, e10);
 		}

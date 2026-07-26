@@ -103,7 +103,8 @@ inline constexpr bool compiler_constant_hex_precision_mode_valid{
 	precision == ::fast_io::manipulators::floating_precision::significant ||
 	precision == ::fast_io::manipulators::floating_precision::fractional ||
 	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero ||
-	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero};
+	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_hex_fractional};
 
 template <::fast_io::manipulators::floating_rounding rounding>
 inline constexpr bool compiler_constant_hex_rounding_valid{
@@ -402,11 +403,23 @@ compiler_constant_hex_make_precision_plan(
 						plan.fractional + increment);
 				}
 			}
-			if (exponent != 0u && plan.leading_digit == 2u)
+			/*
+			Keep the constant proxy observationally equivalent to the runtime
+			hexadecimal precision emitter.  Both carriers denote the same real
+			number after a leading carry; only charconv's printf-a spelling keeps
+			2p+E instead of normalizing to 1p+(E+1).
+			*/
+			if constexpr (
+				flags.precision !=
+				::fast_io::manipulators::floating_precision::
+					charconv_hex_fractional)
 			{
-				plan.leading_digit = 1u;
-				plan.fractional = 0u;
-				++plan.binary_exponent;
+				if (exponent != 0u && plan.leading_digit == 2u)
+				{
+					plan.leading_digit = 1u;
+					plan.fractional = 0u;
+					++plan.binary_exponent;
+				}
 			}
 		}
 	}

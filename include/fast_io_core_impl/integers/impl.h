@@ -73,7 +73,23 @@ enum class floating_precision : ::std::uint_least8_t
 	significant,
 	fractional,
 	significant_preserve_trailing_zero,
-	fractional_preserve_trailing_zero
+	fractional_preserve_trailing_zero,
+	/*
+	`std::to_chars(..., chars_format::general, P)` has the same P-significant
+	digit rounding grid as `significant`, but its presentation rule is distinct:
+	use fixed exactly when the rounded scientific exponent X satisfies
+	-4 <= X < max(P,1).  Keeping this internal policy in the precision tag lets
+	the shared integer conversion and cold exact fallback remain single-copy;
+	only their final fixed/scientific decision differs.
+	*/
+	charconv_significant,
+	/*
+	Hexadecimal to_chars with an explicit fractional precision follows the
+	printf-a carry layout.  Rounding 1.ffff at P=0 is spelled 2p+E, whereas the
+	shortest hexadecimal formatter normalizes the equal value to 1p+(E+1).
+	The numeric grid is otherwise identical to fractional-preserving mode.
+	*/
+	charconv_hex_fractional
 };
 
 enum class floating_rounding : ::std::uint_least8_t
@@ -412,17 +428,20 @@ inline constexpr ::fast_io::manipulators::scalar_flags floating_precision_roundi
 template <::fast_io::manipulators::floating_precision precision>
 inline constexpr bool floating_precision_is_significant{
 	precision == ::fast_io::manipulators::floating_precision::significant ||
-	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero};
+	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_significant};
 
 template <::fast_io::manipulators::floating_precision precision>
 inline constexpr bool floating_precision_is_fractional{
 	precision == ::fast_io::manipulators::floating_precision::fractional ||
-	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero};
+	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_hex_fractional};
 
 template <::fast_io::manipulators::floating_precision precision>
 inline constexpr bool floating_precision_preserves_trailing_zero{
 	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero ||
-	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero};
+	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_hex_fractional};
 
 inline constexpr ::fast_io::manipulators::scalar_flags
 set_json_float_flag(::fast_io::manipulators::scalar_flags flags, bool json_float) noexcept

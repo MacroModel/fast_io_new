@@ -1543,14 +1543,30 @@ inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *i
 					}
 					digit = 0u;
 				}
-				if (exponent != 0 && digits[0] == 2u)
+				/*
+				The carry 1.ffff... -> 2.000... has two value-equivalent
+				presentations: 2p+E and 1p+(E+1).  Shortest/native fast_io
+				hexadecimal output uses the normalized latter form.  Explicit
+				std::to_chars precision is specified by the printf-a layout and
+				therefore retains the leading 2 at the original exponent.  This
+				branch changes only presentation: 2*2^E = 1*2^(E+1), so all
+				rounding policies and exact bits remain identical.
+				*/
+				if constexpr (
+					precision_mode !=
+					::fast_io::manipulators::floating_precision::
+						charconv_hex_fractional)
 				{
-					digits[0] = 1u;
-					for (::std::size_t index{1u}; index < retained_digits; ++index)
+					if (exponent != 0 && digits[0] == 2u)
 					{
-						digits[index] = 0u;
+						digits[0] = 1u;
+						for (::std::size_t index{1u};
+							 index < retained_digits; ++index)
+						{
+							digits[index] = 0u;
+						}
+						++e2;
 					}
-					++e2;
 				}
 			}
 		}
@@ -1595,9 +1611,124 @@ inline constexpr ::std::size_t print_rsvhexfloat_size_cache{
 template <::std::integral char_type>
 struct scan_floating_context
 {
-	static inline constexpr ::std::size_t capacity{8192u};
-	::fast_io::freestanding::array<char_type, capacity> buffer;
+	/*
+	The numeric context scanner used to contain an unconditional 8192-code-unit
+	array solely for the optional `infinity`/`nan(payload)` branch.  That made a
+	decimal context occupy 9--34 KiB (depending on char_type), so the generic
+	context owner had to allocate even for an ordinary token such as "1.25".
+
+	Special tokens need unbounded *logical* look-behind: if a payload has no
+	closing ')', the contiguous grammar stops before '(', and a chunked scanner
+	must retain the prefix in order to compute the same cursor.  A small fixed
+	capacity therefore cannot preserve the grammar for arbitrary payloads.
+	Store the common spellings inline and grow only after a real special token
+	exceeds that storage.  The numeric state is now small and allocation-free;
+	`nan(...)` keeps the former exact replay semantics without the artificial
+	8192-code-unit limit.
+	*/
+	static inline constexpr ::std::size_t inline_capacity{32u};
+	::fast_io::freestanding::array<char_type, inline_capacity> inline_buffer;
+	char_type *dynamic_buffer{};
 	::std::size_t size{};
+	::std::size_t capacity{inline_capacity};
+
+	scan_floating_context() = default;
+	scan_floating_context(scan_floating_context const &) = delete;
+	scan_floating_context &operator=(scan_floating_context const &) = delete;
+
+	[[nodiscard]] inline constexpr char_type *data() noexcept
+	{
+		/*
+		`dynamic_buffer` is null exactly while capacity equals the embedded
+		extent.  Thus both arms denote storage for at least `capacity` elements;
+		the predicate changes only ownership, not the indexed sequence.
+		*/
+		return dynamic_buffer == nullptr ? inline_buffer.data() : dynamic_buffer;
+	}
+
+	[[nodiscard]] inline constexpr char_type const *data() const noexcept
+	{
+		return dynamic_buffer == nullptr ? inline_buffer.data() : dynamic_buffer;
+	}
+
+	[[nodiscard]] inline constexpr bool reserve(::std::size_t requested) noexcept
+	{
+		if (requested <= capacity)
+		{
+			/*
+			The invariant size<=capacity means the current allocation already
+			contains every index below `requested`.  Returning without copying
+			is therefore both sufficient and observationally exact.
+			*/
+			return true;
+		}
+		constexpr auto maximum{(::std::numeric_limits<::std::size_t>::max)()};
+		constexpr auto maximum_capacity{maximum / sizeof(char_type)};
+		if (requested > maximum_capacity)
+		{
+			/*
+			An array of `requested` elements needs requested*sizeof(char_type)
+			bytes.  The inequality proves that product is not representable by
+			size_t, hence no conforming allocation can satisfy the request.
+			Rejecting before multiplication also removes the overflow itself.
+			*/
+			return false;
+		}
+		auto next_capacity{capacity};
+		while (next_capacity < requested)
+		{
+			if (next_capacity > maximum_capacity / 2u)
+			{
+				/*
+				Doubling beyond this point could exceed the largest byte-safe
+				element count.  `requested` has already been proved byte-safe,
+				so choosing it exactly terminates growth without overshoot.
+				*/
+				next_capacity = requested;
+				break;
+			}
+			/*
+			Here 2*next_capacity<=maximum_capacity.  The multiplication is
+			therefore defined, and geometric growth gives amortized O(1)
+			append while preserving the byte-allocation bound.
+			*/
+			next_capacity *= 2u;
+		}
+		auto *next{::fast_io::details::allocate_iobuf_space<char_type>(next_capacity)};
+		/*
+		The old live range is [0,size), with size<=capacity<next_capacity.
+		A non-overlapping copy consequently initializes exactly the retained
+		prefix and never reads or writes outside either allocation.
+		*/
+		::fast_io::freestanding::non_overlapped_copy_n(data(), size, next);
+		if (dynamic_buffer != nullptr)
+		{
+			/*
+			Only heap storage is released; the inline array is a subobject and
+			must never reach the allocator.  `capacity` is the exact element
+			count used by its matching allocation.
+			*/
+			::fast_io::details::deallocate_iobuf_space<false>(
+				dynamic_buffer, capacity);
+		}
+		dynamic_buffer = next;
+		capacity = next_capacity;
+		return true;
+	}
+
+	inline constexpr ~scan_floating_context() noexcept
+	{
+		if (dynamic_buffer != nullptr)
+		{
+			/*
+			The null predicate is the ownership bit established by reserve.
+			Thus destruction performs exactly one matching deallocation after
+			any number of growth steps, and none for the inline-only case.
+			*/
+			::fast_io::details::deallocate_iobuf_space<false>(
+				dynamic_buffer, capacity);
+		}
+	}
 };
 
 template <::std::integral char_type>
@@ -1628,7 +1759,7 @@ scan_floating_context_map_iter(scan_floating_context<char_type> const &state, ::
 							   char_type const *chunk_begin, char_type const *chunk_end,
 							   char_type const *parsed_iter) noexcept
 {
-	auto const offset{static_cast<::std::size_t>(parsed_iter - state.buffer.data())};
+	auto const offset{static_cast<::std::size_t>(parsed_iter - state.data())};
 	if (offset <= old_size)
 	{
 		return chunk_begin;
@@ -1650,17 +1781,36 @@ scan_floating_context_append(scan_floating_context<char_type> &state, char_type 
 	auto const chunk_size{static_cast<::std::size_t>(chunk_end - chunk_begin)};
 	if (!chunk_size)
 	{
+		/*
+		Appending the empty sequence preserves the buffered prefix.  Returning
+		the common endpoint proves zero consumption without forming a writable
+		one-past access.
+		*/
 		return {chunk_end, ::fast_io::parse_code::partial, false};
 	}
-	auto const available{scan_floating_context<char_type>::capacity - state.size};
-	if (!available)
+	constexpr auto maximum{(::std::numeric_limits<::std::size_t>::max)()};
+	if (maximum - state.size < chunk_size ||
+		!state.reserve(state.size + chunk_size))
 	{
+		/*
+		The first predicate is exactly the negation of representability for
+		`size+chunk_size`; short-circuiting prevents that sum from being formed
+		on overflow.  The second predicate covers byte-count impossibility.
+		Neither failure copies input, so the returned begin cursor reports zero
+		consumption and the existing prefix remains intact.
+		*/
 		return {chunk_begin, ::fast_io::parse_code::overflow, true};
 	}
-	auto const copied{chunk_size < available ? chunk_size : available};
-	::fast_io::freestanding::non_overlapped_copy_n(chunk_begin, copied, state.buffer.data() + state.size);
-	state.size += copied;
-	return {chunk_begin + copied, ::fast_io::parse_code::partial, copied != chunk_size};
+	/*
+	After reserve, [size,size+chunk_size) is a valid disjoint destination
+	suffix.  Copying the chunk establishes that concatenating all partial calls
+	is byte-for-byte identical to one contiguous token; updating size only
+	after the copy preserves the invariant if evaluation is interrupted.
+	*/
+	::fast_io::freestanding::non_overlapped_copy_n(
+		chunk_begin, chunk_size, state.data() + state.size);
+	state.size += chunk_size;
+	return {chunk_end, ::fast_io::parse_code::partial, false};
 }
 
 enum class scan_hexfloat_context_phase : ::std::uint_least8_t
@@ -1759,11 +1909,11 @@ scan_hexfloat_context_append_special_prefix(
 {
 	if (state.has_sign && !state.special_sign_prefixed)
 	{
-		if (state.special_buffer.size == state.special_buffer.capacity)
+		if (!state.special_buffer.reserve(state.special_buffer.size + 1u))
 		{
 			return {chunk_begin, ::fast_io::parse_code::overflow};
 		}
-		state.special_buffer.buffer.index_unchecked(state.special_buffer.size) = state.sign_char;
+		state.special_buffer.data()[state.special_buffer.size] = state.sign_char;
 		++state.special_buffer.size;
 		state.special_sign_prefixed = true;
 	}
@@ -1789,7 +1939,7 @@ scan_hexfloat_context_special_define(
 		return {append_result.iter, append_result.code};
 	}
 	T parsed_value{};
-	auto const *buffer_begin{state.special_buffer.buffer.data()};
+	auto const *buffer_begin{state.special_buffer.data()};
 	auto const *buffer_end{buffer_begin + state.special_buffer.size};
 	auto parse_result{::fast_io::details::scan_hexfloat_contiguous_define_impl<char_type, flags>(
 		buffer_begin, buffer_end, parsed_value)};
@@ -2101,7 +2251,7 @@ scan_hexfloat_context_eof(
 			return ::fast_io::parse_code::end_of_file;
 		}
 		T parsed_value{};
-		auto const *buffer_begin{state.special_buffer.buffer.data()};
+		auto const *buffer_begin{state.special_buffer.data()};
 		auto const *buffer_end{buffer_begin + state.special_buffer.size};
 		auto parse_result{::fast_io::details::scan_hexfloat_contiguous_define_impl<char_type, flags>(
 			buffer_begin, buffer_end, parsed_value)};

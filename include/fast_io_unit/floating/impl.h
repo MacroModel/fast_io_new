@@ -219,7 +219,9 @@ inline constexpr bool print_floating_precision_valid{
 	precision == ::fast_io::manipulators::floating_precision::significant ||
 	precision == ::fast_io::manipulators::floating_precision::fractional ||
 	precision == ::fast_io::manipulators::floating_precision::significant_preserve_trailing_zero ||
-	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero};
+	precision == ::fast_io::manipulators::floating_precision::fractional_preserve_trailing_zero ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_significant ||
+	precision == ::fast_io::manipulators::floating_precision::charconv_hex_fractional};
 
 template <::fast_io::manipulators::floating_rounding rounding>
 inline constexpr bool print_floating_rounding_valid{
@@ -1425,3 +1427,5 @@ inline constexpr ::std::size_t single_pass_bounded_materialization_size(
 
 #include "precise_size.h"
 #include "compiler_constant.h"
+#include "../../fast_io_core_impl/charconv/float_from_chars.h"
+#include "../../fast_io_core_impl/charconv/float_to_chars.h"

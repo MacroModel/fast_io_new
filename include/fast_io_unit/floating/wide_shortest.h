@@ -402,8 +402,9 @@ When both candidates round-trip, `wide_shortest_prefer_upper` applies the exact
 decimal-distance/tie policy used by the narrow Dragonbox implementation.  The
 IEC 60559 max_digits10 separation bound guarantees a successful bracketing
 candidate by `m10digits` (21 for binary80, 37 for binary128), including every
-directed and nearest endpoint convention.  The final carrier plus one is below
-10^37 for the admitted wide types, strictly inside uint128.
+directed and nearest endpoint convention.  A 37-digit lower carrier is at most
+10^37-1, so its one-unit upper candidate is at most 10^37.  Since
+10^37 < 2^128, both candidates are strictly representable in uint128.
 */
 template <typename flt,
 		  ::fast_io::manipulators::floating_rounding rounding>

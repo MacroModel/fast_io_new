@@ -153,7 +153,16 @@ template <typename flt, ::fast_io::manipulators::floating_format format, bool js
 	}
 	else if constexpr (format == ::fast_io::manipulators::floating_format::general)
 	{
-		if (-5 < exponent && exponent < 7)
+		/*
+		Sizing must repeat emission's notation predicate exactly; otherwise an
+		exact-boundary to_chars call could approve the fixed length and then emit
+		a longer scientific spelling (or conversely return a false overflow).
+		For decimal=(mantissa,exponent) with L digits, the scientific exponent is
+		X=exponent+L-1, hence the general rule is -4<=X<6.
+		*/
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(exponent + length - 1)};
+		if (-4 <= scientific_exponent && scientific_exponent < 6)
 		{
 			return floating_precise_fixed_size_with_length<flt, json_float>(mantissa, exponent, length);
 		}
@@ -313,7 +322,14 @@ template <bool showpos, bool nan_show_sign, bool nan_show_type,
 	{
 		if constexpr (format == ::fast_io::manipulators::floating_format::scientific)
 		{
-			return sign_size + 4u; // the shortest zero spelling is exactly 0e+0
+			/*
+			Scientific charconv emits one coefficient digit, `e`, an explicit
+			exponent sign, and at least two exponent digits.  For zero these are
+			exactly `0e+00`, hence five code units plus the optional value sign.
+			This is the same grammar used by prsv_fp_dece0; equality of the size
+			and writer formulas is the exact-boundary store proof.
+			*/
+			return sign_size + 5u;
 		}
 		return sign_size + 1u + (json_float ? 2u : 0u);
 	}
@@ -356,7 +372,12 @@ floating_precise_shortest_fields_size(
 		if constexpr (format ==
 			::fast_io::manipulators::floating_format::scientific)
 		{
-			return sign_size + 4u;
+			/*
+			The integer-field proxy must report the same `0e+00` length as the
+			native-value path.  Both classify zero by exponent==mantissa==0, so
+			five code units plus sign is representation-independent.
+			*/
+			return sign_size + 5u;
 		}
 		return sign_size + 1u + (json_float ? 2u : 0u);
 	}
@@ -636,7 +657,20 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
-	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	if constexpr (
+		format == ::fast_io::manipulators::floating_format::general &&
+		precision_mode ==
+			::fast_io::manipulators::floating_precision::
+				charconv_significant)
+	{
+		auto const rounded_exponent{
+			decimal.exponent +
+			static_cast<::std::int_least32_t>(decimal.size) - 1};
+		fixed = -4 <= rounded_exponent &&
+			(rounded_exponent < 0 ||
+			 static_cast<::std::size_t>(rounded_exponent) < significant);
+	}
+	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{static_cast<::std::int_least64_t>(decimal.exponent) -
 									static_cast<::std::int_least64_t>(virtual_padding)};
@@ -757,7 +791,16 @@ floating_precise_wide_runtime_rounded_size(
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
-	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	if (precision_mode == precision_enum::charconv_significant)
+	{
+		auto const rounded_exponent{
+			decimal.exponent +
+			static_cast<::std::int_least32_t>(decimal.size) - 1};
+		fixed = -4 <= rounded_exponent &&
+			(rounded_exponent < 0 ||
+			 static_cast<::std::size_t>(rounded_exponent) < significant);
+	}
+	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{
 			static_cast<::std::int_least64_t>(decimal.exponent) -
@@ -1028,6 +1071,29 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 			return floating_precise_fixed_size_with_length<flt, json_float>(mantissa, exponent,
 																			static_cast<::std::int_least32_t>(
 																				::fast_io::details::chars_len<10u, true>(mantissa)));
+		}
+		else if constexpr (
+			format == ::fast_io::manipulators::floating_format::general &&
+			precision_mode ==
+				::fast_io::manipulators::floating_precision::
+					charconv_significant)
+		{
+			auto const length{static_cast<::std::int_least32_t>(
+				::fast_io::details::chars_len<10u, true>(mantissa))};
+			auto const scientific_exponent{
+				static_cast<::std::int_least32_t>(
+					exponent + length - 1)};
+			auto const significant_precision{precision ? precision : 1u};
+			if (-4 <= scientific_exponent &&
+				(scientific_exponent < 0 ||
+				 static_cast<::std::size_t>(scientific_exponent) <
+					 significant_precision))
+			{
+				return floating_precise_fixed_size_with_length<
+					flt, json_float>(mantissa, exponent, length);
+			}
+			return floating_precise_scientific_size_with_length<flt>(
+				exponent, length);
 		}
 		return floating_precise_decimal_layout_size<flt, format, json_float>(mantissa, exponent);
 	}
@@ -1680,7 +1746,7 @@ floating_precise_prepare_precision_metadata(
 #if defined(__SIZEOF_INT128__) || \
 	(defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__) && \
 	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
-		if constexpr (::std::same_as<flt, double>)
+		if constexpr (::fast_io::details::dragonbox_uses_binary64_core<flt>)
 		{
 			if (!fractional_grid)
 			{
@@ -2207,14 +2273,31 @@ template <bool showbase, bool showpos, bool nan_show_sign, bool nan_show_type,
 					}
 					digit = 0u;
 				}
-				if (exponent != 0u && digits[0] == 2u)
+				if constexpr (
+					precision_mode !=
+					::fast_io::manipulators::floating_precision::
+						charconv_hex_fractional)
 				{
-					digits[0] = 1u;
-					for (::std::size_t index{1u}; index != retained_digits; ++index)
+					/*
+					After carry, 2*2^E and 1*2^(E+1) are mathematically
+					identical.  Native hexadecimal presentation selects the
+					normalized latter form, so its exponent-width contribution
+					must be measured after the increment.  Charconv fractional
+					precision instead retains 2p+E; excluding it here keeps the
+					size proof identical to the emitter and therefore prevents
+					an exact-fit buffer from being rejected without granting
+					the writer any additional storage.
+					*/
+					if (exponent != 0u && digits[0] == 2u)
 					{
-						digits[index] = 0u;
+						digits[0] = 1u;
+						for (::std::size_t index{1u};
+							 index != retained_digits; ++index)
+						{
+							digits[index] = 0u;
+						}
+						++binary_exponent;
 					}
-					++binary_exponent;
 				}
 			}
 		}

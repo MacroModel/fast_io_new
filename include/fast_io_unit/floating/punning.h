@@ -947,50 +947,58 @@ inline constexpr char_type *prsv_fp_hex0p0(char_type *iter) noexcept
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_dece0(char_type *iter) noexcept
 {
+	/*
+	Scientific charconv requires one digit before the radix and an exponent
+	with at least two decimal digits.  Zero has exact coefficient 0 and
+	exponent 0, so the unique shortest spelling in this grammar is `0e+00`
+	(or its uppercase image).  Each branch below is the same five-code-unit
+	abstract spelling in the destination execution character type; using
+	typed literals avoids assuming that narrow `char` is ASCII.
+	*/
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
 		{
-			return copy_string_literal("0E+0", iter);
+			return copy_string_literal("0E+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, wchar_t>)
 		{
-			return copy_string_literal(L"0E+0", iter);
+			return copy_string_literal(L"0E+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, char16_t>)
 		{
-			return copy_string_literal(u"0E+0", iter);
+			return copy_string_literal(u"0E+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, char32_t>)
 		{
-			return copy_string_literal(U"0E+0", iter);
+			return copy_string_literal(U"0E+00", iter);
 		}
 		else
 		{
-			return copy_string_literal(u8"0E+0", iter);
+			return copy_string_literal(u8"0E+00", iter);
 		}
 	}
 	else
 	{
 		if constexpr (::std::same_as<char_type, char>)
 		{
-			return copy_string_literal("0e+0", iter);
+			return copy_string_literal("0e+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, wchar_t>)
 		{
-			return copy_string_literal(L"0e+0", iter);
+			return copy_string_literal(L"0e+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, char16_t>)
 		{
-			return copy_string_literal(u"0e+0", iter);
+			return copy_string_literal(u"0e+00", iter);
 		}
 		else if constexpr (::std::same_as<char_type, char32_t>)
 		{
-			return copy_string_literal(U"0e+0", iter);
+			return copy_string_literal(U"0e+00", iter);
 		}
 		else
 		{
-			return copy_string_literal(u8"0e+0", iter);
+			return copy_string_literal(u8"0e+00", iter);
 		}
 	}
 }

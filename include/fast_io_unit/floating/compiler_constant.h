@@ -908,7 +908,21 @@ compiler_constant_floating_uses_fixed(
 	else if constexpr (flags.floating ==
 		::fast_io::manipulators::floating_format::general)
 	{
-		return -5 < exponent && exponent < 7;
+		/*
+		The constant proxy stores the same canonical (M,e) carrier as runtime
+		Dragonbox.  If M has L digits, both paths therefore have the identical
+		scientific exponent X=e+L-1.  Applying -4<=X<6 here proves that constant
+		materialization cannot select a different notation merely because the
+		optimizer exposed M and e at compile time.
+		*/
+		auto const digits{static_cast<::std::int_least32_t>(
+			::fast_io::details::
+				compiler_constant_floating_decimal_digits(mantissa))};
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(
+				exponent + digits - 1)};
+		return -4 <= scientific_exponent &&
+			scientific_exponent < 6;
 	}
 	else
 	{

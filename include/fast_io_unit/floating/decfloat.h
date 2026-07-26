@@ -262,18 +262,17 @@ template <typename T>
 	return false;
 }
 
-// The Clinger shortcut evaluates a small decimal with native floating multiply
-// or divide and is exact only under its assumed nearest-even environment.  When
-// fast_io exposes the mutable C floating-point environment, keep conversion in
-// the integer rounding pipeline selected by current_floating_rounding(); this
-// avoids making the result depend on an unmodelled ambient rounding mode.
-inline constexpr bool scan_decfloat_clinger_environment_independent{
-#if defined(FAST_IO_HAS_FLOATING_POINT_ENVIRONMENT)
-	false
-#else
-	true
-#endif
-};
+/*
+The Clinger shortcut evaluates a small decimal with native floating multiply
+or divide.  Its theorem assumes nearest-even hardware arithmetic.  Runtime
+callers may change the C floating environment even when fast_io itself was
+compiled without floating-environment integration, so the absence of a library
+macro cannot prove that assumption.  The three assignment sites below admit
+Clinger only during constant evaluation, whose arithmetic mode is fixed by the
+translation and cannot observe a runtime fenv.  Runtime input always uses the
+integer cached-product/exact pipeline and is consequently a pure function of
+the explicit rounding template argument.
+*/
 
 inline constexpr ::std::size_t scan_decfloat_exact_digit_capacity{768u};
 
@@ -597,17 +596,17 @@ template <::fast_io::manipulators::floating_rounding rounding>
 [[nodiscard]] inline constexpr ::std::uint_least64_t
 scan_decfloat_round_mantissa(bool negative, ::std::uint_least64_t mantissa, bool has_tail, bool is_tie) noexcept
 {
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_odd)
+	if constexpr (::fast_io::details::scan_decfloat_nearest_rounding<rounding>)
 	{
-		auto rounded_down{mantissa >> 1u};
-		if (((mantissa & 1u) != 0u || has_tail) && ((rounded_down & 1u) == 0u))
-		{
-			++rounded_down;
-		}
-		return rounded_down;
-	}
-	else if constexpr (::fast_io::details::scan_decfloat_nearest_rounding<rounding>)
-	{
+		/*
+		`mantissa = 2q + g`, where q is the lower candidate and g is the
+		half-ulp guard bit. Hence g=0 is strictly below the midpoint even when
+		later discarded bits are nonzero, while g=1 is at or above it. All six
+		nearest policies therefore share this magnitude test; they differ only
+		when `is_tie` proves exact equality with the midpoint. In particular,
+		nearest-to-odd is not round-to-odd jamming: parity may select a result
+		only at a tie.
+		*/
 		if ((mantissa & 1u) != 0u)
 		{
 			if (!is_tie || ::fast_io::details::scan_decfloat_nearest_tie_round_up<rounding>(negative, mantissa))
@@ -1290,6 +1289,181 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 	inline constexpr auto scan_decfloat_pow5_0_to_27_table{
 		::fast_io::details::scan_decfloat_generate_pow5_0_to_27_table()};
 
+	template <typename T>
+	[[nodiscard]] inline constexpr bool
+	scan_decfloat_try_exact_dyadic(T &value, bool negative,
+								  ::std::uint_least64_t significand,
+								  ::std::int_least64_t decimal_exponent) noexcept
+	{
+		using no_cvref_t = ::std::remove_cvref_t<T>;
+		if constexpr (!::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
+		{
+			/*
+			The bit construction below targets the at-most-64-bit IEEE field
+			model used by the cached converter.  Wide native formats retain their
+			existing exact-bigint path; declining this optional shortcut changes
+			neither their accepted grammar nor their rounding result.
+			*/
+			return false;
+		}
+		else
+		{
+			using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
+			constexpr auto precision_bits{
+				static_cast<unsigned>(trait::mbits + 1u)};
+			constexpr auto exponent_bias{
+				static_cast<::std::int_least32_t>(
+					(static_cast<::std::uint_least32_t>(1u)
+					 << (trait::ebits - 1u)) -
+					1u)};
+			constexpr auto minimum_normal_exponent{
+				static_cast<::std::int_least32_t>(1 - exponent_bias)};
+			constexpr auto maximum_normal_exponent{exponent_bias};
+
+			/*
+			M*10^e = (M*5^e)*2^e for e>=0 and
+			M*10^-k = (M/5^k)*2^-k exactly when 5^k divides M.  Since
+			5^27 fits in uint64_t and 5^28 does not, an unsigned 64-bit M
+			can satisfy the negative divisibility case only for k<=27.
+			The positive multiplication guard proves that its coefficient is
+			also represented exactly.  No floating instruction or ambient
+			rounding mode participates in either reduction.
+			*/
+			if (decimal_exponent < -27 || 27 < decimal_exponent)
+			{
+				return false;
+			}
+			::std::uint_least64_t coefficient{significand};
+			auto binary_exponent{static_cast<::std::int_least32_t>(
+				decimal_exponent)};
+			if (decimal_exponent < 0)
+			{
+				auto const power5{
+					::fast_io::details::scan_decfloat_pow5_0_to_27_table[
+						static_cast<::std::size_t>(-decimal_exponent)]};
+				if (coefficient % power5 != 0u)
+				{
+					/*
+					An uncancelled factor 5 remains in the denominator, so the
+					rational is not dyadic and cannot be materialized by an
+					exact binary shift.  The cached/exact rounding pipeline must
+					decide between adjacent target values.
+					*/
+					return false;
+				}
+				coefficient /= power5;
+			}
+			else
+			{
+				auto const power5{
+					::fast_io::details::scan_decfloat_pow5_0_to_27_table[
+						static_cast<::std::size_t>(decimal_exponent)]};
+				constexpr auto uint64_max{
+					(::std::numeric_limits<::std::uint_least64_t>::max)()};
+				if (coefficient > uint64_max / power5)
+				{
+					/*
+					The exact coefficient does not fit the shortcut's carrier.
+					Falling through preserves it in the existing 64x128 cached
+					product rather than accepting a wrapped integer.
+					*/
+					return false;
+				}
+				coefficient *= power5;
+			}
+
+			if (coefficient == 0u)
+			{
+				/*
+				The caller normally handles zero before conversion.  Keeping the
+				helper total avoids applying count-zero operations outside their
+				nonzero domain without creating a second signed-zero policy.
+				*/
+				return false;
+			}
+			auto const trailing_zeroes{
+				static_cast<unsigned>(::std::countr_zero(coefficient))};
+			coefficient >>= trailing_zeroes;
+			binary_exponent += static_cast<::std::int_least32_t>(
+				trailing_zeroes);
+			auto const coefficient_bits{static_cast<unsigned>(
+				::std::numeric_limits<::std::uint_least64_t>::digits -
+				::std::countl_zero(coefficient))};
+			if (precision_bits < coefficient_bits)
+			{
+				/*
+				After removing every factor two, an odd coefficient wider than
+				the target precision cannot be represented exactly at any binary
+				exponent.  All rounding policies therefore continue through the
+				normal cached converter.
+				*/
+				return false;
+			}
+
+			auto const leading_exponent{
+				static_cast<::std::int_least32_t>(
+					binary_exponent +
+					static_cast<::std::int_least32_t>(coefficient_bits) - 1)};
+			::fast_io::details::scan_decfloat_adjusted_mantissa adjusted;
+			if (minimum_normal_exponent <= leading_exponent &&
+				leading_exponent <= maximum_normal_exponent)
+			{
+				/*
+				Shifting the odd coefficient to precision_bits places its leading
+				one in the implicit-bit position and appends only zero bits.
+				Removing that implicit bit and adding the IEEE bias therefore
+				encodes coefficient*2^binary_exponent exactly.
+				*/
+				auto const normalized{
+					coefficient << (precision_bits - coefficient_bits)};
+				auto const implicit_bit{
+					::std::uint_least64_t{1u} << trait::mbits};
+				adjusted.mantissa = normalized & (implicit_bit - 1u);
+				adjusted.power2 = leading_exponent + exponent_bias;
+			}
+			else if (leading_exponent < minimum_normal_exponent)
+			{
+				constexpr auto subnormal_unit_exponent{
+					static_cast<::std::int_least32_t>(
+						minimum_normal_exponent -
+						static_cast<::std::int_least32_t>(trait::mbits))};
+				auto const subnormal_shift{
+					static_cast<::std::int_least32_t>(
+						binary_exponent - subnormal_unit_exponent)};
+				if (subnormal_shift < 0 ||
+					static_cast<unsigned>(subnormal_shift) >=
+						::std::numeric_limits<::std::uint_least64_t>::digits ||
+					trait::mbits <
+						coefficient_bits +
+							static_cast<unsigned>(subnormal_shift))
+				{
+					/*
+					A negative shift leaves a fractional subnormal quantum; an
+					oversized shift leaves the finite subnormal field.  In both
+					cases the exact dyadic is not a target value, so rounding
+					must remain in the general path.
+					*/
+					return false;
+				}
+				adjusted.mantissa =
+					coefficient << static_cast<unsigned>(subnormal_shift);
+				adjusted.power2 = 0;
+			}
+			else
+			{
+				/*
+				The exact dyadic lies above the largest finite binade.  Its
+				infinity-versus-max-finite result depends on the requested
+				rounding policy, which the general converter already implements.
+				*/
+				return false;
+			}
+			::fast_io::details::scan_decfloat_to_float(
+				negative, adjusted, value);
+			return true;
+		}
+	}
+
 	[[nodiscard]] inline constexpr bool scan_decfloat_bigint_mul_pow5(scan_decfloat_bigint &value,
 																	  ::std::uint_least64_t exponent) noexcept
 	{
@@ -1436,12 +1610,17 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 																   bool remainder_nonzero,
 																   bool tail_nonzero) noexcept
 	{
-		if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_odd)
+		if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
 		{
-			return (remainder_nonzero || tail_nonzero) && ((quotient & 1u) == 0u);
-		}
-		else if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
-		{
+			/*
+			Let the exact scaled magnitude be q+r/d with 0<=r<d. Comparing
+			2r with d completely orders it against the midpoint q+1/2.
+			Consequently every nearest policy returns q below the midpoint and
+			q+1 above it. Only equality leaves two equidistant candidates, so
+			only that branch may consult the policy's tie rule. Treating every
+			inexact nearest-to-odd input as "make q odd" would instead implement
+			round-to-odd jamming and can select the farther neighbour.
+			*/
 			if (twice_remainder_compare < 0)
 			{
 				return false;
@@ -1905,16 +2084,26 @@ scan_decfloat_decimal_round_up(bool negative, ::std::uint_least64_t rounded_down
 							   ::std::uint_least64_t remainder, ::std::uint_least64_t divisor,
 							   bool tail_nonzero) noexcept
 {
+	/*
+	For retained decimal integer q, the discarded suffix represents a
+	nonnegative fraction. An empty suffix is exact and cannot change q under
+	any rounding policy; this branch also prevents a directed mode from moving
+	an already representable value.
+	*/
 	if (!remainder && !tail_nonzero)
 	{
 		return false;
 	}
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_odd)
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
 	{
-		return (rounded_down & 1u) == 0u;
-	}
-	else if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
-	{
+		/*
+		The common nearest decision follows from comparing the discarded
+		fraction with 1/2. A nonzero tail after an exactly-half retained
+		remainder makes the full suffix strictly greater than one half. Parity
+		(or sign for another tie convention) matters only in the exact-half
+		branch; this is the defining distinction between nearest-to-odd and
+		round-to-odd jamming.
+		*/
 		auto const half{divisor >> 1u};
 		if (remainder < half)
 		{
@@ -1966,6 +2155,19 @@ inline constexpr void scan_decfloat_append_digit(scan_decfloat_significand_state
 [[nodiscard]] inline constexpr bool
 scan_decfloat_ascii8_is_digits(::std::uint_least64_t val) noexcept
 {
+	/*
+	Interpret val as eight little-endian unsigned bytes c_i.  For an ASCII
+	digit, c_i-0x30 is in [0,9] and c_i+0x46 is in [0x76,0x7f], so neither
+	operation sets that lane's high bit or propagates a borrow/carry.
+
+	If some lane is invalid, choose the least-significant invalid lane; every
+	earlier lane is a digit and therefore supplies no incoming borrow/carry.
+	For c_i<0x30, subtraction modulo 256 lies in [0xd0,0xff] and sets bit 7.
+	For 0x3a<=c_i<=0xb9, addition lies in [0x80,0xff] and sets bit 7.  For
+	c_i>=0xba, subtraction lies in [0x8a,0xcf] and sets bit 7.  Thus the masked
+	word is zero iff all eight lanes are digits.  This also proves that whole-
+	word carry propagation cannot create a false acceptance.
+	*/
 	return ((((val + 0x4646464646464646u) | (val - 0x3030303030303030u)) &
 			 0x8080808080808080u) == 0);
 }
@@ -1973,6 +2175,11 @@ scan_decfloat_ascii8_is_digits(::std::uint_least64_t val) noexcept
 [[nodiscard]] inline constexpr bool
 scan_decfloat_ascii8_has_nonzero_digit(::std::uint_least64_t val) noexcept
 {
+	/*
+	The caller first proves every byte is a digit.  XOR with eight ASCII zero
+	bytes is therefore zero exactly for the string "00000000"; any nonzero
+	digit changes at least one lane and hence the full integer.
+	*/
 	return (val ^ 0x3030303030303030u) != 0;
 }
 
@@ -2012,12 +2219,33 @@ scan_decfloat_skip_after_exact_limit_simd(char_type const *first, char_type cons
 #endif
 	for (; N <= static_cast<::std::size_t>(last - first);)
 	{
+		/*
+		The loop guard proves the full N-code-unit load is contained in
+		[first,last); no masked or speculative overread is required.
+		*/
 		simd_vector_type vec;
 		vec.load(first);
+		/*
+		ASCII '0'..'9' are positive signed-byte values.  Lane-wise signed
+		comparisons therefore satisfy
+
+		    valid_i <=> ('0' <= vec_i && vec_i <= '9')
+
+		for every possible input byte: negative lanes fail the lower bound and
+		bytes above 0x7f also appear negative and fail it.  Conjunction is thus
+		the exact digit predicate, not a locale-dependent approximation.
+		*/
 		auto const valid{(zeroes <= vec) & (vec <= nines)};
 		auto const invalid{~valid};
 		if (!::fast_io::intrinsics::is_all_zeros(invalid))
 		{
+			/*
+			Comparison masks use an all-zero lane for valid and an all-one lane
+			for invalid after complementation.  Counting zero lanes from the
+			front yields precisely the index of the first nondigit.  The scalar
+			prefix loop visits exactly the accepted lanes and computes their
+			sticky OR before returning that boundary.
+			*/
 			auto const valid_count{::fast_io::intrinsics::vector_mask_countr_zero(invalid)};
 			auto const *const invalid_pos{first + valid_count};
 			for (; first != invalid_pos; ++first)
@@ -2031,6 +2259,11 @@ scan_decfloat_skip_after_exact_limit_simd(char_type const *first, char_type cons
 		}
 		if (!tail_nonzero && !::fast_io::intrinsics::is_all_zeros(vec != zeroes))
 		{
+			/*
+			All lanes are already known digits.  Therefore vec!=zeroes has a
+			nonzero lane iff at least one digit is 1..9, exactly the sticky
+			predicate needed after the retained exact prefix.
+			*/
 			tail_nonzero = true;
 		}
 		first += N;
@@ -2426,12 +2659,20 @@ template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 {
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	auto adjusted_exponent{::fast_io::details::scan_decfloat_adjusted_exponent(state, exponent)};
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
-				  ::fast_io::details::scan_decfloat_clinger_environment_independent)
+	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
 	{
-		if (!state.truncated_nonzero &&
-			::fast_io::details::scan_decfloat_try_clinger(state.significand, adjusted_exponent, negative, value))
+		if (::std::is_constant_evaluated() &&
+			!state.truncated_nonzero &&
+			::fast_io::details::scan_decfloat_try_clinger(
+				state.significand, adjusted_exponent, negative, value))
 		{
+			/*
+			Constant evaluation has a translation-fixed nearest-even mode, and
+			an untruncated state denotes the exact integer significand.  The
+			Clinger bounds then prove the native multiply/divide is correctly
+			rounded.  At runtime the first conjunct is false and this entire
+			branch folds away, preserving fenv independence.
+			*/
 			return ::fast_io::parse_code::ok;
 		}
 	}
@@ -2500,11 +2741,17 @@ scan_decfloat_assign_significand(T &value, bool negative, ::std::uint_least64_t 
 		value = negative ? -static_cast<T>(0.0) : static_cast<T>(0.0);
 		return ::fast_io::parse_code::ok;
 	}
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
-				  ::fast_io::details::scan_decfloat_clinger_environment_independent)
+	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
 	{
-		if (::fast_io::details::scan_decfloat_try_clinger(significand, adjusted_exponent, negative, value))
+		if (::std::is_constant_evaluated() &&
+			::fast_io::details::scan_decfloat_try_clinger(
+				significand, adjusted_exponent, negative, value))
 		{
+			/*
+			This state contains no omitted digits by construction.  Therefore
+			the constant-evaluation Clinger theorem applies directly; runtime
+			again bypasses native floating arithmetic before reading the fenv.
+			*/
 			return ::fast_io::parse_code::ok;
 		}
 	}
@@ -2655,13 +2902,32 @@ scan_decfloat_assign_short(T &value, bool negative, ::std::uint_least64_t signif
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	auto adjusted_exponent{::fast_io::details::scan_decfloat_saturating_add(
 		exponent, -static_cast<::std::int_least64_t>(fractional_digits))};
-	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
-				  ::fast_io::details::scan_decfloat_clinger_environment_independent)
+	if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
 	{
-		if (::fast_io::details::scan_decfloat_try_clinger(significand, adjusted_exponent, negative, value))
+		if (::std::is_constant_evaluated() &&
+			::fast_io::details::scan_decfloat_try_clinger(
+				significand, adjusted_exponent, negative, value))
 		{
+			/*
+			The short parser's coefficient and adjusted exponent denote the
+			complete decimal exactly.  Constant evaluation may use Clinger;
+			runtime conversion falls through to the same integer kernel used by
+			long inputs and all other explicit policies.
+			*/
 			return ::fast_io::parse_code::ok;
 		}
+	}
+	if (::fast_io::details::scan_decfloat_try_exact_dyadic(
+			value, negative, significand, adjusted_exponent))
+	{
+		/*
+		The helper returns true only after constructing the exact target bit
+		pattern with integer arithmetic.  Exact representability makes all ten
+		explicit rounding policies, and every current-environment selection,
+		observationally identical; returning here cannot bypass a policy-specific
+		tie, underflow, or overflow decision.
+		*/
+		return ::fast_io::parse_code::ok;
 	}
 	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
 	{
@@ -2767,7 +3033,44 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 			::std::uint_least64_t significand{};
 			::std::uint_least64_t digit_count{};
 			::std::uint_least64_t fractional_digits{};
+			bool has_digit{};
 			char8_t digit{};
+			constexpr auto zero{
+				::fast_io::char_literal_v<u8'0', char_type>};
+			constexpr ::std::uint_least64_t ascii_zeroes{
+				0x3030303030303030ULL};
+			/*
+			If z leading integer zeroes precede the first nonzero digit, replacing
+			the digit sequence 0^z D by D leaves both M*10^q and q unchanged:
+			the integer radix position is unchanged and the removed coefficient
+			terms are exactly zero.  Consequently they consume no significand
+			precision.  The eight-byte equality is stronger than a digit test and
+			therefore cannot skip punctuation or a nonzero digit.  Unaligned loads
+			use memcpy, so the optimization adds no alignment precondition.
+			*/
+			for (; static_cast<::std::size_t>(end - first) >=
+				   sizeof(::std::uint_least64_t);)
+			{
+				::std::uint_least64_t val;
+				::fast_io::freestanding::my_memcpy(
+					__builtin_addressof(val), first,
+					sizeof(::std::uint_least64_t));
+				if constexpr (
+					::std::endian::little != ::std::endian::native)
+				{
+					val = ::fast_io::little_endian(val);
+				}
+				if (val != ascii_zeroes)
+				{
+					break;
+				}
+				first += sizeof(::std::uint_least64_t);
+				has_digit = true;
+			}
+			for (; first != end && *first == zero; ++first)
+			{
+				has_digit = true;
+			}
 			for (; digit_count + 8u <= digit_limit &&
 				   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
 			{
@@ -2786,6 +3089,7 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 								  ::fast_io::details::scan_decfloat_ascii8_parse(val));
 				digit_count += 8u;
 				first += sizeof(::std::uint_least64_t);
+				has_digit = true;
 			}
 			for (; first != end && ::fast_io::details::scan_decfloat_decimal_digit(*first, digit); ++first)
 			{
@@ -2795,6 +3099,7 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 				}
 				significand = significand * 10u + static_cast<::std::uint_least64_t>(digit);
 				++digit_count;
+				has_digit = true;
 			}
 
 			constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
@@ -2802,6 +3107,46 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 			{
 				++first;
 				auto const *fraction_begin{first};
+				/*
+				Fractional zeroes may be erased from the stored coefficient only
+				while no earlier nonzero digit exists.  Unlike integer leading
+				zeroes, each erased fractional zero still moves the decimal radix;
+				fractional_digits is therefore measured from fraction_begin after
+				scanning and includes every skipped code unit.  Thus
+
+				    0.00D * 10^E = D * 10^(E-3)
+
+				is preserved exactly.  Once significand is nonzero, an intervening
+				zero changes the place value of every later digit and must enter
+				the multiply-by-ten recurrence.
+				*/
+				if (!digit_count)
+				{
+					for (; static_cast<::std::size_t>(end - first) >=
+						   sizeof(::std::uint_least64_t);)
+					{
+						::std::uint_least64_t val;
+						::fast_io::freestanding::my_memcpy(
+							__builtin_addressof(val), first,
+							sizeof(::std::uint_least64_t));
+						if constexpr (
+							::std::endian::little !=
+							::std::endian::native)
+						{
+							val = ::fast_io::little_endian(val);
+						}
+						if (val != ascii_zeroes)
+						{
+							break;
+						}
+						first += sizeof(::std::uint_least64_t);
+						has_digit = true;
+					}
+					for (; first != end && *first == zero; ++first)
+					{
+						has_digit = true;
+					}
+				}
 				for (; digit_count + 8u <= digit_limit &&
 					   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
 				{
@@ -2820,6 +3165,7 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 									  ::fast_io::details::scan_decfloat_ascii8_parse(val));
 					digit_count += 8u;
 					first += sizeof(::std::uint_least64_t);
+					has_digit = true;
 				}
 				for (; first != end && ::fast_io::details::scan_decfloat_decimal_digit(*first, digit); ++first)
 				{
@@ -2829,11 +3175,12 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 					}
 					significand = significand * 10u + static_cast<::std::uint_least64_t>(digit);
 					++digit_count;
+					has_digit = true;
 				}
 				fractional_digits = static_cast<::std::uint_least64_t>(first - fraction_begin);
 			}
 
-			if (digit_count == 0)
+			if (!has_digit)
 			{
 				return {begin, ::fast_io::parse_code::invalid, true};
 			}
@@ -3176,11 +3523,11 @@ scan_decfloat_context_append_special_prefix(::fast_io::details::scan_decfloat_co
 {
 	if (state.has_sign && !state.special_sign_prefixed)
 	{
-		if (state.special_buffer.size == state.special_buffer.capacity)
+		if (!state.special_buffer.reserve(state.special_buffer.size + 1u))
 		{
 			return {chunk_begin, ::fast_io::parse_code::overflow};
 		}
-		state.special_buffer.buffer.index_unchecked(state.special_buffer.size) = state.sign_char;
+		state.special_buffer.data()[state.special_buffer.size] = state.sign_char;
 		++state.special_buffer.size;
 		state.special_sign_prefixed = true;
 	}
@@ -3206,7 +3553,7 @@ scan_decfloat_context_special_define(::fast_io::details::scan_decfloat_context<c
 		return {append_result.iter, append_result.code};
 	}
 	T parsed_value{};
-	auto const *buffer_begin{state.special_buffer.buffer.data()};
+	auto const *buffer_begin{state.special_buffer.data()};
 	auto const *buffer_end{buffer_begin + state.special_buffer.size};
 	::fast_io::parse_result<char_type const *> parse_result;
 	if constexpr (use_precision)
@@ -3512,7 +3859,7 @@ scan_decfloat_context_eof(::fast_io::details::scan_decfloat_context<char_type> &
 			return ::fast_io::parse_code::end_of_file;
 		}
 		T parsed_value{};
-		auto const *buffer_begin{state.special_buffer.buffer.data()};
+		auto const *buffer_begin{state.special_buffer.data()};
 		auto const *buffer_end{buffer_begin + state.special_buffer.size};
 		::fast_io::parse_result<char_type const *> parse_result;
 		if constexpr (use_precision)

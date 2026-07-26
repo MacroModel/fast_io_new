@@ -273,6 +273,41 @@ inline constexpr bool dragonbox_uses_binary32_core{
 	iec559_traits<flt>::mbits <= iec559_traits<float>::mbits &&
 	iec559_traits<flt>::ebits <= iec559_traits<float>::ebits};
 
+/*
+The binary64 precision accelerators consume only the already-punned fraction
+and exponent fields; none performs arithmetic in `flt`.  Consequently their
+mathematical input is determined by the IEC layout, not by whether the frontend
+spells that layout `double`, `_Float64`, or an ABI-equivalent type.
+
+For an admitted type below, mbits=52 and ebits=11 give the exact finite-value
+identity
+
+	magnitude = M * 2^(E - 1023 - 52),
+
+with the usual E=0 subnormal adjustment.  A 64-value-bit unsigned carrier and
+an equal object/carrier size prove that the punned sign, exponent, and fraction
+occupy exactly the same 64-bit domain used by every binary64 DA bound.  Thus
+substituting an ABI-equivalent spelling leaves every integer operand, interval
+comparison, tie rejection, and emitted coefficient unchanged.  Conversely,
+any binary16/32/80/128 format fails at least one field-width or layout
+condition, so no non-binary64 representation can enter these specializations.
+*/
+template <typename flt>
+inline constexpr bool dragonbox_uses_binary64_core{[]() constexpr noexcept
+{
+	using clean_type = ::std::remove_cvref_t<flt>;
+	using trait = ::fast_io::details::iec559_traits<clean_type>;
+	using mantissa_type = typename trait::mantissa_type;
+	return trait::mbits == 52u && trait::ebits == 11u &&
+		::std::numeric_limits<mantissa_type>::digits == 64 &&
+		sizeof(clean_type) == sizeof(mantissa_type);
+}()};
+
+static_assert(::fast_io::details::dragonbox_uses_binary64_core<double>);
+#if defined(FAST_IO_HAS_FLOAT64_TYPE)
+static_assert(::fast_io::details::dragonbox_uses_binary64_core<_Float64>);
+#endif
+
 template <typename flt>
 inline constexpr ::std::int_least32_t dragonbox_kappa{
 	::fast_io::details::dragonbox_uses_binary32_core<flt> ? 1 : 2};
@@ -2686,7 +2721,17 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_with
 {
 	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
 	{
-		if (-5 < e10 && e10 < 7)
+		/*
+		Let L be the number of decimal digits in m10.  The represented value is
+		m10*10^e10, so moving the radix behind the leading digit gives scientific
+		exponent X=e10+L-1.  The no-precision general presentation uses the
+		printf-g default decision: fixed iff -4<=X<6.  Testing e10 itself would
+		be incorrect after trailing-zero removal (for example,
+		123456789*10^2 has e10=2 but X=10).
+		*/
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(e10 + olength - 1)};
+		if (-4 <= scientific_exponent && scientific_exponent < 6)
 		{
 			return print_rsv_fp_fixed_decision_with_length_impl<flt, comma, json_float>(
 				iter, m10, e10, olength);
@@ -2768,7 +2813,17 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 {
 	if constexpr (mt == ::fast_io::manipulators::floating_format::general)
 	{
-		if (-5 < e10 && e10 < 7)
+		auto const length{static_cast<::std::int_least32_t>(
+			chars_len<10, true>(m10))};
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(e10 + length - 1)};
+		/*
+		This is the same -4<=X<6 theorem as the length-carrying overload.
+		Computing L here rather than reusing e10 is necessary: canonicalization
+		may remove any number of coefficient zeroes while preserving both the
+		value and X.
+		*/
+		if (-4 <= scientific_exponent && scientific_exponent < 6)
 		{
 			return print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(iter, m10, e10);
 		}
@@ -8057,7 +8112,20 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 	}
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
-	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	if constexpr (
+		format == ::fast_io::manipulators::floating_format::general &&
+		precision_mode ==
+			::fast_io::manipulators::floating_precision::
+				charconv_significant)
+	{
+		auto const rounded_exponent{
+			decimal.exponent +
+			static_cast<::std::int_least32_t>(decimal.size) - 1};
+		fixed = -4 <= rounded_exponent &&
+			(rounded_exponent < 0 ||
+			 static_cast<::std::size_t>(rounded_exponent) < significant);
+	}
+	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{static_cast<::std::int_least64_t>(decimal.exponent) -
 									static_cast<::std::int_least64_t>(virtual_padding)};
@@ -9326,7 +9394,16 @@ inline constexpr char_type *exact_precision_wide_runtime_present(
 	}
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
-	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	if (precision_mode == precision_enum::charconv_significant)
+	{
+		auto const rounded_exponent{
+			decimal.exponent +
+			static_cast<::std::int_least32_t>(decimal.size) - 1};
+		fixed = -4 <= rounded_exponent &&
+			(rounded_exponent < 0 ||
+			 static_cast<::std::size_t>(rounded_exponent) < significant);
+	}
+	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{
 			static_cast<::std::int_least64_t>(decimal.exponent) -
@@ -10484,6 +10561,38 @@ inline constexpr char_type *print_rsv_fp_precision_decision_impl(
 		{
 			return ::fast_io::details::print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(iter, m10, e10);
 		}
+		else if constexpr (
+			mt == ::fast_io::manipulators::floating_format::general &&
+			precision_mode ==
+				::fast_io::manipulators::floating_precision::
+					charconv_significant)
+		{
+			/*
+			The standard general-with-precision decision is made after decimal
+			rounding.  If L is the final coefficient length, its scientific
+			exponent is X=e10+L-1.  P=0 is specified as P=1.  The two comparisons
+			below are exactly -4<=X && X<P; spelling them in signed/unsigned
+			pieces also proves that a very large size_t precision cannot narrow.
+			*/
+			auto const length{static_cast<::std::int_least32_t>(
+				chars_len<10, true>(m10))};
+			auto const scientific_exponent{
+				static_cast<::std::int_least32_t>(e10 + length - 1)};
+			auto const significant_precision{precision ? precision : 1u};
+			if (-4 <= scientific_exponent &&
+				(scientific_exponent < 0 ||
+				 static_cast<::std::size_t>(scientific_exponent) <
+					 significant_precision))
+			{
+				return ::fast_io::details::
+					print_rsv_fp_fixed_decision_impl<
+						flt, comma, json_float>(iter, m10, e10);
+			}
+			return ::fast_io::details::print_rsv_fp_decision_impl<
+				flt, comma, uppercase_e,
+				::fast_io::manipulators::floating_format::scientific,
+				false>(iter, m10, e10);
+		}
 		else
 		{
 			return ::fast_io::details::print_rsv_fp_decision_impl<flt, comma, uppercase_e, mt, json_float>(
@@ -10570,6 +10679,30 @@ inline constexpr char_type *print_rsv_fp_try_directed_carrier_decision_impl(
 	{
 		return ::fast_io::details::print_rsv_fp_fixed_decision_impl<flt, comma, json_float>(
 			iter, m10, e10);
+	}
+	else if constexpr (
+		mt == ::fast_io::manipulators::floating_format::general &&
+		precision_mode ==
+			::fast_io::manipulators::floating_precision::
+				charconv_significant)
+	{
+		auto const length{static_cast<::std::int_least32_t>(
+			chars_len<10, true>(m10))};
+		auto const scientific_exponent{
+			static_cast<::std::int_least32_t>(e10 + length - 1)};
+		auto const significant_precision{precision ? precision : 1u};
+		if (-4 <= scientific_exponent &&
+			(scientific_exponent < 0 ||
+			 static_cast<::std::size_t>(scientific_exponent) <
+				 significant_precision))
+		{
+			return ::fast_io::details::print_rsv_fp_fixed_decision_impl<
+				flt, comma, json_float>(iter, m10, e10);
+		}
+		return ::fast_io::details::print_rsv_fp_decision_impl<
+			flt, comma, uppercase_e,
+			::fast_io::manipulators::floating_format::scientific, false>(
+				iter, m10, e10);
 	}
 	else
 	{
@@ -11829,7 +11962,7 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 	// the ambiguity interval succeeds, so an exact or possible tie still falls
 	// through without modifying the destination.
 #if defined(__SIZEOF_INT128__)
-	if constexpr (::std::same_as<flt, double> &&
+	if constexpr (::fast_io::details::dragonbox_uses_binary64_core<flt> &&
 		format == ::fast_io::manipulators::floating_format::scientific &&
 		::fast_io::details::floating_precision_preserves_trailing_zero<precision_mode> &&
 		::fast_io::details::floating_rounding_is_nearest<rounding>)
@@ -11874,7 +12007,7 @@ inline constexpr char_type *print_rsvflt_precision_slow_path_impl(
 	// accepted carrier below and in those writers comes from the same DA interval
 	// proof, and every rejection reaches the same exact fallback.
 #if defined(__SIZEOF_INT128__)
-	if constexpr (::std::same_as<flt, double> &&
+	if constexpr (::fast_io::details::dragonbox_uses_binary64_core<flt> &&
 		(::fast_io::details::floating_precision_is_significant<precision_mode> ||
 		 (format == ::fast_io::manipulators::floating_format::scientific &&
 		  ::fast_io::details::floating_precision_is_fractional<precision_mode>)) &&

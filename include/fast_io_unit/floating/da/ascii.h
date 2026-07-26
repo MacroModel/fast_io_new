@@ -1125,9 +1125,14 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	}
 	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::general)
 	{
-		auto const decimal_exponent{static_cast<::std::int_least32_t>(
-			exponent - static_cast<::std::int_least32_t>(digit_count) + 1)};
-		use_fixed = -5 < decimal_exponent && decimal_exponent < 7;
+		/*
+		At this stage `exponent` is already the exponent of the leading decimal
+		digit, i.e. X in d.ddd*10^X.  `digit_count` affects the carrier's trailing
+		exponent but not X.  The general presentation theorem therefore tests
+		-4<=X<6 directly; reconstructing e10 and testing it would make notation
+		depend on how many insignificant zeroes Dragonbox removed.
+		*/
+		use_fixed = -4 <= exponent && exponent < 6;
 	}
 	else if constexpr (flags.floating == ::fast_io::manipulators::floating_format::decimal)
 	{
