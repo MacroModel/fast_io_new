@@ -662,6 +662,11 @@ inline constexpr bool long_double_alias_is_float80{
 	::std::numeric_limits<long double>::digits == 64 &&
 	::std::numeric_limits<long double>::max_exponent == 16384};
 
+inline constexpr bool long_double_alias_is_ibm_double_double{
+	sizeof(long double) == 2u * sizeof(double) &&
+	::std::numeric_limits<long double>::digits == 106 &&
+	::std::numeric_limits<long double>::max_exponent == 1024};
+
 #if defined(__SIZEOF_INT128__) && defined(__STDCPP_FLOAT128_T__)
 inline constexpr bool long_double_alias_is_float128{
 	sizeof(long double) == sizeof(_Float128) && ::std::numeric_limits<long double>::digits == 113 &&
@@ -703,9 +708,14 @@ struct long_double_alias_type_traits<false, false, true>
 template <>
 struct float_alias_type_traits<long double>
 {
-	using alias_type =
+	using ordinary_alias_type =
 		typename long_double_alias_type_traits<long_double_alias_is_double, long_double_alias_is_float80,
 											   long_double_alias_is_float128>::alias_type;
+	/* IBM double-double is a real 16-byte arithmetic domain.  Falling through
+	   the historical unknown-long-double default would narrow both components
+	   to binary64 before the floating unit can apply its explicit bridge. */
+	using alias_type = ::std::conditional_t<long_double_alias_is_ibm_double_double,
+		long double, ordinary_alias_type>;
 };
 
 #if (defined(__SIZEOF_FLOAT16__) || defined(__FLOAT16__)) && defined(__STDCPP_FLOAT16_T__)

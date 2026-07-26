@@ -7,15 +7,25 @@ Floating to_chars: proof and bounded-store contract
 Exact source model
 ------------------
 
-For every admitted IEC 60559 representation, punning.h decomposes a finite
-value into sign s, integer significand m, and binary exponent e:
+For every admitted IEC 60559 field representation, punning.h decomposes a
+finite value into sign s, integer significand m, and binary exponent e:
 
-                         x = (-1)^s m 2^e.
+						 x = (-1)^s m 2^e.
 
 This identity is exact, including subnormals (whose hidden bit is absent).
 NaN, infinity, and signed zero are classified from the same integer fields
 before any floating arithmetic, which also preserves narrow signaling-NaN
 payloads on ABIs where a native by-value conversion would quiet them.
+
+PowerPC IBM double-double is deliberately not covered by that field argument.
+Its object is two binary64 components h and l and denotes their exact sum.
+The IBM bridge decodes both signed dyadics, aligns their integer magnitudes,
+and obtains the unique odd carrier m*2^e without floating arithmetic.  Its
+predecessor and successor are constructed from the real p=106 lattice quantum
+2^max(E-105,-1074), using the preceding-binade quantum below an exact power of
+two.  Thus its shortest interval is the actual ABI interval, including the
+reduced-precision underflow region and asymmetric maximum, rather than the
+interval of a fictitious IEEE binary128 field.
 
 Shortest conversion constructs the rounding interval I(x): the set of reals
 which the selected policy maps back to x.  Its endpoints are the adjacent
@@ -33,21 +43,27 @@ the same length exist, the documented distance/tie comparison selects the one
 required by the rounding policy.  Hence parsing the emitted carrier under that
 policy returns x, and no shorter carrier can do so.
 
-Precision conversion asks for a decimal grid rather than a shortest interval:
-10^-P for fixed/scientific hexadecimal-fraction precision, or P significant
-digits for general.  Exact binary expansion gives quotient Q and remainder R.
-Comparing 2R with the divisor implements the six nearest rules; testing R!=0
-implements the four directed rules.  Carry is propagated before presentation,
-so powers of ten and binade boundaries need no exceptional rounding rule.
+Precision conversion asks for a prescribed grid rather than a shortest
+interval.  Fixed precision P uses the global quantum 10^-P.  If scientific
+normalization gives x=y*10^X with 1<=y<10, P fractional digits mean P+1
+significant digits and quantum 10^(X-P).  General precision P likewise means
+P significant digits, while hexadecimal precision P uses P radix-16 digits
+after binary normalization.  Exact binary expansion gives quotient Q and
+remainder R.  Comparing 2R with the divisor implements the six nearest rules;
+testing R!=0 implements the four directed rules.  Carry is propagated before
+presentation, so powers of ten and binade boundaries need no exceptional
+rounding rule.
 
 Presentation is injective in the selected carrier: fixed inserts the radix
 according to q, scientific writes one leading digit and adjusts the exponent,
-and hexadecimal writes the binary exponent with no `0x` prefix.  General
-without precision compares the complete fixed and scientific spelling lengths
-and selects the shorter (fixed on a tie).  With P significant digits, let X be
-the scientific exponent *after rounding*; the standard `g` rule selects fixed
-iff -4 <= X < max(P,1).  The charconv_significant precision tag records only
-this final layout rule and reuses the same numeric rounding engine.
+and hexadecimal writes the binary exponent with no `0x` prefix.  The
+three-argument overload compares the complete fixed and scientific spelling
+lengths and selects the shorter (fixed on a tie); an explicit
+chars_format::general instead applies the standard `g` exponent-window layout
+to the same shortest carrier.  With P significant digits, let X be the
+scientific exponent *after rounding*; the standard `g` rule selects fixed iff
+-4 <= X < max(P,1).  The charconv_significant precision tag records only this
+final layout rule and reuses the same numeric rounding engine.
 
 Digits and punctuation are produced with char_literal_v/charliteralofnumber,
 so char, wchar_t, char8_t, char16_t, and char32_t encode the same abstract
@@ -63,13 +79,13 @@ type/format reserve extent is available.  to_chars_floating_emit therefore has
 two proved branches:
 
   1. capacity >= print_reserve_size(tag[,value]): the ordinary writer's
-     physical-store contract is satisfied, so it performs the fast single
-     conversion.  Runtime-precision manipulators necessarily use the
-     value-dependent form because precision is part of `value`;
+	 physical-store contract is satisfied, so it performs the fast single
+	 conversion.  Runtime-precision manipulators necessarily use the
+	 value-dependent form because precision is part of `value`;
   2. otherwise, print_reserve_precise_size computes the exact logical length.
-     If it does not fit, no write occurs and {last,value_too_large} is returned.
-     If it fits, print_reserve_precise_define selects exact-bounds stores whose
-     every written code unit is inside that measured slice.
+	 If it does not fit, no write occurs and {last,value_too_large} is returned.
+	 If it fits, print_reserve_precise_define selects exact-bounds stores whose
+	 every written code unit is inside that measured slice.
 
 These cases cover every capacity and prove both absence of overrun at an exact
 boundary and the standard all-or-error result.  The second conversion in the
@@ -78,16 +94,18 @@ tight branch is intentional: the first call is a non-writing size proof.
 Constant/runtime equivalence
 ----------------------------
 
-The compiler-constant proxy captures exactly the same (s,m,e) fields, rounding
-policy, and presentation flags as the native runtime manipulator.  The proof
-above makes the output a deterministic function F(s,m,e,flags,precision).
-Both paths therefore emit F of identical arguments.  __builtin_constant_p is
-only a profitability gate: true materializes the integer-field proxy; false
-uses the native path.  It is not a semantic test and is distinct from constant
-evaluation.  During consteval, the same constexpr field arithmetic is used and
-runtime SIMD branches are unavailable.  A runtime `chars_format` switch and a
-literal-format arm call the same fixed-format instantiation, so format
-dispatch is equivalent by direct substitution as well.
+For field representations, the compiler-constant proxy captures exactly the
+same (s,m,e) fields, rounding policy, and presentation flags as the native
+runtime manipulator.  The proof above makes the output a deterministic
+function F(s,m,e,flags,precision), so both paths emit identical arguments to
+F.  IBM double-double intentionally bypasses this proxy: retaining only one
+synthetic p=106 carrier would lose the component-dependent neighbor lattice.
+It uses the native-object adapter in both optimizer-constant and dynamic calls.
+__builtin_constant_p is therefore only a profitability gate where the proxy is
+representation-complete; it is never a semantic test.  During consteval, the
+same constexpr integer arithmetic is used and runtime SIMD branches are
+unavailable.  A runtime `chars_format` switch and a literal-format arm call the
+same fixed-format instantiation, proving dispatch equivalence by substitution.
 */
 
 namespace fast_io
@@ -185,9 +203,12 @@ to_chars_floating_precision_flags() noexcept
 		else
 		{
 			/*
-			Fixed and scientific precision count decimal fractional digits and
-			must retain trailing zeroes, so both select the exact same 10^-P
-			rounding grid.
+			Fixed and scientific precision both count displayed fractional
+			decimal digits and retain trailing zeroes, so they share this precision
+			category.  The format remains part of the manipulator: fixed uses the
+			global 10^-P grid, whereas scientific first determines the normalized
+			exponent X and therefore rounds on the 10^(X-P) grid.  Sharing the tag
+			does not identify those two grids.
 			*/
 			flags.precision =
 				::fast_io::manipulators::floating_precision::
@@ -403,15 +424,13 @@ to_chars_floating_capture_fields(T value) noexcept
 	}
 }
 
-template <::fast_io::details::my_floating_point T>
+template <typename floating_type>
 [[nodiscard]] inline constexpr bool
-to_chars_floating_is_integer(T value) noexcept
+to_chars_floating_fields_are_integer(
+	::fast_io::details::punning_result<floating_type> fields) noexcept
 {
-	using floating_type = ::std::remove_cv_t<T>;
 	using trait = ::fast_io::details::iec559_traits<floating_type>;
 	using mantissa_type = typename trait::mantissa_type;
-	auto const fields{
-		::fast_io::details::to_chars_floating_capture_fields(value)};
 	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
 		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u)};
 	if (fields.exponent == exponent_mask)
@@ -473,12 +492,20 @@ to_chars_floating_is_integer(T value) noexcept
 
 template <::fast_io::details::my_floating_point T>
 [[nodiscard]] inline constexpr bool
-to_chars_floating_fixed_cannot_win_shortest(T value) noexcept
+to_chars_floating_is_integer(T value) noexcept
 {
 	using floating_type = ::std::remove_cv_t<T>;
+	return ::fast_io::details::to_chars_floating_fields_are_integer<
+		floating_type>(
+			::fast_io::details::to_chars_floating_capture_fields(value));
+}
+
+template <typename floating_type>
+[[nodiscard]] inline constexpr bool
+to_chars_floating_fields_fixed_cannot_win_shortest(
+	::fast_io::details::punning_result<floating_type> fields) noexcept
+{
 	using trait = ::fast_io::details::iec559_traits<floating_type>;
-	auto const fields{
-		::fast_io::details::to_chars_floating_capture_fields(value)};
 	constexpr auto bias{static_cast<::std::int_least32_t>(
 		(static_cast<::std::uint_least32_t>(1u)
 		 << (trait::ebits - 1u)) -
@@ -511,6 +538,16 @@ to_chars_floating_fixed_cannot_win_shortest(T value) noexcept
 	return fixed_loss_exponent <= unbiased_exponent;
 }
 
+template <::fast_io::details::my_floating_point T>
+[[nodiscard]] inline constexpr bool
+to_chars_floating_fixed_cannot_win_shortest(T value) noexcept
+{
+	using floating_type = ::std::remove_cv_t<T>;
+	return ::fast_io::details::
+		to_chars_floating_fields_fixed_cannot_win_shortest<floating_type>(
+			::fast_io::details::to_chars_floating_capture_fields(value));
+}
+
 #if defined(__SIZEOF_INT128__)
 using to_chars_floating_small_integer_type = __uint128_t;
 #else
@@ -525,18 +562,16 @@ struct to_chars_floating_small_integer
 	bool available{};
 };
 
-template <::fast_io::details::my_floating_point T>
+template <typename floating_type>
 [[nodiscard]] inline constexpr
 	::fast_io::details::to_chars_floating_small_integer
-to_chars_floating_make_small_integer(T value) noexcept
+to_chars_floating_make_small_integer_from_fields(
+	::fast_io::details::punning_result<floating_type> fields) noexcept
 {
-	using floating_type = ::std::remove_cv_t<T>;
 	using trait = ::fast_io::details::iec559_traits<floating_type>;
 	using mantissa_type = typename trait::mantissa_type;
 	using carrier =
 		::fast_io::details::to_chars_floating_small_integer_type;
-	auto const fields{
-		::fast_io::details::to_chars_floating_capture_fields(value)};
 	if (!fields.exponent)
 	{
 		/*
@@ -607,6 +642,134 @@ to_chars_floating_make_small_integer(T value) noexcept
 	return {magnitude, size, negative, true};
 }
 
+template <::fast_io::details::my_floating_point T>
+[[nodiscard]] inline constexpr
+	::fast_io::details::to_chars_floating_small_integer
+to_chars_floating_make_small_integer(T value) noexcept
+{
+	using floating_type = ::std::remove_cv_t<T>;
+	return ::fast_io::details::
+		to_chars_floating_make_small_integer_from_fields<floating_type>(
+			::fast_io::details::to_chars_floating_capture_fields(value));
+}
+
+#if defined(__SIZEOF_INT128__)
+/*
+Fast run-time realization of the standard shortest rule for the overwhelmingly
+common binary32/binary64, ASCII, nearest-to-even specialization.
+
+There are two independent minimizations in the standard rule.
+
+1. DA returns the nearest shortest round-tripping decimal carrier and its ASCII
+   renderer chooses the shorter complete fixed/scientific spelling, choosing
+   fixed on equal lengths.  Call the resulting string A and its length L.
+2. If the binary value is an integer, its exact fixed spelling Z is another
+   round-tripping candidate.  Z need not be the spelling obtained from the
+   shortest-significand carrier: for example a binary32 integer can have an
+   equal-length nearby decimal carrier.  The standard first minimizes total
+   length and then distance to the exact value.  Consequently Z replaces A
+   exactly when |Z| <= L; equality is resolved in favor of Z because its
+   distance is zero.
+
+The former implementation measured A without writing and then performed the DA
+conversion again when A won.  This specialization reverses the schedule:
+render A once, derive Z from the already captured binary fields, and overwrite
+A only when Z wins.  The caller proves that the complete reserve extent fits in
+the destination.  Therefore rendering A is memory-safe, and |Z| <= L proves
+that the overwrite is contained in the already written logical interval.
+Neither the candidate order nor any output byte changes; only duplicated work
+is removed.
+*/
+template <::fast_io::details::my_floating_point T>
+[[nodiscard]] inline constexpr ::fast_io::basic_to_chars_result<char>
+to_chars_floating_standard_shortest_da_ascii(
+	char *first, char *last, T value) noexcept
+{
+	using floating_type = ::std::remove_cv_t<T>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	static_assert(
+		(trait::mbits == 23u && trait::ebits == 8u) ||
+		(trait::mbits == 52u && trait::ebits == 11u));
+	constexpr auto flags{
+		::fast_io::details::to_chars_floating_flags<
+			::std::chars_format::general, true,
+			::fast_io::manipulators::floating_rounding::
+				nearest_to_even>()};
+	auto const fields{
+		::fast_io::details::to_chars_floating_capture_fields(value)};
+	auto *const shortest_end{
+		::fast_io::details::print_rsvflt_fields_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float, floating_type>(
+				first, fields.mantissa, fields.exponent, fields.sign)};
+
+	if (::fast_io::details::
+			to_chars_floating_fields_fixed_cannot_win_shortest<
+				floating_type>(fields))
+	{
+		/*
+		The exponent bound proves that every exact fixed spelling is strictly
+		longer than the maximum possible shortest spelling.  Constructing its
+		magnitude cannot affect the winner.
+		*/
+		return {shortest_end, {}};
+	}
+	if (!::fast_io::details::
+			to_chars_floating_fields_are_integer<floating_type>(fields))
+	{
+		/*
+		A noninteger has no exact integral fixed candidate.  DA has already
+		minimized the round-tripping carrier and its presentation, so A is the
+		unique result of the standard ordering.  This test deliberately follows
+		the exponent-only loss bound: large finite values are usually integral,
+		but their fixed spellings are already proved unable to win, so computing
+		their divisibility mask would be dead work.
+		*/
+		return {shortest_end, {}};
+	}
+
+	auto const exact_integer{
+		::fast_io::details::
+			to_chars_floating_make_small_integer_from_fields<floating_type>(
+				fields)};
+	if (!exact_integer.available)
+	{
+		/*
+		On this specialization the carrier is uint128.  Unavailability proves
+		|x| >= 2^128, hence the exact fixed magnitude has at least 39 decimal
+		digits because 2^128 > 10^38.  Binary32/binary64 shortest reserve bounds
+		are both below 39 code units, so Z is strictly longer than A.
+		*/
+		static_assert(
+			::fast_io::details::print_rsv_cache<
+				floating_type,
+				::fast_io::manipulators::floating_format::decimal> < 39u);
+		return {shortest_end, {}};
+	}
+
+	auto const shortest_size{
+		static_cast<::std::size_t>(shortest_end - first)};
+	if (exact_integer.size <= shortest_size)
+	{
+		/*
+		For a strict inequality Z wins the primary length ordering.  At equality
+		both strings round-trip, but Z denotes x exactly and has distance zero,
+		so it wins the secondary distance ordering.  Since |Z| <= L and A already
+		fit, the checked integral writer cannot fail and overwrites no byte beyond
+		A's logical interval.
+		*/
+		return ::fast_io::details::to_chars_integral_checked<10u>(
+			first, last, exact_integer.magnitude, exact_integer.negative);
+	}
+	/*
+	A is strictly shorter than Z, so distance is not consulted.  Retaining the
+	already rendered DA result completes the proof of equivalence.
+	*/
+	return {shortest_end, {}};
+}
+#endif
+
 template <::fast_io::manipulators::floating_rounding rounding,
 		  ::fast_io::details::my_floating_point T,
 		  ::fast_io::details::character char_type>
@@ -639,6 +802,61 @@ inline constexpr ::fast_io::basic_to_chars_result<char_type>
 to_chars_floating_standard_shortest(
 	char_type *first, char_type *last, T value) noexcept
 {
+#if defined(__SIZEOF_INT128__)
+	using floating_type = ::std::remove_cv_t<T>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	if constexpr (
+		rounding ==
+			::fast_io::manipulators::floating_rounding::nearest_to_even &&
+		::std::same_as<char_type, char> &&
+		::fast_io::details::is_ascii<char_type> &&
+		((trait::mbits == 23u && trait::ebits == 8u) ||
+		 (trait::mbits == 52u && trait::ebits == 11u)))
+	{
+		/*
+		The specialized renderer is a run-time scheduling optimization.  Constant
+		evaluation retains the pure code-unit materializer, and a compiler-known
+		value retains the dedicated __builtin_constant_p proxy path whose purpose
+		is minimum literal-call code size.  For an unknown run-time value, form
+		only the source type needed to query the writer's physical reserve bound.
+		*/
+		bool use_runtime_da{!::std::is_constant_evaluated()};
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+		use_runtime_da = use_runtime_da && !__builtin_constant_p(value);
+#endif
+		if (use_runtime_da)
+		{
+			constexpr auto shortest_flags{
+				::fast_io::details::to_chars_floating_flags<
+					::std::chars_format::general, true, rounding>()};
+			using source_type = decltype(
+				::fast_io::details::make_floating_scalar_manip<
+					shortest_flags>(value));
+			constexpr auto source_tag{
+				::fast_io::io_reserve_type<char_type, source_type>};
+			constexpr auto reserve_size{print_reserve_size(source_tag)};
+			auto const capacity{
+				static_cast<::std::size_t>(last - first)};
+			if (reserve_size <= capacity) [[likely]]
+			{
+				/*
+				This inequality contains every fixed-width DA/ASCII scratch store.
+				The render-first proof in the callee then permits an exact-integer
+				overwrite without a preliminary size/conversion pass.
+				*/
+				return ::fast_io::details::
+					to_chars_floating_standard_shortest_da_ascii(
+						first, last, value);
+			}
+			/*
+			An exact-boundary buffer may fit the logical result but not the DA
+			writer's wider scratch stores.  Falling through preserves the original
+			non-writing size check and exact-bounds writer, so failure still leaves
+			the destination untouched.
+			*/
+		}
+	}
+#endif
 	if (::fast_io::details::to_chars_floating_is_integer(value))
 	{
 		if (::fast_io::details::
@@ -1160,21 +1378,29 @@ to_chars(char_type *first, char_type *last, T value,
 	{
 		if (precision < 0)
 		{
-			if (format == ::std::chars_format::general ||
-				format == ::std::chars_format::hex)
+			if (format == ::std::chars_format::hex)
 			{
 				/*
-				For general and hexadecimal formats, a negative precision means
-				"precision omitted"; delegating to the format-only overload is
-				therefore exact and also reuses its shortest special cases.
+				A negative runtime precision has the printf meaning "precision
+				omitted".  For `%a`, omitting precision requests the exact
+				radix-16 expansion with only redundant trailing zeroes removed;
+				the format-only hexadecimal overload implements exactly that
+				spelling.  Delegation therefore preserves both the value and the
+				minimal exact digit count, including the subnormal normalization
+				proved by to_chars_floating_standard_hex.
 				*/
 				return ::fast_io::to_chars<rounding>(
 					first, last, value, format);
 			}
 			/*
-			Fixed and scientific use the standard default precision six.
-			Replacing the negative sentinel before unsigned conversion prevents
-			wraparound and selects exactly the mandated 10^-6 grid.
+			Omitted `%f`, `%e`, and `%g` precision is six.  Thus general does
+			not become the shortest overload: it rounds to six significant
+			decimal digits.  Fixed rounds on the global 10^-6 grid; scientific
+			keeps six fractional digits after normalization, hence seven
+			significant digits on an exponent-dependent grid.  The format remains
+			part of the fixed-template instantiation, so replacing the negative
+			sentinel by six selects each of those distinct rules and prevents a
+			value-changing unsigned wraparound.
 			*/
 			precision = 6;
 		}

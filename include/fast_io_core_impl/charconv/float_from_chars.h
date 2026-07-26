@@ -15,33 +15,39 @@ Mathematical model
 After removing the optional minus sign, a decimal token with digits d[0..n)
 and k digits after the radix point denotes exactly
 
-                    x = M * 10^(E-k),
-        M = sum(d[i] * 10^(n-1-i)).
+					x = M * 10^(E-k),
+		M = sum(d[i] * 10^(n-1-i)).
 
 Leading and trailing zeroes change the pair (M,E-k), never x.  The scanner
 therefore keeps a bounded leading significand, the total decimal exponent, and
 a sticky predicate saying whether any omitted digit is nonzero.  If the kept
 prefix is A and r decimal positions were omitted, the exact magnitude lies in
 
-        [A*10^r, (A+1)*10^r)                    (sticky unknown),
+		[A*10^r, (A+1)*10^r)                    (sticky unknown),
 
 or is the single left endpoint when no nonzero digit was omitted.  Multiplying
 by 10^q is multiplying by 5^q and shifting by q binary places.  The cached
 power path computes the high product with integer arithmetic.  It accepts only
 when both endpoints round to the same target representation.  Monotonicity of
 every supported IEEE rounding map proves that every x in the interval then
-has that result.  If the endpoints disagree, scan_decfloat_assign_big (or the
-native wide exact path) evaluates the retained decimal integer and power
-exactly; thus the fast path is an optimization, not an approximation.
+has that result.  If the endpoints disagree, scan_decfloat_assign_big evaluates
+the retained lower endpoint by exact limb arithmetic.  Its type-dependent
+prefix contains every terminating decimal binary midpoint (at most 768 digits
+through binary64 and fewer than 11565 through binary128).  Therefore an
+omitted suffix cannot cross a midpoint: after the complete midpoint digits it
+is either zero, preserving equality, or nonzero, proving the input is above.
+The sticky bit distinguishes those cases.  The native wide path is used only
+where this integer continuation is unavailable.  Thus the fast path remains
+an optimization, not an approximation.
 
 Let a positive finite target binade have adjacent values a<b.  The ten explicit
 policies implemented by floating_rounding choose:
 
   * nearest policies: a or b according as x is below or above (a+b)/2;
-    at equality the policy selects even, odd, +infinity, -infinity, zero, or
-    away from zero as named;
+	at equality the policy selects even, odd, +infinity, -infinity, zero, or
+	away from zero as named;
   * directed policies: the appropriate endpoint of [a,b], with the direction
-    reversed only by the sign where required.
+	reversed only by the sign where required.
 
 The scanner's guard/round/sticky predicates are exactly the three comparisons
 with that midpoint/endpoints.  Carry from the significand is followed by an
@@ -50,9 +56,20 @@ normal value, and at the top binade it produces the policy's overflow result.
 Consequently the integer decision is the definition of the selected rounding
 map, including signed zero, underflow, and overflow.
 
+PowerPC IBM double-double has no concatenated IEC 60559 field.  For decimal and
+hexadecimal input the exact quotient/remainder decision instead rounds to a
+p=106 dyadic S*2^(E-105), with emin=-969 and hence minimum quantum 2^-1074.
+The assignment bridge rounds S once to a binary64 high component H and stores
+the exact residual L=S*2^e-H as the low component.  The bound |L|<=0.5 ulp(H)
+gives at most 53 residual bits, so both components are exact and H+L equals the
+already-selected dyadic.  A significand carry recomputes the scale from the
+incremented E; this preserves S*2^(E-105) rather than reusing a scale smaller
+by two.  The final-binade comparison against the actual IBM maximum handles
+its asymmetric endpoint before any component is materialized.
+
 For hexadecimal input, digits h[0..n) with k fractional digits denote
 
-                    x = H * 2^(P-4k).
+					x = H * 2^(P-4k).
 
 No cached irrational scale is needed.  Keeping p+guard bits plus a sticky bit
 is sufficient because division by a power of two exposes the discarded suffix
@@ -181,6 +198,41 @@ from_chars_floating_map_result(
 	strong lexical rollback required by that rule.
 	*/
 	return {original_first, ::std::errc::invalid_argument};
+}
+
+template <::fast_io::details::character char_type>
+[[nodiscard]] inline constexpr bool
+from_chars_decimal_has_incomplete_exponent_suffix(
+	char_type const *first, char_type const *last) noexcept
+{
+	/*
+	The streaming scanner reports `partial` for two disjoint reasons: a lexical
+	prefix that can grow (`e`, `e+`, or `e-` at the physical end), and an exact
+	arithmetic fallback unavailable on the target.  Only the former permits the
+	general-charconv rollback to its fixed prefix.  Testing the final abstract
+	characters, rather than the shared parse_code, separates those reasons.
+	*/
+	if (first == last)
+	{
+		return false;
+	}
+	constexpr auto lower_e{::fast_io::char_literal_v<u8'e', char_type>};
+	constexpr auto upper_e{::fast_io::char_literal_v<u8'E', char_type>};
+	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
+	constexpr auto minus{::fast_io::char_literal_v<u8'-', char_type>};
+	auto const final{last[-1]};
+	if (final == lower_e || final == upper_e)
+	{
+		/* The exponent marker itself is the unique one-code-unit prefix. */
+		return true;
+	}
+	if ((final == plus || final == minus) && last - first >= 2)
+	{
+		auto const marker{last[-2]};
+		/* A sign can extend an exponent only when immediately preceded by e/E. */
+		return marker == lower_e || marker == upper_e;
+	}
+	return false;
 }
 
 /*
@@ -369,14 +421,18 @@ from_chars_floating_fixed(
 				char_type, flags>(first, last, temporary);
 		if constexpr (format == ::std::chars_format::general)
 		{
-			if (parsed.code == ::fast_io::parse_code::partial)
+			if (parsed.code == ::fast_io::parse_code::partial &&
+				parsed.iter == last &&
+				::fast_io::details::
+					from_chars_decimal_has_incomplete_exponent_suffix(
+						first, last))
 			{
 				/*
-				At a bounded charconv endpoint, `1e` or `1e+` cannot be extended.
-				The prefix before `e` is nevertheless a complete fixed decimal.
-				Reparsing with fixed grammar returns exactly that prefix; both
-				parses use the same digit state and rounding function, so this
-				is a lexical rollback rather than a second numeric semantics.
+				The suffix predicate proves that `partial` is lexical, not an
+				unresolved numeric conversion.  Such an incomplete exponent is
+				not part of the longest valid prefix, so reparsing under fixed
+				grammar stops exactly at `e`.  Both parses use the same digit
+				state and rounding function; this changes only token extent.
 				*/
 				constexpr auto fixed_flags{
 					::fast_io::details::from_chars_floating_flags<

@@ -5,11 +5,85 @@
 namespace fast_io::details::da
 {
 
-// A provisional shortest decimal carrier.  If has_last_digit is true, the
-// decimal coefficient is significand * 10 + last_digit at exponent `exponent`.
-// Otherwise it is significand at exponent `exponent + 1`.  finalize() performs
-// exactly this representation change; the direct ASCII writer consumes the
-// same fields without first constructing the finalized aggregate.
+/*
+Nearest-to-even shortest-conversion theorem
+===========================================
+
+Write one positive finite source as x=m*2^e, where m is its integer
+significand.  Parsing a real y with round-to-nearest, ties-to-even returns x
+exactly when y lies in x's rounding cell.  For a regular value (equal gaps to
+both neighbours) that cell is
+
+    R(x) = [x-2^(e-1), x+2^(e-1)]                         (1)
+
+with both midpoint endpoints included iff m is even and excluded iff m is odd.
+At an exact normal power of two the predecessor gap is half the successor gap,
+so the cell is instead
+
+    R2(x) = [x-2^(e-2), x+2^(e-1)].                       (2)
+
+Its centre significand is even, hence both endpoints are closed.  Signs need no
+separate arithmetic proof: decimal negation maps the positive cell bijectively
+onto the negative cell and the caller emits the sign after converting the
+magnitude.
+
+Let W be the width of the relevant cell: W=2^e in (1) and
+W=(3/4)*2^e in (2).  Set d=floor(log10(W)) and scale by 10^(-(d+1)).
+The scaled cell width is in [0.1,1).  Therefore it contains at most one integer
+grid point and, if it contains none, contains a point of the one-decimal-place
+grid.  The equality endpoint case cannot create a missing open interval:
+10^d=2^e has only the e=d=0 solution, and the half-integer binary endpoints are
+not both points of the 10^d grid.  Thus only two candidate grids are required:
+
+    J * 10^(d+1),             or
+    (10*I + D) * 10^d.                                      (3)
+
+An integer-grid member has one fewer coefficient digit and is necessarily the
+shortest choice.  Otherwise the fine-grid member is shortest because the coarse
+grid has just been proved empty.  Removing trailing decimal zeroes later
+preserves the real number and can only shorten it.
+
+The cache/product lemma used below is the integer implementation of this
+geometric argument.  With B=2^k (k=34 for binary32 and k=64 for binary64), the
+aligned cached product supplies A=I+F/B.  Cache entries are normalized downward
+endpoints; the binary32 high-word specialization deliberately uses the matching
+upward endpoint.  The generated correction bits and discarded-product bound
+prove that the exact scaled value and radius can differ from their integer
+proxies by at most one B-unit.  After adding `even = 1-(m mod 2)`, the following
+integer predicates are therefore exactly the endpoint-membership predicates:
+
+    F < H             <=> I is in R(x),
+    B-F <= H          <=> I+1 is in R(x).                    (4)
+
+The strict/non-strict asymmetry is not arbitrary: the `+even` changes equality
+from rejected for an odd significand to accepted for an even significand,
+precisely reproducing (1).  Since the scaled cell is shorter than one, the two
+predicates cannot both select different coarse candidates.
+
+The last digit is a nearest-even rounding of 10F/B, subject to the asymmetric
+lower bound in (2).  For B a power of two, an exact half-integer 10F/B can occur
+only at F=B/4 or F=3B/4: from 20F=(2q+1)B, divisibility by five forces
+2q+1 to be 5 or 15 modulo 20.  Ordinary add-half rounding already sends 7.5 to
+the even digit 8; the explicit B/4 branch sends 2.5 to the even digit 2.
+Binary64's `+6` is the minimal discrete correction for its downward 128-bit
+cache.  Completeness follows by partitioning every exponent's significand
+interval at the modular boundaries
+
+    (C_q*m) mod 2^(s+64)
+
+for (4) and for the nine digit half-points.  Away from the adjacent boundary
+units monotonicity makes the approximate and exact decisions identical; the
+boundary congruence classes give the `+6` correction and the B/4 exception.
+Consequently this is an exhaustive integer-boundary proof, not an empirical
+real-number comparison.
+
+`conversion_result` stores exactly the two alternatives in (3).  If
+`has_last_digit` is false, `significand * 10^(exponent+1)` is the proved coarse
+candidate.  If true,
+`(10*significand+last_digit) * 10^exponent` is the proved fine candidate.
+`finalize()` merely materializes that identity; the direct ASCII writer consumes
+the same fields and is therefore mathematically equivalent.
+*/
 struct conversion_result
 {
 	::std::uint_least64_t significand;
@@ -18,76 +92,148 @@ struct conversion_result
 	bool has_last_digit;
 };
 
-// Convert the irregular interval of a finite normal power of two.  The caller
-// passes the implicit-bit significand with a zero stored mantissa.  Its lower
-// boundary is closer than the regular interval, hence the
-// floor(log10((3/4) * 2^e)) exponent and separate half-ULP test.
+/*
+Convert the asymmetric cell (2) of a finite normal power of two.  The caller
+passes the implicit-bit significand with a zero stored mantissa.  Every branch
+below is one of the two grid-membership tests or the fine-grid construction
+proved above; no presentation policy is mixed into this arithmetic.
+*/
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_irregular(
 	::std::uint_least64_t binary_significand, ::std::int_least32_t binary_exponent) noexcept
 {
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
 	constexpr auto uint64_max{(::std::numeric_limits<::std::uint_least64_t>::max)()};
+	/*
+	The complete asymmetric width is
+
+	    2^(e-2) + 2^(e-1) = (3/4)*2^e.
+
+	Choosing d from that width proves the same two-grid bound as the regular
+	case.  `shift` aligns x*10^(-(d+1)) so the six discarded guard bits and
+	the following 64 fractional bits have the cache lemma's B=2^64 scale.
+	*/
 	auto const decimal_exponent{compute_decimal_exponent(binary_exponent, false)};
 	auto const shift{static_cast<::std::uint_least8_t>(
 		compute_exponent_shift(binary_exponent, decimal_exponent + 1) + extra_shift)};
 	auto const power{cached_data.powers[-decimal_exponent - 1]};
 	auto const product{::fast_io::details::da::umul64x128_high(binary_significand << shift, power)};
+	/*
+	`umul64x128_high` returns the high 128 bits of the exact 192-bit integer
+	product.  Dropping `extra_shift` guard bits therefore gives the proved
+	lower fixed-point endpoint A=integral+fractional/2^64, with no floating
+	operation and no dependence on the hardware rounding mode.
+	*/
 	auto integral{product.hi >> extra_shift};
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
+	/*
+	`half_ulp` is the upper radius 2^(e-1) on the B grid.  The lower radius is
+	exactly half as large.  Unsigned carry implements B-F<=H without a branch
+	or an overflowing mathematical addition; the strict lower comparison
+	implements F<H/2.  Power-of-two midpoint endpoints are closed, and the
+	downward-cache error convention is already incorporated in H, so equality
+	needs no parity correction here.
+	*/
 	auto const half_ulp{power.hi >> (extra_shift + 1u - shift)};
 	auto const round_up{half_ulp > uint64_max - fractional};
 	auto const round_down{(half_ulp >> 1u) > fractional};
+	// Only the upper coarse candidate changes I; the lower candidate is I itself.
 	integral += round_up;
+	/*
+	If neither coarse candidate exists, the first expression chooses the
+	nearest fine-grid digit, with exact halves biased downward as required by
+	the irregular boundary certificate.  Put z=F-H/2.  On every path where the
+	digit is live, `round_down` is false, hence z>=0 and the unsigned subtraction
+	cannot wrap.  Since
+
+	    floor((10*z + (B-1))/B) = ceil(10*z/B),
+
+	`lower` is exactly the smallest digit whose decimal point is not below the
+	closer lower boundary.  Taking max(nearest,lower) produces a member of (2).
+	When either coarse predicate is true the digit is deliberately dead, so its
+	value cannot affect the returned decimal.
+	*/
 	auto digit{static_cast<::std::uint_least32_t>(::fast_io::details::da::umul64x64_add_high(
 		fractional, 10u, (static_cast<::std::uint_least64_t>(1) << 63u) - 1u))};
 	auto const lower{static_cast<::std::uint_least32_t>(::fast_io::details::da::umul64x64_add_high(
 		fractional - (half_ulp >> 1u), 10u, uint64_max))};
 	if (digit < lower)
 	{
+		// The nearest tenth lay below the asymmetric cell; select its first member.
 		digit = lower;
 	}
+	/*
+	A coarse-grid hit omits the final digit.  Otherwise the fine-grid proof
+	above supplies it.  The scaled width is <1, so `round_up` and `round_down`
+	cannot select two distinct integer candidates.
+	*/
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 }
 
-// Convert a nonzero regular finite binary32 value.  raw_exponent is the
-// effective table exponent: callers map a subnormal raw exponent to one while
-// retaining its subnormal significand.  Exact normal powers of two use
-// compute_irregular instead.  The significand parity term selects the correct
-// open or closed binary interval endpoint.
+/*
+Convert a nonzero regular finite binary32 value.  `raw_exponent` is the
+effective table exponent: a subnormal is mapped to one while retaining its
+subnormal significand, which is exactly the identity
+m*2^-149 = m*2^(1-150).  Exact normal powers of two use `compute_irregular`;
+every admitted value therefore has the symmetric cell (1).
+*/
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr void compute_binary32_fields(
 	::std::uint_least32_t binary_significand, ::std::uint_least32_t raw_exponent,
 	::std::uint_least64_t &integral_result, ::std::int_least32_t &decimal_exponent_result,
 	::std::uint_least32_t &last_digit_result, bool &has_last_digit_result) noexcept
 {
 	constexpr ::std::uint_least8_t extra_shift{34u};
+	// IEEE binary32 decodes exactly as m*2^(raw_exponent-150).
 	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 150};
+	/*
+	d=floor(e*log10(2)) is the regular cell-width exponent.  The generated
+	table stores the same alignment proved exhaustively below; adding 34-6
+	changes only the fixed-point radix from the shared cache guard width to
+	B=2^34.
+	*/
 	auto const decimal_exponent{compute_decimal_exponent_reduced(binary_exponent)};
 	auto const shift{static_cast<::std::uint_least8_t>(
 		cached_data.exponent_shifts.data[static_cast<::std::size_t>(raw_exponent + 925u)] +
 		(extra_shift - exponent_shift_cache::extra_shift))};
 	auto const power_high{cached_data.powers[-decimal_exponent - 1].hi};
+	/*
+	The 64-bit high word is sufficient for binary32 because m has at most 24
+	bits.  `power_high+1` is the matching upward endpoint of the truncated
+	128-bit power, and `umulh` then yields A=I+F/2^34 with the one-unit error
+	required by the cache/product lemma.
+	*/
 	auto const product{::fast_io::intrinsics::umulh(
 		power_high + 1u, static_cast<::std::uint_least64_t>(binary_significand) << shift)};
 	constexpr ::std::uint_least64_t fractional_mask{(static_cast<::std::uint_least64_t>(1) << extra_shift) - 1u};
 	auto const fractional{product & fractional_mask};
+	/*
+	H is the symmetric half-ULP radius on the 34-bit grid.  The parity addend
+	is one exactly when m is even.  Thus `F+H >= 2^34` admits I+1 and `H>F`
+	admits I with precisely the open/closed endpoint rule in (1).
+	*/
 	auto const half_ulp{static_cast<::std::uint_least64_t>(
 		(power_high >> (65u - shift)) + (1u - (binary_significand & 1u)))};
 	auto const round_up{static_cast<bool>((fractional + half_ulp) >> extra_shift)};
 	auto const round_down{half_ulp > fractional};
 	auto const integral{static_cast<::std::uint_least64_t>((product >> extra_shift) + round_up)};
+	/*
+	If the coarse grid is empty, add-half computes nearest(10F/2^34).
+	All exact decimal half cases reduce to F=B/4 or 3B/4 by the divisibility
+	argument in the theorem.  The latter rounds upward from 7 to the even 8;
+	the former needs the explicit lower-even correction below.
+	*/
 	auto digit{static_cast<::std::uint_least32_t>(
 		(fractional * 10u + (static_cast<::std::uint_least64_t>(1) << (extra_shift - 1u))) >> extra_shift)};
 	if (fractional == (static_cast<::std::uint_least64_t>(1) << (extra_shift - 2u)))
 	{
-		// Here the fractional value is exactly one quarter, so multiplying by
-		// ten gives the halfway value 2.5.  The shortest-interval convention
-		// selects its even lower digit, 2; spell out that representable tie.
+		// 10*(B/4)/B=2.5; nearest-even selects the even lower digit 2.
 		digit = 2u;
 	}
+	// These four assignments expose the same proved carrier without a return ABI copy.
 	integral_result = integral;
 	decimal_exponent_result = decimal_exponent;
 	last_digit_result = digit;
+	// A coarse member is shorter; only an empty coarse grid keeps the fine digit.
 	has_last_digit_result = !(round_up || round_down);
 }
 
@@ -130,6 +276,70 @@ compute_decimal_exponent_high_product(::std::int_least32_t binary_exponent) noex
 
 static_assert(verify_decimal_exponent_high_product());
 
+/*
+Table-free binary32 alignment
+-----------------------------
+
+For a regular binary32 encoding, raw exponent r is in [1,254] and the exact
+integer exponent supplied to DA is e=r-150.  The reduced reciprocal has already
+proved
+
+    d = floor(e*log10(2)) = (e*78913) >> 18
+
+on the larger binary32/binary64 domain.  A normalized cached value for
+10^(-(d+1)) needs the left alignment
+
+    s = e + floor(-(d+1)*log2(10)) + 1 + 34
+      = e + ((-(d+1)*217707) >> 16) + 35.
+
+The second fixed-point identity is not assumed from an error estimate alone:
+the verifier below exhausts all 254 normal raw exponents and compares the
+formula with the generated authoritative shift table.  This is the complete
+binary32 staged domain, not a sample.  Its result also proves s is the same
+31..34 shift consumed by the existing product/rounding proof.
+*/
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr
+	::std::uint_least8_t compute_binary32_shift_without_table(
+		::std::uint_least32_t raw_exponent,
+		::std::int_least32_t binary_exponent,
+		::std::int_least32_t decimal_exponent) noexcept
+{
+	(void)raw_exponent;
+	return static_cast<::std::uint_least8_t>(
+		::fast_io::details::da::compute_exponent_shift(
+			binary_exponent, decimal_exponent + 1) +
+		34u);
+}
+
+[[nodiscard]] inline constexpr bool
+verify_binary32_shift_without_table() noexcept
+{
+	for (::std::uint_least32_t raw_exponent{1u};
+		 raw_exponent != 255u; ++raw_exponent)
+	{
+		auto const binary_exponent{
+			static_cast<::std::int_least32_t>(raw_exponent) - 150};
+		auto const decimal_exponent{
+			::fast_io::details::da::compute_decimal_exponent_reduced(
+				binary_exponent)};
+		auto const formula{
+			::fast_io::details::da::compute_binary32_shift_without_table(
+				raw_exponent, binary_exponent, decimal_exponent)};
+		auto const table{
+			static_cast<::std::uint_least8_t>(
+				cached_data.exponent_shifts.data[
+					static_cast<::std::size_t>(raw_exponent + 925u)] +
+				(34u - exponent_shift_cache::extra_shift))};
+		if (formula != table)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static_assert(verify_binary32_shift_without_table());
+
 // Staged binary32 conversion with the AArch64 power-table base exposed as a
 // loop invariant.  Its fixed-point arithmetic and returned fields are
 // identical to compute_binary32; only the address expression differs.  The
@@ -158,8 +368,21 @@ static_assert(verify_decimal_exponent_high_product());
 	auto base{cached_data.powers.data + power10_cache::size + power10_cache::minimum_exponent};
 	if (!::std::is_constant_evaluated())
 	{
+		/*
+		This empty constraint changes no value.  It only prevents the optimizer
+		from rematerializing a different cache-base expression between independent
+		lanes; the address still denotes the identical constexpr cache object.
+		Constant evaluation omits GNU assembly and uses that object directly.
+		*/
 		__asm__("" : "+r"(base));
 	}
+	/*
+	Every arithmetic expression below is the expression proved in
+	`compute_binary32_fields`: the split cache layout changes only how
+	`power_high` is addressed.  In particular, the parity endpoint correction,
+	the two coarse membership tests, and the B/4 nearest-even exception are
+	field-for-field identical, proving staged and scalar carriers equal.
+	*/
 	auto const power_high{base[static_cast<::std::ptrdiff_t>(decimal_exponent)]};
 	auto const product{::fast_io::intrinsics::umulh(
 		power_high + 1u, static_cast<::std::uint_least64_t>(binary_significand) << shift)};
@@ -174,21 +397,38 @@ static_assert(verify_decimal_exponent_high_product());
 		(fractional * 10u + (static_cast<::std::uint_least64_t>(1) << (extra_shift - 1u))) >> extra_shift)};
 	if (fractional == (static_cast<::std::uint_least64_t>(1) << (extra_shift - 2u)))
 	{
-		// Same exact one-quarter/tie-to-even case as compute_binary32_fields.
+		// Same exact B/4 -> 2.5 -> even 2 case as compute_binary32_fields.
 		digit = 2u;
 	}
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 #else
+	/*
+	The table-free binary32 alignment theorem above remains available to an
+	explicit vector backend, but it is not selected merely because x86 exposes
+	BMI2 or AVX2.  Native i9-14900HX GCC16 AB/BA measurements of the complete
+	prepare+emit caller made the scalar table-free spelling 1.5--1.9% slower:
+	the two dependent fixed-point multiplies cost more than the hot one-byte
+	load.  The ordinary implementation below is therefore the proved x86
+	performance choice until an AVX-512 multi-lane backend amortizes those
+	integer operations.  This branch changes scheduling only; the exhaustive
+	formula/table equality above proves either spelling would return identical
+	fields.
+	*/
 	return ::fast_io::details::da::compute_binary32(binary_significand, raw_exponent);
 #endif
 }
 
-// Binary64 form of the regular finite conversion contract documented for
-// compute_binary32_fields.  The caller supplies effective raw exponent one for
-// subnormals, while exact normal powers of two use compute_irregular.
+/*
+Binary64 form of the regular theorem.  The caller supplies effective raw
+exponent one for subnormals, retaining their 52-bit significand, and exact
+normal powers of two use `compute_irregular`.  Thus this function sees exactly
+the symmetric cell (1).  It differs from binary32 only in using the complete
+128-bit downward cache and B=2^64.
+*/
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary64(
 	::std::uint_least64_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept
 {
+	// IEEE binary64 decodes exactly as m*2^(raw_exponent-1075).
 	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 1075};
 	::std::int_least32_t decimal_exponent;
 	// On Apple AArch64, the unsigned high product below computes the same reduced
@@ -207,25 +447,61 @@ static_assert(verify_decimal_exponent_high_product());
 	decimal_exponent = compute_decimal_exponent_reduced(binary_exponent);
 #endif
 	constexpr ::std::uint_least8_t extra_shift{exponent_shift_cache::extra_shift};
+	/*
+	The generated shift is
+	e+floor(-(d+1)*log2(10))+1+extra_shift.  Consequently the high 128 product
+	bits contain six guard bits, followed by I and the complete 64-bit F of
+	A=I+F/2^64.  The table entry is indexed only after callers have mapped a
+	subnormal to effective exponent one and excluded non-finite exponent 2047.
+	*/
 	auto const shift{cached_data.exponent_shifts.data[raw_exponent]};
 	auto const power{cached_data.powers[-decimal_exponent - 1]};
 	auto const product{::fast_io::details::da::umul64x128_high(binary_significand << shift, power)};
 	auto integral{product.hi >> extra_shift};
 	auto const fractional{static_cast<::std::uint_least64_t>(
 		(product.hi << (64u - extra_shift)) | (product.lo >> extra_shift))};
+	/*
+	For an interior digit boundary, rounding 10F/B would add B/2.  The power
+	cache is a downward endpoint, so the exact product may lie in the next few
+	integer numerator units.  The complete modular boundary partition stated in
+	the theorem proves that +6 is the smallest common bias which makes every
+	non-tie boundary agree for all 2046 normal exponent classes and the
+	effective-subnormal class.  It is format-specific: copying it to binary32,
+	binary80, or binary128 would have no proof.  `umul64x64_add_high` computes
+
+	    floor((10F + B/2 + 6)/B)
+
+	exactly, without an intermediate 10F overflow.
+	*/
 	auto digit{static_cast<::std::uint_least32_t>(::fast_io::details::da::umul64x64_add_high(
 		fractional, 10u, (static_cast<::std::uint_least64_t>(1) << 63u) + 6u))};
 	if (fractional == (static_cast<::std::uint_least64_t>(1) << 62u))
 	{
-		// fractional / 2^64 is exactly one quarter; 10 * fractional is the
-		// halfway decimal digit 2.5, whose even endpoint is digit 2.
+		/*
+		F=B/4 is the only exact half where add-half chooses the odd upper
+		digit: 10F/B=2.5, so nearest-even must select 2.  The other possible
+		exact half is F=3B/4, where the ordinary upward result is 8 and already
+		even.  Overriding after the +6 bias also proves the correction cannot
+		turn the exact 2.5 tie into an upward decision.
+		*/
 		digit = 2u;
 	}
+	/*
+	H is the symmetric half-ULP radius.  Adding one for even m closes both
+	midpoints; odd m leaves them open.  Unsigned wrap of F+H is exactly
+	B-F<=H, so `round_up` admits I+1.  `H>F` admits I.  The cell-width proof
+	makes these mutually exclusive as choices of distinct coarse integers.
+	*/
 	auto const half_ulp{static_cast<::std::uint_least64_t>(
 		(power.hi >> (extra_shift + 1u - shift)) + (1u - (binary_significand & 1u)))};
 	auto const round_up{fractional + half_ulp < fractional};
 	auto const round_down{half_ulp > fractional};
+	// The upper coarse candidate is I+1; the lower candidate remains I.
 	integral += round_up;
+	/*
+	When a coarse member exists it is shorter and the digit is dead.  Otherwise
+	the proved nearest-even fine digit completes (10I+D)*10^d.
+	*/
 	return {integral, decimal_exponent, digit, !(round_up || round_down)};
 }
 

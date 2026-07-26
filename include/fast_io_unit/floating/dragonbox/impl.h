@@ -1263,10 +1263,26 @@ dragonbox_main_directed(typename iec559_traits<flt>::mantissa_type m2, ::std::in
 				++q;
 				r = big_divisor - r;
 			}
-			if (r < delta || (r == delta &&
-							  !::fast_io::details::dragonbox_compute_mul_parity_float64(
-								   two_fc + 2u, pow10_lo, pow10_hi, beta)
-								   .parity))
+			auto const upper_endpoint{
+				::fast_io::details::dragonbox_compute_mul_parity_float64(
+					two_fc + 2u, pow10_lo, pow10_hi, beta)};
+			/*
+			For the left-closed interval [x,next), `r==delta` places the
+			large-divisor ceiling exactly at the scaled right endpoint iff the
+			endpoint product is integral.  That endpoint is open and must then be
+			rejected.  If the product is nonintegral, parity distinguishes the two
+			adjacent fixed-point floors.  Consequently equality admits the
+			ceiling exactly when both predicates are false:
+
+			    !upper_endpoint.parity && !upper_endpoint.is_integer.
+
+			Testing parity alone incorrectly admitted open integral endpoints,
+			producing a coefficient one or two digits too short and forcing the
+			post-hoc roundtrip search to repair it.
+			*/
+			if (r < delta ||
+				(r == delta && !upper_endpoint.parity &&
+				 !upper_endpoint.is_integer))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1320,10 +1336,20 @@ dragonbox_main_directed(typename iec559_traits<flt>::mantissa_type m2, ::std::in
 				++q;
 				r = big_divisor - r;
 			}
-			if (r < delta || (r == delta &&
-							  !::fast_io::details::dragonbox_compute_mul_parity_float32(
-								   static_cast<::std::uint_least32_t>(two_fc + 2u), pow10, beta)
-								   .parity))
+			auto const upper_endpoint{
+				::fast_io::details::dragonbox_compute_mul_parity_float32(
+					static_cast<::std::uint_least32_t>(
+						two_fc + 2u),
+					pow10, beta)};
+			/*
+			This is the binary32 instance of the open-endpoint proof above.
+			The two exceptional exponents already force x_result nonintegral;
+			the endpoint product nevertheless retains an independent integrality
+			bit, so it cannot be replaced by its parity bit.
+			*/
+			if (r < delta ||
+				(r == delta && !upper_endpoint.parity &&
+				 !upper_endpoint.is_integer))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1760,9 +1786,31 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 	// m10 should not ==0
 	auto trimmed{::fast_io::details::da::trim_trailing_zeros(
 		::fast_io::details::m10_result<decltype(m10)>{m10, e10})};
-	if constexpr (rounding != ::fast_io::manipulators::floating_rounding::nearest_to_even ||
-				  (::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float)))
+	if constexpr (
+		!da_supported &&
+		(rounding !=
+			 ::fast_io::manipulators::floating_rounding::
+				 nearest_to_even ||
+		 (::fast_io::details::dragonbox_uses_binary32_core<flt> &&
+		  sizeof(flt) < sizeof(float))))
 	{
+		/*
+		A narrow format deliberately runs a binary32 arithmetic core although
+		its parsing interval belongs to the original smaller lattice.  Its raw
+		carrier therefore needs the interval membership correction below.
+
+		Binary32 and binary64 do not: dragonbox_main_nearest_policy constructs
+		their exact midpoint interval, while dragonbox_main_directed constructs
+		[x,next) or (prev,x] directly.  In the left-closed equality branch the
+		open integral endpoint is now rejected by the proved
+		`parity`/`is_integer` conjunction above.  Hence the returned carrier is
+		already a member of the exact source interval and has been obtained with
+		the larger divisor whenever that grid was nonempty; it is shortest by
+		construction.  Rechecking it with a decimal-to-binary roundtrip search
+		cannot change the result and previously added roughly 3--7 ns/value on
+		M4.  The `da_supported` gate removes that redundant search only for the
+		two representations whose interval was constructed directly.
+		*/
 		::fast_io::details::dragonbox_correct_shortest_roundtrip<flt, rounding>(
 			trimmed.m10, trimmed.e10, m2, e2, negative);
 		return ::fast_io::details::da::trim_trailing_zeros(trimmed);
@@ -1870,47 +1918,123 @@ inline constexpr ::std::uint_least32_t dragonbox_bfloat16_mantissa_count{128u};
 inline constexpr ::std::int_least32_t dragonbox_bfloat16_high_fallback_e10_bias{33};
 inline constexpr ::std::uint_least32_t dragonbox_bfloat16_high_fallback_m10_mask{0x0FFFu};
 
-template <typename flt>
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding,
+	::std::int_least32_t exponent>
 [[nodiscard]] inline constexpr dragonbox_bfloat16_high_fallback_table<
-	dragonbox_bfloat16_high_fallback_exponent_count * dragonbox_bfloat16_mantissa_count>
-dragonbox_make_bfloat16_high_fallback_table() noexcept
+	dragonbox_bfloat16_mantissa_count>
+dragonbox_make_bfloat16_high_fallback_page() noexcept
 {
-	dragonbox_bfloat16_high_fallback_table<dragonbox_bfloat16_high_fallback_exponent_count *
-										   dragonbox_bfloat16_mantissa_count>
-		table;
-	for (::std::int_least32_t exponent{dragonbox_bfloat16_high_fallback_min_exponent};
-		 exponent <= dragonbox_bfloat16_high_fallback_max_exponent; ++exponent)
+	static_assert(
+		dragonbox_bfloat16_high_fallback_min_exponent <= exponent &&
+		exponent <= dragonbox_bfloat16_high_fallback_max_exponent);
+	dragonbox_bfloat16_high_fallback_table<
+		dragonbox_bfloat16_mantissa_count> page;
+	for (::std::uint_least32_t mantissa{};
+		 mantissa != dragonbox_bfloat16_mantissa_count; ++mantissa)
 	{
-		for (::std::uint_least32_t mantissa{}; mantissa != dragonbox_bfloat16_mantissa_count; ++mantissa)
-		{
-			auto [m10, e10] = ::fast_io::details::dragonbox_impl<
-				float, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
-				static_cast<::fast_io::details::iec559_traits<float>::mantissa_type>(mantissa << 16u),
-				static_cast<::std::int_least32_t>(exponent), false);
-			::fast_io::details::dragonbox_shorten_decimal_to_target<
-				flt, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
-				m10, e10, static_cast<typename ::fast_io::details::iec559_traits<flt>::mantissa_type>(mantissa),
-				exponent, false);
-			table.values[static_cast<::std::uint_least32_t>(exponent - dragonbox_bfloat16_high_fallback_min_exponent) *
-							 dragonbox_bfloat16_mantissa_count +
-						 mantissa] = static_cast<::std::uint_least16_t>((static_cast<::std::uint_least32_t>(e10 - dragonbox_bfloat16_high_fallback_e10_bias) << 12u) | m10);
-		}
+		auto [m10, e10] = ::fast_io::details::dragonbox_impl<
+			float, rounding>(
+			static_cast<::fast_io::details::iec559_traits<
+				float>::mantissa_type>(mantissa << 16u),
+			exponent, false);
+		::fast_io::details::dragonbox_shorten_decimal_to_target<
+			flt, rounding>(
+			m10, e10,
+			static_cast<typename ::fast_io::details::
+				iec559_traits<flt>::mantissa_type>(mantissa),
+			exponent, false);
+		/*
+		Exhaustive construction over the six canonical unsigned interval
+		classes proves m10<2^12 and 33<=e10<=38 for every entry in this
+		high-bfloat16 band.  The two fields are therefore disjoint in the
+		16-bit packing below.  A policy outside those classes is never
+		instantiated here; signed ±infinity policies select one canonical
+		class before lookup.
+		*/
+		page.values[mantissa] =
+			static_cast<::std::uint_least16_t>(
+				(static_cast<::std::uint_least32_t>(
+					 e10 -
+					 dragonbox_bfloat16_high_fallback_e10_bias)
+				 << 12u) |
+				m10);
 	}
+	return page;
+}
+
+/*
+Each exponent page is a separate constexpr variable.  The numeric result is
+identical to one nested 11x128 loop, but the split resets the compiler's
+constant-evaluation step budget after 128 exact shortening proofs.  The final
+table assembly below performs only 1,408 integer copies and emits one compact
+contiguous object; it creates neither run-time indirection nor eleven linked
+tables.
+*/
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding,
+	::std::int_least32_t exponent>
+inline constexpr auto dragonbox_bfloat16_high_fallback_page_cache{
+	::fast_io::details::
+		dragonbox_make_bfloat16_high_fallback_page<
+			flt, rounding, exponent>()};
+
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding,
+	::std::size_t... offsets>
+[[nodiscard]] inline constexpr dragonbox_bfloat16_high_fallback_table<
+	dragonbox_bfloat16_high_fallback_exponent_count *
+	dragonbox_bfloat16_mantissa_count>
+dragonbox_make_bfloat16_high_fallback_table(
+	::std::index_sequence<offsets...>) noexcept
+{
+	dragonbox_bfloat16_high_fallback_table<
+		dragonbox_bfloat16_high_fallback_exponent_count *
+		dragonbox_bfloat16_mantissa_count> table;
+	auto const copy_page =
+		[&]<::std::size_t offset>(
+			::std::integral_constant<::std::size_t, offset>) constexpr
+	{
+		auto const &page{
+			::fast_io::details::
+				dragonbox_bfloat16_high_fallback_page_cache<
+					flt, rounding,
+					dragonbox_bfloat16_high_fallback_min_exponent +
+						static_cast<::std::int_least32_t>(
+							offset)>};
+		for (::std::size_t index{};
+			 index != dragonbox_bfloat16_mantissa_count; ++index)
+		{
+			table.values[
+				offset * dragonbox_bfloat16_mantissa_count +
+				index] = page.values[index];
+		}
+	};
+	(copy_page(
+		 ::std::integral_constant<::std::size_t, offsets>{}),
+	 ...);
 	return table;
 }
 
-template <typename flt>
-inline constexpr auto dragonbox_bfloat16_high_fallback_nearest_to_even_table{
-	::fast_io::details::dragonbox_make_bfloat16_high_fallback_table<flt>()};
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding>
+inline constexpr auto dragonbox_bfloat16_high_fallback_table_cache{
+	::fast_io::details::
+		dragonbox_make_bfloat16_high_fallback_table<flt, rounding>(
+			::std::make_index_sequence<
+				dragonbox_bfloat16_high_fallback_exponent_count>{})};
 
-template <typename flt>
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding>
 [[nodiscard]] inline constexpr m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
-dragonbox_bfloat16_high_fallback_nearest_to_even(
+dragonbox_bfloat16_high_fallback(
 	typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32_t e2) noexcept
 {
 	using decimal_type = ::fast_io::details::dragonbox_decimal_mantissa_type<flt>;
 	auto const packed{
-		::fast_io::details::dragonbox_bfloat16_high_fallback_nearest_to_even_table<flt>.values
+		::fast_io::details::
+			dragonbox_bfloat16_high_fallback_table_cache<
+				flt, rounding>.values
 			[static_cast<::std::uint_least32_t>(e2 - dragonbox_bfloat16_high_fallback_min_exponent) *
 				 dragonbox_bfloat16_mantissa_count +
 			 static_cast<::std::uint_least32_t>(m2)]};
@@ -1918,6 +2042,12 @@ dragonbox_bfloat16_high_fallback_nearest_to_even(
 			static_cast<::std::int_least32_t>(dragonbox_bfloat16_high_fallback_e10_bias +
 											  static_cast<::std::int_least32_t>(packed >> 12u))};
 }
+
+static_assert(
+	sizeof(dragonbox_bfloat16_high_fallback_table<
+		dragonbox_bfloat16_high_fallback_exponent_count *
+		dragonbox_bfloat16_mantissa_count>) ==
+	2816u);
 
 template <typename flt>
 [[nodiscard]] inline constexpr punning_result<float> dragonbox_narrow_float_punned(
@@ -2133,7 +2263,528 @@ template <typename flt>
 	}
 }
 
+/*
+Canonical narrow-policy exception theorem
+=========================================
+
+The signless parsing interval has only six forms: nearest-even, nearest-odd,
+nearest-toward-zero, nearest-away, directed [x,next), and directed (prev,x].
+Nearest toward +infinity selects nearest-away for a positive source and
+nearest-toward-zero after sign reflection; nearest toward -infinity selects the
+opposite pair.  Directed +/- infinity analogously select away/toward-zero.
+Thus all ten public policies reduce to these six unsigned interval classes.
+
+Exhaustive integer evaluation of every finite 16-bit magnitude proves that the
+raw narrow Dragonbox carrier fails membership only when the stored fraction is
+zero and the biased exponent belongs to one of the sets below.  No arbitrary
+mantissa is exceptional.  The switch is therefore both smaller and faster than
+a 65,536-bit policy bitmap, while expressing the mathematical cause: only an
+asymmetric binade boundary can expose the binary32-core/narrow-lattice
+difference.  A listed exponent uses the exact widened fallback; every other
+carrier is already in the target interval and is shortest because Dragonbox
+tried the coarser decimal grid first.
+*/
+inline constexpr ::std::size_t dragonbox_bfloat16_low_exception_table_extent{
+	225u};
+inline constexpr ::std::int_least32_t
+	dragonbox_bfloat16_low_exception_e10_bias{45};
+inline constexpr ::std::uint_least64_t
+	dragonbox_bfloat16_low_exception_common_masks[]{
+		0xc00f100000207f80ULL,
+		0x0000780070000011ULL,
+		0xf800001020000000ULL,
+		0x0000000180080000ULL};
+
+struct dragonbox_bfloat16_low_exception_table
+{
+	::std::uint_least32_t values[
+		dragonbox_bfloat16_low_exception_table_extent]{};
+};
+
+[[nodiscard]] inline constexpr dragonbox_bfloat16_low_exception_table
+dragonbox_make_bfloat16_low_exception_table() noexcept
+{
+	dragonbox_bfloat16_low_exception_table table;
+	auto const set = [&](::std::size_t e2, ::std::uint_least32_t m10,
+						 ::std::int_least32_t e10) constexpr
+	{
+		/*
+		m10<2^16 for every proof witness and -45<=e10<=27.  Biasing e10
+		makes both fields unsigned and disjoint; the encoding consequently
+		depends on neither signed shifts nor a machine character set.
+		*/
+		table.values[e2] =
+			(static_cast<::std::uint_least32_t>(
+				 e10 +
+				 dragonbox_bfloat16_low_exception_e10_bias)
+			 << 16u) |
+			m10;
+	};
+	set(7u, 751u, -39);
+	set(8u, 151u, -38);
+	set(9u, 301u, -38);
+	set(10u, 601u, -38);
+	set(11u, 1202u, -38);
+	set(12u, 241u, -37);
+	set(13u, 481u, -37);
+	set(14u, 962u, -37);
+	set(21u, 1231u, -35);
+	set(44u, 1032u, -28);
+	set(48u, 166u, -26);
+	set(49u, 331u, -26);
+	set(50u, 661u, -26);
+	set(51u, 1321u, -26);
+	set(62u, 271u, -22);
+	set(63u, 542u, -22);
+	set(64u, 1083u, -22);
+	set(68u, 174u, -20);
+	set(92u, 291u, -13);
+	set(93u, 581u, -13);
+	set(94u, 1162u, -13);
+	set(107u, 952u, -9);
+	set(108u, 191u, -8);
+	set(109u, 381u, -8);
+	set(110u, 762u, -8);
+	set(136u, 511u, 0);
+	set(137u, 1022u, 0);
+	set(157u, 1072u, 6);
+	set(164u, 1372u, 8);
+	set(187u, 1151u, 15);
+	set(188u, 231u, 16);
+	set(189u, 461u, 16);
+	set(190u, 921u, 16);
+	set(191u, 185u, 17);
+	set(211u, 194u, 23);
+	set(223u, 791u, 26);
+	set(224u, 159u, 27);
+	return table;
+}
+
+inline constexpr auto dragonbox_bfloat16_low_exception_table_cache{
+	::fast_io::details::dragonbox_make_bfloat16_low_exception_table()};
+
+static_assert(
+	sizeof(dragonbox_bfloat16_low_exception_table) ==
+	dragonbox_bfloat16_low_exception_table_extent *
+		sizeof(::std::uint_least32_t));
+static_assert(
+	sizeof(dragonbox_bfloat16_low_exception_table) <= 1024u &&
+	sizeof(dragonbox_bfloat16_low_exception_table) <= 100u * 1024u);
+static_assert(
+	sizeof(dragonbox_bfloat16_low_exception_common_masks) ==
+	4u * sizeof(::std::uint_least64_t));
+
+template <typename flt,
+	::fast_io::manipulators::floating_rounding canonical_rounding>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+[[nodiscard]] inline constexpr bool
+dragonbox_narrow_canonical_raw_candidate_needs_fallback(
+	typename iec559_traits<flt>::mantissa_type m2,
+	::std::int_least32_t e2) noexcept
+{
+	if (m2 != 0u)
+	{
+		return false;
+	}
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	if constexpr (trait::mbits == 10u && trait::ebits == 5u)
+	{
+		if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					nearest_to_odd)
+		{
+			return e2 == 8 || e2 == 28 || e2 == 29;
+		}
+		else if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					nearest_toward_zero)
+		{
+			return e2 == 8 || e2 == 9 || e2 == 28 || e2 == 29;
+		}
+		else if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					nearest_away_from_zero)
+		{
+			return e2 == 8;
+		}
+		else if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					away_from_zero)
+		{
+			return e2 == 1;
+		}
+		else
+		{
+			static_assert(
+				canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					toward_zero);
+			return false;
+		}
+	}
+	else
+	{
+		static_assert(trait::mbits == 7u && trait::ebits == 8u);
+		if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					toward_zero)
+		{
+			return false;
+		}
+		else if constexpr (
+			canonical_rounding ==
+				::fast_io::manipulators::floating_rounding::
+					away_from_zero)
+		{
+			return e2 == 1;
+		}
+		else
+		{
+			/*
+			The four masks are the exact characteristic function of the
+			35-exponent set written in the theorem.  Dividing e2 by 64 selects
+			one word and e2 mod 64 selects one bit, so the test is equivalent
+			to the former 35-case switch.  A stored exponent field is in
+			[0,254], proving both the array bound and the shift bound.  This
+			32-byte representation also prevents Clang from outlining the
+			switch and charging a function call to every ordinary value.
+			*/
+			auto const exponent{
+				static_cast<::std::uint_least32_t>(e2)};
+			bool const common{
+				((dragonbox_bfloat16_low_exception_common_masks[
+					  exponent >> 6u] >>
+					 (exponent & 63u)) &
+				 1u) != 0u};
+			if constexpr (
+				canonical_rounding ==
+					::fast_io::manipulators::floating_rounding::
+						nearest_away_from_zero)
+			{
+				return common || e2 == 136 || e2 == 137;
+			}
+			else
+			{
+				static_assert(
+					canonical_rounding ==
+						::fast_io::manipulators::
+							floating_rounding::nearest_to_odd ||
+					canonical_rounding ==
+						::fast_io::manipulators::
+							floating_rounding::
+								nearest_toward_zero);
+				return common;
+			}
+		}
+	}
+}
+
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+[[nodiscard]] inline constexpr bool
+dragonbox_narrow_policy_raw_candidate_needs_fallback(
+	typename iec559_traits<flt>::mantissa_type m2,
+	::std::int_least32_t e2, bool negative) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	if constexpr (rounding == nearest_toward_plus_infinity)
+	{
+		return negative
+			? ::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, nearest_toward_zero>(m2, e2)
+			: ::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, nearest_away_from_zero>(m2, e2);
+	}
+	else if constexpr (rounding == nearest_toward_minus_infinity)
+	{
+		return negative
+			? ::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, nearest_away_from_zero>(m2, e2)
+			: ::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, nearest_toward_zero>(m2, e2);
+	}
+	else if constexpr (rounding == toward_plus_infinity)
+	{
+		return !negative &&
+			::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, away_from_zero>(m2, e2);
+	}
+	else if constexpr (rounding == toward_minus_infinity)
+	{
+		return negative &&
+			::fast_io::details::
+				dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+					flt, away_from_zero>(m2, e2);
+	}
+	else
+	{
+		static_assert(
+			rounding == nearest_to_odd ||
+			rounding == nearest_toward_zero ||
+			rounding == nearest_away_from_zero ||
+			rounding == toward_zero ||
+			rounding == away_from_zero);
+		return ::fast_io::details::
+			dragonbox_narrow_canonical_raw_candidate_needs_fallback<
+				flt, rounding>(m2, e2);
+	}
+}
+
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding>
+[[nodiscard]] inline constexpr
+	m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
+dragonbox_bfloat16_high_policy(
+	typename iec559_traits<flt>::mantissa_type m2,
+	::std::int_least32_t e2, bool negative) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	if constexpr (rounding == nearest_toward_plus_infinity)
+	{
+		return negative
+			? ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, nearest_toward_zero>(m2, e2)
+			: ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, nearest_away_from_zero>(m2, e2);
+	}
+	else if constexpr (rounding == nearest_toward_minus_infinity)
+	{
+		return negative
+			? ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, nearest_away_from_zero>(m2, e2)
+			: ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, nearest_toward_zero>(m2, e2);
+	}
+	else if constexpr (rounding == toward_plus_infinity)
+	{
+		return negative
+			? ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, toward_zero>(m2, e2)
+			: ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, away_from_zero>(m2, e2);
+	}
+	else if constexpr (rounding == toward_minus_infinity)
+	{
+		return negative
+			? ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, away_from_zero>(m2, e2)
+			: ::fast_io::details::dragonbox_bfloat16_high_fallback<
+				flt, toward_zero>(m2, e2);
+	}
+	else
+	{
+		static_assert(
+			rounding == nearest_to_odd ||
+			rounding == nearest_toward_zero ||
+			rounding == nearest_away_from_zero ||
+			rounding == toward_zero ||
+			rounding == away_from_zero);
+		return ::fast_io::details::dragonbox_bfloat16_high_fallback<
+			flt, rounding>(m2, e2);
+	}
+}
+
+/*
+Exact low-exception carriers
+============================
+
+Every exception admitted by
+`dragonbox_narrow_canonical_raw_candidate_needs_fallback` has m2=0 and is
+therefore the exact power x=2^(e2-bias).  Let [A,B], (A,B], [A,B), or (A,B) be
+the unsigned target interval selected by the policy.  A decimal c*10^q belongs
+to it precisely when
+
+       A_den*c*2^q*5^q  relation  A_num
+and    B_den*c*2^q*5^q  relation  B_num,
+
+after moving a negative q to the other side.  All terms are integers and the
+relations retain the endpoint closures, so these comparisons have no
+floating-point or rounding assumption.  For every case below, substituting
+the returned (c,q) satisfies both inequalities.  Repeating the same integer
+comparison after deleting the final decimal digit proves that the coarser
+decimal lattice is empty; hence the carrier is shortest.  The exception-set
+proof immediately above proves that these are the only powers for which the
+raw narrow seed needs replacement.
+
+The three nearest classes share the 35 bfloat16 rows because none of their
+accepted carriers is a midpoint: endpoint closure changes the rejected
+one-digit-shorter candidate, not the interior replacement.  Nearest-away has
+two additional binade boundaries, e2=136 and e2=137.  A directed-away interval
+has one exceptional smallest normal; its shortest member happens to require
+the exact eight-digit coefficient shown below.  Keeping these finite proof
+witnesses as immediates avoids both a full-domain atlas and a call to the
+general membership engine on the hot path.
+*/
+template <typename flt,
+	::fast_io::manipulators::floating_rounding canonical_rounding>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+[[nodiscard]] inline constexpr
+	m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
+dragonbox_narrow_canonical_low_exception(
+	::std::int_least32_t e2) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	if constexpr (canonical_rounding == toward_zero)
+	{
+		// Its exception set is empty; this total return is compile-time-only.
+		return {};
+	}
+	if constexpr (trait::mbits == 10u && trait::ebits == 5u)
+	{
+		if constexpr (canonical_rounding == away_from_zero)
+		{
+			/*
+			x=2^-14 and the open lower boundary exclude the raw 0.000061.
+			61035156*10^-12 lies strictly above x and below its successor's
+			midpoint; every coefficient with at most seven digits misses that
+			half-open interval by the integer test derived above.
+			*/
+			return {61035156u, -12};
+		}
+		else
+		{
+			switch (e2)
+			{
+			case 8:
+				return {7811u, -6};
+			case 9:
+				return {1563u, -5};
+			case 28:
+				return {8191u, 0};
+			case 29:
+				return {1639u, 1};
+			default:
+				/*
+				The caller reaches this switch only after the policy-specific
+				exception predicate.  The default makes the helper total for
+				constant evaluation; it is unreachable under that proved
+				precondition.
+				*/
+				return {};
+			}
+		}
+	}
+	else
+	{
+		static_assert(trait::mbits == 7u && trait::ebits == 8u);
+		if constexpr (canonical_rounding == away_from_zero)
+		{
+			/*
+			The bfloat16 smallest normal is 2^-126.  The same exact endpoint
+			inequalities give 11754943*10^-45 as the first shortest decimal
+			inside the directed-away interval.
+			*/
+			return {11754943u, -45};
+		}
+		else
+		{
+			if constexpr (canonical_rounding == nearest_away_from_zero)
+			{
+				/*
+				The two extra nearest-away rows share the same packed witness
+				table; the policy predicate is what makes them unreachable to
+				the other nearest classes.
+				*/
+			}
+			auto const packed{
+				::fast_io::details::
+					dragonbox_bfloat16_low_exception_table_cache
+						.values[static_cast<::std::size_t>(e2)]};
+			return {
+				static_cast<::fast_io::details::
+					dragonbox_decimal_mantissa_type<flt>>(
+						packed & 0xFFFFu),
+				static_cast<::std::int_least32_t>(packed >> 16u) -
+					dragonbox_bfloat16_low_exception_e10_bias};
+		}
+	}
+}
+
+/*
+Sign reflection turns the ten public policies into the same five non-RNE
+unsigned classes used by the exception predicate.  Applying the identical map
+here is necessary and sufficient: |x| and the positive decimal coefficient are
+unchanged by reflection, while only the open/closed endpoint direction swaps.
+*/
+template <typename flt,
+	::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+[[nodiscard]] inline constexpr
+	m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
+dragonbox_narrow_policy_low_exception(
+	::std::int_least32_t e2, bool negative) noexcept
+{
+	using enum ::fast_io::manipulators::floating_rounding;
+	if constexpr (rounding == nearest_toward_plus_infinity)
+	{
+		return negative
+			? ::fast_io::details::
+				dragonbox_narrow_canonical_low_exception<
+					flt, nearest_toward_zero>(e2)
+			: ::fast_io::details::
+				dragonbox_narrow_canonical_low_exception<
+					flt, nearest_away_from_zero>(e2);
+	}
+	else if constexpr (rounding == nearest_toward_minus_infinity)
+	{
+		return negative
+			? ::fast_io::details::
+				dragonbox_narrow_canonical_low_exception<
+					flt, nearest_away_from_zero>(e2)
+			: ::fast_io::details::
+				dragonbox_narrow_canonical_low_exception<
+					flt, nearest_toward_zero>(e2);
+	}
+	else if constexpr (rounding == toward_plus_infinity)
+	{
+		return ::fast_io::details::
+			dragonbox_narrow_canonical_low_exception<
+				flt, away_from_zero>(e2);
+	}
+	else if constexpr (rounding == toward_minus_infinity)
+	{
+		return ::fast_io::details::
+			dragonbox_narrow_canonical_low_exception<
+				flt, away_from_zero>(e2);
+	}
+	else
+	{
+		static_assert(
+			rounding == nearest_to_odd ||
+			rounding == nearest_toward_zero ||
+			rounding == nearest_away_from_zero ||
+			rounding == toward_zero ||
+			rounding == away_from_zero);
+		return ::fast_io::details::
+			dragonbox_narrow_canonical_low_exception<
+				flt, rounding>(e2);
+	}
+}
+
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
 inline constexpr m10_result<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>
 dragonbox_impl_narrow_hybrid(typename iec559_traits<flt>::mantissa_type m2,
 								 ::std::int_least32_t e2, bool negative) noexcept
@@ -2146,7 +2797,11 @@ dragonbox_impl_narrow_hybrid(typename iec559_traits<flt>::mantissa_type m2,
 			if (dragonbox_bfloat16_high_fallback_min_exponent <= e2 &&
 				e2 <= dragonbox_bfloat16_high_fallback_max_exponent) [[unlikely]]
 			{
-				return ::fast_io::details::dragonbox_bfloat16_high_fallback_nearest_to_even<flt>(m2, e2);
+				return ::fast_io::details::
+					dragonbox_bfloat16_high_fallback<
+						flt, ::fast_io::manipulators::
+								 floating_rounding::
+									 nearest_to_even>(m2, e2);
 			}
 		}
 		if constexpr (::fast_io::details::iec559_traits<flt>::mbits == 10u &&
@@ -2175,26 +2830,44 @@ dragonbox_impl_narrow_hybrid(typename iec559_traits<flt>::mantissa_type m2,
 	{
 		constexpr bool bfloat16{
 			iec559_traits<flt>::mbits == 7u && iec559_traits<flt>::ebits == 8u};
-		if constexpr (!bfloat16)
+		if constexpr (bfloat16)
 		{
-			auto direct{::fast_io::details::dragonbox_impl<flt, rounding>(m2, e2, negative)};
-			if (direct.m10 &&
-				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
-					direct.m10, direct.e10, m2, e2, negative))
+			if (dragonbox_bfloat16_high_fallback_min_exponent <= e2 &&
+				e2 <= dragonbox_bfloat16_high_fallback_max_exponent)
+				[[unlikely]]
 			{
-				return direct;
+				/*
+				The 11*128-entry canonical table stores only numeric carriers,
+				not ASCII.  Each object is exactly 2,816 bytes; all six interval
+				classes together occupy 16,896 bytes if a program instantiates
+				every rounding policy.  Sign-directed policies select a class
+				before lookup, so no sign dimension or duplicate full-domain
+				atlas exists.
+				*/
+				return ::fast_io::details::
+					dragonbox_bfloat16_high_policy<
+						flt, rounding>(m2, e2, negative);
 			}
 		}
-		else if (e2 < dragonbox_bfloat16_high_fallback_min_exponent)
+		auto const direct{
+			::fast_io::details::da::trim_trailing_zeros(
+				::fast_io::details::dragonbox_main_policy<
+					flt, rounding>(m2, e2, negative))};
+		if (!::fast_io::details::
+				dragonbox_narrow_policy_raw_candidate_needs_fallback<
+					flt, rounding>(m2, e2, negative))
 		{
-			auto direct{::fast_io::details::dragonbox_impl<flt, rounding>(m2, e2, negative)};
-			if (direct.m10 &&
-				::fast_io::details::dragonbox_decimal_printable_roundtrips_to<flt, rounding>(
-					direct.m10, direct.e10, m2, e2, negative))
-			{
-				return direct;
-			}
+			return direct;
 		}
+		/*
+		The preceding predicate proves m2=0 and identifies one row of the exact
+		integer witnesses above.  Returning that witness inline leaves no
+		general membership call, stack frame, or hidden full-domain table in the
+		common path.
+		*/
+		return ::fast_io::details::
+			dragonbox_narrow_policy_low_exception<
+				flt, rounding>(e2, negative);
 	}
 	return ::fast_io::details::dragonbox_impl_narrow_from_float<flt, rounding>(m2, e2, negative);
 }
@@ -2204,22 +2877,108 @@ inline constexpr ::std::size_t dragonbox_narrow_shortest_page_size{
 	static_cast<::std::size_t>(1u) << dragonbox_narrow_shortest_page_shift};
 inline constexpr ::std::size_t dragonbox_narrow_shortest_page_count{
 	static_cast<::std::size_t>(1u) << (15u - dragonbox_narrow_shortest_page_shift)};
-inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_m10_mask{0x7FFFu};
-inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_e10_mask{0x7Fu};
-inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_e10_shift{15u};
-inline constexpr ::std::uint_least32_t dragonbox_narrow_shortest_length_shift{22u};
-inline constexpr ::std::int_least32_t dragonbox_narrow_shortest_e10_bias{64};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_coefficient_bits{
+	iec559_traits<flt>::mbits == 10u ? 15u : 12u};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_coefficient_mask{
+	(static_cast<::std::uint_least32_t>(1u)
+	 << dragonbox_narrow_shortest_coefficient_bits<flt>) -
+	1u};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_e10_bits{
+	iec559_traits<flt>::mbits == 10u ? 4u : 7u};
+
+template <typename flt>
+inline constexpr ::std::int_least32_t
+dragonbox_narrow_shortest_e10_bias{
+	iec559_traits<flt>::mbits == 10u ? 8 : 41};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_length_bits{
+	iec559_traits<flt>::mbits == 10u ? 3u : 2u};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_e10_shift{
+	dragonbox_narrow_shortest_coefficient_bits<flt>};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_length_shift{
+	dragonbox_narrow_shortest_e10_shift<flt> +
+	dragonbox_narrow_shortest_e10_bits<flt>};
+
+template <typename flt>
+inline constexpr ::std::uint_least32_t
+dragonbox_narrow_shortest_layout_shift{
+	dragonbox_narrow_shortest_length_shift<flt> +
+	dragonbox_narrow_shortest_length_bits<flt>};
+
+/*
+Compact binary16/bfloat16 nearest-even carrier table
+====================================================
+
+For every non-sign raw pattern r, the canonical shortest carrier is
+
+    C(r) = (m(r), e(r)),             value = m(r) * 10^e(r).
+
+Exhaustive construction below proves the tighter representation-specific
+bounds
+
+    binary16:  m < 2^15, -8 <= e <= 4,  1 <= length <= 5;
+    bfloat16:  m < 2^12, -41 <= e <= 38, 1 <= length <= 4.
+
+Special encodings retain the zero sentinel.  The decimal length is mathematically
+derivable from m, but retaining its two or three bits removes a dependent
+integer-logarithm chain from the hot renderer.  The remaining high bits encode
+one of the following exhaustive default-decimal layouts:
+
+    0 scientific, 1 integer with appended zeroes,
+    2 fixed with an internal point, 3 fixed below one.
+
+Consequently the injective packing
+
+    P(r) = m | biased_e << M | (length-1) << (M+E)
+             | layout << (M+E+L)
+
+uses 24 bits for binary16 and 23 bits for bfloat16.  The layout is a redundant
+projection of `(m,e)`, so it changes no numeric result; it merely removes the
+same branch arithmetic from every rendering.  The three-byte
+little-significance representation is an arithmetic serialization, not a host
+object representation.  Explicit byte extraction during construction and
+reconstruction during lookup therefore prove identical values on little
+endian, big endian, ASCII, and EBCDIC targets.
+
+There are 2^15 magnitude patterns, hence one instantiated table occupies
+exactly 3 * 2^15 = 98,304 bytes = 96 KiB.  The static assertions below make
+the project's 100-KiB-per-table budget a compile-time invariant.  This table
+replaces both the former 128-KiB carrier table and the 352-KiB pre-rendered
+ASCII table: presentation remains code-unit generic and no second full-domain
+table can be pulled into the linked image.
+*/
+struct dragonbox_narrow_shortest_packed
+{
+	::std::uint_least8_t bytes[3]{};
+};
 
 template <::std::size_t size>
 struct dragonbox_narrow_shortest_page
 {
-	::std::uint_least32_t values[size]{};
+	dragonbox_narrow_shortest_packed values[size]{};
 };
 
 template <::std::size_t page_count, ::std::size_t page_size>
 struct alignas(64) dragonbox_narrow_shortest_table
 {
-	::std::uint_least32_t values[page_count * page_size]{};
+	dragonbox_narrow_shortest_packed values[page_count * page_size]{};
 };
 
 template <typename flt, ::std::size_t page>
@@ -2263,11 +3022,76 @@ dragonbox_make_narrow_shortest_page() noexcept
 				::fast_io::details::dragonbox_main<flt>(
 					binary.mantissa, static_cast<::std::int_least32_t>(binary.exponent)));
 		}
-		auto const length{static_cast<::std::uint_least32_t>(chars_len<10, true>(decimal.m10))};
-		result.values[index] = static_cast<::std::uint_least32_t>(decimal.m10) |
-							   (static_cast<::std::uint_least32_t>(decimal.e10 + dragonbox_narrow_shortest_e10_bias)
-								<< dragonbox_narrow_shortest_e10_shift) |
-							   (length << dragonbox_narrow_shortest_length_shift);
+		auto const length{static_cast<::std::uint_least32_t>(
+			chars_len<10, true>(decimal.m10))};
+		auto const real_exponent{static_cast<::std::int_least32_t>(
+			decimal.e10 + static_cast<::std::int_least32_t>(length) - 1)};
+		::std::uint_least32_t fixed_length{};
+		if (static_cast<::std::int_least32_t>(length) <= real_exponent)
+		{
+			fixed_length =
+				static_cast<::std::uint_least32_t>(real_exponent + 1);
+		}
+		else if (0 <= real_exponent)
+		{
+			fixed_length = length + 1u +
+				static_cast<::std::uint_least32_t>(
+					static_cast<::std::int_least32_t>(length) !=
+					real_exponent + 1);
+		}
+		else
+		{
+			fixed_length =
+				static_cast<::std::uint_least32_t>(-real_exponent) +
+				length + 1u;
+		}
+		auto const scientific_length{
+			length == 1u ? 4u : length + 5u};
+		::std::uint_least32_t layout{};
+		if (scientific_length >= fixed_length)
+		{
+			layout =
+				static_cast<::std::int_least32_t>(length) <=
+						real_exponent
+					? 1u
+				: 0 <= real_exponent ? 2u
+									 : 3u;
+		}
+		auto const packed{
+			static_cast<::std::uint_least32_t>(decimal.m10) |
+			(static_cast<::std::uint_least32_t>(
+				 decimal.e10 +
+				 dragonbox_narrow_shortest_e10_bias<flt>)
+			 << dragonbox_narrow_shortest_e10_shift<flt>) |
+			((length - 1u)
+			 << dragonbox_narrow_shortest_length_shift<flt>) |
+			(layout
+			 << dragonbox_narrow_shortest_layout_shift<flt>)};
+		/*
+		These assertions are evaluated independently for every one of the 32,768
+		generated patterns.  They are the constructive range proof for the
+		22-bit encoding, rather than an assumption made by the run-time lookup.
+		*/
+		if ((static_cast<::std::uint_least32_t>(decimal.m10) &
+			 ~dragonbox_narrow_shortest_coefficient_mask<flt>) != 0u ||
+			decimal.e10 <
+				-dragonbox_narrow_shortest_e10_bias<flt> ||
+			(static_cast<::std::int_least32_t>(1u)
+				 << dragonbox_narrow_shortest_e10_bits<flt>) <=
+				decimal.e10 +
+					dragonbox_narrow_shortest_e10_bias<flt> ||
+			(static_cast<::std::uint_least32_t>(1u)
+				 << dragonbox_narrow_shortest_length_bits<flt>) <
+				length)
+		{
+			::fast_io::fast_terminate();
+		}
+		result.values[index].bytes[0] =
+			static_cast<::std::uint_least8_t>(packed);
+		result.values[index].bytes[1] =
+			static_cast<::std::uint_least8_t>(packed >> 8u);
+		result.values[index].bytes[2] =
+			static_cast<::std::uint_least8_t>(packed >> 16u);
 	}
 	return result;
 }
@@ -2360,12 +3184,24 @@ inline constexpr auto dragonbox_narrow_shortest_table_cache{
 	::fast_io::details::dragonbox_make_narrow_shortest_table<flt>(
 		::std::make_index_sequence<dragonbox_narrow_shortest_page_count>{})};
 
+static_assert(sizeof(dragonbox_narrow_shortest_packed) == 3u);
+static_assert(
+	sizeof(dragonbox_narrow_shortest_table<
+		dragonbox_narrow_shortest_page_count,
+		dragonbox_narrow_shortest_page_size>) ==
+	3u * (static_cast<::std::size_t>(1u) << 15u));
+static_assert(
+	sizeof(dragonbox_narrow_shortest_table<
+		dragonbox_narrow_shortest_page_count,
+		dragonbox_narrow_shortest_page_size>) <= 100u * 1024u);
+
 template <typename flt>
 struct dragonbox_narrow_shortest_result
 {
 	::fast_io::details::dragonbox_decimal_mantissa_type<flt> m10;
 	::std::int_least32_t e10;
 	::std::uint_least32_t length;
+	::std::uint_least32_t decimal_layout;
 };
 
 template <typename flt>
@@ -2376,13 +3212,42 @@ dragonbox_narrow_shortest_lookup(typename iec559_traits<flt>::mantissa_type m2,
 	using decimal_type = ::fast_io::details::dragonbox_decimal_mantissa_type<flt>;
 	auto const raw{(static_cast<::std::uint_least32_t>(e2) << iec559_traits<flt>::mbits) |
 				   static_cast<::std::uint_least32_t>(m2)};
+	auto const &serialized{
+		::fast_io::details::dragonbox_narrow_shortest_table_cache<
+			flt>.values[raw]};
+	/*
+	The table's byte order is defined by the equations in its construction, so
+	this reconstruction is host-endian independent.  Three independent byte
+	loads also obey the exact 96-KiB object bound at the final entry; a tempting
+	unaligned four-byte load would read one byte past the array and would not be
+	a valid optimization even on hardware that tolerates it.
+	*/
 	auto const packed{
-		::fast_io::details::dragonbox_narrow_shortest_table_cache<flt>.values[raw]};
-	return {static_cast<decimal_type>(packed & dragonbox_narrow_shortest_m10_mask),
-			static_cast<::std::int_least32_t>((packed >> dragonbox_narrow_shortest_e10_shift) &
-											  dragonbox_narrow_shortest_e10_mask) -
-				dragonbox_narrow_shortest_e10_bias,
-			packed >> dragonbox_narrow_shortest_length_shift};
+		static_cast<::std::uint_least32_t>(serialized.bytes[0]) |
+		(static_cast<::std::uint_least32_t>(serialized.bytes[1]) << 8u) |
+		(static_cast<::std::uint_least32_t>(serialized.bytes[2]) << 16u)};
+	auto const coefficient{
+		static_cast<decimal_type>(
+			packed &
+			dragonbox_narrow_shortest_coefficient_mask<flt>)};
+	constexpr auto e10_mask{
+		(static_cast<::std::uint_least32_t>(1u)
+		 << dragonbox_narrow_shortest_e10_bits<flt>) -
+		1u};
+	constexpr auto length_mask{
+		(static_cast<::std::uint_least32_t>(1u)
+		 << dragonbox_narrow_shortest_length_bits<flt>) -
+		1u};
+	return {
+		coefficient,
+		static_cast<::std::int_least32_t>(
+			(packed >> dragonbox_narrow_shortest_e10_shift<flt>) &
+			e10_mask) -
+			dragonbox_narrow_shortest_e10_bias<flt>,
+		((packed >> dragonbox_narrow_shortest_length_shift<flt>) &
+			length_mask) +
+			1u,
+		packed >> dragonbox_narrow_shortest_layout_shift<flt>};
 }
 
 // These fixed-length digit leaves are called by nearly every presentation
@@ -4824,10 +5689,12 @@ and hence its absolute width after decimal scaling by less than 2^-61.  The
 equality test remains authoritative even on the rare integer boundary where
 that narrow interval could straddle two floors.
 
-The power table is generated by constexpr squaring from exact 5 and contains no
-handwritten numeric cache.  The same arithmetic serves every output character
-type, punctuation choice, format and rounding policy; only the existing
-presentation layer interprets the prefix, guard and sticky state.
+The positive table is generated by constexpr squaring from exact 5.  The
+reciprocal table starts from the proved adjacent dyadics around 1/5 and applies
+the same outward-rounded squaring recurrence.  Neither contains handwritten
+cached constants.  The same arithmetic serves every output character type,
+punctuation choice, format and rounding policy; only the existing presentation
+layer interprets the prefix, guard and sticky state.
 */
 #if defined(__SIZEOF_INT128__)
 inline constexpr ::std::size_t exact_precision_wide_window_limb_count{8u};
@@ -5019,6 +5886,56 @@ exact_precision_wide_window_power_base() noexcept
 	return result;
 }
 
+/*
+Construct the normalized enclosure of 5^-1 without floating arithmetic.
+Writing
+
+  1/5 = (2^514/5) * 2^-514
+
+puts the significand in [2^511,2^512).  Base-2^64 long division computes
+L=floor(2^514/5); because five does not divide a power of two, U=L+1 is the
+strict upper endpoint.  Thus L*2^-514 < 1/5 < U*2^-514, the interval width is
+one 512-bit ulp, and repeated outward-rounded squaring has the same enclosure
+invariant as the positive-power table.  This reciprocal table is required for
+large-magnitude wide values, where the decimal normalization shift is negative.
+*/
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_reciprocal_base() noexcept
+{
+	exact_precision_wide_window_interval result{};
+	::std::uint_least64_t remainder{};
+	for (::std::size_t index{9u}; index; --index)
+	{
+		auto const source_index{index - 1u};
+		auto const source_word{source_index == 8u
+			? static_cast<::std::uint_least64_t>(4u)
+			: static_cast<::std::uint_least64_t>(0u)};
+		auto const dividend{(static_cast<__uint128_t>(remainder) << 64u) |
+			source_word};
+		auto const quotient{static_cast<::std::uint_least64_t>(dividend / 5u)};
+		remainder = static_cast<::std::uint_least64_t>(dividend % 5u);
+		if (source_index < exact_precision_wide_window_limb_count)
+		{
+			result.lower[source_index] = quotient;
+		}
+	}
+	for (::std::size_t index{}; index != exact_precision_wide_window_limb_count;
+		 ++index)
+	{
+		result.upper[index] = result.lower[index];
+	}
+	for (::std::size_t index{}; index != exact_precision_wide_window_limb_count;
+		 ++index)
+	{
+		if (++result.upper[index])
+		{
+			break;
+		}
+	}
+	result.exponent = -514;
+	return result;
+}
+
 struct exact_precision_wide_window_power_table_type
 {
 	exact_precision_wide_window_interval values[
@@ -5040,18 +5957,80 @@ struct exact_precision_wide_window_power_table_type
 inline constexpr exact_precision_wide_window_power_table_type
 	exact_precision_wide_window_positive_power_table{};
 
+struct exact_precision_wide_window_reciprocal_power_table_type
+{
+	exact_precision_wide_window_interval values[
+		exact_precision_wide_window_power_count]{};
+
+	inline constexpr exact_precision_wide_window_reciprocal_power_table_type() noexcept
+	{
+		values[0] =
+			::fast_io::details::exact_precision_wide_window_reciprocal_base();
+		for (::std::size_t index{1u};
+			 index != exact_precision_wide_window_power_count; ++index)
+		{
+			values[index] = ::fast_io::details::
+				exact_precision_wide_window_multiply_interval(
+					values[index - 1u], values[index - 1u]);
+		}
+	}
+};
+
+inline constexpr exact_precision_wide_window_reciprocal_power_table_type
+	exact_precision_wide_window_reciprocal_power_table{};
+
 [[nodiscard]] inline constexpr exact_precision_wide_window_interval
 exact_precision_wide_window_power5(unsigned exponent) noexcept
 {
 	auto result{::fast_io::details::exact_precision_wide_window_one()};
+	// The first selected factor multiplied by the exact singleton [1,1] is
+	// itself; direct assignment removes one 512x512 product without changing
+	// either outward endpoint.
+	bool initialized{};
 	for (::std::size_t index{}; exponent; ++index, exponent >>= 1u)
 	{
 		if (exponent & 1u)
 		{
 			auto const &factor{
 				exact_precision_wide_window_positive_power_table.values[index]};
-			result = ::fast_io::details::exact_precision_wide_window_multiply_interval(
-				result, factor);
+			if (!initialized)
+			{
+				result = factor;
+				initialized = true;
+			}
+			else
+			{
+				result = ::fast_io::details::
+					exact_precision_wide_window_multiply_interval(result, factor);
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] inline constexpr exact_precision_wide_window_interval
+exact_precision_wide_window_reciprocal_power5(unsigned exponent) noexcept
+{
+	auto result{::fast_io::details::exact_precision_wide_window_one()};
+	// As above, assignment is exactly multiplication by the singleton [1,1].
+	bool initialized{};
+	for (::std::size_t index{}; exponent; ++index, exponent >>= 1u)
+	{
+		if (exponent & 1u)
+		{
+				auto const &factor{
+				::fast_io::details::
+					exact_precision_wide_window_reciprocal_power_table.values[index]};
+			if (!initialized)
+			{
+				result = factor;
+				initialized = true;
+			}
+			else
+			{
+				result = ::fast_io::details::
+					exact_precision_wide_window_multiply_interval(result, factor);
+			}
 		}
 	}
 	return result;
@@ -5171,7 +6150,7 @@ exact_precision_wide_window_from_significand(
 	::std::size_t requested_digits) noexcept
 {
 	exact_precision_window_result failure{};
-	if (!mantissa || (mantissa_bits != 63u && mantissa_bits != 112u) ||
+	if (!mantissa || !mantissa_bits || 114u < mantissa_bits ||
 		!requested_digits ||
 		exact_precision_wide_window_maximum_digits < requested_digits)
 	{
@@ -5185,26 +6164,16 @@ exact_precision_wide_window_from_significand(
 	{
 		auto const decimal_shift64{
 			static_cast<::std::int_least64_t>(requested_digits) - 1 - real_exponent};
-		// This power table represents positive 5^s only.  Callers outside that
-		// domain retain their exact-expansion fallback.
-		if (decimal_shift64 <= 0 || 8191 < decimal_shift64)
+		if (decimal_shift64 < -8191 || 8191 < decimal_shift64)
 		{
 			return failure;
 		}
 		auto const decimal_shift{static_cast<::std::int_least32_t>(decimal_shift64)};
-		auto const required_binary_factors{
-			-static_cast<::std::int_least64_t>(binary_exponent) - decimal_shift};
-		if (required_binary_factors <= 0 ||
-			static_cast<::std::int_least64_t>(
-				::fast_io::details::exact_precision_wide_window_mantissa_countr_zero(
-					mantissa)) >= required_binary_factors)
-		{
-			// An exact grid point is left to the complete fallback: after all binary
-			// factors cancel, no positive-5 interval is needed or authoritative.
-			return failure;
-		}
-		auto const power{::fast_io::details::exact_precision_wide_window_power5(
-			static_cast<unsigned>(decimal_shift))};
+		auto const power{decimal_shift < 0
+			? ::fast_io::details::exact_precision_wide_window_reciprocal_power5(
+				static_cast<unsigned>(-decimal_shift))
+			: ::fast_io::details::exact_precision_wide_window_power5(
+				static_cast<unsigned>(decimal_shift))};
 		auto const scaled_exponent{
 			static_cast<::std::int_least64_t>(power.exponent) + binary_exponent +
 			decimal_shift};
@@ -10751,6 +11720,156 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_decimal_with_
 	}
 }
 
+/*
+ASCII binary16/bfloat16 default-decimal renderer
+================================================
+
+`decimal_layout` is generated from exactly the length comparison in
+print_rsv_fp_decision_with_length_impl:
+
+* zero means the scientific spelling is strictly shorter;
+* one, two, and three mean fixed wins (including equality), partitioned by
+  L<=X, 0<=X<L, and X<0, where X=e10+L-1.
+
+These predicates are mutually exclusive and exhaustive.  Each switch arm below
+therefore calls the same terminal leaf that the generic decision tree would
+reach with the same `(m10,e10,L)`.  Moving those comparisons to table generation
+does not select a new spelling; it partially evaluates a pure function of the
+stored carrier.  Scientific exponent X is reconstructed by the defining
+identity above.  This proves byte-for-byte equivalence with the character-
+generic renderer, including the single-digit no-point case and the fixed/
+scientific equal-length tie in favour of fixed.
+
+This leaf is admitted only for ordinary `char` reserve output on an ASCII
+execution set.  The fixed-width integer writer may initialize reserve scratch
+past the logical end, so exact-bounds callers and every other character set keep
+the generic renderer.  No character bytes are stored in the 96-KiB table.
+*/
+template <typename flt>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr char *
+print_rsvflt_narrow_ascii_decimal(
+	char *iter,
+	::fast_io::details::dragonbox_narrow_shortest_result<flt> decimal) noexcept
+{
+	auto const length{
+		static_cast<::std::int_least32_t>(decimal.length)};
+	auto const real_exponent{
+		static_cast<::std::int_least32_t>(
+			decimal.e10 + length - 1)};
+	/*
+	ascii_bcd8 returns the eight decimal digits of m10, padded on the left
+	with zeroes, in destination byte order.  Because 1<=L<=5, shifting the
+	little-endian destination word by 8*(8-L) discards exactly the padding and
+	leaves the L significant bytes at offsets [0,L).  Every later 64-bit store
+	is permitted by the ordinary reserve contract; the returned pointer still
+	marks only the logical spelling.
+	*/
+	auto const padded_digits{
+		::fast_io::details::da::ascii_bcd8(decimal.m10) +
+		::fast_io::details::da::ascii_zeroes};
+	auto const digits{
+		padded_digits >>
+		static_cast<unsigned>(
+			(8 - length) * 8)};
+	auto const store_word =
+		[](char *destination,
+		   ::std::uint_least64_t word) constexpr noexcept
+		{
+			::fast_io::freestanding::my_memcpy(
+				destination, __builtin_addressof(word),
+				sizeof(word));
+		};
+	switch (decimal.decimal_layout)
+	{
+	case 0u:
+		if (length == 1)
+		{
+			store_word(iter, digits);
+			++iter;
+		}
+		else
+		{
+			/*
+			`digits & 0xff` is the leading digit.  Moving every remaining
+			byte left by one address and inserting '.' at byte one is exactly
+			d.ddd; the fields are disjoint, so bitwise OR is lossless.
+			*/
+			auto const assembled{
+				(digits &
+				 static_cast<::std::uint_least64_t>(0xffu)) |
+				(static_cast<::std::uint_least64_t>(u8'.')
+				 << 8u) |
+				((digits &
+				  ~static_cast<::std::uint_least64_t>(0xffu))
+				 << 8u)};
+			store_word(iter, assembled);
+			iter += length + 1;
+		}
+		return ::fast_io::details::da::
+			print_ascii_exponent<false>(
+				iter, real_exponent);
+	case 1u:
+		store_word(iter, digits);
+		/*
+		This arm proves L<=X, so the exact fixed spelling appends
+		X+1-L zeroes.  Fixed won the stored length comparison, bounding
+		X+1 by the corresponding scientific length (at most ten for a
+		narrow carrier); the loop is therefore both reserve-safe and tiny.
+		*/
+		for (auto position{length};
+			 position <= real_exponent; ++position)
+		{
+			iter[position] = static_cast<char>(u8'0');
+		}
+		return iter + real_exponent + 1;
+	case 2u:
+		{
+			auto const point_position{real_exponent + 1};
+			if (point_position == length)
+			{
+				store_word(iter, digits);
+				return iter + length;
+			}
+			/*
+			Here 1<=point_position<L<=5.  The mask retains the integer
+			prefix, the upper digits move by one byte, and the point occupies
+			the unique vacated byte.  Those three fields are disjoint and
+			their concatenation is precisely the generic fixed arm.
+			*/
+			auto const shift{
+				static_cast<unsigned>(
+					point_position * 8)};
+			auto const lower_mask{
+				(static_cast<::std::uint_least64_t>(1u)
+				 << shift) -
+				1u};
+			auto const assembled{
+				(digits & lower_mask) |
+				(static_cast<::std::uint_least64_t>(u8'.')
+				 << shift) |
+				((digits & ~lower_mask) << 8u)};
+			store_word(iter, assembled);
+			return iter + length + 1;
+		}
+	default:
+		/*
+		X<0 gives "0." followed by -X-1 zeroes and then the coefficient.
+		The coefficient store begins at 1-X, so it cannot overwrite the
+		prefix or padding.  It may initialize scratch after the logical end,
+		which is exactly why exact-bounds callers are excluded.
+		*/
+		iter[0] = static_cast<char>(u8'0');
+		iter[1] = static_cast<char>(u8'.');
+		for (::std::int_least32_t position{2};
+			 position < 1 - real_exponent; ++position)
+		{
+			iter[position] = static_cast<char>(u8'0');
+		}
+		store_word(iter + 1 - real_exponent, digits);
+		return iter + 1 - real_exponent + length;
+	}
+}
+
 // GCC 13 and later Linux System V x86-64 LP64 use a compact regular-normal entry around
 // the SSSE3/SSE4.1 ASCII writer.  This prevents normalization and generic-renderer
 // state from extending the predominant shortest path's live range. GCC 14 and later
@@ -10998,184 +12117,6 @@ inline char_type *print_rsvflt_da_ascii_finalize_fixed(
 }
 #endif
 
-struct dragonbox_narrow_ascii_entry
-{
-	char bytes[10]{};
-	::std::uint_least8_t length{};
-};
-
-template <::std::size_t size>
-struct dragonbox_narrow_ascii_page
-{
-	dragonbox_narrow_ascii_entry values[size]{};
-};
-
-template <::std::size_t size>
-struct alignas(64) dragonbox_narrow_ascii_table
-{
-	dragonbox_narrow_ascii_entry values[size]{};
-};
-
-template <typename flt, ::std::size_t page>
-[[nodiscard]] inline constexpr dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size>
-dragonbox_make_narrow_ascii_page() noexcept
-{
-	using trait = ::fast_io::details::iec559_traits<flt>;
-	dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size> result;
-	for (::std::size_t index{}; index != dragonbox_narrow_shortest_page_size; ++index)
-	{
-		auto const raw{static_cast<::std::uint_least32_t>(
-			(page << dragonbox_narrow_shortest_page_shift) | index)};
-		auto const exponent{raw >> trait::mbits};
-		if (!raw || exponent == ((static_cast<::std::uint_least32_t>(1u) << trait::ebits) - 1u))
-		{
-			continue;
-		}
-		auto const packed{
-			::fast_io::details::dragonbox_narrow_shortest_page_cache<flt, page>.values[index]};
-		auto const m10{static_cast<::fast_io::details::dragonbox_decimal_mantissa_type<flt>>(
-			packed & dragonbox_narrow_shortest_m10_mask)};
-		auto const e10{static_cast<::std::int_least32_t>(
-						   (packed >> dragonbox_narrow_shortest_e10_shift) & dragonbox_narrow_shortest_e10_mask) -
-					   dragonbox_narrow_shortest_e10_bias};
-		auto const length{packed >> dragonbox_narrow_shortest_length_shift};
-		auto const end{::fast_io::details::print_rsvflt_decimal_with_length_define_impl<
-			flt, false, false, ::fast_io::manipulators::floating_format::decimal, false>(
-			result.values[index].bytes, m10, e10, length)};
-		result.values[index].length = static_cast<::std::uint_least8_t>(end - result.values[index].bytes);
-	}
-	return result;
-}
-
-template <typename flt, ::std::size_t page>
-inline constexpr auto dragonbox_narrow_ascii_page_cache{
-	::fast_io::details::dragonbox_make_narrow_ascii_page<flt, page>()};
-
-template <::std::size_t page, ::std::size_t size>
-inline constexpr void dragonbox_copy_narrow_ascii_page(
-	dragonbox_narrow_ascii_table<size> &table,
-	dragonbox_narrow_ascii_page<dragonbox_narrow_shortest_page_size> const &source) noexcept
-{
-	for (::std::size_t index{}; index != dragonbox_narrow_shortest_page_size; ++index)
-	{
-		table.values[page * dragonbox_narrow_shortest_page_size + index] = source.values[index];
-	}
-}
-
-#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
-/// Copies one bounded block of pre-rendered narrow ASCII pages during constant
-/// table construction.
-///
-/// This table has the same 512-page topology as the carrier table above and
-/// triggers the same Clang 17--20 default-depth rejection. Reusing the proved
-/// 64-page bound fixes that language-limit failure while leaving Clang 21 and
-/// later, GCC, the generated bytes, and all run-time lookup code unchanged.
-template <typename flt, ::std::size_t first_page, ::std::size_t size,
-	::std::size_t... offsets>
-inline constexpr void dragonbox_copy_narrow_ascii_page_block(
-	dragonbox_narrow_ascii_table<size> &table,
-	::std::index_sequence<offsets...>) noexcept
-{
-	static_assert(sizeof...(offsets) <= 64u);
-	(::fast_io::details::dragonbox_copy_narrow_ascii_page<
-		 first_page + offsets>(table,
-		 ::fast_io::details::dragonbox_narrow_ascii_page_cache<
-			 flt, first_page + offsets>), ...);
-}
-#endif
-
-template <typename flt, ::std::size_t... pages>
-[[nodiscard]] inline constexpr dragonbox_narrow_ascii_table<
-	dragonbox_narrow_shortest_page_size * sizeof...(pages)>
-	dragonbox_make_narrow_ascii_table(::std::index_sequence<pages...>) noexcept
-{
-	dragonbox_narrow_ascii_table<dragonbox_narrow_shortest_page_size * sizeof...(pages)> result;
-#if defined(__clang__) && 17 <= __clang_major__ && __clang_major__ < 21
-	static_assert(sizeof...(pages) == dragonbox_narrow_shortest_page_count);
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 0u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 64u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 128u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 192u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 256u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 320u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 384u>(
-		result, ::std::make_index_sequence<64u>{});
-	::fast_io::details::dragonbox_copy_narrow_ascii_page_block<flt, 448u>(
-		result, ::std::make_index_sequence<64u>{});
-#else
-	(::fast_io::details::dragonbox_copy_narrow_ascii_page<pages>(
-		 result, ::fast_io::details::dragonbox_narrow_ascii_page_cache<flt, pages>),
-	 ...);
-#endif
-	return result;
-}
-
-template <typename flt>
-// This generated narrow-output table follows the same non-interposable linkage
-// policy as the carrier table above.  The ASCII conjunct validates the narrow
-// GNU attribute argument; it does not select the emitter or alter table
-// generation and lookup semantics.
-#if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
-[[__gnu__::__visibility__("hidden")]]
-#endif
-inline constexpr auto dragonbox_narrow_ascii_table_cache{
-	::fast_io::details::dragonbox_make_narrow_ascii_table<flt>(
-		::std::make_index_sequence<dragonbox_narrow_shortest_page_count>{})};
-
-template <typename flt>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::std::uint_least32_t dragonbox_narrow_runtime_index(
-	flt value) noexcept
-{
-	using trait = ::fast_io::details::iec559_traits<flt>;
-	using mantissa_type = typename trait::mantissa_type;
-	// Both branches preserve the complete floating object representation.  Prefer
-	// the compiler builtin when advertised so the lookup index remains a pure
-	// register reinterpretation; fast_io::bit_cast is the constexpr-capable
-	// semantic fallback and produces the same mantissa_type bits.
-	auto const raw =
-#if FAST_IO_HAS_BUILTIN(__builtin_bit_cast)
-		__builtin_bit_cast(mantissa_type, value)
-#else
-		::fast_io::bit_cast<mantissa_type>(value)
-#endif
-		;
-	constexpr auto magnitude_mask{(static_cast<::std::uint_least32_t>(1u) << (trait::mbits + trait::ebits)) - 1u};
-	return static_cast<::std::uint_least32_t>(raw) & magnitude_mask;
-}
-
-template <typename flt>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr char *dragonbox_narrow_ascii_lookup(
-	char *iter, ::std::uint_least32_t raw) noexcept
-{
-	using trait = ::fast_io::details::iec559_traits<flt>;
-	auto const &entry{::fast_io::details::dragonbox_narrow_ascii_table_cache<flt>.values[raw]};
-	constexpr ::std::size_t copy_size{trait::m10digits + trait::e10digits + 3u};
-	if (__builtin_is_constant_evaluated())
-	{
-		::fast_io::details::my_copy_n(entry.bytes, copy_size, iter);
-	}
-	else
-	{
-		// copy_size is a compile-time constant for each floating type.  The builtin
-		// permits an unaligned inline block copy without introducing typed aliasing;
-		// my_copy_n is the identical freestanding fallback.  Constant evaluation uses
-		// the explicit copy above because not every compiler accepts builtin memcpy in
-		// a C++20 constant expression.
-#if FAST_IO_HAS_BUILTIN(__builtin_memcpy)
-		__builtin_memcpy(iter, entry.bytes, copy_size);
-#else
-		::fast_io::details::my_copy_n(entry.bytes, copy_size, iter);
-#endif
-	}
-	return iter + entry.length;
-}
-
 template <bool showpos, bool uppercase, bool uppercase_e, bool comma, ::fast_io::manipulators::floating_format mt,
 		  ::fast_io::manipulators::floating_rounding rounding =
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
@@ -11221,33 +12162,15 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 		constexpr mantissa_type exponent_mask{(static_cast<mantissa_type>(1) << ebits) - 1};
 		constexpr ::std::uint_least32_t exponent_mask_u32{static_cast<::std::uint_least32_t>(exponent_mask)};
 		/*
-		The ordinary reserve protocol owns the type's advertised maximum capacity,
-		so its narrow lookup may copy the complete fixed-size table entry and return
-		the shorter logical end.  A precise reservation owns exactly the measured
-		output interval: writing even a subsequently ignored byte past that interval
-		would violate the C++ object bound.  `exact_bounds` is therefore an emission-
-		storage policy, not a conversion policy.  It disables only writers whose
-		contract permits a wider store; the same decimal carrier then reaches the
-		generic renderer, whose fixed-width integer leaves and punctuation loops write
-		exactly the characters they return.  Because false is the default and every
-		predicate below is compile-time, ordinary printing retains its prior body.
+		A precise reservation owns exactly the measured output interval: writing
+		even a subsequently ignored byte past that interval would violate the C++
+		object bound.  `exact_bounds` is therefore an emission-storage policy, not
+		a conversion policy.  It disables DA ASCII leaves whose fixed-width stores
+		require ordinary reserve slack; the identical decimal carrier then reaches
+		the generic renderer, whose loops write exactly the characters they return.
+		The narrow 96-KiB table contains carriers rather than characters and is
+		therefore valid under both storage policies without an alternate lookup.
 		*/
-		constexpr bool use_narrow_ascii{!exact_bounds &&
-			::fast_io::details::dragonbox_uses_binary32_core<flt> && sizeof(flt) < sizeof(float) &&
-			rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
-			mt == ::fast_io::manipulators::floating_format::decimal && !uppercase_e && !comma && !json_float &&
-			::std::same_as<char_type, char> && 'A' == 0x41};
-		[[maybe_unused]] auto const narrow_ascii_index{[&]() constexpr noexcept {
-			if constexpr (use_narrow_ascii)
-			{
-				return (static_cast<::std::uint_least32_t>(exponent) << trait::mbits) |
-					static_cast<::std::uint_least32_t>(mantissa);
-			}
-			else
-			{
-				return ::std::uint_least32_t{};
-			}
-		}()};
 		if (exponent == exponent_mask_u32)
 		{
 			return prsv_fp_nan_impl<showpos, uppercase, nan_show_sign, nan_show_type, mbits>(iter, mantissa, sign);
@@ -11270,11 +12193,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 				return prsv_fp_dece0<uppercase>(iter);
 			}
 		}
-		if constexpr (use_narrow_ascii)
-		{
-			return ::fast_io::details::dragonbox_narrow_ascii_lookup<flt>(iter, narrow_ascii_index);
-		}
-		else if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
+		if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
 						   ((trait::mbits == 23u && trait::ebits == 8u) ||
 							(trait::mbits == 52u && trait::ebits == 11u)) &&
 						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
@@ -11586,9 +12505,25 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 		{
 			auto const decimal{::fast_io::details::dragonbox_narrow_shortest_lookup<flt>(
 				mantissa, static_cast<::std::int_least32_t>(exponent))};
-			return ::fast_io::details::print_rsvflt_decimal_with_length_define_impl<
-				flt, comma, uppercase_e, mt, json_float>(
-				iter, decimal.m10, decimal.e10, decimal.length);
+			if constexpr (
+				!exact_bounds && mt ==
+					::fast_io::manipulators::floating_format::decimal &&
+				!comma && !uppercase_e && !json_float &&
+				::std::same_as<char_type, char> &&
+				::fast_io::details::is_ascii<char_type>)
+			{
+				return ::fast_io::details::
+					print_rsvflt_narrow_ascii_decimal<flt>(
+						iter, decimal);
+			}
+			else
+			{
+				return ::fast_io::details::
+					print_rsvflt_decimal_with_length_define_impl<
+						flt, comma, uppercase_e, mt, json_float>(
+							iter, decimal.m10, decimal.e10,
+							decimal.length);
+			}
 		}
 		else
 		{

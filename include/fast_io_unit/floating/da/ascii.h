@@ -114,6 +114,12 @@ using ascii_i32x2 [[gnu::vector_size(8)]] = int;
 using ascii_i32x4 [[gnu::vector_size(16)]] = int;
 using ascii_u64x2 [[gnu::vector_size(16)]] = unsigned long long;
 
+struct ascii_aarch64_binary32_digit_data
+{
+	ascii_digit_block digits;
+	ascii_u8x16 unshuffled;
+};
+
 // Clang and GCC expose different builtin spellings for the same signed,
 // saturating, doubling high multiply.  Saturation is unreachable for the BCD
 // input bounds below; consequently both branches return the identical lane-wise
@@ -196,6 +202,39 @@ ascii_bcd4x4(ascii_i32x4 value) noexcept
 							  pairs + tens * ascii_i16x8{246, 246, 246, 246, 246, 246, 246, 246});
 }
 
+// Preserve both representations produced by the same BCD computation.  The
+// destination-order word serves fixed notation, while the natural four-lane
+// byte order serves the AArch64 TBL scientific writer below.  Keeping the
+// vector here is not a second digit conversion: byte_swap is a bijection, so
+// `digits.low-ascii_zeroes` and `unshuffled` contain exactly the same eight
+// decimal digits in reverse orders.  Returning both lets notation selection
+// consume whichever order avoids a vector-to-GPR-to-vector round trip.
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_aarch64_binary32_digit_data
+make_ascii_binary32_digit_data_simd(::std::uint_least64_t value) noexcept
+{
+	auto const pairs{value + static_cast<::std::uint_least64_t>(4294957296) *
+								 ((value * ascii_div10000_multiplier) >> 40u)};
+	auto const unshuffled{::fast_io::details::da::ascii_bcd4x4(ascii_i32x4{
+		static_cast<int>(static_cast<::std::uint_least32_t>(pairs)),
+		static_cast<int>(static_cast<::std::uint_least32_t>(pairs >> 32u)), 0, 0})};
+	auto const raw{__builtin_bit_cast(ascii_u64x2, unshuffled)[0]};
+	auto const bcd{::fast_io::byte_swap(raw)};
+	/*
+	Each numeric byte is in [0,9].  Consequently a byte is nonzero exactly when
+	its corresponding decimal digit is nonzero.  The least significant nonzero
+	byte of `raw` becomes the most significant nonzero byte of `bcd`; dividing
+	countr_zero(raw) by eight therefore counts leading zero digits.  The explicit
+	zero branch is required because countr_zero(0) has the full word width and the
+	coefficient carrier is permitted to contain an all-zero scratch block.
+	*/
+	auto const span{raw ? static_cast<::std::uint_least32_t>(
+							  8u - (static_cast<::std::uint_least32_t>(
+										::std::countr_zero(raw)) >>
+									3u))
+						: 0u};
+	return {{bcd + ascii_zeroes, 0u, span}, unshuffled};
+}
+
 // Each input lane is in [0, 9999].  The result contains four unpacked numeric
 // digits per lane; the later byte shuffle establishes destination order.
 template <typename flt>
@@ -204,17 +243,7 @@ make_ascii_digit_block_simd(::std::uint_least64_t value) noexcept
 {
 	if constexpr (sizeof(flt) <= sizeof(float))
 	{
-		auto const pairs{value + static_cast<::std::uint_least64_t>(4294957296) *
-									 ((value * ascii_div10000_multiplier) >> 40u)};
-		auto const unshuffled{::fast_io::details::da::ascii_bcd4x4(ascii_i32x4{
-			static_cast<int>(static_cast<::std::uint_least32_t>(pairs)),
-			static_cast<int>(static_cast<::std::uint_least32_t>(pairs >> 32u)), 0, 0})};
-		auto const raw{__builtin_bit_cast(ascii_u64x2, unshuffled)[0]};
-		auto const bcd{::fast_io::byte_swap(raw)};
-		auto const span{raw ? static_cast<::std::uint_least32_t>(
-								  8u - (static_cast<::std::uint_least32_t>(::std::countr_zero(raw)) >> 3u))
-							: 0u};
-		return {bcd + ascii_zeroes, 0u, span};
+		return ::fast_io::details::da::make_ascii_binary32_digit_data_simd(value).digits;
 	}
 	else
 	{
@@ -624,11 +653,11 @@ struct ascii_fixed_layout_cache
 #endif
 inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 
-// Clang 23 Linux System V x86-64 reads a dense projection of
-// decimal_fixed_mask before selecting a writer, including in scalar-feature
-// builds. This deliberately duplicates 108 bytes so the decision neither scales
-// the index by a 32- or 64-byte entry nor materializes the full-layout address
-// on the scientific branch.
+// Little-endian AArch64 binary32 and Clang 23 Linux System V x86-64 read a
+// dense projection of decimal_fixed_mask before selecting a writer.  This
+// deliberately duplicates 108 bytes so the decision neither scales the index
+// by a 32- or 64-byte entry nor materializes the full-layout address on the
+// scientific branch.
 // Baseline, SSE4.1 and native Clang assembly all preserve a branch-free mask
 // calculation before the unavoidable writer branch.  Replacing it with the
 // closed-form length predicate introduces an additional exponent-dependent
@@ -636,17 +665,22 @@ inline constexpr ascii_fixed_layout_cache ascii_fixed_layouts{};
 // notation is known.  The consteval copy proves bit identity with
 // ascii_fixed_layouts. Compiler Explorer forced/base whole-consumer audits cover
 // Clang 16--22 and trunk; none emits an instruction-identical replacement. A
-// physical-core Clang 22 ABBA/BAAB run was statistically neutral (overall ratio
+// physical-core x86 Clang 22 ABBA/BAAB run was statistically neutral (overall ratio
 // 0.999684) while the projection added 144 linked text bytes, so Clang 22 is a
 // tested rejection rather than an omitted release. Current trunk Clang 24 also
 // emits a different consumer sequence and adds the 108-byte projection without
-// reducing its 553-instruction whole-consumer count. Only Clang 23 retains the
-// measured tradeoff. x32, MinGW, the Microsoft ABI and non-Linux x86-64 reuse
-// the canonical layout. Change the exact transition only after whole-caller
-// latency, text/data size, loads and spills are re-audited.
-#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23 && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+// reducing its 553-instruction whole-consumer count. Only x86 Clang 23 retains
+// that measured x86 tradeoff.  On AArch64 the projection also separates the
+// mask load from the 32-byte fixed-layout address; this is valuable because the
+// TBL scientific path otherwise carries a useless full-layout dependency.
+// x32, MinGW, the Microsoft ABI, non-Linux x86-64 and scalar targets reuse the
+// canonical layout. Change either transition only after whole-caller latency,
+// text/data size, loads and spills are re-audited.
+#if (((defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	  (defined(__clang__) || defined(__GNUC__))) || \
+	 (defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	  defined(__clang__) && __clang_major__ == 23 && \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC))))
 struct ascii_decimal_fixed_mask_cache
 {
 	::std::uint_least32_t data[static_cast<::std::size_t>(
@@ -663,22 +697,29 @@ struct ascii_decimal_fixed_mask_cache
 
 // This projection follows the same non-interposable linkage policy as its
 // source table.  It owns distinct compact data by design, not a second layout;
-// the ASCII conjunct only keeps the GNU narrow attribute argument valid.
+// consteval assignment proves every projected word equals its source field.
+// The ASCII conjunct only keeps the GNU narrow attribute argument valid.
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
 inline constexpr ascii_decimal_fixed_mask_cache ascii_decimal_fixed_masks{};
 #endif
 
-// Compile-time generated complete binary32 scientific shuffles.  The index is
+// Compile-time generated complete binary32 scientific shuffles for the
+// little-endian AArch64 TBL and x86 pshufb backends.  The index is
 // (digit_span - 1) * 4 + has_last_digit * 2 + has_extra_digit.  Source lanes
 // 0..7 contain digits, 8..11 the packed exponent, 12 the optional last digit,
 // and 13 the decimal point.  shuffle[15] is metadata holding the logical length
-// and is outside every logical output.  This table exists only with its x86
-// pshufb consumer, preventing unused ISA-specific data on other targets.
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
-	(defined(__GNUC__) || defined(__clang__)) && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+// and is outside every logical output.  Both instructions define an
+// out-of-range source index as a zero byte, so the same generated permutation
+// is a byte-for-byte proof object for both ISAs.  The table exists only when at
+// least one proved consumer is compiled, preventing a 512-byte payload on
+// scalar-only targets.
+#if (((defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	  (defined(__clang__) || defined(__GNUC__))) || \
+	 ((defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	  (defined(__GNUC__) || defined(__clang__)) && \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC))))
 struct ascii_binary32_scientific_cache
 {
 	struct alignas(16) entry
@@ -734,7 +775,7 @@ struct ascii_binary32_scientific_cache
 	}
 };
 
-// Hidden visibility gives the pshufb consumer a direct table address.  The
+// Hidden visibility gives either shuffle consumer a direct table address.  The
 // surrounding backend/ISA guard determines whether these ASCII lanes are
 // consumed; the ASCII conjunct exists because the GNU visibility mode is a
 // narrow string literal and is rejected by GCC after IBM1047 translation.
@@ -954,6 +995,106 @@ template <typename flt, bool comma, bool json_float>
 	return destination + digit_count + 1u;
 }
 
+// AArch64 binary32 scientific emission keeps the natural-order numeric digit
+// vector produced by ascii_bcd4x4 and joins it with punctuation and the packed
+// exponent before performing one TBL permutation and one 16-byte store.  For
+// every output lane j the generated index selects exactly the byte used by the
+// scalar construction:
+//
+//   source[0..7]   = the eight coefficient digits,
+//   source[8..11]  = "e[+-]dd",
+//   source[12]     = the optional interval digit,
+//   source[13]     = the decimal point.
+//
+// The binary32 scientific exponent is in [-45,38], hence it always has two
+// decimal exponent digits and lanes 8..11 are complete.  The cache construction
+// enumerates digit_span in [1,8] and both Boolean fields, proving index in
+// [0,31].  TBL maps an index with its high bit set to zero, exactly matching the
+// unused scratch bytes in the scalar spelling.  Byte 15 stores logical-length
+// metadata in the cache rather than output data, so the physical 16-byte store
+// may pass the returned pointer but never the caller's reserve extent.
+#if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	(defined(__clang__) || defined(__GNUC__))
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline ascii_u8x16
+ascii_aarch64_table_lookup(ascii_u8x16 source, ascii_u8x16 indices) noexcept
+{
+	/*
+	Clang and GCC expose different frontend names for the same architectural TBL
+	instruction.  Both operate on sixteen unsigned byte lanes, and the immediate
+	48 in Clang's type-polymorphic builtin denotes uint8x16_t.  This branch is
+	therefore an API spelling choice; it cannot change a selected byte.
+	*/
+#if defined(__clang__)
+	return __builtin_bit_cast(
+		ascii_u8x16,
+		__builtin_neon_vqtbl1q_v(
+			__builtin_bit_cast(ascii_i8x16, source),
+			__builtin_bit_cast(ascii_i8x16, indices), 48));
+#else
+	return __builtin_aarch64_qtbl1v16qi_uuu(source, indices);
+#endif
+}
+
+template <bool comma, bool uppercase_e>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *
+print_ascii_scientific_aarch64_binary32(
+	char *destination, ascii_u8x16 unshuffled,
+	::std::uint_least32_t digit_span,
+	::std::int_least32_t exponent, bool has_extra_digit,
+	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
+{
+	auto exponent_data{
+		ascii_exponents.data[static_cast<::std::size_t>(
+			exponent - ascii_exponent_cache::minimum)]};
+	if constexpr (uppercase_e)
+	{
+		/*
+		The packed exponent contains lowercase 'e' only in byte zero.  XOR with
+		'e'^'E' changes exactly that byte and leaves sign and decimal digits
+		unchanged, proving equivalence with the scalar uppercase branch.
+		*/
+		exponent_data ^=
+			static_cast<::std::uint_least64_t>(u8'e' ^ u8'E');
+	}
+	auto source{__builtin_bit_cast(
+		ascii_u64x2,
+		unshuffled + ascii_u8x16{
+			48, 48, 48, 48, 48, 48, 48, 48,
+			48, 48, 48, 48, 48, 48, 48, 48})};
+	/*
+	The high 64-bit lane is scratch after digit conversion.  Overwriting it with
+	the four exponent bytes followed by optional digit and point constructs the
+	exact source alphabet documented above.  The cache never reads its remaining
+	two bytes.
+	*/
+	source[1] =
+		(exponent_data &
+		 static_cast<::std::uint_least64_t>(0xffffffffu)) |
+		(static_cast<::std::uint_least64_t>(u8'0' + last_digit)
+		 << 32u) |
+		(static_cast<::std::uint_least64_t>(
+			 comma ? u8',' : u8'.')
+		 << 40u);
+	auto const index{
+		(digit_span - 1u) * 4u +
+		static_cast<::std::uint_least32_t>(has_last_digit) * 2u +
+		static_cast<::std::uint_least32_t>(has_extra_digit)};
+	auto const &layout{
+		ascii_binary32_scientific_layouts.data[index]};
+	ascii_u8x16 shuffle;
+	::fast_io::freestanding::my_memcpy(
+		__builtin_addressof(shuffle), layout.shuffle,
+		sizeof(shuffle));
+	auto const assembled{
+		::fast_io::details::da::ascii_aarch64_table_lookup(
+			__builtin_bit_cast(ascii_u8x16, source), shuffle)};
+	::fast_io::freestanding::my_memcpy(
+		destination, __builtin_addressof(assembled),
+		sizeof(assembled));
+	return destination + layout.shuffle[15];
+}
+#endif
+
 // x86 binary32 scientific emission consumes the unshuffled digit vector before
 // it becomes scalar words.  It emits one complete 16-byte pshufb result;
 // layout.shuffle[15] contains the shorter logical length and byte 15 is outside
@@ -1101,7 +1242,29 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	// stable cross-frontend ABI contract.
 #if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
 	(defined(__clang__) || defined(__GNUC__))
-	auto const digits{::fast_io::details::da::make_ascii_digit_block_simd<flt>(significand)};
+	auto const digit_data{[&]() noexcept
+	{
+		if constexpr (binary32)
+		{
+			return ::fast_io::details::da::
+				make_ascii_binary32_digit_data_simd(significand);
+		}
+		else
+		{
+			/*
+			Binary64 scientific notation consumes destination-order digits, so its
+			unshuffled member is dead.  Supplying a zero vector gives this branch
+			the same structural carrier as binary32 without adding an instruction
+			after constant propagation; the mathematical digit block is exactly
+			the pre-existing binary64 SIMD result.
+			*/
+			return ascii_aarch64_binary32_digit_data{
+				::fast_io::details::da::
+					make_ascii_digit_block_simd<flt>(significand),
+				{}};
+		}
+	}()};
+	auto const digits{digit_data.digits};
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
@@ -1139,16 +1302,39 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		if (ascii_fixed_layout_cache::minimum <= exponent &&
 			exponent <= ascii_fixed_layout_cache::maximum)
 		{
-			// The audited Clang-23 Linux x86 artifact uses the compact projection documented
-			// above to avoid addressing the full 64-byte SIMD layout before the
-			// notation decision.  Its definition-site audit found Clang 22 latency
-			// neutral with 144 additional text bytes, while trunk Clang 24 removed no
-			// whole-consumer instruction.  Every other configuration reads the
-			// authoritative mask from the full layout entry and emits identical
-			// characters.
-#if defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
-	defined(__clang__) && __clang_major__ == 23 && \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+			// The AArch64 and audited Clang-23 Linux x86 artifacts use the compact
+			// projection documented above, avoiding a full-layout address on the
+			// scientific branch.  The projection is generated from the authoritative
+			// field, so this backend choice cannot alter the notation bit or bytes.
+#if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	(defined(__clang__) || defined(__GNUC__))
+			/*
+			The binary32 TBL path benefits from breaking the mask dependency away
+			from the fixed-layout base.  Binary64 has a longer digit state and the
+			same projection was neutral-to-negative on M4, so it retains the
+			canonical entry and lets the fixed branch reuse that address.
+			*/
+			auto const fixed_mask{[&]() noexcept
+			{
+				if constexpr (binary32)
+				{
+					return ascii_decimal_fixed_masks.data[
+						static_cast<::std::size_t>(
+							exponent -
+							ascii_fixed_layout_cache::minimum)];
+				}
+				else
+				{
+					return ascii_fixed_layouts.data[
+						static_cast<::std::size_t>(
+							exponent -
+							ascii_fixed_layout_cache::minimum)]
+						.decimal_fixed_mask;
+				}
+			}()};
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	  defined(__clang__) && __clang_major__ == 23 && \
+	  !(defined(__arm64ec__) || defined(_M_ARM64EC))
 			auto const fixed_mask{ascii_decimal_fixed_masks.data[static_cast<::std::size_t>(
 				exponent - ascii_fixed_layout_cache::minimum)]};
 #else
@@ -1195,13 +1381,27 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 	{
 		return nullptr;
 	}
-	// Complete binary32 pshufb assembly has opposite profitable placement in the
-	// audited compiler pipelines: Clang uses it while conversion/emission are in
-	// one scalar call, whereas GCC uses it after staged preparation shortens the
-	// surrounding live range.  Both branches emit identical bytes.  Revalidate
-	// pshufb count, frame, spills and calls when staged preparation or compiler
-	// support changes; this polarity is not part of formatting semantics.
-#if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
+	// AArch64 TBL consumes the natural digit vector for every placement: keeping
+	// it through the notation branch removes a scalar round trip in both scalar
+	// and staged callers.  Complete binary32 pshufb assembly has the opposite
+	// profitable placement in the audited x86 compiler pipelines: Clang uses it
+	// while conversion/emission are in one scalar call, whereas GCC uses it after
+	// staged preparation shortens the surrounding live range.  Every branch
+	// selects the same bytes from the same carrier.  Revalidate shuffle count,
+	// frame, spills and calls when staged preparation or compiler support changes;
+	// placement is not part of formatting semantics.
+#if (defined(__aarch64__) || defined(__arm64__)) && !defined(__AARCH64EB__) && \
+	(defined(__clang__) || defined(__GNUC__))
+	if constexpr (binary32)
+	{
+		return ::fast_io::details::da::
+			print_ascii_scientific_aarch64_binary32<
+				flags.comma, flags.uppercase_e>(
+					destination, digit_data.unshuffled,
+					digits.span, exponent, has_extra_digit,
+					last_digit, has_last_digit);
+	}
+#elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	if constexpr (binary32)

@@ -269,6 +269,19 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 	}
 	#if defined(__SIZEOF_INT128__)
 	else if constexpr (
+		::fast_io::details::fp_floating_point_is_ibm_double_double<flt>)
+	{
+		auto const decimal{
+			::fast_io::details::wide_shortest_from_ibm_double_double<rounding>(
+				static_cast<long double>(value))};
+		if (!decimal.success)
+		{
+			::fast_io::fast_terminate();
+		}
+		return floating_precise_decimal_layout_size<flt, format, json_float>(
+			decimal.m10, decimal.e10);
+	}
+	else if constexpr (
 		::fast_io::details::print_floating_decimal_exact_supported<flt>)
 	{
 		auto const decimal{
@@ -2574,6 +2587,13 @@ inline constexpr char_type *print_reserve_precise_define(
 			iter, widened);
 	}
 #if defined(__SIZEOF_INT128__)
+	else if constexpr (
+		::fast_io::details::fp_floating_point_is_ibm_double_double<flt>)
+	{
+		return ::fast_io::details::
+			print_floating_ibm_double_double_scalar_define<flags>(
+				iter, value.reference);
+	}
 	else if constexpr (
 		::fast_io::details::print_floating_decimal_exact_supported<flt>)
 	{

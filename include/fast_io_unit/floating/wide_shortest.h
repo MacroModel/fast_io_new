@@ -2,6 +2,7 @@
 
 #include "punning.h"
 #include "roundtrip.h"
+#include "wide_ryu.h"
 
 #if defined(__SIZEOF_INT128__)
 
@@ -205,6 +206,45 @@ wide_shortest_compact_from_significand(
 		result.zero = true;
 		return result;
 	}
+	/*
+	Only the leading 40 digits and exact knowledge of equality can affect a
+	comparison with a <=38-digit candidate.  The 512-bit interval window proves
+	the leading digits by requiring its lower and upper floors to agree.  A
+	zero residual also proves exact termination and permits the compact result.
+	Any conservative positive residual leaves equality undecided and therefore
+	uses the complete expansion below.
+	*/
+	auto const window{
+		::fast_io::details::exact_precision_wide_window_from_significand(
+			significand,
+			::fast_io::details::ibm_double_double_u128_bit_width(significand),
+			binary_exponent, wide_shortest_compact_digits)};
+	/*
+	`tail_nonzero` is a conservative residual predicate, not an equality
+	oracle.  It may be true for an exactly terminated decimal endpoint (for
+	example an integer midpoint ending in zero).  Synthesizing a positive digit
+	from that predicate would move a closed endpoint outward and reject the
+	endpoint itself.  The compact comparison object therefore consumes a window
+	only when the residual is proved zero.  Otherwise the complete expansion
+	below determines the canonical length and whether a genuinely positive tail
+	exists.  Runtime nearest-even wide conversion will use its fixed-width fast
+	core; this branch remains the exact semantic reference for constant
+	evaluation and uncommon policies.
+	*/
+	if (window.success && !window.tail_nonzero)
+	{
+		wide_shortest_compact_decimal result{};
+		result.stored_size = window.decimal.size;
+		result.full_size = result.stored_size;
+		result.exponent = static_cast<::std::int_least32_t>(
+			window.real_exponent + 1 -
+			static_cast<::std::int_least32_t>(result.full_size));
+		for (::std::size_t index{}; index != result.stored_size; ++index)
+		{
+			result.digits[index] = window.decimal.digits[index];
+		}
+		return result;
+	}
 	auto const exact{
 		::fast_io::details::wide_shortest_exact_from_significand<flt>(
 			significand, binary_exponent)};
@@ -288,6 +328,214 @@ struct wide_shortest_interval
 	bool lower_closed{};
 	bool upper_closed{};
 };
+
+[[nodiscard]] inline constexpr ::fast_io::details::ibm_double_double_dyadic
+wide_shortest_ibm_add_dyadics(
+	::fast_io::details::ibm_double_double_dyadic left,
+	::fast_io::details::ibm_double_double_dyadic right,
+	::std::int_least32_t exponent_adjust = 0) noexcept
+{
+	/*
+	Zero has no intrinsic dyadic exponent.  Treating its placeholder exponent
+	as a scale would require an unbounded shift at the minimum subnormal.  The
+	identity 0+x=x instead transfers the nonzero operand's exact scale and then
+	applies exponent_adjust; for midpoint construction that adjustment is -1,
+	so (0+x)/2 becomes x*2^-1 exactly.
+	*/
+	if (!left.significand)
+	{
+		right.exponent = static_cast<::std::int_least32_t>(
+			right.exponent + exponent_adjust);
+		right.negative = false;
+		return right;
+	}
+	if (!right.significand)
+	{
+		left.exponent = static_cast<::std::int_least32_t>(
+			left.exponent + exponent_adjust);
+		left.negative = false;
+		return left;
+	}
+	auto const common_exponent{
+		left.exponent < right.exponent ? left.exponent : right.exponent};
+	auto const left_shift{
+		static_cast<unsigned>(left.exponent - common_exponent)};
+	auto const right_shift{
+		static_cast<unsigned>(right.exponent - common_exponent)};
+	if (127u <= left_shift || 127u <= right_shift)
+	{
+		return {};
+	}
+	auto significand{(left.significand << left_shift) +
+		(right.significand << right_shift)};
+	auto exponent{static_cast<::std::int_least32_t>(
+		common_exponent + exponent_adjust)};
+	for (; significand && (significand & 1u) == 0u;
+		 significand >>= 1u)
+	{
+		++exponent;
+	}
+	return {significand, exponent, false, significand != 0u};
+}
+
+/*
+For a positive IBM value with top binary exponent E, the representable lattice
+within its binade has quantum
+
+  q(E) = 2^max(E-105,-1074).
+
+This follows from p=106 until the low binary64 component reaches its own
+minimum subnormal exponent.  The successor always adds q(E).  The predecessor
+also subtracts q(E), except at an exact power of two: the preceding binade has
+top exponent E-1 and therefore quantum q(E-1).  This is the same asymmetric
+boundary responsible for shorter IEEE intervals, derived here from the IBM
+lattice rather than from a synthetic IEEE field.
+
+After aligning target and quantum at the smaller exponent, both integers have
+at most 107 bits.  Addition/subtraction is consequently exact in uint128.  The
+smallest target subtracts to zero; the largest target adds one final quantum
+to the virtual finite successor used solely by the overflow interval.  Thus no
+floating instruction, libm call, errno update, or exception flag participates
+in neighbor construction.
+*/
+[[nodiscard]] inline constexpr ::fast_io::details::ibm_double_double_dyadic
+wide_shortest_ibm_neighbor(
+	::fast_io::details::ibm_double_double_dyadic target,
+	bool successor) noexcept
+{
+	auto const width{
+		::fast_io::details::ibm_double_double_u128_bit_width(
+			target.significand)};
+	auto const top_exponent{static_cast<::std::int_least32_t>(
+		target.exponent + static_cast<::std::int_least32_t>(width - 1u))};
+	auto quantum_exponent{static_cast<::std::int_least32_t>(
+		top_exponent - 105)};
+	if (!successor && target.significand == 1u)
+	{
+		--quantum_exponent;
+	}
+	if (quantum_exponent < -1074)
+	{
+		quantum_exponent = -1074;
+	}
+	auto const common_exponent{
+		target.exponent < quantum_exponent ? target.exponent
+											 : quantum_exponent};
+	auto const target_shift{static_cast<unsigned>(
+		target.exponent - common_exponent)};
+	auto const quantum_shift{static_cast<unsigned>(
+		quantum_exponent - common_exponent)};
+	if (127u <= target_shift || 127u <= quantum_shift)
+	{
+		return {};
+	}
+	auto const target_integer{target.significand << target_shift};
+	auto const quantum_integer{static_cast<__uint128_t>(1u) << quantum_shift};
+	__uint128_t neighbor_integer{};
+	if (successor)
+	{
+		if ((~static_cast<__uint128_t>(0u)) - target_integer <
+			quantum_integer)
+		{
+			return {};
+		}
+		neighbor_integer = target_integer + quantum_integer;
+	}
+	else
+	{
+		if (target_integer < quantum_integer)
+		{
+			return {};
+		}
+		neighbor_integer = target_integer - quantum_integer;
+	}
+	auto neighbor_exponent{common_exponent};
+	for (; neighbor_integer && (neighbor_integer & 1u) == 0u;
+		 neighbor_integer >>= 1u)
+	{
+		++neighbor_exponent;
+	}
+	return {neighbor_integer, neighbor_exponent, false, true};
+}
+
+[[nodiscard]] inline constexpr bool wide_shortest_ibm_even(
+	::fast_io::details::ibm_double_double_dyadic const &value) noexcept
+{
+	auto const width{
+		::fast_io::details::ibm_double_double_u128_bit_width(
+			value.significand)};
+	auto const top_exponent{static_cast<::std::int_least32_t>(
+		value.exponent + static_cast<::std::int_least32_t>(width - 1u))};
+	/*
+	IBM double-double has p=106 until the low binary64 component reaches its
+	minimum exponent.  Its local lattice quantum is therefore
+
+	  2^max(top_exponent-105,-1074).
+
+	Expressing the target in units of that quantum gives the integer whose low
+	bit is the nearest-even tie bit.  This also handles powers of two: 1 is
+	2^105 local quanta and is even on both asymmetric sides.
+	*/
+	auto const quantum_exponent{
+		top_exponent - 105 < -1074 ? -1074 : top_exponent - 105};
+	if (value.exponent <= quantum_exponent)
+	{
+		return (value.significand & 1u) == 0u;
+	}
+	return true;
+}
+
+template <::fast_io::manipulators::floating_rounding rounding, typename flt>
+	requires(::fast_io::details::fp_floating_point_is_ibm_double_double<flt>)
+[[nodiscard]] inline constexpr ::fast_io::details::wide_shortest_interval
+wide_shortest_make_ibm_interval(flt value, bool negative) noexcept
+{
+	auto target{
+		::fast_io::details::get_ibm_double_double_dyadic(value)};
+	target.negative = false;
+	auto const previous{
+		::fast_io::details::wide_shortest_ibm_neighbor(target, false)};
+	auto const next{
+		::fast_io::details::wide_shortest_ibm_neighbor(target, true)};
+	wide_shortest_interval result{};
+	if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+	{
+		auto const lower_midpoint{
+			::fast_io::details::wide_shortest_ibm_add_dyadics(
+				previous, target, -1)};
+		auto const upper_midpoint{
+			::fast_io::details::wide_shortest_ibm_add_dyadics(
+				target, next, -1)};
+		result.lower = ::fast_io::details::
+			wide_shortest_compact_from_significand<flt>(
+				lower_midpoint.significand, lower_midpoint.exponent);
+		result.upper = ::fast_io::details::
+			wide_shortest_compact_from_significand<flt>(
+				upper_midpoint.significand, upper_midpoint.exponent);
+		auto const even{::fast_io::details::wide_shortest_ibm_even(target)};
+		result.lower_closed = ::fast_io::details::
+			dragonbox_nearest_normal_left_closed<rounding>(negative, even);
+		result.upper_closed = ::fast_io::details::
+			dragonbox_nearest_normal_right_closed<rounding>(negative, even);
+	}
+	else
+	{
+		auto const right_closed{
+			::fast_io::details::floating_rounding_directed_round_up<rounding>(
+				negative)};
+		auto const &lower{right_closed ? previous : target};
+		auto const &upper{right_closed ? target : next};
+		result.lower = ::fast_io::details::
+			wide_shortest_compact_from_significand<flt>(
+				lower.significand, lower.exponent);
+		result.upper = ::fast_io::details::
+			wide_shortest_compact_from_significand<flt>(
+				upper.significand, upper.exponent);
+		result.lower_closed = !right_closed;
+		result.upper_closed = right_closed;
+	}
+	return result;
+}
 
 template <typename flt,
 		  ::fast_io::manipulators::floating_rounding rounding>
@@ -390,6 +638,102 @@ wide_shortest_make_interval(
 }
 
 /*
+The window contains max_digits+1 proved decimal digits of the exact target.
+At precision P, digits [0,P) form L and digit P is the guard.  The remaining
+window digits plus tail_nonzero are exactly the sticky predicate; unlike the
+canonical full expansion, zero padding is therefore harmless.  The candidate
+exponent is real_exponent+1-P, derived directly from scientific notation and
+independent of the unmaterialized exact coefficient length.  Trying the two
+bracketing grid points in increasing P is the same completeness argument used
+by the full-expansion fallback below.
+*/
+template <::fast_io::manipulators::floating_rounding rounding>
+[[nodiscard]] inline constexpr ::fast_io::details::wide_shortest_result
+wide_shortest_from_window(
+	::fast_io::details::exact_precision_window_result const &window,
+	::fast_io::details::wide_shortest_interval const &interval,
+	::std::size_t maximum_digits, bool negative) noexcept
+{
+	if (!window.success || window.decimal.size <= maximum_digits)
+	{
+		return {};
+	}
+	__uint128_t prefix{};
+	for (::std::size_t precision{1u}; precision <= maximum_digits; ++precision)
+	{
+		prefix = prefix * 10u + window.decimal.digits[precision - 1u];
+		auto const candidate_exponent{static_cast<::std::int_least32_t>(
+			window.real_exponent + 1 -
+			static_cast<::std::int_least32_t>(precision))};
+		auto const guard{window.decimal.digits[precision]};
+		bool retained_after_guard{};
+		for (::std::size_t index{precision + 1u};
+			 !retained_after_guard && index != window.decimal.size; ++index)
+		{
+			retained_after_guard =
+				window.decimal.digits[index] != 0u;
+		}
+		auto const after_guard{
+			retained_after_guard || window.tail_nonzero};
+		/*
+		The fixed-width window proves every stored digit, but `tail_nonzero`
+		is deliberately conservative: a nonzero residual interval proves that
+		the omitted tail *may* be positive, not that the exact dyadic tail is.
+		That distinction is immaterial unless the guard is exactly five and
+		every retained digit after it is zero.  In precisely that case the
+		nearest policy must distinguish an exact midpoint from a value above it.
+
+		Example: (2^63+1)/4 has canonical decimal tail ".25".  A 22-digit
+		window stores an additional proved zero but can retain a conservative
+		residual; treating that residual as sticky chooses ...3 instead of the
+		nearest-even ...2.  No interval-width argument can recover the missing
+		equality bit.  Returning failure here delegates to the complete exact
+		expansion, which computes sticky as the existence of a later canonical
+		digit and therefore distinguishes equality.  For guard<5 or guard>5,
+		any possible tail lies strictly on the already selected side of one half.
+		For directed policies sticky never participates in prefer_upper.  Thus
+		this is the only ambiguous branch and the fallback is both necessary and
+		sufficient.
+		*/
+		if constexpr (
+			::fast_io::details::floating_rounding_is_nearest<
+				rounding>)
+		{
+			if (guard == 5u && !retained_after_guard &&
+				window.tail_nonzero)
+			{
+				return {};
+			}
+		}
+		auto const prefer_upper{
+			::fast_io::details::wide_shortest_prefer_upper<rounding>(
+				prefix, guard, after_guard, negative)};
+		auto const try_candidate = [&](bool upper) constexpr noexcept
+		{
+			auto coefficient{
+				prefix + static_cast<__uint128_t>(upper)};
+			auto exponent{candidate_exponent};
+			::fast_io::details::wide_shortest_trim(coefficient, exponent);
+			return ::fast_io::details::wide_shortest_result{
+				coefficient, exponent,
+				::fast_io::details::wide_shortest_interval_contains(
+					interval, coefficient, exponent)};
+		};
+		auto const preferred{try_candidate(prefer_upper)};
+		if (preferred.success)
+		{
+			return preferred;
+		}
+		auto const alternate{try_candidate(!prefer_upper)};
+		if (alternate.success)
+		{
+			return alternate;
+		}
+	}
+	return {};
+}
+
+/*
 Let the canonical exact expansion be D*10^e with N digits.  For a requested
 P, L=floor(D/10^(N-P))*10^(e+N-P) and U=L+10^(e+N-P) bracket the exact binary
 value.  Every IEC 60559 rounding preimage is one monotone interval containing
@@ -433,14 +777,133 @@ wide_shortest_from_binary(
 	{
 		return {0u, 0, true};
 	}
+	if constexpr (
+		rounding ==
+			::fast_io::manipulators::floating_rounding::
+				nearest_to_even &&
+		(trait::mbits == 63u || trait::mbits == 112u) &&
+		trait::ebits == 15u)
+	{
+		/*
+		Runtime/constant-path equivalence theorem
+		-----------------------------------------
+
+		wide_ryu_nearest_even and the exact backend below construct the same
+		nearest-even parsing interval from `(mantissa,binary_exponent)`.  Each
+		visits decimal grids in increasing precision, and at the first nonempty
+		grid each chooses the closest bracketing point with an even decimal tie.
+		The chosen carrier is therefore unique.  Replacing one implementation by
+		the other according to evaluation mode cannot change `(m10,e10)`.
+
+		The builtin constant-evaluation predicate folds to false in an ordinary
+		run-time instantiation; it is not a data-dependent branch and introduces
+		no dynamic dispatch overhead.  Constant evaluation deliberately retains
+		the table-independent exact proof below, while run time avoids its
+		5--14 microsecond big-integer endpoint materialization.  The enclosing
+		compiler-constant proxy already uses `__builtin_constant_p` to enter the
+		constant arm before this field function, so compile-known ftoa calls do
+		not instantiate a dynamic dispatcher.
+		*/
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+		if (!__builtin_is_constant_evaluated())
+#else
+		if (!::std::is_constant_evaluated())
+#endif
+		{
+			auto const fast{
+				::fast_io::details::
+					wide_ryu_nearest_even<flt>(
+						mantissa, binary_exponent)};
+			/*
+			The field guards above exclude the only two non-success domains
+			(special encodings and zero).  wide_ryu_nearest_even is total on
+			every remaining finite magnitude: both exponent signs construct a
+			cache index inside [0,4928], and the digit-removal loop terminates
+			because integer division strictly decreases a positive endpoint.
+			Returning unconditionally records that proof for the optimizer.  A
+			checked fallthrough would retain the multi-kilobyte exact backend in
+			the emitted runtime function and add a never-taken branch.
+			*/
+			return {fast.m10, fast.e10, fast.success};
+		}
+	}
+	else if constexpr (
+		(trait::mbits == 63u || trait::mbits == 112u) &&
+		trait::ebits == 15u)
+	{
+		/*
+		The other nine explicit policies use the policy-complete fixed-width
+		interval core.  Equations (3)--(6) in wide_ryu.h prove that its inclusive
+		integer interval is exactly the interval materialized below:
+		nearest policies use the same asymmetric midpoints and independently
+		chosen endpoint closures; directed policies use the same target/neighbor
+		pair and one closed target endpoint.  Both algorithms then visit decimal
+		grids from coarse admissibility to the first nonempty grid and apply the
+		same policy to the two target-adjacent points.  Their successful carrier
+		is consequently identical.
+
+		As for nearest-even, constant evaluation retains the table-independent
+		exact construction.  At run time the field guards above exclude special
+		encodings and zero.  For every remaining finite field, equations (5) and
+		(6) preserve a nonempty interval until the first failed coarsening, and
+		the target-bracketing theorem proves that one of floor(x) and floor(x)+1
+		is in that interval.  Thus the helper is total on this domain.  Returning
+		unconditionally records the proof for the optimizer, removes a
+		never-taken branch, and prevents the exact big-integer backend from being
+		retained in the emitted run-time function.
+		*/
+#if FAST_IO_HAS_BUILTIN(__builtin_is_constant_evaluated)
+		if (!__builtin_is_constant_evaluated())
+#else
+		if (!::std::is_constant_evaluated())
+#endif
+		{
+			auto const fast{
+				::fast_io::details::
+					wide_ryu_policy<flt, rounding>(
+						mantissa, binary_exponent, negative)};
+			return {fast.m10, fast.e10, fast.success};
+		}
+	}
 	auto const interval{
 		::fast_io::details::wide_shortest_make_interval<flt, rounding>(
 			mantissa, binary_exponent, negative)};
+	__uint128_t exact_significand{static_cast<__uint128_t>(mantissa)};
+	::std::int_least32_t exact_binary_exponent{};
+	constexpr auto bias{static_cast<::std::int_least32_t>(
+		(static_cast<::std::uint_least32_t>(1u) << (trait::ebits - 1u)) - 1u)};
+	if (binary_exponent)
+	{
+		exact_significand |= static_cast<__uint128_t>(1u) << trait::mbits;
+		exact_binary_exponent = static_cast<::std::int_least32_t>(
+			binary_exponent) - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		exact_binary_exponent =
+			1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	constexpr auto maximum_digits{
+		static_cast<::std::size_t>(trait::m10digits)};
+	auto const window{
+		::fast_io::details::exact_precision_wide_window_from_significand(
+			exact_significand,
+			::fast_io::details::ibm_double_double_u128_bit_width(
+				exact_significand),
+			exact_binary_exponent, maximum_digits + 1u)};
+	if (window.success)
+	{
+		auto const result{
+			::fast_io::details::wide_shortest_from_window<rounding>(
+				window, interval, maximum_digits, negative)};
+		if (result.success)
+		{
+			return result;
+		}
+	}
 	auto const decimal{::fast_io::details::exact_precision_from_binary<flt>(
 		mantissa, binary_exponent)};
 	__uint128_t prefix{};
-	constexpr auto maximum_digits{
-		static_cast<::std::size_t>(trait::m10digits)};
 	auto const limit{
 		decimal.size < maximum_digits ? decimal.size : maximum_digits};
 	for (::std::size_t precision{1u}; precision <= limit; ++precision)
@@ -463,6 +926,103 @@ wide_shortest_from_binary(
 			::fast_io::details::wide_shortest_prefer_upper<rounding>(
 				prefix, guard, after_guard, negative)};
 		auto try_candidate = [&](bool upper) constexpr noexcept {
+			auto coefficient{
+				prefix + static_cast<__uint128_t>(upper)};
+			auto exponent{candidate_exponent};
+			::fast_io::details::wide_shortest_trim(coefficient, exponent);
+			return ::fast_io::details::wide_shortest_result{
+				coefficient, exponent,
+				::fast_io::details::wide_shortest_interval_contains(
+					interval, coefficient, exponent)};
+		};
+		auto const preferred{try_candidate(prefer_upper)};
+		if (preferred.success)
+		{
+			return preferred;
+		}
+		auto const alternate{try_candidate(!prefer_upper)};
+		if (alternate.success)
+		{
+			return alternate;
+		}
+	}
+	return {};
+}
+
+/*
+IBM double-double shortest conversion uses the same decimal-grid completeness
+theorem as the binary80/binary128 path, but its interval endpoints come from
+the ABI's real adjacent values.  This distinction is essential at powers of
+two, in the reduced-precision underflow region and at overflow.  Once the
+interval and the target's exact dyadic expansion are known, trying the lower
+and upper decimal grid neighbors in increasing precision is representation
+independent; the proof preceding wide_shortest_from_binary applies verbatim.
+Thirty-five digits cover `max_digits10` for the 106-bit domain, and 10^35 is
+strictly smaller than 2^117, so every candidate and its one-unit successor fit
+the uint128 carrier.
+*/
+template <::fast_io::manipulators::floating_rounding rounding, typename flt>
+	requires(::fast_io::details::fp_floating_point_is_ibm_double_double<flt>)
+[[nodiscard]] inline constexpr ::fast_io::details::wide_shortest_result
+wide_shortest_from_ibm_double_double(flt value) noexcept
+{
+	static_assert(rounding !=
+		::fast_io::manipulators::floating_rounding::current_environment);
+	auto const target{
+		::fast_io::details::get_ibm_double_double_dyadic(value)};
+	if (!target.success)
+	{
+		return {};
+	}
+	if (!target.significand)
+	{
+		return {0u, 0, true};
+	}
+	auto const interval{
+		::fast_io::details::wide_shortest_make_ibm_interval<rounding>(
+			value, target.negative)};
+	constexpr ::std::size_t maximum_digits{35u};
+	auto const window{
+		::fast_io::details::exact_precision_wide_window_from_significand(
+			target.significand,
+			::fast_io::details::ibm_double_double_u128_bit_width(
+				target.significand),
+			target.exponent, maximum_digits + 1u)};
+	if (window.success)
+	{
+		auto const result{
+			::fast_io::details::wide_shortest_from_window<rounding>(
+				window, interval, maximum_digits, target.negative)};
+		if (result.success)
+		{
+			return result;
+		}
+	}
+	auto const decimal{
+		::fast_io::details::wide_shortest_exact_from_significand<flt>(
+			target.significand, target.exponent)};
+	__uint128_t prefix{};
+	auto const limit{
+		decimal.size < maximum_digits ? decimal.size : maximum_digits};
+	for (::std::size_t precision{1u}; precision <= limit; ++precision)
+	{
+		prefix = prefix * 10u + decimal.digits[precision - 1u];
+		auto const candidate_exponent{static_cast<::std::int_least32_t>(
+			decimal.exponent +
+			static_cast<::std::int_least32_t>(decimal.size - precision))};
+		if (precision == decimal.size)
+		{
+			return {prefix, candidate_exponent,
+				::fast_io::details::wide_shortest_interval_contains(
+					interval, prefix, candidate_exponent)};
+		}
+		auto const guard{decimal.digits[precision]};
+		auto const after_guard{precision + 1u < decimal.size};
+		auto const prefer_upper{
+			::fast_io::details::wide_shortest_prefer_upper<rounding>(
+				prefix, guard, after_guard, target.negative)};
+		auto const try_candidate = [&](bool upper) constexpr noexcept
+		{
 			auto coefficient{
 				prefix + static_cast<__uint128_t>(upper)};
 			auto exponent{candidate_exponent};

@@ -83,10 +83,12 @@ inline constexpr ::std::size_t compiler_constant_floating_scalar_capacity{5006u}
 template <typename floating_type>
 inline constexpr bool compiler_constant_floating_type_supported =
 	#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
-	(::fast_io::details::print_floating_decimal_direct_supported<
+	(!::fast_io::details::fp_floating_point_is_ibm_double_double<
+		 ::std::remove_cv_t<floating_type>> &&
+	 (::fast_io::details::print_floating_decimal_direct_supported<
 		 ::std::remove_cv_t<floating_type>> ||
 	 ::fast_io::details::print_floating_decimal_exact_supported<
-		 ::std::remove_cv_t<floating_type>>)
+		 ::std::remove_cv_t<floating_type>>))
 	#else
 	false
 #endif
@@ -95,8 +97,10 @@ inline constexpr bool compiler_constant_floating_type_supported =
 template <typename floating_type>
 inline constexpr bool compiler_constant_floating_hex_type_supported =
 	#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
-	::fast_io::details::compiler_constant_hex_has_iec559_traits<
-		::std::remove_cv_t<floating_type>>
+	(!::fast_io::details::fp_floating_point_is_ibm_double_double<
+		 ::std::remove_cv_t<floating_type>> &&
+	 ::fast_io::details::compiler_constant_hex_has_iec559_traits<
+		 ::std::remove_cv_t<floating_type>>)
 #else
 	false
 #endif
@@ -118,6 +122,18 @@ template <::fast_io::manipulators::scalar_flags flags, typename floating_type>
 inline constexpr bool compiler_constant_floating_precision_supported{
 	::fast_io::details::print_floating_precision_supported<flags, floating_type> &&
 	::fast_io::details::print_floating_precision_valid<flags.precision> &&
+	/*
+	The precision proxy captures one IEC field by bit-casting the complete object
+	to `iec559_traits<T>::mantissa_type`.  IBM double-double exposes those traits
+	only as a synthetic exact-value carrier: its object is the ordered pair
+	(high,low).  Concatenating that pair would recover neither their exact sum nor
+	the component-dependent hexadecimal normalization.  Excluding IBM here (and
+	not in compiler_constant_hex_scalar_supported, whose integer-field helpers
+	are also used after the native IBM adapter) proves that constant-value and
+	dynamic precision calls both enter the same native-object path.
+	*/
+	!::fast_io::details::fp_floating_point_is_ibm_double_double<
+		::std::remove_cv_t<floating_type>> &&
 	flags.percentage == ::fast_io::manipulators::percentage_flag::none &&
 	flags.rounding !=
 		::fast_io::manipulators::floating_rounding::current_environment &&

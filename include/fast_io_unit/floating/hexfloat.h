@@ -937,7 +937,26 @@ inline constexpr ::fast_io::parse_code scan_hexfloat_assign_ieee_result(T &value
 	static_assert(precision_bits <= sizeof(storage_type) * ::std::numeric_limits<unsigned char>::digits);
 	static_assert(sizeof(mantissa_type) <= sizeof(storage_type));
 	constexpr auto bias{static_cast<::std::int_least64_t>((static_cast<::std::uint_least32_t>(1u) << ebits) >> 1u) - 1};
-	constexpr auto min_exponent{1 - bias};
+	/*
+	IBM double-double's leading binary64 range ends at the binary64 exponent,
+	but its 106-bit normal lattice stops when the low component reaches the
+	binary64 subnormal floor.  Hence emin is -969 and the subnormal quantum is
+	2^(-969-(106-1))=2^-1074.  The ordinary IEEE expression 1-bias=-1022
+	would incorrectly invent 53 additional full-precision binades.
+	*/
+	constexpr auto min_exponent{[]() constexpr noexcept
+	{
+		if constexpr (::fast_io::details::
+			fp_floating_point_is_ibm_double_double<T>)
+		{
+			return static_cast<::std::int_least64_t>(
+				::std::numeric_limits<T>::min_exponent - 1);
+		}
+		else
+		{
+			return static_cast<::std::int_least64_t>(1 - bias);
+		}
+	}()};
 	constexpr auto max_exponent{bias};
 	constexpr auto int64_max{(::std::numeric_limits<::std::int_least64_t>::max)()};
 	constexpr auto int64_min{(::std::numeric_limits<::std::int_least64_t>::min)()};
@@ -955,7 +974,80 @@ inline constexpr ::fast_io::parse_code scan_hexfloat_assign_ieee_result(T &value
 		return ::fast_io::parse_code::overflow;
 	}
 
-	if constexpr (::fast_io::details::fp_floating_point_is_float80<T>)
+	if constexpr (
+		::fast_io::details::fp_floating_point_is_ibm_double_double<T>)
+	{
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+		/*
+		For a normal result, round_shift returns precisely the p=106 integer
+		S for x=S*2^(E-105).  Its guard/sticky decision already implements the
+		selected one of the ten policies.  A carry changes S=2^106 into
+		2^105 and increments E, an algebraic identity; crossing E=1023 is the
+		only ordinary exponent overflow.  The component bridge then preserves
+		the exact dyadic sum, including the asymmetric finite top cell proved
+		in punning.h.
+		*/
+		if (exponent2 >= min_exponent)
+		{
+			auto significand{
+				::fast_io::details::scan_hexfloat_round_shift<rounding>(
+					stored, remaining_bits, truncated_nonzero, negative,
+					total_bits - static_cast<::std::int_least64_t>(
+						precision_bits))};
+			auto target_exponent{exponent2};
+			if (significand == static_cast<storage_type>(
+					storage_type{1} << precision_bits))
+			{
+				significand >>= 1u;
+				if (target_exponent == max_exponent)
+				{
+					return ::fast_io::parse_code::overflow;
+				}
+				++target_exponent;
+			}
+			if (!::fast_io::details::fp_assign_ibm_double_double_significand(
+					value, static_cast<__uint128_t>(significand),
+					static_cast<::std::int_least32_t>(target_exponent -
+						static_cast<::std::int_least64_t>(mbits)),
+					negative))
+			{
+				return ::fast_io::parse_code::overflow;
+			}
+			return ::fast_io::parse_code::ok;
+		}
+
+		/*
+		Below emin every IBM value is an integral multiple of 2^-1074.
+		Rounding the exact hexadecimal integer directly to that grid is both
+		necessary and sufficient.  A quotient of zero is underflow; a quotient
+		of 2^105 reaches the least normal value without changing its value, so
+		both sides of the seam use the same exact component splitter.
+		*/
+		auto const subnormal_shift{
+			(min_exponent - static_cast<::std::int_least64_t>(mbits)) -
+			binary_exponent};
+		auto const fraction{
+			::fast_io::details::scan_hexfloat_round_shift<rounding>(
+				stored, remaining_bits, truncated_nonzero, negative,
+				subnormal_shift)};
+		if (fraction == 0u)
+		{
+			return ::fast_io::parse_code::overflow;
+		}
+		if (!::fast_io::details::fp_assign_ibm_double_double_significand(
+				value, static_cast<__uint128_t>(fraction),
+				static_cast<::std::int_least32_t>(
+					min_exponent - static_cast<::std::int_least64_t>(mbits)),
+				negative))
+		{
+			return ::fast_io::parse_code::overflow;
+		}
+		return ::fast_io::parse_code::ok;
+#else
+		return ::fast_io::parse_code::overflow;
+#endif
+	}
+	else if constexpr (::fast_io::details::fp_floating_point_is_float80<T>)
 	{
 		if (exponent2 >= min_exponent)
 		{
