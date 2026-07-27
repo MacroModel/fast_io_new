@@ -507,6 +507,37 @@ inline constexpr bool multiple_of_pow5(::std::uint_least64_t value, ::std::uint_
 	return value * m5.hi <= m5.lo;
 }
 
+/*
+After the exponent-bias adjustment, the source is m*2^e2.  The normal
+interval uses doubled integers
+
+	L=(2m-1)*2^(e2-1), C=(2m)*2^(e2-1),
+	R=(2m+1)*2^(e2-1).
+
+Writing k=minus_k, a boundary is an integer in the decimal grid precisely
+when
+
+	F*2^(e2-1) / 10^k
+		= F*2^(e2-k-1) / 5^k
+
+is integral (for k<0 the same identity moves 2^-k*5^-k into the
+numerator).  L and R have odd F, so they cannot supply a missing factor of
+two; C may, which is why the midpoint helper has the extra multiple-of-two
+case.  Substituting the finite binary32/binary64 e2 domains into the exact
+floor-log expression for k gives the ranges below:
+
+  * in the middle range every required factor is already in the explicit
+	2^(e2-1) and 10^-k terms;
+  * above it, only 5^k|F remains, tested by the proved modular inverse table;
+  * below it, an endpoint's odd F cannot supply the missing two, while a
+	center is integral iff 2^(k-e2+1)|F.
+
+At the upper false boundary binary64 has k>=24 and
+5^24>2^55>F; binary32 has k>=11 and 5^11>2^25>F.  Therefore divisibility is
+impossible there.  These cases are exhaustive and establish that each helper
+is an iff test for exact grid membership, not a recovered-cache
+approximation.
+*/
 inline constexpr bool is_integral_end_point(::std::uint_least64_t two_f, ::std::int_least32_t e2,
 											::std::int_least32_t minus_k) noexcept
 {
@@ -1112,9 +1143,31 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 			two_fr << static_cast<unsigned>(beta), pow10_lo, pow10_hi)};
 		::std::uint_least64_t q{z_result.integer_part / big_divisor};
 		::std::uint_least32_t r{static_cast<::std::uint_least32_t>(z_result.integer_part % big_divisor)};
+		/*
+		Endpoint membership must be decided in the exact decimal grid, not
+		from `z_result.is_integer`.  The latter says that the discarded limbs
+		of multiplication by the finite recovered cache are zero.  It is not
+		equivalent to exact divisibility of the binary endpoint: for example,
+		an endpoint can be an integer multiple of 10^k while the upward
+		recovered cache leaves a nonzero discarded limb.
+
+		For r==0, q lies on the right boundary exactly when
+		is_integral_end_point(two_fr,e2,minus_k) holds.  The helper proves
+		that predicate from the source integers by factoring
+		10^k=2^k*5^k; its modular-inverse table proof above is an iff test
+		for the required power of five.  Hence r!=0, an included endpoint,
+		or a nonintegral endpoint all admit q; only an open integral endpoint
+		must decrement and continue on the finer grid.  The r==delta branch
+		is the symmetric left-boundary statement.  In the final small-grid
+		tie, is_integral_mid_point applies the same exact factorization to
+		the center, so the selected binary-to-decimal tie policy is consulted
+		if and only if the candidate is the exact center.
+		*/
 		if (r < delta)
 		{
-			if (r || !z_result.is_integer || include_right)
+			if (r || include_right ||
+				!::fast_io::details::is_integral_end_point(
+					two_fr, e2, minus_k))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1125,7 +1178,10 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 		{
 			auto const x_result{
 				::fast_io::details::dragonbox_compute_mul_parity_float64(two_fl, pow10_lo, pow10_hi, beta)};
-			if (x_result.parity || (x_result.is_integer && include_left))
+			if (x_result.parity ||
+				(include_left &&
+				 ::fast_io::details::is_integral_end_point(
+					 two_fl, e2, minus_k)))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1142,8 +1198,10 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 			auto const y_result{
 				::fast_io::details::dragonbox_compute_mul_parity_float64(two_fc, pow10_lo, pow10_hi, beta)};
 			if (y_result.parity != approx_y_parity ||
-				(::fast_io::details::dragonbox_nearest_binary_tie_prefer_down<rounding>(negative, q) &&
-				 y_result.is_integer))
+				(::fast_io::details::dragonbox_nearest_binary_tie_prefer_down<rounding>(
+					 negative, q) &&
+				 ::fast_io::details::is_integral_mid_point(
+					 two_fc, e2, minus_k)))
 			{
 				--q;
 			}
@@ -1160,9 +1218,17 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 			static_cast<::std::uint_least64_t>(two_fr) << static_cast<unsigned>(beta), pow10)};
 		::std::uint_least32_t q{static_cast<::std::uint_least32_t>(z_result.integer_part / big_divisor)};
 		::std::uint_least32_t r{static_cast<::std::uint_least32_t>(z_result.integer_part % big_divisor)};
+		/*
+		The binary32 cache has the same recovered-endpoint distinction as
+		the binary64 cache.  Its exact helpers use the identical
+		2^k*5^k divisibility theorem in the 32-bit source domain, so these
+		three tests are the representation-width instance of the proof above.
+		*/
 		if (r < delta)
 		{
-			if (r || !z_result.is_integer || include_right)
+			if (r || include_right ||
+				!::fast_io::details::is_integral_end_point_float32(
+					two_fr, e2, minus_k))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1173,7 +1239,10 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 		{
 			auto const x_result{
 				::fast_io::details::dragonbox_compute_mul_parity_float32(two_fl, pow10, beta)};
-			if (x_result.parity || (x_result.is_integer && include_left))
+			if (x_result.parity ||
+				(include_left &&
+				 ::fast_io::details::is_integral_end_point_float32(
+					 two_fl, e2, minus_k)))
 			{
 				return {q, minus_k + kappa + 1};
 			}
@@ -1188,8 +1257,10 @@ dragonbox_main_nearest_policy(typename iec559_traits<flt>::mantissa_type m2, ::s
 			bool const approx_y_parity{((dist ^ small_divisor_div2) & 1u) != 0u};
 			auto const y_result{::fast_io::details::dragonbox_compute_mul_parity_float32(two_fc, pow10, beta)};
 			if (y_result.parity != approx_y_parity ||
-				(::fast_io::details::dragonbox_nearest_binary_tie_prefer_down<rounding>(negative, q) &&
-				 y_result.is_integer))
+				(::fast_io::details::dragonbox_nearest_binary_tie_prefer_down<rounding>(
+					 negative, q) &&
+				 ::fast_io::details::is_integral_mid_point_float32(
+					 two_fc, e2, minus_k)))
 			{
 				--q;
 			}
@@ -1801,15 +1872,18 @@ dragonbox_impl(typename iec559_traits<flt>::mantissa_type m2, ::std::int_least32
 
 		Binary32 and binary64 do not: dragonbox_main_nearest_policy constructs
 		their exact midpoint interval, while dragonbox_main_directed constructs
-		[x,next) or (prev,x] directly.  In the left-closed equality branch the
-		open integral endpoint is now rejected by the proved
-		`parity`/`is_integer` conjunction above.  Hence the returned carrier is
-		already a member of the exact source interval and has been obtained with
-		the larger divisor whenever that grid was nonempty; it is shortest by
-		construction.  Rechecking it with a decimal-to-binary roundtrip search
-		cannot change the result and previously added roughly 3--7 ns/value on
-		M4.  The `da_supported` gate removes that redundant search only for the
-		two representations whose interval was constructed directly.
+		[x,next) or (prev,x] directly.  Nearest-policy endpoint and center
+		equalities are decided by the exact 2^k*5^k divisibility predicates
+		above, independently of recovered-cache residue bits; the directed
+		left-closed equality branch likewise rejects its open integral endpoint
+		with the proved parity/integrality conjunction.  Hence the returned
+		carrier is already a member of the exact source interval and has been
+		obtained with the larger divisor whenever that grid was nonempty; it is
+		shortest by construction.  Rechecking it with a decimal-to-binary
+		roundtrip search cannot change the result and previously added roughly
+		3--7 ns/value on M4.  The `da_supported` gate removes that redundant
+		search only for the two representations whose interval was constructed
+		directly.
 		*/
 		::fast_io::details::dragonbox_correct_shortest_roundtrip<flt, rounding>(
 			trimmed.m10, trimmed.e10, m2, e2, negative);
@@ -2923,6 +2997,133 @@ dragonbox_narrow_shortest_layout_shift{
 	dragonbox_narrow_shortest_length_bits<flt>};
 
 /*
+Exact scientific spelling length
+--------------------------------
+
+Let a nonzero decimal carrier have L coefficient digits and scientific
+exponent X.  Its coefficient occupies one character when L=1 and L+1
+characters otherwise (the extra character is the radix point).  The exponent
+suffix occupies
+
+	e, sign, max(2,digits(|X|))
+
+characters.  The unsigned negation below is defined even for INT32_MIN and
+`chars_len` supplies the exact decimal digit count.  Saturating both additions
+makes the helper valid for precision modes whose virtual coefficient length is
+chosen by the caller; shortest carriers are far below the saturation bound.
+
+Every decimal notation selector uses this same function.  In particular, a
+one-digit coefficient has length five for a two-digit exponent (`1e-03`), not
+four.  Therefore an equal-length fixed spelling such as `0.001` or `10000`
+wins the documented fixed-on-equality rule.  The helper also accounts for the
+third and later exponent digits required by binary64, binary80 and binary128.
+*/
+[[nodiscard]] inline constexpr ::std::size_t
+print_rsv_fp_scientific_length(
+	::std::int_least32_t scientific_exponent,
+	::std::size_t coefficient_digits) noexcept
+{
+	auto exponent_magnitude{
+		static_cast<::std::uint_least32_t>(scientific_exponent)};
+	if (scientific_exponent < 0)
+	{
+		exponent_magnitude = 0u - exponent_magnitude;
+	}
+	auto exponent_digits{static_cast<::std::size_t>(
+		::fast_io::details::chars_len<10u, true>(exponent_magnitude))};
+	if (exponent_digits < 2u)
+	{
+		exponent_digits = 2u;
+	}
+	constexpr auto maximum{
+		(::std::numeric_limits<::std::size_t>::max)()};
+	auto result{coefficient_digits};
+	auto const point_size{
+		static_cast<::std::size_t>(coefficient_digits != 1u)};
+	result = maximum - result < point_size
+		? maximum
+		: result + point_size;
+	auto const suffix_size{exponent_digits + 2u};
+	return maximum - result < suffix_size
+		? maximum
+		: result + suffix_size;
+}
+
+/*
+Scientific-only raw-exponent bands
+----------------------------------
+
+Let a finalized shortest decimal be M*10^e, let L be the number of digits of
+M, and put X=e+L-1.  Then 10^X<=M*10^e<10^(X+1).  Binary32 and binary64
+shortest carriers satisfy L<=9 and L<=17 respectively.
+
+For a raw normal exponent r and bias b, the source magnitude lies in
+[2^(r-b),2^(r-b+1)).  A decimal which rounds to that source lies strictly
+inside the two adjacent finite floats: nearest policies are bounded by their
+midpoints, while directed policies are bounded by the target and the relevant
+neighbour.  The sign reverses interval orientation but leaves magnitudes and
+spelling lengths unchanged.
+
+At the lower boundary r<=b-15, the successor magnitude is at most 2^-14.
+Since 2^-14<10^-4, every admissible decimal has X<=-5.
+
+At the upper binary32 boundary r>=b+47, even the predecessor of the smallest
+source is
+
+	2^47-2^23 = 140737479966720 > 10^14,
+
+so X>=14.  For binary64 r>=b+74, that predecessor is
+
+	2^74-2^21 = 18889465931478578757632 > 10^22,
+
+so X>=22.
+
+Ignoring a sign/showpos character common to both spellings, fixed has length
+L-X+1 for X<0 and X+1 for X>=L.  Scientific length is computed exactly by
+print_rsv_fp_scientific_length:
+
+* X<=-5: fixed is at least L+6.  Scientific is 5 for L=1 and L+5 for
+  L>1 while |X|<100; every additional exponent digit is dominated by the
+  corresponding growth of -X.
+* binary32 X>=14: fixed is at least 15, scientific at most L+5<=14.
+* binary64 22<=X<100: fixed is at least 23, scientific at most L+5<=22.
+  For X>=100 fixed is at least 101 while scientific is at most L+6<=23.
+
+Thus scientific is strictly shorter throughout all four bands.  Equality is
+impossible, so decimal's fixed-on-equality rule is not bypassed.  Comma and
+uppercase E preserve length; JSON's optional ".0" can only lengthen an
+integral fixed spelling.  Special values and zero return before this predicate,
+and raw exponent zero is excluded, so no subnormal normalization invariant is
+changed.
+
+The presentation theorem itself is rounding-policy independent.  The current
+caller is deliberately narrower: only nearest-even binary32/binary64 reaches
+the DA carrier used below.  Extending another policy requires first proving
+that policy's shortest carrier; this predicate alone cannot justify reusing the
+nearest-even conversion.
+*/
+template <typename flt>
+[[nodiscard]] inline constexpr bool
+print_rsvflt_da_scientific_is_strictly_shorter(
+	::std::uint_least32_t raw_exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	static_assert(
+		(trait::mbits == 23u && trait::ebits == 8u) ||
+		(trait::mbits == 52u && trait::ebits == 11u));
+	constexpr ::std::uint_least32_t bias{
+		(static_cast<::std::uint_least32_t>(1u)
+		 << (trait::ebits - 1u)) -
+		1u};
+	constexpr ::std::uint_least32_t lower_raw_exponent{bias - 15u};
+	constexpr ::std::uint_least32_t upper_raw_exponent{
+		bias + (trait::mbits == 23u ? 47u : 74u)};
+	return raw_exponent != 0u &&
+		(raw_exponent <= lower_raw_exponent ||
+		 upper_raw_exponent <= raw_exponent);
+}
+
+/*
 Compact binary16/bfloat16 nearest-even carrier table
 ====================================================
 
@@ -3046,7 +3247,8 @@ dragonbox_make_narrow_shortest_page() noexcept
 				length + 1u;
 		}
 		auto const scientific_length{
-			length == 1u ? 4u : length + 5u};
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exponent, length)};
 		::std::uint_least32_t layout{};
 		if (scientific_length >= fixed_length)
 		{
@@ -3647,8 +3849,9 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_with
 			fixed_length = static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(-real_exp) +
 															  static_cast<::std::uint_least32_t>(olength) + 1u);
 		}
-		::std::uint_least32_t scientific_length{
-			static_cast<::std::uint_least32_t>(olength == 1 ? olength + 3 : olength + 5)};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exp, static_cast<::std::size_t>(olength))};
 		if (scientific_length < fixed_length)
 		{
 			// scientific decision
@@ -3737,8 +3940,9 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_decision_impl
 			fixed_length = static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(-real_exp) +
 															  static_cast<::std::uint_least32_t>(olength) + 1u);
 		}
-		::std::uint_least32_t scientific_length{
-			static_cast<::std::uint_least32_t>(olength == 1 ? olength + 3 : olength + 5)};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exp, static_cast<::std::size_t>(olength))};
 		if (scientific_length < fixed_length)
 		{
 			iter = print_rsv_fp_decimal_common_impl<comma>(iter, m10, static_cast<::std::uint_least32_t>(olength));
@@ -9122,8 +9326,9 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 			fixed_length = ::fast_io::details::exact_precision_saturating_add(
 				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
 		}
-		auto const scientific_length{::fast_io::details::exact_precision_saturating_add(
-			virtual_size, virtual_size == 1u ? 3u : 5u)};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				rounded_exponent, virtual_size)};
 		fixed = scientific_length >= fixed_length;
 	}
 	if (fixed)
@@ -10404,8 +10609,8 @@ inline constexpr char_type *exact_precision_wide_runtime_present(
 				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
 		}
 		auto const scientific_length{
-			::fast_io::details::exact_precision_saturating_add(
-				virtual_size, virtual_size == 1u ? 3u : 5u)};
+			::fast_io::details::print_rsv_fp_scientific_length(
+				rounded_exponent, virtual_size)};
 		fixed = scientific_length >= fixed_length;
 	}
 	if (fixed)
@@ -12245,6 +12450,19 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 				value.json_float = json_float;
 				return value;
 			}()};
+			constexpr auto direct_scientific_flags{[]() constexpr noexcept {
+				auto value{
+					::fast_io::manipulators::
+						floating_point_default_scalar_flags};
+				value.uppercase = uppercase;
+				value.uppercase_e = uppercase_e;
+				value.comma = comma;
+				value.floating =
+					::fast_io::manipulators::
+						floating_format::scientific;
+				value.json_float = json_float;
+				return value;
+			}()};
 			// GCC-specific shortest-emission boundaries.  Regular binary64 values
 			// keep conversion and the selected renderer close; irregular/subnormal
 			// values use a compiler-major-specific rare entry.  The portable branch
@@ -12265,6 +12483,22 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 						(static_cast<::std::uint_least64_t>(1u) << trait::mbits)};
 					auto const regular{::fast_io::details::da::compute_binary64(
 						binary_significand, exponent)};
+					if constexpr (
+						mt ==
+						::fast_io::manipulators::
+							floating_format::decimal)
+					{
+						if (::fast_io::details::
+								print_rsvflt_da_scientific_is_strictly_shorter<
+									flt>(exponent))
+						{
+							return ::fast_io::details::da::
+								print_ascii_shortest<
+									flt,
+									direct_scientific_flags>(
+										iter, regular);
+						}
+					}
 					// GCC 13-15 keep selected decimal fixed bands in the direct entry so
 					// the already-known layout does not flow through the general decision.
 					// GCC 16 uses the unified path after its constant/load schedule changed.
@@ -12361,6 +12595,70 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 						::fast_io::details::da::compute_binary32_fields(
 							binary_significand, exponent, significand, decimal_exponent,
 							last_digit, has_last_digit);
+						if constexpr (
+							mt ==
+							::fast_io::manipulators::
+								floating_format::decimal)
+						{
+							if (::fast_io::details::
+									print_rsvflt_da_scientific_is_strictly_shorter<
+										flt>(exponent))
+							{
+								/*
+								GCC 16's profitable scientific-band schedule is
+								the inverse of the general decimal schedule below:
+								the renderer is small enough to inline after the
+								layout decision has been proved at the raw-exponent
+								level, keeping the four SIMD divisors behind one base
+								shortens their live ranges, and staged emission lets
+								the x86 renderer assemble the complete scientific
+								spelling with its single pshufb.  Two independent
+								three-cycle CPU6 ABBA campaigns improved the complete
+								public f32 conversion by 5.68% and 6.12%; the isolated
+								fields result ranged from +0.08% to -0.90%, so the
+								public call, not the isolated leaf, is the acceptance
+								metric.  The staged choice adds 632 linked text bytes.
+
+								GCC 14/15 retain the previously measured outlined
+								entry.  The arithmetic identity is exact in either
+								case: compute_binary32_fields has already produced
+								the same four carrier fields, and both renderer
+								entries instantiate print_ascii_shortest_fields with
+								scientific flags.  Cached versus immediate divisor
+								constants spell identical reciprocal integers; only
+								load placement and the call boundary differ.  More
+								specifically, staged=false and staged=true derive the
+								same digit block, span, scientific exponent, optional
+								interval digit and returned length.  The latter merely
+								selects the x86 shuffle spelling proved equivalent to
+								the scalar assembler in da/ascii.h.  Exhaustively
+								comparing both renderers for every nonzero-mantissa
+								normal binary32 encoding in the guaranteed-scientific
+								raw-exponent bands covered 1,619,001,151 carriers with
+								identical bytes and pointers.
+								*/
+#if 16 <= __GNUC__
+								return ::fast_io::details::da::
+									print_ascii_shortest_fields<
+										flt,
+										direct_scientific_flags,
+										true, true>(
+											iter, significand,
+											decimal_exponent,
+											last_digit,
+											has_last_digit);
+#else
+								return ::fast_io::details::da::
+									print_ascii_shortest_split<
+										flt,
+										direct_scientific_flags>(
+											iter, significand,
+											decimal_exponent,
+											last_digit,
+											has_last_digit);
+#endif
+							}
+						}
 						// This call boundary preserves the admitted major/format live
 						// ranges. Recheck spills, calls, pshufb placement and linked text
 						// if a future compiler requires another transition.
@@ -12408,6 +12706,19 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 			// This is the semantic reference for every GCC-specific branch above.
 			auto const converted{::fast_io::details::da::to_conversion_result<flt>(
 				mantissa, static_cast<::std::int_least32_t>(exponent))};
+			if constexpr (
+				mt == ::fast_io::manipulators::floating_format::decimal)
+			{
+				if (::fast_io::details::
+						print_rsvflt_da_scientific_is_strictly_shorter<
+							flt>(exponent))
+				{
+					return ::fast_io::details::da::
+						print_ascii_shortest<
+							flt, direct_scientific_flags>(
+								iter, converted);
+				}
+			}
 			/*
 			The binary64 ASCII leaf consumes a 15- or 16-digit provisional
 			coefficient.  Every normal carrier satisfies that invariant.  A high

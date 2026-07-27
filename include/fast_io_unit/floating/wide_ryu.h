@@ -1,9 +1,9 @@
 ﻿#pragma once
 
 #include "punning.h"
-#include "wide_ryu_cache.h"
-
 #if defined(__SIZEOF_INT128__)
+
+#include "wide_ryu_cache.h"
 
 namespace fast_io::details
 {
@@ -349,9 +349,21 @@ Moving to the next coarser decimal grid replaces [L,U] by
 
     [ceil(L/10), floor(U/10)].                                 (6)
 
-Thus a digit can be deleted iff the interval in (6) is nonempty.  Repeating
-(6) computes the coarsest nonempty decimal grid and therefore the minimum
-significant-digit count.
+If (6) is nonempty, let y be an admitted point on that coarser grid.  On the
+current grid y has a coefficient divisible by ten.  Monotonicity of the
+rounding interval also admits the target-adjacent current-grid point z between
+x and y.  If z!=y, the normalized coefficient of y has fewer significant
+digits than z; if z=y, both grids normalize to the identical decimal.
+Therefore coarsening either improves significant-digit count or preserves the
+same canonical value while floor(x/h)>=10.
+
+The sole transition needing a stop is floor(x/h)<10.  A nonzero result already
+has one significant digit there, so the 10h grid cannot improve the primary
+minimum-digit objective.  Its admitted point can instead be a farther
+one-digit decimal across a power-of-ten boundary.  The loop consequently stops
+before that transition, as proved at the guard below.  Repeating (6) subject to
+this stop computes the minimum significant-digit count and, among equally
+short candidates, preserves the closest decimal/tie ordering.
 
 At that grid, floor(x) and floor(x)+1 are the only candidates adjacent to x.
 For nearest policies the removed guard/sticky pair chooses the closer one and
@@ -745,6 +757,42 @@ wide_ryu_policy(
 	bool sticky{!target_exact};
 	for (;;)
 	{
+		/*
+		Significant-digit minimality is not decimal-grid coarseness
+		------------------------------------------------------------
+
+		Let the current grid spacing be h and write x/h=t.  Once
+		floor(t)<10, moving to spacing 10h cannot reduce the number of
+		significant digits of a nonzero result below one.  More importantly,
+		blindly accepting that coarser grid can change the canonical closest
+		one-digit result.
+
+		This is observable at the positive binary128 minimum subnormal under
+		toward-minus-infinity.  Its parsing interval is
+
+		    [x,2x),  x = 2^-16494 = 6.475...e-4966.
+
+		On the h=1e-4966 grid, 7h is the closest admitted one-digit decimal.
+		The 10h grid is also nonempty and contains 10h=1e-4965, but that
+		decimal still has one significant digit after normalization and is
+		farther from x.  The old loop therefore returned 1e-4965 at run time
+		while the exact constant-evaluation path correctly returned 7e-4966.
+
+		The following stop is complete, not special-case arithmetic.  If a
+		nonzero point y on the 10h grid belongs to the monotone parsing
+		interval containing x, the current-grid point z nearest x on the same
+		side satisfies x <= z <= y or y <= z <= x, hence z belongs as well.
+		When floor(t)<10, z has one decimal digit, except z=10h, which
+		normalizes to exactly the same one-digit value as y.  Thus the finer
+		grid always supplies a closer one-digit candidate or the identical
+		candidate; no coarser grid can improve significant-digit count or the
+		canonical distance/tie ordering.  Stopping here restores the proven
+		equivalence with wide_shortest_from_window and the full exact backend.
+		*/
+		if (target_floor < 10u)
+		{
+			break;
+		}
 		auto const next_lower{
 			lower / 10u +
 			static_cast<__uint128_t>(lower % 10u != 0u)};

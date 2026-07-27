@@ -327,8 +327,16 @@ void print_contiguous_staged_range_define();
 void print_contiguous_staged_range_width();
 
 template <::std::integral char_type, ::std::input_iterator It>
-inline constexpr bool sized_range_view_contiguous_staged_v = []() constexpr
+[[nodiscard]] inline consteval bool
+sized_range_view_contiguous_staged() noexcept
 {
+	/*
+	Keep this capability query as an immediate function rather than an inline
+	variable-template initializer.  Clang 17 otherwise crashes while completing
+	the nested requires-expression (InstantiateVariableInitializer from an
+	ExprRequirement).  The function has the same compile-time Boolean value and
+	every use remains an atomic constraint, while avoiding that frontend path.
+	*/
 	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
 	using value_type = typename view_type::forwarded_value_type;
 	if constexpr (
@@ -364,10 +372,10 @@ inline constexpr bool sized_range_view_contiguous_staged_v = []() constexpr
 			} noexcept -> ::std::same_as<char_type *>;
 		};
 	}
-}();
+}
 
 template <::std::integral char_type, ::std::input_iterator It>
-	requires(::fast_io::sized_range_view_contiguous_staged_v<char_type, It>)
+	requires(::fast_io::sized_range_view_contiguous_staged<char_type, It>())
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 sized_range_view_staged_define(
 	char_type *destination, sized_range_view_t<char_type, It> value) noexcept
@@ -398,7 +406,7 @@ inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, si
 		return ptr;
 	}
 	if constexpr (
-		::fast_io::sized_range_view_contiguous_staged_v<char_type, It>)
+		::fast_io::sized_range_view_contiguous_staged<char_type, It>())
 	{
 		/*
 		The specialization preserves this function's reserve contract.  For
@@ -884,7 +892,7 @@ inline constexpr bool try_sized_range_view_put_area_direct_scatter(
 template <::std::integral char_type, ::std::contiguous_iterator It,
 	typename output>
 	requires(
-		::fast_io::sized_range_view_contiguous_staged_v<char_type, It> &&
+		::fast_io::sized_range_view_contiguous_staged<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
@@ -976,7 +984,7 @@ inline constexpr void print_define(io_reserve_type_t<char_type, sized_range_view
 		return;
 	}
 	if constexpr (
-		::fast_io::sized_range_view_contiguous_staged_v<char_type, It> &&
+		::fast_io::sized_range_view_contiguous_staged<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 	{

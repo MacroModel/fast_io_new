@@ -737,8 +737,6 @@ inline constexpr ::std::size_t print_contiguous_staged_range_width(
 	::fast_io::io_reserve_type_t<
 		char, ::fast_io::manipulators::scalar_manip_t<flags, flt>>) noexcept
 {
-	using trait = ::fast_io::details::iec559_traits<
-		::std::remove_cvref_t<flt>>;
 	/*
 	This is the minimum count that pays for the source-aware phase boundary,
 	and exactly the number of independent carriers retained by one iteration.

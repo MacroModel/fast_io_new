@@ -837,17 +837,23 @@ wide_shortest_from_binary(
 		integer interval is exactly the interval materialized below:
 		nearest policies use the same asymmetric midpoints and independently
 		chosen endpoint closures; directed policies use the same target/neighbor
-		pair and one closed target endpoint.  Both algorithms then visit decimal
-		grids from coarse admissibility to the first nonempty grid and apply the
-		same policy to the two target-adjacent points.  Their successful carrier
-		is consequently identical.
+		pair and one closed target endpoint.  Both algorithms minimize normalized
+		significant digits and then apply the same distance/tie policy to the two
+		target-adjacent points.  The fixed core's `target_floor < 10` stop is the
+		power-of-ten boundary needed for this equivalence: beyond it a coarser
+		grid cannot reduce a nonzero result below one digit and may only replace
+		the exact backend's closer one-digit point by a farther one.  Its proof
+		in wide_ryu.h shows that every earlier coarsening either reduces digit
+		count or preserves the identical normalized decimal.  Their successful
+		carrier is consequently identical.
 
 		As for nearest-even, constant evaluation retains the table-independent
 		exact construction.  At run time the field guards above exclude special
 		encodings and zero.  For every remaining finite field, equations (5) and
-		(6) preserve a nonempty interval until the first failed coarsening, and
-		the target-bracketing theorem proves that one of floor(x) and floor(x)+1
-		is in that interval.  Thus the helper is total on this domain.  Returning
+		(6) preserve a nonempty interval until the first failed or canonical
+		one-digit coarsening, and the target-bracketing theorem proves that one
+		of floor(x) and floor(x)+1 is in that interval.  Thus the helper is total
+		on this domain.  Returning
 		unconditionally records the proof for the optimizer, removes a
 		never-taken branch, and prevents the exact big-integer backend from being
 		retained in the emitted run-time function.

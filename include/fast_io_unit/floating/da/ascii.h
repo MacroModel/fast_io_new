@@ -360,20 +360,19 @@ ascii_x86_bcd4x4(ascii_x86_u32x4 value) noexcept
 	if constexpr (use_cached_constants)
 	{
 		auto constants{__builtin_addressof(ascii_x86_bcd_constants)};
-		if (!__builtin_is_constant_evaluated())
-		{
-			// Code-generation barrier only: keep the four divisor vectors behind
-			// one opaque base address.  GCC 13-15 otherwise duplicate address or
-			// constant materialization in the audited hot path.  Arithmetic is
-			// unchanged; revalidate loads, spills and calls before removing it.
+		// Code-generation barrier only: keep the four divisor vectors behind
+		// one opaque base address.  This function is not constexpr, so every
+		// invocation is a runtime invocation; an is_constant_evaluated guard is
+		// both redundant and diagnosed as tautological by GCC 13-15 under
+		// -Werror.  Arithmetic is unchanged.  Revalidate loads, spills and calls
+		// before removing the barrier itself.
 #if !defined(_MSC_VER) && \
 	(defined(__clang__) || (defined(__GNUC__) && !defined(__clang__)))
-			// GNU extended assembly is unavailable in native MSVC and is not part of
-			// the clang-cl source contract audited here.  Omitting this empty barrier
-			// can only rematerialize the address; it cannot change a divisor or digit.
-			__asm__("" : "+r"(constants));
+		// GNU extended assembly is unavailable in native MSVC and is not part of
+		// the clang-cl source contract audited here.  Omitting this empty barrier
+		// can only rematerialize the address; it cannot change a divisor or digit.
+		__asm__("" : "+r"(constants));
 #endif
-		}
 		auto const hundreds_words{::fast_io::details::da::ascii_x86_mul_high_u16(
 			__builtin_bit_cast(ascii_x86_u16x8, value),
 			constants->div100)};
@@ -410,9 +409,16 @@ make_ascii_digit_data_x86(::std::uint_least64_t value) noexcept
 	{
 		auto const pairs{value + static_cast<::std::uint_least64_t>(4294957296) *
 									 ((value * ascii_div10000_multiplier) >> 40u)};
+		/*
+		On little-endian x86, bit-casting {pairs,0} places the low and high
+		32-bit halves of pairs in BCD lanes zero and one and clears lanes two and
+		three.  This is exactly the previous four-element vector initializer, but
+		exposes the complete low 64-bit lane to the backend as one vmovq.
+		*/
+		auto const pair_lanes{__builtin_bit_cast(
+			ascii_x86_u32x4, ascii_x86_u64x2{pairs, 0u})};
 		auto const unshuffled{::fast_io::details::da::ascii_x86_bcd4x4<use_cached_constants>(
-			ascii_x86_u32x4{static_cast<unsigned int>(pairs),
-							static_cast<unsigned int>(pairs >> 32u), 0u, 0u})};
+			pair_lanes)};
 		auto const raw{__builtin_bit_cast(ascii_x86_u64x2, unshuffled)[0]};
 		auto const span{raw ? static_cast<::std::uint_least32_t>(
 								  8u - (static_cast<::std::uint_least32_t>(::std::countr_zero(raw)) >> 3u))
@@ -635,7 +641,13 @@ struct ascii_fixed_layout_cache
 				{
 					fixed_length = static_cast<::std::uint_least32_t>(-exponent) + length + 1u;
 				}
-				auto const scientific_length{length == 1u ? length + 3u : length + 5u};
+				/*
+				Within this cache X is in [-5,26], so the exponent suffix is
+				exactly four characters (`e`, sign, two digits).  The coefficient
+				is one character for L=1 and L+1 otherwise.
+				*/
+				auto const scientific_length{
+					length == 1u ? length + 4u : length + 5u};
 				layout.decimal_fixed_mask |= static_cast<::std::uint_least32_t>(
 												 fixed_length <= scientific_length)
 											 << (length - 1u);

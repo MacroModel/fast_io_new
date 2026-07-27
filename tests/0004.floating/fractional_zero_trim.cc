@@ -1,9 +1,10 @@
 #include <bit>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <system_error>
 
-#include <fast_io_freestanding.h>
-#include <fast_io_unit/string.h>
+#include <fast_io.h>
 
 int main()
 {
@@ -18,6 +19,64 @@ int main()
 	constexpr auto significant_mode{floating_precision::significant};
 	constexpr auto preserving_mode{
 		floating_precision::fractional_preserve_trailing_zero};
+
+	/*
+	A one-digit scientific coefficient still has a four-character exponent
+	suffix (`e`, sign, two digits).  Thus `0.001` and `1e-03`, and likewise
+	`10000` and `1e+04`, are equal-length alternatives.  Decimal format must
+	choose fixed on equality.  The volatile field source exercises the runtime
+	DA path; literals exercise the compiler-constant proxy; wide output reaches
+	the code-unit-generic renderer; significant precision reaches the exact
+	virtual-length selector.  Exact five-byte to_chars buffers additionally pin
+	the precise-size/emission agreement and the no-overstore boundary.
+	*/
+	volatile ::std::uint64_t low_bits{
+		::std::bit_cast<::std::uint64_t>(0.001)};
+	volatile ::std::uint64_t high_bits{
+		::std::bit_cast<::std::uint64_t>(10000.0)};
+	auto const runtime_low{
+		::std::bit_cast<double>(
+			static_cast<::std::uint64_t>(low_bits))};
+	auto const runtime_high{
+		::std::bit_cast<double>(
+			static_cast<::std::uint64_t>(high_bits))};
+	auto const runtime_low_text{::fast_io::concat_std(runtime_low)};
+	auto const runtime_high_text{::fast_io::concat_std(runtime_high)};
+	auto const constant_low_text{::fast_io::concat_std(0.001)};
+	auto const constant_high_text{::fast_io::concat_std(10000.0)};
+	auto const wide_low_text{::fast_io::wconcat_std(runtime_low)};
+	auto const precision_low_text{::fast_io::concat_std(
+		decimal<significant_mode, nearest>(runtime_low, 1u))};
+	auto const precision_high_text{::fast_io::concat_std(
+		decimal<significant_mode, nearest>(runtime_high, 1u))};
+	char low_buffer[6u]{};
+	char high_buffer[6u]{};
+	low_buffer[5] = '!';
+	high_buffer[5] = '!';
+	auto const low_to_chars{
+		::fast_io::to_chars(
+			low_buffer, low_buffer + 5u, runtime_low)};
+	auto const high_to_chars{
+		::fast_io::to_chars(
+			high_buffer, high_buffer + 5u, runtime_high)};
+	if (runtime_low_text != "0.001" ||
+		runtime_high_text != "10000" ||
+		constant_low_text != "0.001" ||
+		constant_high_text != "10000" ||
+		wide_low_text != L"0.001" ||
+		precision_low_text != "0.001" ||
+		precision_high_text != "10000" ||
+		low_to_chars.ec != ::std::errc{} ||
+		low_to_chars.ptr != low_buffer + 5u ||
+		::std::string_view(low_buffer, 5u) != "0.001" ||
+		high_to_chars.ec != ::std::errc{} ||
+		high_to_chars.ptr != high_buffer + 5u ||
+		::std::string_view(high_buffer, 5u) != "10000" ||
+		low_buffer[5] != '!' || high_buffer[5] != '!')
+	{
+		return 1;
+	}
+
 	auto const tiny_general{::fast_io::concat_std(
 		general<fractional_mode, nearest>(tiny_value, 6u))};
 	auto const tiny_negative{::fast_io::concat_std(

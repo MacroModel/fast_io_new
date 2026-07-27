@@ -2046,8 +2046,36 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 				return static_cast<::std::int_least64_t>(1 - bias);
 			}
 		}()};
-		constexpr auto max_exponent{static_cast<::std::int_least64_t>(
-			::std::numeric_limits<no_cvref_t>::max_exponent - 1)};
+		constexpr auto max_exponent{[]() constexpr noexcept
+		{
+			if constexpr (::fast_io::details::
+				fp_floating_point_is_ibm_double_double<no_cvref_t>)
+			{
+				return static_cast<::std::int_least64_t>(
+					::std::numeric_limits<no_cvref_t>::max_exponent - 1);
+			}
+			else
+			{
+				/*
+				For an IEC field with E exponent bits the bias is
+				B=2^(E-1)-1 and the largest finite unbiased exponent is B.
+				This is the exact inverse of the encoded exponent (2^E-2);
+				it depends only on the representation already proved by
+				scan_decfloat_layout_supported.
+
+				Do not query numeric_limits here.  Compiler extension types may
+				have a complete iec559_traits specialization while the selected
+				C++ standard library does not specialize numeric_limits for that
+				frontend.  In particular Clang with libstdc++ reports
+				numeric_limits<__float128>::max_exponent==0, which would turn
+				every value at exponent zero (for example 1.25) into a false
+				overflow.  Substitution of B is identical for every standard
+				specialization and keeps the arithmetic independent of frontend
+				library declarations.
+				*/
+				return bias;
+			}
+		}()};
 		if constexpr (rounding == ::fast_io::manipulators::floating_rounding::current_environment)
 		{
 			switch (::fast_io::details::current_floating_rounding())
@@ -3304,8 +3332,9 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 [[msvc::forceinline]]
 #endif
 [[nodiscard]] inline constexpr scan_decfloat_fast_result<char_type>
-scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type const *first,
-										   char_type const *end, bool negative, T &value) noexcept
+scan_decfloat_contiguous_short_define_impl(char_type const *first,
+										   char_type const *end,
+										   bool negative, T &value) noexcept
 {
 	if constexpr (sizeof(char_type) != sizeof(char8_t) || !::fast_io::details::is_ascii<char_type>)
 	{
@@ -3381,15 +3410,63 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 				first += sizeof(::std::uint_least64_t);
 				has_digit = true;
 			}
-			for (; first != end && ::fast_io::details::scan_decfloat_decimal_digit(*first, digit); ++first)
-			{
+			/*
+			Peel a compiler-selected short scalar prefix without changing the
+			decimal recurrence.
+			One successful call consumes exactly one abstract digit d and applies
+
+				(S,n,p) -> (10*S+d,n+1,p+1).
+
+			The `&&` sequence stops at the first end/nondigit, exactly where the
+			former loop stopped; only after every peeled call succeeds can the
+			residual loop run.  Testing the digit before `digit_limit` is
+			significant: a nondigit after the last storable digit completes the
+			short token, whereas one more digit must select the exact long
+			fallback.  Thus the peeled and loop forms have identical pointer,
+			coefficient, count and fallback results.
+
+			Four calls give the best measured layout on Apple/LLVM and GCC
+			11--15.  GCC 16 lowers three calls to a smaller public parser and a
+			better real Raptor-Lake result; LLVM-MCA also reduces its modeled
+			uops versus four calls on Alder Lake, Zen 3/4 and Broadwell.  The
+			compile-time choice changes only how many applications of the proved
+			recurrence are written straight-line.  It does not claim to remove
+			every dynamic branch, and the residual loop is identical.
+			*/
+			bool digit_limit_reached{};
+			auto scan_one_digit = [&]() constexpr noexcept {
+				if (first == end ||
+					!::fast_io::details::scan_decfloat_decimal_digit(*first, digit))
+				{
+					return false;
+				}
 				if (digit_count == digit_limit)
 				{
-					return {};
+					digit_limit_reached = true;
+					return false;
 				}
-				significand = significand * 10u + static_cast<::std::uint_least64_t>(digit);
+				significand =
+					significand * 10u + static_cast<::std::uint_least64_t>(digit);
 				++digit_count;
+				++first;
 				has_digit = true;
+				return true;
+			};
+#if defined(__GNUC__) && !defined(__clang__) && 16 <= __GNUC__
+			if (scan_one_digit() && scan_one_digit() &&
+				scan_one_digit())
+#else
+			if (scan_one_digit() && scan_one_digit() &&
+				scan_one_digit() && scan_one_digit())
+#endif
+			{
+				while (scan_one_digit())
+				{
+				}
+			}
+			if (digit_limit_reached)
+			{
+				return {};
 			}
 
 			constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
@@ -3404,7 +3481,7 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 				fractional_digits is therefore measured from fraction_begin after
 				scanning and includes every skipped code unit.  Thus
 
-				    0.00D * 10^E = D * 10^(E-3)
+					0.00D * 10^E = D * 10^(E-3)
 
 				is preserved exactly.  Once significand is nonzero, an intervening
 				zero changes the place value of every later digit and must enter
@@ -3457,22 +3534,78 @@ scan_decfloat_contiguous_short_define_impl(char_type const *begin, char_type con
 					first += sizeof(::std::uint_least64_t);
 					has_digit = true;
 				}
-				for (; first != end && ::fast_io::details::scan_decfloat_decimal_digit(*first, digit); ++first)
-				{
+				/*
+				This is the same compiler-selected recurrence prefix proved for
+				the integer part.  `fractional_digits` is derived from
+				first-fraction_begin afterward, so advancing `first` inside the
+				peeled step also preserves every radix-place contribution,
+				including zeroes.
+				*/
+				bool fractional_digit_limit_reached{};
+				auto scan_one_fractional_digit = [&]() constexpr noexcept {
+					if (first == end ||
+						!::fast_io::details::scan_decfloat_decimal_digit(*first, digit))
+					{
+						return false;
+					}
 					if (digit_count == digit_limit)
 					{
-						return {};
+						fractional_digit_limit_reached = true;
+						return false;
 					}
-					significand = significand * 10u + static_cast<::std::uint_least64_t>(digit);
+					significand =
+						significand * 10u +
+						static_cast<::std::uint_least64_t>(digit);
 					++digit_count;
+					++first;
 					has_digit = true;
+					return true;
+				};
+#if defined(__GNUC__) && !defined(__clang__) && 16 <= __GNUC__
+				if (scan_one_fractional_digit() &&
+					scan_one_fractional_digit() &&
+					scan_one_fractional_digit())
+#else
+				if (scan_one_fractional_digit() &&
+					scan_one_fractional_digit() &&
+					scan_one_fractional_digit() &&
+					scan_one_fractional_digit())
+#endif
+				{
+					while (scan_one_fractional_digit())
+					{
+					}
+				}
+				if (fractional_digit_limit_reached)
+				{
+					return {};
 				}
 				fractional_digits = static_cast<::std::uint_least64_t>(first - fraction_begin);
 			}
 
 			if (!has_digit)
 			{
-				return {begin, ::fast_io::parse_code::invalid, true};
+				/*
+				No decimal digit means that this speculative ASCII-only path
+				owns no lexical result.  Returning unhandled delegates Inf/NaN,
+				an isolated radix point, and every invalid prefix to the complete
+				scanner below.  That scanner was already the semantic authority
+				for non-ASCII, constant-evaluated, and over-limit inputs.
+
+				This convention also lets the caller enter the short scanner
+				without first decoding the leading code unit.  A numeric token
+				therefore classifies its first digit exactly once rather than
+				once in the caller and once here.  The partition is exhaustive:
+				a decimal within the short coefficient bound returns handled,
+				an over-limit decimal returns unhandled at the exact digit
+				boundary, and a token with no digit returns unhandled here.  In
+				all unhandled cases the complete scanner restarts at the
+				unchanged position following the already-classified optional
+				sign, with the saved `negative` bit; an eventual lexical failure
+				still reports `begin`.  Thus no speculative cursor, coefficient,
+				value or public error position is observable.
+				*/
+				return {};
 			}
 
 			::std::int_least64_t exponent{};
@@ -3559,26 +3692,29 @@ scan_decfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 		}
 	}
 
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
-	char8_t first_digit{};
-	bool const numeric_candidate{
-		first != end && (*first == dot ||
-						 ::fast_io::details::scan_decfloat_decimal_digit(*first, first_digit))};
-	if (numeric_candidate)
+	if constexpr (!use_precision)
 	{
-		if constexpr (!use_precision)
+		/*
+		The short scanner is a transactional classifier: `handled` proves that
+		its returned pointer/code/value are final, while unhandled exposes none
+		of its local state.  Calling it directly removes the former duplicate
+		leading-digit decode.  Its proof above shows that every rejected case is
+		reparsed by the unchanged complete grammar from the preserved
+		post-sign cursor and sign bit; public lexical failure still returns
+		`begin`.
+		*/
+		auto const short_result{
+			::fast_io::details::scan_decfloat_contiguous_short_define_impl<
+				char_type, flags>(
+				first, end, negative, value)};
+		if (short_result.handled)
 		{
-			auto const short_result{
-				::fast_io::details::scan_decfloat_contiguous_short_define_impl<char_type, flags>(begin, first, end,
-																								 negative, value)};
-			if (short_result.handled)
-			{
-				return {short_result.iter, short_result.code};
-			}
+			return {short_result.iter, short_result.code};
 		}
 	}
 
-	if (!numeric_candidate && first != end &&
+	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	if (first != end &&
 		::fast_io::details::scan_decfloat_special_start_char(*first))
 	{
 		auto const special_result{

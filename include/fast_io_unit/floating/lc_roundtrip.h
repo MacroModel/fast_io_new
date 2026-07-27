@@ -374,8 +374,9 @@ inline constexpr char_type *lc_print_rsv_fp_decision_impl(basic_lc_all<char_type
 			fixed_length = static_cast<::std::uint_least32_t>(static_cast<::std::uint_least32_t>(-real_exp) +
 															  static_cast<::std::uint_least32_t>(olength) + 1u);
 		}
-		::std::uint_least32_t scientific_length{
-			static_cast<::std::uint_least32_t>(olength == 1 ? olength + 3 : olength + 5)};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exp, static_cast<::std::size_t>(olength))};
 		auto const &numeric_ref{all->numeric};
 		auto const decimal_point{
 			::fast_io::details::lc_resolve_scatter(all, numeric_ref.decimal_point)};

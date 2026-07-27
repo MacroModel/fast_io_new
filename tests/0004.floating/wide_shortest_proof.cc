@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -48,8 +49,9 @@ struct reference_result
 	return result;
 }
 
+template <typename flt>
 inline constexpr void make_scanner_state(
-	::fast_io::details::scan_decfloat_significand_state &state,
+	::fast_io::details::scan_decfloat_significand_state<flt> &state,
 	__uint128_t coefficient) noexcept
 {
 	char8_t reversed[40u]{};
@@ -99,7 +101,7 @@ template <typename flt, rounding policy>
 [[nodiscard]] inline constexpr bool roundtrips(decimal_candidate candidate,
 											   bool negative, flt const &source) noexcept
 {
-	::fast_io::details::scan_decfloat_significand_state state{};
+	::fast_io::details::scan_decfloat_significand_state<flt> state{};
 	make_scanner_state(state, candidate.coefficient);
 	flt parsed{};
 	if constexpr (policy == rounding::nearest_to_odd)
@@ -327,6 +329,54 @@ template <typename flt, rounding policy>
 		   result.e10 == expected.e10;
 }
 
+consteval bool constant_binary64_open_midpoint_regression() noexcept
+{
+	constexpr auto source{
+		::std::bit_cast<double>(UINT64_C(0xc3d5819119d3b7a8))};
+	constexpr auto fields{
+		::fast_io::details::get_punned_result(source)};
+	constexpr auto result{
+		::fast_io::details::dragonbox_impl<
+			double, rounding::nearest_to_odd>(
+			fields.mantissa,
+			static_cast<::std::int_least32_t>(fields.exponent),
+			fields.sign)};
+	return result.m10 == UINT64_C(6198717147617599) &&
+		   result.e10 == 3;
+}
+
+static_assert(constant_binary64_open_midpoint_regression());
+
+[[nodiscard]] bool check_binary64_open_midpoint_regression() noexcept
+{
+	/*
+	The old recovered-cache `is_integer` test admitted 61987171476176*10^5
+	for this negative binary64 under nearest-to-odd.  That decimal is exactly
+	the open midpoint above the source, so reparsing selected the adjacent
+	carrier.  Exact endpoint divisibility must instead continue to the finer
+	grid and choose 6198717147617599*10^3.
+
+	The asserted carrier proves canonical selection, while `roundtrips` uses
+	the independent decimal scanner to prove that the chosen point belongs to
+	the source interval.  Keeping both checks prevents a matching formatter and
+	parser error from hiding the original open-endpoint bug.
+	*/
+	constexpr ::std::uint_least64_t bits{UINT64_C(0xc3d5819119d3b7a8)};
+	auto const source{::std::bit_cast<double>(bits)};
+	auto const fields{::fast_io::details::get_punned_result(source)};
+	auto const result{
+		::fast_io::details::dragonbox_impl<
+			double, rounding::nearest_to_odd>(
+			fields.mantissa,
+			static_cast<::std::int_least32_t>(fields.exponent),
+			fields.sign)};
+	decimal_candidate const candidate{result.m10, result.e10};
+	return result.m10 == UINT64_C(6198717147617599) &&
+		   result.e10 == 3 &&
+		   roundtrips<double, rounding::nearest_to_odd>(
+			   candidate, fields.sign, source);
+}
+
 template <typename flt, rounding policy>
 [[nodiscard]] bool check_narrow_policy() noexcept
 {
@@ -498,6 +548,23 @@ static_assert(constant_shortest_works<long double>());
 #if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16 && \
 	(!defined(__FLT128_MANT_DIG__) || __FLT128_MANT_DIG__ == 113)
 static_assert(constant_shortest_works<__float128>());
+
+/*
+The minimum positive binary128 is 2^-16494 = 6.475...e-4966.  Under positive
+toward-minus-infinity its decimal preimage is [x,2x), so both 7e-4966 and
+1e-4965 round-trip with one significant digit.  The former is closer.  This
+cross-decimal-binade case proves that the fixed-width runtime path must stop
+once grid coarsening cannot reduce the normalized digit count; otherwise it
+chooses the farther one-digit point while the exact constant path chooses 7.
+*/
+[[nodiscard]] bool binary128_directed_binade_regression() noexcept
+{
+	auto const result{
+		::fast_io::details::wide_shortest_from_binary<
+			__float128, rounding::toward_minus_infinity>(
+			static_cast<__uint128_t>(1u), 0u, false)};
+	return result.success && result.m10 == 7u && result.e10 == -4966;
+}
 #endif
 
 } // namespace
@@ -507,7 +574,8 @@ static_assert(constant_shortest_works<__float128>());
 int main()
 {
 #if defined(__SIZEOF_INT128__)
-	if (!run_all_policies<float, narrow_checker>() ||
+	if (!check_binary64_open_midpoint_regression() ||
+		!run_all_policies<float, narrow_checker>() ||
 		!run_all_policies<double, narrow_checker>())
 	{
 		return 1;
@@ -522,7 +590,8 @@ int main()
 	}
 #if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16 && \
 	(!defined(__FLT128_MANT_DIG__) || __FLT128_MANT_DIG__ == 113)
-	if (!run_all_policies<__float128, wide_checker>())
+	if (!binary128_directed_binade_regression() ||
+		!run_all_policies<__float128, wide_checker>())
 	{
 		return 1;
 	}

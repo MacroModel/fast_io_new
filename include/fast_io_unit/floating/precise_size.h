@@ -174,10 +174,9 @@ template <typename flt, ::fast_io::manipulators::floating_format format, bool js
 	}
 	else
 	{
-		// `decimal` compares the historical fixed/scientific cost estimates before
-		// rendering.  The estimates intentionally omit the variable exponent width;
-		// reproducing that predicate, then counting the selected grammar exactly,
-		// is necessary at powers where the two estimates tie.
+		// `decimal` compares the complete fixed and scientific spellings before
+		// rendering.  Reusing the writer's exact exponent-aware model is necessary
+		// at powers where the two lengths tie.
 		auto const real_exponent{static_cast<::std::int_least32_t>(exponent + length - 1)};
 		::std::uint_least32_t fixed_length{};
 		if (length <= real_exponent)
@@ -197,8 +196,9 @@ template <typename flt, ::fast_io::manipulators::floating_format format, bool js
 			fixed_length = static_cast<::std::uint_least32_t>(-real_exponent) +
 						   static_cast<::std::uint_least32_t>(length) + 1u;
 		}
-		auto const scientific_estimate{static_cast<::std::uint_least32_t>(
-			length == 1 ? length + 3 : length + 5)};
+		auto const scientific_estimate{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exponent, static_cast<::std::size_t>(length))};
 		if (scientific_estimate < fixed_length)
 		{
 			return floating_precise_scientific_size_with_length<flt>(exponent, length);
@@ -712,8 +712,9 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 			fixed_length = ::fast_io::details::exact_precision_saturating_add(
 				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
 		}
-		auto const scientific_length{::fast_io::details::exact_precision_saturating_add(
-			virtual_size, virtual_size == 1u ? 3u : 5u)};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				rounded_exponent, virtual_size)};
 		fixed = scientific_length >= fixed_length;
 	}
 	if (fixed)
@@ -845,8 +846,8 @@ floating_precise_wide_runtime_rounded_size(
 				virtual_size, static_cast<::std::size_t>(-rounded_exponent) + 1u);
 		}
 		auto const scientific_length{
-			::fast_io::details::exact_precision_saturating_add(
-				virtual_size, virtual_size == 1u ? 3u : 5u)};
+			::fast_io::details::print_rsv_fp_scientific_length(
+				rounded_exponent, virtual_size)};
 		fixed = scientific_length >= fixed_length;
 	}
 	if (fixed)

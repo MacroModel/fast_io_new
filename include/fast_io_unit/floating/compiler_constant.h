@@ -964,7 +964,9 @@ compiler_constant_floating_uses_fixed(
 			fixed_length = static_cast<::std::size_t>(-real_exponent) +
 				digits + 1u;
 		}
-		auto const scientific_length{digits == 1u ? digits + 3u : digits + 5u};
+		auto const scientific_length{
+			::fast_io::details::print_rsv_fp_scientific_length(
+				real_exponent, digits)};
 		return scientific_length >= fixed_length;
 	}
 }
@@ -3959,8 +3961,8 @@ compiler_constant_floating_fragment_decimal_precision_carrier(
 				static_cast<::std::size_t>(-rounded_exponent) + 1u);
 		}
 		auto const scientific_length{
-			::fast_io::details::exact_precision_saturating_add(
-				virtual_size, virtual_size == 1u ? 3u : 5u)};
+			::fast_io::details::print_rsv_fp_scientific_length(
+				rounded_exponent, virtual_size)};
 		fixed = scientific_length >= fixed_length;
 	}
 	if (fixed)
