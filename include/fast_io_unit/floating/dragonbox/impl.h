@@ -2354,9 +2354,9 @@ zero and the biased exponent belongs to one of the sets below.  No arbitrary
 mantissa is exceptional.  The switch is therefore both smaller and faster than
 a 65,536-bit policy bitmap, while expressing the mathematical cause: only an
 asymmetric binade boundary can expose the binary32-core/narrow-lattice
-difference.  A listed exponent uses the exact widened fallback; every other
-carrier is already in the target interval and is shortest because Dragonbox
-tried the coarser decimal grid first.
+difference.  A listed exponent uses an exact narrow-lattice witness; every
+other carrier is already in the target interval and is shortest because
+Dragonbox tried the coarser decimal grid first.
 */
 inline constexpr ::std::size_t dragonbox_bfloat16_low_exception_table_extent{
 	225u};
@@ -2394,42 +2394,42 @@ dragonbox_make_bfloat16_low_exception_table() noexcept
 			 << 16u) |
 			m10;
 	};
-	set(7u, 751u, -39);
+	set(7u, 752u, -39);
 	set(8u, 151u, -38);
 	set(9u, 301u, -38);
-	set(10u, 601u, -38);
-	set(11u, 1202u, -38);
+	set(10u, 602u, -38);
+	set(11u, 1204u, -38);
 	set(12u, 241u, -37);
 	set(13u, 481u, -37);
-	set(14u, 962u, -37);
-	set(21u, 1231u, -35);
-	set(44u, 1032u, -28);
+	set(14u, 963u, -37);
+	set(21u, 1233u, -35);
+	set(44u, 1034u, -28);
 	set(48u, 166u, -26);
 	set(49u, 331u, -26);
-	set(50u, 661u, -26);
-	set(51u, 1321u, -26);
+	set(50u, 662u, -26);
+	set(51u, 1323u, -26);
 	set(62u, 271u, -22);
 	set(63u, 542u, -22);
-	set(64u, 1083u, -22);
+	set(64u, 1084u, -22);
 	set(68u, 174u, -20);
 	set(92u, 291u, -13);
-	set(93u, 581u, -13);
-	set(94u, 1162u, -13);
-	set(107u, 952u, -9);
+	set(93u, 582u, -13);
+	set(94u, 1164u, -13);
+	set(107u, 954u, -9);
 	set(108u, 191u, -8);
 	set(109u, 381u, -8);
-	set(110u, 762u, -8);
-	set(136u, 511u, 0);
-	set(137u, 1022u, 0);
-	set(157u, 1072u, 6);
-	set(164u, 1372u, 8);
-	set(187u, 1151u, 15);
+	set(110u, 763u, -8);
+	set(136u, 512u, 0);
+	set(137u, 1024u, 0);
+	set(157u, 1074u, 6);
+	set(164u, 1374u, 8);
+	set(187u, 1153u, 15);
 	set(188u, 231u, 16);
 	set(189u, 461u, 16);
-	set(190u, 921u, 16);
+	set(190u, 922u, 16);
 	set(191u, 185u, 17);
 	set(211u, 194u, 23);
-	set(223u, 791u, 26);
+	set(223u, 792u, 26);
 	set(224u, 159u, 27);
 	return table;
 }
@@ -2699,10 +2699,9 @@ The three nearest classes share the 35 bfloat16 rows because none of their
 accepted carriers is a midpoint: endpoint closure changes the rejected
 one-digit-shorter candidate, not the interior replacement.  Nearest-away has
 two additional binade boundaries, e2=136 and e2=137.  A directed-away interval
-has one exceptional smallest normal; its shortest member happens to require
-the exact eight-digit coefficient shown below.  Keeping these finite proof
-witnesses as immediates avoids both a full-domain atlas and a call to the
-general membership engine on the hot path.
+has one exceptional smallest normal.  Keeping these finite proof witnesses as
+immediates avoids both a full-domain atlas and a call to the general membership
+engine on the hot path.
 */
 template <typename flt,
 	::fast_io::manipulators::floating_rounding canonical_rounding>
@@ -2726,23 +2725,32 @@ dragonbox_narrow_canonical_low_exception(
 		if constexpr (canonical_rounding == away_from_zero)
 		{
 			/*
-			x=2^-14 and the open lower boundary exclude the raw 0.000061.
-			61035156*10^-12 lies strictly above x and below its successor's
-			midpoint; every coefficient with at most seven digits misses that
-			half-open interval by the integer test derived above.
+			x=2^-14 has the directed-away magnitude interval
+			(previous,x].  61*10^-6 lies strictly above the largest subnormal
+			and below x; its one-digit predecessor 6*10^-5 is below the
+			interval.  It is therefore the shortest narrow-lattice witness.
 			*/
-			return {61035156u, -12};
+			return {61u, -6};
 		}
 		else
 		{
 			switch (e2)
 			{
 			case 8:
-				return {7811u, -6};
+			{
+				if constexpr (canonical_rounding == nearest_toward_zero)
+				{
+					return {7812u, -6};
+				}
+				else
+				{
+					return {7813u, -6};
+				}
+			}
 			case 9:
 				return {1563u, -5};
 			case 28:
-				return {8191u, 0};
+				return {8192u, 0};
 			case 29:
 				return {1639u, 1};
 			default:
@@ -2763,10 +2771,10 @@ dragonbox_narrow_canonical_low_exception(
 		{
 			/*
 			The bfloat16 smallest normal is 2^-126.  The same exact endpoint
-			inequalities give 11754943*10^-45 as the first shortest decimal
-			inside the directed-away interval.
+			inequalities give 117*10^-40 as the shortest decimal inside its
+			directed-away magnitude interval.
 			*/
-			return {11754943u, -45};
+			return {117u, -40};
 		}
 		else
 		{
@@ -3579,12 +3587,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsv_fp_e_impl(char_t
 template <::std::integral char_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fill_zeros_impl(char_type *iter, ::std::size_t n) noexcept
 {
-	for (::std::size_t i{}; i != n; ++i)
-	{
-		*iter = char_literal_v<u8'0', char_type>;
-		++iter;
-	}
-	return iter;
+	return ::fast_io::details::my_fill_n(
+		iter, n, char_literal_v<u8'0', char_type>);
 }
 
 template <bool comma, ::std::integral char_type>
@@ -5867,14 +5871,11 @@ inline constexpr exact_precision_window_result exact_precision_window_materializ
 Binary80 and binary128 can require more than eleven thousand exact coefficient
 digits even when the caller requests only a short scientific field.  The
 bounded window below encloses positive 5^s by two normalized 512-bit dyadic
-endpoints.  Its arithmetic admits every field for which s is proved positive;
-the established runtime precision gate currently calls the subnormal wrapper,
-while compiler-constant precision may also supply an explicit normal binary
-exponent.  The reciprocal construction is documented separately but
-deliberately does not add a second runtime table here.  The code accepts a
-prefix only when shifting both endpoints produces the same integer.
-Consequently approximation affects only
-the acceptance rate: an accepted prefix is the exact floor.
+endpoints.  Runtime and compiler-constant precision both supply the explicit
+normal or subnormal binary exponent, and the reciprocal table covers negative
+decimal scaling for large magnitudes.  The code accepts a prefix only when
+shifting both endpoints produces the same integer.  Consequently approximation
+affects only the acceptance rate: an accepted prefix is the exact floor.
 
 For a requested window of r decimal digits and k=floor(log10(x)), set
 
@@ -6327,6 +6328,55 @@ template <typename mantissa_type>
 		static_cast<::std::uint_least64_t>(wide >> 64u)));
 }
 
+template <typename mantissa_type>
+[[nodiscard]] inline constexpr bool
+exact_precision_wide_window_scaled_tail_nonzero(
+	mantissa_type mantissa, ::std::int_least32_t binary_exponent,
+	::std::int_least32_t decimal_shift) noexcept
+{
+	auto reduced{static_cast<__uint128_t>(mantissa)};
+	if (decimal_shift < 0)
+	{
+		auto count{static_cast<unsigned>(-decimal_shift)};
+		/*
+		A nonzero significand of at most 114 bits contains no more than 49
+		factors of five.  Rejecting a larger denominator immediately avoids
+		__uint128 division in the overwhelmingly common reciprocal-power case.
+		For the remaining exact-power candidates, division by the constant five
+		determines whether the decimal denominator was cancelled completely.
+		*/
+		if (49u < count)
+		{
+			return true;
+		}
+		for (; count; --count)
+		{
+			if (reduced % 5u)
+			{
+				return true;
+			}
+			reduced /= 5u;
+		}
+	}
+	auto const scaled_binary_exponent{
+		static_cast<::std::int_least64_t>(binary_exponent) + decimal_shift};
+	if (0 <= scaled_binary_exponent)
+	{
+		return false;
+	}
+	auto const required_twos{
+		static_cast<::std::uint_least64_t>(-scaled_binary_exponent)};
+	if (sizeof(__uint128_t) *
+			::std::numeric_limits<unsigned char>::digits <
+		required_twos)
+	{
+		return true;
+	}
+	return ::fast_io::details::
+		exact_precision_wide_window_mantissa_countr_zero(reduced) <
+		required_twos;
+}
+
 [[nodiscard]] inline constexpr ::std::int_least32_t
 exact_precision_wide_window_log10_pow2_seed(
 	::std::int_least32_t binary_exponent) noexcept
@@ -6417,8 +6467,11 @@ exact_precision_wide_window_from_significand(
 			--real_exponent;
 			continue;
 		}
+		auto const tail_nonzero{::fast_io::details::
+			exact_precision_wide_window_scaled_tail_nonzero(
+				mantissa, binary_exponent, decimal_shift)};
 		auto generated{::fast_io::details::exact_precision_window_materialize(
-			lower, size, requested_digits, real_exponent, true, false)};
+			lower, size, requested_digits, real_exponent, tail_nonzero, false)};
 		if (!generated.success)
 		{
 			return failure;
@@ -9286,17 +9339,35 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_rounded_preci
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
 	if constexpr (
-		format == ::fast_io::manipulators::floating_format::general &&
-		precision_mode ==
-			::fast_io::manipulators::floating_precision::
-				charconv_significant)
+		format == ::fast_io::manipulators::floating_format::general)
 	{
 		auto const rounded_exponent{
 			decimal.exponent +
 			static_cast<::std::int_least32_t>(decimal.size) - 1};
-		fixed = -4 <= rounded_exponent &&
-			(rounded_exponent < 0 ||
-			 static_cast<::std::size_t>(rounded_exponent) < significant);
+		if constexpr (
+			precision_mode ==
+				::fast_io::manipulators::floating_precision::
+					charconv_significant)
+		{
+			fixed = -4 <= rounded_exponent &&
+				(rounded_exponent < 0 ||
+				 static_cast<::std::size_t>(rounded_exponent) <
+					 significant);
+		}
+		else if constexpr (fractional && preserve)
+		{
+			if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+			{
+				auto const virtual_exponent{
+					static_cast<::std::int_least64_t>(decimal.exponent) -
+					static_cast<::std::int_least64_t>(virtual_padding)};
+				fixed = -5 < virtual_exponent && virtual_exponent < 7;
+			}
+		}
+		else
+		{
+			fixed = -4 <= rounded_exponent && rounded_exponent < 6;
+		}
 	}
 	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
@@ -10349,10 +10420,11 @@ inline constexpr void exact_precision_window_round(
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
-inline constexpr bool exact_precision_wide_subnormal_prepare(
+inline constexpr bool exact_precision_wide_prepare(
 	unsigned char *output_digits, ::std::size_t &output_size,
 	::std::int_least32_t &output_exponent, ::std::size_t &significant,
-	__uint128_t mantissa, unsigned mantissa_bits,
+	__uint128_t significand, unsigned mantissa_bits,
+	::std::int_least32_t binary_exponent,
 	::std::size_t precision,
 	::fast_io::manipulators::floating_format format,
 	::fast_io::manipulators::floating_precision precision_mode,
@@ -10379,14 +10451,15 @@ inline constexpr bool exact_precision_wide_subnormal_prepare(
 			significant = precision + 1u;
 			keep = static_cast<::std::int_least32_t>(significant);
 			generated = ::fast_io::details::
-				exact_precision_wide_subnormal_window_from_binary(
-					mantissa, mantissa_bits, significant + 1u);
+				exact_precision_wide_window_from_significand(
+					significand, mantissa_bits, binary_exponent,
+					significant + 1u);
 		}
 		else
 		{
 			auto const exponent_probe{::fast_io::details::
-				exact_precision_wide_subnormal_window_from_binary(
-					mantissa, mantissa_bits, 2u)};
+				exact_precision_wide_window_from_significand(
+					significand, mantissa_bits, binary_exponent, 2u)};
 			if (!exponent_probe.success)
 			{
 				return false;
@@ -10403,8 +10476,9 @@ inline constexpr bool exact_precision_wide_subnormal_prepare(
 			keep = static_cast<::std::int_least32_t>(requested_keep);
 			significant = static_cast<::std::size_t>(keep);
 			generated = ::fast_io::details::
-				exact_precision_wide_subnormal_window_from_binary(
-					mantissa, mantissa_bits, significant + 1u);
+				exact_precision_wide_window_from_significand(
+					significand, mantissa_bits, binary_exponent,
+					significant + 1u);
 		}
 	}
 	else
@@ -10412,56 +10486,77 @@ inline constexpr bool exact_precision_wide_subnormal_prepare(
 		significant = precision ? precision : 1u;
 		keep = static_cast<::std::int_least32_t>(significant);
 		generated = ::fast_io::details::
-			exact_precision_wide_subnormal_window_from_binary(
-				mantissa, mantissa_bits, significant + 1u);
+			exact_precision_wide_window_from_significand(
+				significand, mantissa_bits, binary_exponent,
+				significant + 1u);
 	}
-	if (!generated.success ||
-		static_cast<::std::int_least32_t>(generated.decimal.size) <= keep)
+	if (!generated.success)
 	{
 		return false;
 	}
-	auto const guard{generated.decimal.digits[static_cast<::std::size_t>(keep)]};
-	auto const rounded_down{keep
-		? generated.decimal.digits[static_cast<::std::size_t>(keep) - 1u]
-		: 0u};
-	auto const round_up{::fast_io::details::exact_precision_window_runtime_round_up(
-		rounding, negative, guard, generated.tail_nonzero, rounded_down)};
-	auto const target_exponent{
-		generated.decimal.exponent +
-		static_cast<::std::int_least32_t>(generated.decimal.size) - keep};
-	if (!keep)
+	if (!generated.tail_nonzero)
 	{
-		generated.decimal.size = 1u;
-		generated.decimal.digits[0] = static_cast<unsigned char>(round_up);
-		generated.decimal.exponent = target_exponent;
+		::fast_io::details::exact_precision_trim(generated.decimal);
 	}
-	else
+	auto const rounded{
+		static_cast<::std::int_least32_t>(generated.decimal.size) > keep};
+	if (rounded)
 	{
-		generated.decimal.size = static_cast<::std::size_t>(keep);
-		generated.decimal.exponent = target_exponent;
-		if (round_up)
+		auto const guard{
+			generated.decimal.digits[static_cast<::std::size_t>(keep)]};
+		auto const rounded_down{keep
+			? generated.decimal.digits[static_cast<::std::size_t>(keep) - 1u]
+			: 0u};
+		auto const round_up{::fast_io::details::
+			exact_precision_window_runtime_round_up(
+				rounding, negative, guard, generated.tail_nonzero,
+				rounded_down)};
+		auto const target_exponent{
+			generated.decimal.exponent +
+			static_cast<::std::int_least32_t>(generated.decimal.size) - keep};
+		if (!keep)
 		{
-			bool carry{true};
-			for (auto index{generated.decimal.size}; index; --index)
+			generated.decimal.size = 1u;
+			generated.decimal.digits[0] =
+				static_cast<unsigned char>(round_up);
+			generated.decimal.exponent = target_exponent;
+		}
+		else
+		{
+			generated.decimal.size = static_cast<::std::size_t>(keep);
+			generated.decimal.exponent = target_exponent;
+			if (round_up)
 			{
-				if (++generated.decimal.digits[index - 1u] != 10u)
+				bool carry{true};
+				for (auto index{generated.decimal.size}; index; --index)
 				{
-					carry = false;
-					break;
+					if (++generated.decimal.digits[index - 1u] != 10u)
+					{
+						carry = false;
+						break;
+					}
+					generated.decimal.digits[index - 1u] = 0u;
 				}
-				generated.decimal.digits[index - 1u] = 0u;
-			}
-			if (carry)
-			{
-				generated.decimal.digits[0] = 1u;
-				generated.decimal.size = 1u;
-				generated.decimal.exponent = target_exponent + keep;
+				if (carry)
+				{
+					generated.decimal.digits[0] = 1u;
+					generated.decimal.size = 1u;
+					generated.decimal.exponent = target_exponent + keep;
+				}
 			}
 		}
 	}
 	if (!preserve)
 	{
 		::fast_io::details::exact_precision_trim(generated.decimal);
+	}
+	if (fractional && preserve && format == format_enum::general)
+	{
+		significant = rounded
+			? ::fast_io::details::
+				exact_precision_fractional_general_rounded_virtual_size(
+					generated.decimal, precision)
+			: generated.decimal.size;
 	}
 	output_size = generated.decimal.size;
 	output_exponent = generated.decimal.exponent;
@@ -10513,14 +10608,10 @@ inline constexpr char_type *exact_precision_wide_call_scientific(
 // 4 x 4 switch when a program instantiates only one policy; without that
 // boundary GCC grows a two-format binary by more than 100 KiB.  The arithmetic
 // below is the runtime spelling of print_rsvflt_rounded_precision_define_impl
-// and preserves its notation-choice inequalities exactly.  At the current
-// integration boundary every non-scientific fractional binary80/binary128
-// subnormal with P<=128 is discharged by the proved tiny-quantum branch before
-// this adapter; therefore the adapter cannot observe fractional-general's
-// carry-created virtual suffix.  If the window is extended to normal values or
-// to larger P, its caller must first mirror
-// exact_precision_fractional_general_rounded_virtual_size so that a carry
-// through retained nines participates in general's notation decision.
+// and preserves its notation-choice inequalities exactly.  The preparation
+// step supplies fractional-general's carry-aware virtual width for every
+// accepted normal or subnormal window; preserve mode can therefore share this
+// runtime presentation without losing the requested decimal quantum.
 // Keep numeric construction and runtime presentation outlined together.  GCC's
 // `noipa` prevents caller-policy cloning; compilers without that capability use
 // noinline and preserve the same prefix/guard/sticky and output contracts.
@@ -10554,7 +10645,9 @@ inline constexpr char_type *exact_precision_wide_runtime_present(
 				flt, comma, uppercase_e, char_type, decimal_type>);
 	}
 	auto virtual_size{decimal.size};
-	if (preserve && !fractional && virtual_size < significant)
+	if (preserve &&
+		(!fractional || format == format_enum::general) &&
+		virtual_size < significant)
 	{
 		virtual_size = significant;
 	}
@@ -10568,14 +10661,32 @@ inline constexpr char_type *exact_precision_wide_runtime_present(
 	}
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
-	if (precision_mode == precision_enum::charconv_significant)
+	if (format == format_enum::general)
 	{
 		auto const rounded_exponent{
 			decimal.exponent +
 			static_cast<::std::int_least32_t>(decimal.size) - 1};
-		fixed = -4 <= rounded_exponent &&
-			(rounded_exponent < 0 ||
-			 static_cast<::std::size_t>(rounded_exponent) < significant);
+		if (precision_mode == precision_enum::charconv_significant)
+		{
+			fixed = -4 <= rounded_exponent &&
+				(rounded_exponent < 0 ||
+				 static_cast<::std::size_t>(rounded_exponent) <
+					 significant);
+		}
+		else if (fractional && preserve)
+		{
+			if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+			{
+				auto const virtual_exponent{
+					static_cast<::std::int_least64_t>(decimal.exponent) -
+					static_cast<::std::int_least64_t>(virtual_padding)};
+				fixed = -5 < virtual_exponent && virtual_exponent < 7;
+			}
+		}
+		else
+		{
+			fixed = -4 <= rounded_exponent && rounded_exponent < 6;
+		}
 	}
 	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
@@ -10636,21 +10747,36 @@ template <typename flt, bool comma, bool uppercase_e, bool json_float,
 #elif __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
-inline constexpr char_type *exact_precision_wide_subnormal_try_print(
+inline constexpr char_type *exact_precision_wide_try_print(
 	char_type *iter,
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
-	::std::size_t precision, bool negative,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
 	::fast_io::manipulators::floating_format format,
 	::fast_io::manipulators::floating_precision precision_mode,
 	::fast_io::manipulators::floating_rounding rounding) noexcept
 {
 	using trait = ::fast_io::details::iec559_traits<flt>;
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	auto significand{static_cast<__uint128_t>(mantissa)};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		significand |= static_cast<__uint128_t>(1u) << trait::mbits;
+		binary_exponent = static_cast<::std::int_least32_t>(exponent) -
+			bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent =
+			1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
 	exact_precision_compact_window_decimal decimal{};
 	::std::size_t significant{};
-	if (!::fast_io::details::exact_precision_wide_subnormal_prepare(
+	if (!::fast_io::details::exact_precision_wide_prepare(
 			decimal.digits, decimal.size, decimal.exponent, significant,
-			static_cast<__uint128_t>(mantissa), trait::mbits, precision, format,
-			precision_mode, rounding, negative))
+			significand, trait::mbits, binary_exponent, precision,
+			format, precision_mode, rounding, negative))
 	{
 		return nullptr;
 	}
@@ -14176,12 +14302,13 @@ inline constexpr char_type *print_rsvflt_precision_define_impl(
 		// The interval implementation requires a native scalar capable of holding
 		// the complete binary128 significand.  Other targets retain the exact path.
 #if defined(__SIZEOF_INT128__)
-		if (!exponent && precision <= 128u)
+		if (precision <= 128u)
 		{
 			if (auto window_end{
-					::fast_io::details::exact_precision_wide_subnormal_try_print<
+					::fast_io::details::exact_precision_wide_try_print<
 						flt, comma, uppercase_e, json_float>(
-							iter, mantissa, precision, sign, mt, precision_mode,
+							iter, mantissa, exponent, precision, sign,
+							mt, precision_mode,
 							rounding)})
 			{
 				return window_end;

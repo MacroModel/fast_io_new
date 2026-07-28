@@ -3927,7 +3927,36 @@ compiler_constant_floating_fragment_decimal_precision_carrier(
 	bool fixed{};
 	constexpr auto int32_max{
 		(::std::numeric_limits<::std::int_least32_t>::max)()};
-	if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+	if constexpr (flags.floating ==
+		::fast_io::manipulators::floating_format::general)
+	{
+		auto const rounded_exponent{
+			exponent + static_cast<::std::int_least32_t>(size) - 1};
+		if constexpr (flags.precision ==
+			::fast_io::manipulators::floating_precision::
+				charconv_significant)
+		{
+			fixed = -4 <= rounded_exponent &&
+				(rounded_exponent < 0 ||
+				 static_cast<::std::size_t>(rounded_exponent) <
+					 significant);
+		}
+		else if constexpr (fractional && preserve)
+		{
+			if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+			{
+				auto const virtual_exponent{
+					static_cast<::std::int_least64_t>(exponent) -
+					static_cast<::std::int_least64_t>(virtual_padding)};
+				fixed = -5 < virtual_exponent && virtual_exponent < 7;
+			}
+		}
+		else
+		{
+			fixed = -4 <= rounded_exponent && rounded_exponent < 6;
+		}
+	}
+	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
 		auto const virtual_exponent{
 			static_cast<::std::int_least64_t>(exponent) -

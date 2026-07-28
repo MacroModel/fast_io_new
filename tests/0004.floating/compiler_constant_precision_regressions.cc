@@ -256,6 +256,33 @@ int main()
 														 ::fast_io::details::punning_result<float>{8388607u, 0u, false}, 5u,
 														 expected_literal{"+0x1,00000p-126"}>;
 
+	// General precision chooses fixed/scientific notation from the rounded
+	// scientific exponent.  Trimming representation-only coefficient zeroes
+	// changes the stored decimal exponent, so using that exponent directly made
+	// compiler-constant materialization disagree with the ordinary writer and
+	// its precise-size contract across both layouts.
+	using binary32_general_trimmed_small = regression_case<char, float,
+														   make_flags<format::general,
+																	  precision_mode::significant,
+																	  rounding::nearest_to_even>(),
+														   ::fast_io::details::punning_result<float>{
+															   3716604u, 121u, true},
+														   6u, expected_literal{"-0.0225477"}>;
+	using binary32_general_trimmed_unit = regression_case<char, float,
+														  make_flags<format::general,
+																	 precision_mode::significant,
+																	 rounding::nearest_to_even>(),
+														  ::fast_io::details::punning_result<float>{
+															  4665676u, 126u, false},
+														  6u, expected_literal{"+0.778096"}>;
+	using binary32_general_trimmed_large = regression_case<char, float,
+														   make_flags<format::general,
+																	  precision_mode::significant,
+																	  rounding::nearest_to_even>(),
+														   ::fast_io::details::punning_result<float>{
+															   2364277u, 155u, false},
+														   6u, expected_literal{"+3.44092e+08"}>;
+
 	// The exact precision window retains 19 decimal digits here.  Scientific
 	// P=17 fractional means 18 significant digits; directed +infinity selects
 	// the final 7.  Sending that extended carrier to the native 17-digit writer
@@ -279,7 +306,11 @@ int main()
 											   3u, expected_literal{"-0X1P-974"}>;
 
 	result = result && run_cases<binary32_canonical_decimal_carrier,
-								 binary32_subnormal_hex_carry, binary64_extended_decimal_carrier,
+								 binary32_subnormal_hex_carry,
+								 binary32_general_trimmed_small,
+								 binary32_general_trimmed_unit,
+								 binary32_general_trimmed_large,
+								 binary64_extended_decimal_carrier,
 								 binary64_hex_carry>();
 
 #if defined(__SIZEOF_FLOAT128__) && __SIZEOF_FLOAT128__ == 16 && \

@@ -489,14 +489,15 @@ floating_precise_make_fractional_rounded_metadata(
 }
 
 /*
-The wide subnormal emitter has already proved that at most P+1 decimal digits
-plus one sticky bit determine every P<=128 result.  Precise reservation needs
-only the selected coefficient's nonzero state, width and exponent, so it must
-not reconstruct the complete binary80/binary128 expansion merely to discard
-all interior digits.  This adapter deliberately calls the same runtime-policy
-window as emission.  The callee performs the unique rounding and trailing-zero
-canonicalization; `floating_precise_make_decimal_metadata<true>` then projects
-that already-selected decimal without applying either operation a second time.
+The wide emitter proves that at most P+1 decimal digits plus one sticky bit
+determine every window-accepted P<=128 result.  Precise reservation needs only
+the selected coefficient's nonzero state, width and exponent, so it must not
+reconstruct the complete binary80/binary128 expansion merely to discard all
+interior digits.  This adapter deliberately calls the same runtime-policy
+window as emission for both normal and subnormal values.  The callee performs
+the unique rounding and trailing-zero canonicalization;
+`floating_precise_make_decimal_metadata<true>` then projects that
+already-selected decimal without applying either operation a second time.
 
 Keeping format, precision mode and rounding as data preserves one arithmetic
 body per floating representation instead of cloning it across the 4 x 4 x 10
@@ -520,21 +521,36 @@ template <typename flt>
 [[__gnu__::__noinline__]]
 #endif
 [[nodiscard]] inline constexpr floating_precise_wide_window_metadata_result
-floating_precise_prepare_wide_subnormal_metadata(
+floating_precise_prepare_wide_window_metadata(
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
-	::std::size_t precision, bool negative,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
 	::fast_io::manipulators::floating_format format,
 	::fast_io::manipulators::floating_precision precision_mode,
 	::fast_io::manipulators::floating_rounding rounding) noexcept
 {
 	using trait = ::fast_io::details::iec559_traits<flt>;
 	static_assert(::fast_io::details::exact_precision_is_wide_binary<flt>);
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	auto significand{static_cast<__uint128_t>(mantissa)};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		significand |= static_cast<__uint128_t>(1u) << trait::mbits;
+		binary_exponent = static_cast<::std::int_least32_t>(exponent) -
+			bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent =
+			1 - bias - static_cast<::std::int_least32_t>(trait::mbits);
+	}
 	::fast_io::details::exact_precision_compact_window_decimal decimal{};
 	::std::size_t significant{};
-	if (!::fast_io::details::exact_precision_wide_subnormal_prepare(
+	if (!::fast_io::details::exact_precision_wide_prepare(
 			decimal.digits, decimal.size, decimal.exponent, significant,
-			static_cast<__uint128_t>(mantissa), trait::mbits, precision, format,
-			precision_mode, rounding, negative))
+			significand, trait::mbits, binary_exponent, precision,
+			format, precision_mode, rounding, negative))
 	{
 		return {};
 	}
@@ -671,17 +687,41 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 	bool fixed{};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
 	if constexpr (
-		format == ::fast_io::manipulators::floating_format::general &&
-		precision_mode ==
-			::fast_io::manipulators::floating_precision::
-				charconv_significant)
+		format == ::fast_io::manipulators::floating_format::general)
 	{
 		auto const rounded_exponent{
 			decimal.exponent +
 			static_cast<::std::int_least32_t>(decimal.size) - 1};
-		fixed = -4 <= rounded_exponent &&
-			(rounded_exponent < 0 ||
-			 static_cast<::std::size_t>(rounded_exponent) < significant);
+		if constexpr (
+			precision_mode ==
+				::fast_io::manipulators::floating_precision::
+					charconv_significant)
+		{
+			fixed = -4 <= rounded_exponent &&
+				(rounded_exponent < 0 ||
+				 static_cast<::std::size_t>(rounded_exponent) <
+					 significant);
+		}
+		else if constexpr (fractional && preserve)
+		{
+			if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+			{
+				auto const virtual_exponent{
+					static_cast<::std::int_least64_t>(decimal.exponent) -
+					static_cast<::std::int_least64_t>(virtual_padding)};
+				fixed = -5 < virtual_exponent && virtual_exponent < 7;
+			}
+		}
+		else
+		{
+			/*
+			Ordinary general presentation is selected from the rounded value's
+			scientific exponent X, exactly as in print_rsv_fp_decision_impl.
+			The coefficient exponent is not invariant under trailing-zero
+			canonicalization and therefore cannot decide the notation.
+			*/
+			fixed = -4 <= rounded_exponent && rounded_exponent < 6;
+		}
 	}
 	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
@@ -792,7 +832,9 @@ floating_precise_wide_runtime_rounded_size(
 			decimal, fractional_digits, preserve);
 	}
 	auto virtual_size{decimal.size};
-	if (preserve && !fractional && virtual_size < significant)
+	if (preserve &&
+		(!fractional || format == format_enum::general) &&
+		virtual_size < significant)
 	{
 		virtual_size = significant;
 	}
@@ -805,14 +847,32 @@ floating_precise_wide_runtime_rounded_size(
 	auto const virtual_padding{virtual_size - decimal.size};
 	bool fixed{};
 	constexpr auto int32_max{(::std::numeric_limits<::std::int_least32_t>::max)()};
-	if (precision_mode == precision_enum::charconv_significant)
+	if (format == format_enum::general)
 	{
 		auto const rounded_exponent{
 			decimal.exponent +
 			static_cast<::std::int_least32_t>(decimal.size) - 1};
-		fixed = -4 <= rounded_exponent &&
-			(rounded_exponent < 0 ||
-			 static_cast<::std::size_t>(rounded_exponent) < significant);
+		if (precision_mode == precision_enum::charconv_significant)
+		{
+			fixed = -4 <= rounded_exponent &&
+				(rounded_exponent < 0 ||
+				 static_cast<::std::size_t>(rounded_exponent) <
+					 significant);
+		}
+		else if (fractional && preserve)
+		{
+			if (virtual_padding <= static_cast<::std::size_t>(int32_max))
+			{
+				auto const virtual_exponent{
+					static_cast<::std::int_least64_t>(decimal.exponent) -
+					static_cast<::std::int_least64_t>(virtual_padding)};
+				fixed = -5 < virtual_exponent && virtual_exponent < 7;
+			}
+		}
+		else
+		{
+			fixed = -4 <= rounded_exponent && rounded_exponent < 6;
+		}
 	}
 	else if (virtual_padding <= static_cast<::std::size_t>(int32_max))
 	{
@@ -860,8 +920,8 @@ floating_precise_wide_runtime_rounded_size(
 }
 
 /*
-Tiny fractional values and ordinary subnormal windows are combined behind one
-outlined size operation.  Consequently a caller policy contributes only a
+Tiny fractional values and bounded normal/subnormal windows are combined behind
+one outlined size operation.  Consequently a caller policy contributes only a
 call with enum data.  A false result has one meaning: the bounded proof did not
 cover the value/grid, so the caller must execute the complete exact fallback.
 */
@@ -872,9 +932,9 @@ template <typename flt, bool json_float>
 [[__gnu__::__noinline__]]
 #endif
 [[nodiscard]] inline constexpr floating_precise_wide_window_size_result
-floating_precise_wide_subnormal_size(
+floating_precise_wide_window_size(
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
-	::std::size_t precision, bool negative,
+	::std::uint_least32_t exponent, ::std::size_t precision, bool negative,
 	::fast_io::manipulators::floating_format format,
 	::fast_io::manipulators::floating_precision precision_mode,
 	::fast_io::manipulators::floating_rounding rounding) noexcept
@@ -889,7 +949,7 @@ floating_precise_wide_subnormal_size(
 		precision_mode == precision_enum::fractional_preserve_trailing_zero};
 	if (fractional && format != format_enum::scientific &&
 		::fast_io::details::exact_precision_fractional_tiny_wide_binary_bound<flt>(
-			0u, precision))
+			exponent, precision))
 	{
 		auto const digit{static_cast<unsigned char>(
 			!floating_precise_runtime_rounding_is_nearest(rounding) &&
@@ -904,8 +964,9 @@ floating_precise_wide_subnormal_size(
 	{
 		return {};
 	}
-	auto const window{floating_precise_prepare_wide_subnormal_metadata<flt>(
-		mantissa, precision, negative, format, precision_mode, rounding)};
+	auto const window{floating_precise_prepare_wide_window_metadata<flt>(
+		mantissa, exponent, precision, negative, format, precision_mode,
+		rounding)};
 	if (!window.success)
 	{
 		return {};
@@ -1870,19 +1931,19 @@ template <typename flt, ::fast_io::manipulators::floating_format format,
 			Wide types intentionally bypass the binary32/binary64 Schubfach
 			carrier in `floating_precise_prepare_precision_metadata`: its cache
 			and endpoint arithmetic are proved only for the narrow exponent
-			domain.  A subnormal window success returns exactly the decimal used
-			by emission.  A capacity/grid rejection and every normal value retain
-			the complete exact expansion, so the optimization is a pure fast-path
-			refinement with an authoritative fallback.  Frontends without a native
-			scalar uint128 do not name the window helpers and enter that fallback
-			directly.
+			domain.  A bounded window success returns exactly the decimal used by
+			emission for normal and subnormal values.  A capacity, grid or
+			equal-endpoint rejection retains the complete exact expansion, so the
+			optimization is a pure fast-path refinement with an authoritative
+			fallback.  Frontends without a native scalar uint128 do not name the
+			window helpers and enter that fallback directly.
 			*/
 #if defined(__SIZEOF_INT128__)
-			if (!exponent)
+			if (precision <= 128u)
 			{
-				auto const window{floating_precise_wide_subnormal_size<flt, json_float>(
-					mantissa, precision, negative, format, precision_mode,
-					rounding)};
+				auto const window{floating_precise_wide_window_size<flt, json_float>(
+					mantissa, exponent, precision, negative, format,
+					precision_mode, rounding)};
 				if (window.success)
 				{
 					return window.size;

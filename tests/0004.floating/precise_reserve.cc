@@ -2,7 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <limits>
+#include <string_view>
 #include <type_traits>
 
 #include <fast_io_freestanding.h>
@@ -456,6 +458,42 @@ bool check_decimal_boundaries() noexcept
 	return true;
 }
 
+bool check_general_significant_layout_boundaries() noexcept
+{
+	using format = ::fast_io::manipulators::floating_format;
+	using rounding = ::fast_io::manipulators::floating_rounding;
+	using precision = ::fast_io::manipulators::floating_precision;
+	using namespace ::fast_io::manipulators;
+	constexpr ::std::uint_least32_t patterns[]{
+		0xbcb8b5fcu, 0x3f47314cu, 0x4da41375u, 0x4a90948au,
+		0x3bd361bfu, 0xcae0aebeu, 0xc0b6a521u};
+	constexpr ::std::string_view expected[]{
+		"-0.0225477", "0.778096", "3.44092e+08", "4.7376e+06",
+		"0.00645086", "-7.3624e+06", "-5.70766"};
+	for (::std::size_t index{}; index != ::std::size(patterns); ++index)
+	{
+		::std::uint_least32_t volatile runtime_bits{patterns[index]};
+		auto const value{::std::bit_cast<float>(
+			static_cast<::std::uint_least32_t>(runtime_bits))};
+		auto manip{
+			general<precision::significant, rounding::nearest_to_even>(
+				value, 6u)};
+		char buffer[64u];
+		auto const end{::fast_io::print_reserve_define(
+			::fast_io::io_reserve_type<char, decltype(manip)>,
+			buffer, manip)};
+		if (::std::string_view(
+				buffer, static_cast<::std::size_t>(end - buffer)) !=
+				expected[index] ||
+			!check_value<float, format::general, rounding::nearest_to_even,
+						 precision::significant, false>(value, 6u))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 template <typename flt, ::fast_io::manipulators::floating_format format>
 bool check_huge_fractional_precision_format() noexcept
 {
@@ -525,6 +563,7 @@ int main()
 			 check_special_policies<float, ::std::uint_least32_t>() &&
 			 check_special_policies<double, ::std::uint_least64_t>() &&
 			 check_decimal_boundaries() &&
+			 check_general_significant_layout_boundaries() &&
 			 check_huge_fractional_precision<float>() &&
 			 check_huge_fractional_precision<double>());
 #endif
