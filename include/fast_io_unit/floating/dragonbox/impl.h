@@ -4418,6 +4418,140 @@ inline constexpr void exact_precision_initialize_wide_limbs(
 	return result;
 }
 
+/*
+For a wide binary value with a large positive exponent, the old exact path
+started at the significand and multiplied the complete base-1e9 accumulator by
+2^34 once for every chunk.  binary80/binary128 can need 478 such chunks.  The
+cost is quadratic because the accumulator grows at each multiplication.
+
+The small table below supplies every 64th chunk (2^2176).  It is deliberately
+stored in the existing base-1e9 representation: after copying one anchor we
+only have to multiply its limbs by the at-most-128-bit significand and process
+the remaining 0..63 chunks.  Eight entries cover the full finite binary80 and
+binary128 exponent domains and occupy about 40 KiB per instantiated wide type.
+Unlike a table of all exponents, this is small enough for a header-only path
+while removing the overwhelming majority of the growing multiplications.
+*/
+inline constexpr unsigned exact_precision_pow2_anchor_chunk_count{64u};
+
+template <typename flt>
+struct exact_precision_wide_pow2_anchor_table
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	constexpr static ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	constexpr static ::std::int_least32_t maximum_binary_exponent{
+		(static_cast<::std::int_least32_t>(1u) << trait::ebits) - 2 - bias -
+		static_cast<::std::int_least32_t>(trait::mbits)};
+	constexpr static ::std::size_t maximum_chunk_count{
+		(static_cast<::std::size_t>(maximum_binary_exponent) +
+		 exact_precision_pow2_chunk - 1u) /
+		exact_precision_pow2_chunk};
+	constexpr static ::std::size_t extent{
+		maximum_chunk_count / exact_precision_pow2_anchor_chunk_count + 1u};
+
+	exact_precision_limb_type
+		limbs[extent][exact_precision_limb_capacity<flt>]{};
+	::std::size_t sizes[extent]{};
+
+	inline exact_precision_wide_pow2_anchor_table() noexcept
+	{
+		limbs[0u][0u] = 1u;
+		sizes[0u] = 1u;
+		for (::std::size_t entry{1u}; entry != extent; ++entry)
+		{
+			auto const previous_size{sizes[entry - 1u]};
+			for (::std::size_t index{}; index != previous_size; ++index)
+			{
+				limbs[entry][index] = limbs[entry - 1u][index];
+			}
+			sizes[entry] = previous_size;
+			for (unsigned chunk{};
+				 chunk != exact_precision_pow2_anchor_chunk_count; ++chunk)
+			{
+				::fast_io::details::exact_precision_multiply_small(
+					limbs[entry], sizes[entry],
+					exact_precision_pow2_multiplier);
+			}
+		}
+	}
+};
+
+template <typename flt>
+[[nodiscard]] inline exact_precision_wide_pow2_anchor_table<flt> const &
+exact_precision_wide_pow2_anchor_table_instance() noexcept
+{
+	/*
+	Keep the table runtime-lazy.  Eager constexpr construction exceeds the
+	default evaluator step budget in GCC when a translation unit instantiates
+	many independent precision frontends.  The table is built once only after a
+	wide positive-exponent fallback is actually reached; normal short-precision
+	window users pay neither initialization nor code-generation cost.  Constant
+	evaluation deliberately stays on the pre-existing exact loop below.
+	*/
+	static exact_precision_wide_pow2_anchor_table<flt> const table{};
+	return table;
+}
+
+template <::std::size_t capacity>
+inline constexpr void exact_precision_add_limbs(
+	exact_precision_limb_type (&limbs)[capacity], ::std::size_t &size,
+	exact_precision_limb_type const *addend, ::std::size_t addend_size) noexcept
+{
+	exact_precision_multiplier_type carry{};
+	::std::size_t index{};
+	for (; index < addend_size || carry; ++index)
+	{
+		if (size == index)
+		{
+			limbs[size++] = 0u;
+		}
+		auto const sum{static_cast<exact_precision_multiplier_type>(limbs[index]) +
+			(index < addend_size ? addend[index] : 0u) + carry};
+		limbs[index] = static_cast<exact_precision_limb_type>(
+			sum % exact_precision_limb_base);
+		carry = sum / exact_precision_limb_base;
+	}
+}
+
+template <::std::size_t capacity, typename mantissa_type>
+inline constexpr void exact_precision_multiply_anchor_by_mantissa(
+	exact_precision_limb_type (&limbs)[capacity], ::std::size_t &size,
+	exact_precision_limb_type const *anchor, ::std::size_t anchor_size,
+	mantissa_type mantissa) noexcept
+{
+	constexpr unsigned word_bits{32u};
+	constexpr auto word_mask{static_cast<mantissa_type>(0xffffffffu)};
+	constexpr exact_precision_multiplier_type word_base{
+		static_cast<exact_precision_multiplier_type>(1u) << word_bits};
+	constexpr auto word_count{
+		(sizeof(mantissa_type) * ::std::numeric_limits<unsigned char>::digits +
+		 word_bits - 1u) /
+		word_bits};
+	limbs[0u] = 0u;
+	size = 1u;
+	for (::std::size_t index{word_count}; index; --index)
+	{
+		::fast_io::details::exact_precision_multiply_small(
+			limbs, size, word_base);
+		auto const word{static_cast<exact_precision_multiplier_type>(
+			(mantissa >> ((index - 1u) * word_bits)) & word_mask)};
+		if (word)
+		{
+			exact_precision_limb_type addend[capacity]{};
+			for (::std::size_t copy{}; copy != anchor_size; ++copy)
+			{
+				addend[copy] = anchor[copy];
+			}
+			auto addend_size{anchor_size};
+			::fast_io::details::exact_precision_multiply_small(
+				addend, addend_size, word);
+			::fast_io::details::exact_precision_add_limbs(
+				limbs, size, addend, addend_size);
+		}
+	}
+}
+
 template <typename flt>
 inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
@@ -4441,31 +4575,58 @@ inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 
 	exact_precision_limb_type limbs[exact_precision_limb_capacity<flt>]{};
 	::std::size_t limb_size{};
-	if constexpr (sizeof(mantissa_type) <= sizeof(exact_precision_multiplier_type))
+	bool initialized_from_anchor{};
+	if constexpr (::fast_io::details::exact_precision_is_wide_binary<flt>)
 	{
-		// Perform the base-1e9 quotient in a type that can represent both the
-		// original mantissa and the divisor.  This is semantically the same integer
-		// division as the former compound assignment, but makes its narrowing proof
-		// explicit for binary16/bfloat16 front ends: the quotient never exceeds the
-		// input mantissa.
-		using division_type = ::std::conditional_t<
-			(sizeof(mantissa_type) < sizeof(exact_precision_multiplier_type)),
-			exact_precision_multiplier_type, mantissa_type>;
-		constexpr auto division_base{static_cast<division_type>(exact_precision_limb_base)};
-		for (; mantissa;)
+		if (!::std::is_constant_evaluated() && 0 < binary_exponent)
 		{
-			auto const current{static_cast<division_type>(mantissa)};
-			// The remainder is in [0, 1e9), exactly the limb_type domain.
-			limbs[limb_size] = static_cast<exact_precision_limb_type>(
-				current % division_base);
-			++limb_size;
-			mantissa = static_cast<mantissa_type>(current / division_base);
+			auto const chunk_count{static_cast<::std::uint_least32_t>(
+				binary_exponent / static_cast<::std::int_least32_t>(
+					exact_precision_pow2_chunk))};
+			auto const anchor_index{static_cast<::std::size_t>(
+				chunk_count / exact_precision_pow2_anchor_chunk_count)};
+			if (anchor_index)
+			{
+				auto const &anchor{::fast_io::details::
+					exact_precision_wide_pow2_anchor_table_instance<flt>()};
+				::fast_io::details::exact_precision_multiply_anchor_by_mantissa(
+					limbs, limb_size, anchor.limbs[anchor_index],
+					anchor.sizes[anchor_index], mantissa);
+				binary_exponent -= static_cast<::std::int_least32_t>(
+					anchor_index * exact_precision_pow2_anchor_chunk_count *
+					exact_precision_pow2_chunk);
+				initialized_from_anchor = true;
+			}
 		}
 	}
-	else
+	if (!initialized_from_anchor)
 	{
-		::fast_io::details::exact_precision_initialize_wide_limbs(
-			limbs, limb_size, mantissa);
+		if constexpr (sizeof(mantissa_type) <= sizeof(exact_precision_multiplier_type))
+		{
+			// Perform the base-1e9 quotient in a type that can represent both the
+			// original mantissa and the divisor.  This is semantically the same integer
+			// division as the former compound assignment, but makes its narrowing proof
+			// explicit for binary16/bfloat16 front ends: the quotient never exceeds the
+			// input mantissa.
+			using division_type = ::std::conditional_t<
+				(sizeof(mantissa_type) < sizeof(exact_precision_multiplier_type)),
+				exact_precision_multiplier_type, mantissa_type>;
+			constexpr auto division_base{static_cast<division_type>(exact_precision_limb_base)};
+			for (; mantissa;)
+			{
+				auto const current{static_cast<division_type>(mantissa)};
+				// The remainder is in [0, 1e9), exactly the limb_type domain.
+				limbs[limb_size] = static_cast<exact_precision_limb_type>(
+					current % division_base);
+				++limb_size;
+				mantissa = static_cast<mantissa_type>(current / division_base);
+			}
+		}
+		else
+		{
+			::fast_io::details::exact_precision_initialize_wide_limbs(
+				limbs, limb_size, mantissa);
+		}
 	}
 	auto decimal_exponent{binary_exponent < 0 ? binary_exponent : 0};
 	if (binary_exponent < 0)

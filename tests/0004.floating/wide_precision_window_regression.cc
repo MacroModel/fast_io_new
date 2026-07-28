@@ -81,7 +81,7 @@ template <typename floating_type, rounding rounding_mode,
 		maximum_exponent |
 		(static_cast<__uint128_t>(UINT64_C(0x123456789abcdef0)) << 48u) |
 		UINT64_C(0x0fedcba98765))};
-	return check_against_full_exact<
+	bool result{check_against_full_exact<
 			   __float128, rounding::nearest_to_even,
 			   precision_mode::significant, format::fixed>(huge, 6u) &&
 		check_against_full_exact<
@@ -95,7 +95,26 @@ template <typename floating_type, rounding rounding_mode,
 		check_against_full_exact<
 			__float128, rounding::away_from_zero,
 			precision_mode::fractional_preserve_trailing_zero,
-			format::decimal>(adjacent, 9u);
+			format::decimal>(adjacent, 9u)};
+	/*
+	The positive-exponent anchor table is used only after 64 base-1e9 power-of-two
+	chunks.  Exercise each of its seven nonzero anchors against the independent
+	512-bit prefix window: the latter supplies the selected P=6 result without
+	materializing this complete integer coefficient.
+	*/
+	constexpr ::std::uint_least16_t anchor_exponents[]{
+		18671u, 20847u, 23023u, 25199u, 27375u, 29551u, 31727u};
+	for (auto raw_exponent : anchor_exponents)
+	{
+		auto const value{::std::bit_cast<__float128>(
+			(static_cast<__uint128_t>(raw_exponent) << 112u) |
+			(static_cast<__uint128_t>(UINT64_C(0x0fedcba987654321)) << 48u) |
+			UINT64_C(0x0000abcd1234))};
+		result = result && check_against_full_exact<
+			__float128, rounding::nearest_to_even,
+			precision_mode::significant, format::fixed>(value, 6u);
+	}
+	return result;
 #else
 	return true;
 #endif
@@ -109,7 +128,7 @@ template <typename floating_type, rounding rounding_mode,
 		12000 - 63)};
 	auto const adjacent{1.0L +
 		__builtin_ldexpl(1.0L, -63)};
-	return check_against_full_exact<
+	bool result{check_against_full_exact<
 			   long double, rounding::nearest_to_even,
 			   precision_mode::significant, format::fixed>(
 				   patterned, 6u) &&
@@ -120,7 +139,19 @@ template <typename floating_type, rounding rounding_mode,
 		check_against_full_exact<
 			long double, rounding::toward_minus_infinity,
 			precision_mode::fractional_preserve_trailing_zero,
-			format::general>(-adjacent, 9u);
+			format::general>(-adjacent, 9u)};
+	constexpr int anchor_exponents[]{
+		2239, 4415, 6591, 8767, 10943, 13119, 15295};
+	for (auto binary_exponent : anchor_exponents)
+	{
+		auto const value{__builtin_ldexpl(
+			static_cast<long double>(UINT64_C(0xfedcba9876543210)),
+			binary_exponent - 63)};
+		result = result && check_against_full_exact<
+			long double, rounding::nearest_to_even,
+			precision_mode::significant, format::fixed>(value, 6u);
+	}
+	return result;
 #else
 	return true;
 #endif
