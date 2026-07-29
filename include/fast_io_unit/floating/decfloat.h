@@ -1256,6 +1256,32 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 	}
 
 	template <::std::size_t limb_capacity>
+	[[nodiscard]] inline constexpr bool
+	scan_decfloat_bigint_any_bits_below(
+		scan_decfloat_bigint<limb_capacity> const &value,
+		::std::size_t bit_limit) noexcept
+	{
+		auto const whole_limbs{bit_limit / 64u};
+		auto const checked_limbs{
+			whole_limbs < value.size ? whole_limbs : value.size};
+		for (::std::size_t index{}; index != checked_limbs; ++index)
+		{
+			if (value.limb[index] != 0u)
+			{
+				return true;
+			}
+		}
+		auto const remaining_bits{bit_limit % 64u};
+		if (remaining_bits && whole_limbs < value.size)
+		{
+			auto const mask{
+				(::std::uint_least64_t{1u} << remaining_bits) - 1u};
+			return (value.limb[whole_limbs] & mask) != 0u;
+		}
+		return false;
+	}
+
+	template <::std::size_t limb_capacity>
 	[[nodiscard]] inline constexpr int scan_decfloat_bigint_compare(scan_decfloat_bigint<limb_capacity> const &left,
 																	scan_decfloat_bigint<limb_capacity> const &right) noexcept
 	{
@@ -1354,6 +1380,22 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		}
 		::fast_io::details::scan_decfloat_bigint_normalize(out);
 		return true;
+	}
+
+	template <::std::size_t limb_capacity>
+	inline constexpr void
+	scan_decfloat_bigint_shift_right_one_inplace(scan_decfloat_bigint<limb_capacity> &value) noexcept
+	{
+		::std::uint_least64_t carry{};
+		for (auto index{value.size}; index != 0u;)
+		{
+			--index;
+			auto const word{value.limb[index]};
+			value.limb[index] = static_cast<::std::uint_least64_t>(
+				(word >> 1u) | (carry << 63u));
+			carry = word & 1u;
+		}
+		::fast_io::details::scan_decfloat_bigint_normalize(value);
 	}
 
 	template <::std::size_t limb_capacity>
@@ -1601,10 +1643,90 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		}
 	}
 
+	inline constexpr ::std::uint_least64_t
+		scan_decfloat_pow5_anchor_chunk_count{32u};
+	inline constexpr ::std::uint_least64_t
+		scan_decfloat_pow5_anchor_exponent{
+			27u * scan_decfloat_pow5_anchor_chunk_count};
+
+	template <::std::size_t limb_capacity>
+	inline constexpr ::std::uint_least64_t
+		scan_decfloat_pow5_anchor_maximum_exponent{
+			limb_capacity >= 640u ? 5095u : 1075u};
+
+	template <::std::size_t limb_capacity>
+	struct scan_decfloat_pow5_anchor_table
+	{
+		inline static constexpr ::std::size_t extent{
+			static_cast<::std::size_t>(
+				scan_decfloat_pow5_anchor_maximum_exponent<limb_capacity> /
+				scan_decfloat_pow5_anchor_exponent) +
+			1u};
+		scan_decfloat_bigint<limb_capacity> values[extent]{};
+
+		inline constexpr scan_decfloat_pow5_anchor_table() noexcept
+		{
+			::fast_io::details::scan_decfloat_bigint_set_u64(values[0u], 1u);
+			for (::std::size_t entry{1u}; entry != extent; ++entry)
+			{
+				::fast_io::details::scan_decfloat_bigint_copy(
+					values[entry], values[entry - 1u]);
+				for (::std::uint_least64_t chunk{};
+					 chunk != scan_decfloat_pow5_anchor_chunk_count; ++chunk)
+				{
+					(void)::fast_io::details::scan_decfloat_bigint_mul_u64(
+						values[entry],
+						::fast_io::details::scan_decfloat_pow5_0_to_27_table[27u]);
+				}
+			}
+		}
+	};
+
+	template <::std::size_t limb_capacity>
+	inline constexpr scan_decfloat_pow5_anchor_table<limb_capacity>
+		scan_decfloat_pow5_anchor_table_instance{};
+
 	template <::std::size_t limb_capacity>
 	[[nodiscard]] inline constexpr bool scan_decfloat_bigint_mul_pow5(scan_decfloat_bigint<limb_capacity> &value,
 																	  ::std::uint_least64_t exponent) noexcept
 	{
+		/*
+		A short decimal coefficient occupies one limb, but binary80/binary128
+		can request nearly five thousand powers of five.  Starting from that
+		coefficient and multiplying by 5^27 makes every early pass revisit an
+		ever-growing accumulator.  The constexpr anchors store every 864th
+		power; copying the nearest lower anchor, multiplying it once by the
+		coefficient, and finishing at most 31 chunks removes most of that
+		quadratic growth.  Six wide anchors occupy 30 KiB, and constexpr storage
+		avoids a first-call initialization spike.  Multi-limb decimal prefixes
+		retain the general exact recurrence.
+		*/
+		if (!::std::is_constant_evaluated() && value.size <= 1u &&
+			exponent >= ::fast_io::details::scan_decfloat_pow5_anchor_exponent)
+		{
+			auto const anchor_index{static_cast<::std::size_t>(
+				exponent /
+				::fast_io::details::scan_decfloat_pow5_anchor_exponent)};
+			using table_type =
+				::fast_io::details::scan_decfloat_pow5_anchor_table<limb_capacity>;
+			if (anchor_index < table_type::extent)
+			{
+				auto const coefficient{
+					value.size ? value.limb[0u] : ::std::uint_least64_t{}};
+				::fast_io::details::scan_decfloat_bigint_copy(
+					value,
+					::fast_io::details::
+						scan_decfloat_pow5_anchor_table_instance<limb_capacity>
+							.values[anchor_index]);
+				if (!::fast_io::details::scan_decfloat_bigint_mul_u64(
+						value, coefficient))
+				{
+					return false;
+				}
+				exponent %=
+					::fast_io::details::scan_decfloat_pow5_anchor_exponent;
+			}
+		}
 		constexpr ::std::uint_least64_t chunk{27u};
 		for (; exponent >= chunk; exponent -= chunk)
 		{
@@ -1669,7 +1791,7 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 	plus the possible carry created by rounding.  Native-u128 targets use that
 	carrier for binary80/binary128.  A target without native u128 admits only the
 	compute-supported formats at this entry; their largest p is binary64's 53,
-	so a uint_least64_t contains the complete quotient and its carry.  The long
+	so a uint_least64_t contains the complete quotient and its carry.  The exact
 	division below explicitly rejects any set quotient bit outside the selected
 	carrier, making this a proved width substitution rather than truncation.
 	*/
@@ -1696,7 +1818,116 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		scan_decfloat_bigint<limb_capacity> const &denominator,
 		::std::int_least64_t binary_shift) noexcept
 	{
+		/*
+		The quotient requested by assign_big has only p or p+1 significant
+		bits, but the old restoring division visited every bit of the scaled
+		dividend.  That is about 16,000 iterations for a finite binary128 value
+		near either decimal exponent limit.
+
+		Materialize the power-of-two scale on one side, align the divisor once,
+		then extract only the actual quotient bits.  Each subtraction leaves the
+		exact remainder, so the final midpoint comparison and every directed
+		rounding policy remain unchanged.  The loop is bounded by the quotient
+		width (at most 114 useful bits for binary128), independently of the
+		decimal exponent.
+		*/
+		if (denominator.size == 1u && denominator.limb[0] == 1u)
+		{
+			/*
+			Positive decimal exponents leave the exact denominator equal to
+			one.  After scale selection their effective divisor is normally a
+			large power of two.  Extracting the quotient and classifying the
+			discarded low bits is exact and touches each relevant limb once;
+			constructing and repeatedly shifting a 5,000-digit aligned divisor
+			would be pure overhead.
+			*/
+			auto const numerator_bits{
+				::fast_io::details::scan_decfloat_bigint_bit_width(numerator)};
+			scan_decfloat_quotient_type quotient{};
+			bool quotient_overflow{};
+			if (binary_shift >= 0)
+			{
+				auto const left_shift{static_cast<::std::size_t>(binary_shift)};
+				if (numerator_bits &&
+					(numerator_bits > ::fast_io::details::scan_decfloat_quotient_bits ||
+					 left_shift >
+						 ::fast_io::details::scan_decfloat_quotient_bits - numerator_bits))
+				{
+					quotient_overflow = true;
+				}
+				else
+				{
+					for (::std::size_t bit{}; bit != numerator_bits; ++bit)
+					{
+						if (::fast_io::details::scan_decfloat_bigint_get_bit(
+								numerator, bit))
+						{
+							quotient |=
+								static_cast<scan_decfloat_quotient_type>(1u)
+								<< (bit + left_shift);
+						}
+					}
+				}
+				return {.quotient = quotient,
+						.twice_remainder_compare = -1,
+						.remainder_nonzero = false,
+						.quotient_overflow = quotient_overflow};
+			}
+
+			auto const right_shift{static_cast<::std::size_t>(-binary_shift)};
+			auto const quotient_width{
+				numerator_bits > right_shift ? numerator_bits - right_shift : 0u};
+			if (quotient_width >
+				::fast_io::details::scan_decfloat_quotient_bits)
+			{
+				quotient_overflow = true;
+			}
+			else
+			{
+				for (::std::size_t bit{}; bit != quotient_width; ++bit)
+				{
+					if (::fast_io::details::scan_decfloat_bigint_get_bit(
+							numerator, bit + right_shift))
+					{
+						quotient |=
+							static_cast<scan_decfloat_quotient_type>(1u) << bit;
+					}
+				}
+			}
+			bool const remainder_nonzero{
+				::fast_io::details::scan_decfloat_bigint_any_bits_below(
+					numerator, right_shift)};
+			int twice_remainder_compare{-1};
+			if (right_shift &&
+				::fast_io::details::scan_decfloat_bigint_get_bit(
+					numerator, right_shift - 1u))
+			{
+				twice_remainder_compare =
+					::fast_io::details::scan_decfloat_bigint_any_bits_below(
+						numerator, right_shift - 1u)
+						? 1
+						: 0;
+			}
+			return {.quotient = quotient,
+					.twice_remainder_compare = twice_remainder_compare,
+					.remainder_nonzero = remainder_nonzero,
+					.quotient_overflow = quotient_overflow};
+		}
+
+		::fast_io::details::scan_decfloat_bigint<limb_capacity> remainder;
 		::fast_io::details::scan_decfloat_bigint<limb_capacity> divisor;
+		if (binary_shift > 0)
+		{
+			if (!::fast_io::details::scan_decfloat_bigint_shift_left(
+					remainder, numerator, static_cast<::std::size_t>(binary_shift)))
+			{
+				return {.quotient_overflow = true};
+			}
+		}
+		else
+		{
+			::fast_io::details::scan_decfloat_bigint_copy(remainder, numerator);
+		}
 		if (binary_shift < 0)
 		{
 			if (!::fast_io::details::scan_decfloat_bigint_shift_left(
@@ -1709,50 +1940,68 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		{
 			::fast_io::details::scan_decfloat_bigint_copy(divisor, denominator);
 		}
-		auto const dividend_bits{
-			::fast_io::details::scan_decfloat_bigint_bit_width(numerator) +
-			(binary_shift > 0 ? static_cast<::std::size_t>(binary_shift) : 0u)};
-		::fast_io::details::scan_decfloat_bigint<limb_capacity> remainder;
+
 		scan_decfloat_quotient_type quotient{};
 		bool quotient_overflow{};
-		for (auto bit_index{dividend_bits}; bit_index != 0u;)
+		auto const remainder_bits{
+			::fast_io::details::scan_decfloat_bigint_bit_width(remainder)};
+		auto const divisor_bits{
+			::fast_io::details::scan_decfloat_bigint_bit_width(divisor)};
+		::fast_io::details::scan_decfloat_bigint<limb_capacity> aligned_divisor;
+		if (remainder_bits >= divisor_bits && divisor_bits != 0u)
 		{
-			--bit_index;
-			bool bit{};
-			if (binary_shift > 0)
-			{
-				auto const shift{static_cast<::std::size_t>(binary_shift)};
-				bit = bit_index >= shift &&
-					  ::fast_io::details::scan_decfloat_bigint_get_bit(numerator, bit_index - shift);
-			}
-			else
-			{
-				bit = ::fast_io::details::scan_decfloat_bigint_get_bit(numerator, bit_index);
-			}
-			if (!::fast_io::details::scan_decfloat_bigint_shl1_add_bit(remainder, bit))
+			auto quotient_bit{remainder_bits - divisor_bits};
+			if (!::fast_io::details::scan_decfloat_bigint_shift_left(
+					aligned_divisor, divisor, quotient_bit))
 			{
 				return {.quotient_overflow = true};
 			}
-			if (::fast_io::details::scan_decfloat_bigint_compare(remainder, divisor) >= 0)
+			bool quotient_nonzero_possible{true};
+			if (::fast_io::details::scan_decfloat_bigint_compare(
+					aligned_divisor, remainder) > 0)
 			{
-				::fast_io::details::scan_decfloat_bigint_sub_assign(remainder, divisor);
-				if (bit_index < ::fast_io::details::scan_decfloat_quotient_bits)
+				if (quotient_bit == 0u)
 				{
-					quotient |=
-						static_cast<scan_decfloat_quotient_type>(1u) << bit_index;
+					quotient_nonzero_possible = false;
 				}
 				else
 				{
-					quotient_overflow = true;
+					--quotient_bit;
+					::fast_io::details::scan_decfloat_bigint_shift_right_one_inplace(
+						aligned_divisor);
 				}
 			}
+			for (; quotient_nonzero_possible;)
+			{
+				if (::fast_io::details::scan_decfloat_bigint_compare(
+						remainder, aligned_divisor) >= 0)
+				{
+					::fast_io::details::scan_decfloat_bigint_sub_assign(
+						remainder, aligned_divisor);
+					if (quotient_bit < ::fast_io::details::scan_decfloat_quotient_bits)
+					{
+						quotient |= static_cast<scan_decfloat_quotient_type>(1u)
+									<< quotient_bit;
+					}
+					else
+					{
+						quotient_overflow = true;
+					}
+				}
+				if (quotient_bit == 0u)
+				{
+					break;
+				}
+				--quotient_bit;
+				::fast_io::details::scan_decfloat_bigint_shift_right_one_inplace(
+					aligned_divisor);
+			}
 		}
-		::fast_io::details::scan_decfloat_bigint<limb_capacity> twice_remainder;
-		::fast_io::details::scan_decfloat_bigint_copy(twice_remainder, remainder);
-		(void)::fast_io::details::scan_decfloat_bigint_shl1_add_bit(twice_remainder, false);
+		::fast_io::details::scan_decfloat_bigint_copy(aligned_divisor, remainder);
+		(void)::fast_io::details::scan_decfloat_bigint_shl1_add_bit(aligned_divisor, false);
 		return {.quotient = quotient,
 				.twice_remainder_compare =
-					::fast_io::details::scan_decfloat_bigint_compare(twice_remainder, divisor),
+					::fast_io::details::scan_decfloat_bigint_compare(aligned_divisor, divisor),
 				.remainder_nonzero = remainder.size != 0u,
 				.quotient_overflow = quotient_overflow};
 	}
@@ -1822,7 +2071,7 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 
 	template <typename T>
 	[[nodiscard]] inline constexpr scan_decfloat_extended_mantissa
-	scan_decfloat_adjusted_to_extended_halfway(scan_decfloat_adjusted_mantissa adjusted) noexcept
+	scan_decfloat_adjusted_to_extended(scan_decfloat_adjusted_mantissa adjusted) noexcept
 	{
 		using no_cvref_t = ::std::remove_cvref_t<T>;
 		using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
@@ -1841,6 +2090,15 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 				::fast_io::details::scan_decfloat_adjusted_significand<no_cvref_t>(adjusted);
 			extended.power2 = static_cast<::std::int_least64_t>(adjusted.power2) - bias;
 		}
+		return extended;
+	}
+
+	template <typename T>
+	[[nodiscard]] inline constexpr scan_decfloat_extended_mantissa
+	scan_decfloat_adjusted_to_extended_halfway(scan_decfloat_adjusted_mantissa adjusted) noexcept
+	{
+		auto extended{
+			::fast_io::details::scan_decfloat_adjusted_to_extended<T>(adjusted)};
 		extended.mantissa = static_cast<::std::uint_least64_t>((extended.mantissa << 1u) | 1u);
 		--extended.power2;
 		return extended;
@@ -1848,12 +2106,11 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 
 	template <typename T>
 	[[nodiscard]] inline constexpr bool
-	scan_decfloat_try_nearest_even_compare(T &value, bool negative,
-										   scan_decfloat_significand_state<T> const &state,
-										   ::std::int_least64_t decimal_exponent,
-										   scan_decfloat_adjusted_mantissa lower,
-										   scan_decfloat_adjusted_mantissa upper,
-										   ::fast_io::parse_code &code) noexcept
+	scan_decfloat_compare_exact_to_extended(
+		scan_decfloat_significand_state<T> const &state,
+		::std::int_least64_t decimal_exponent,
+		scan_decfloat_extended_mantissa boundary,
+		int &order) noexcept
 	{
 		using no_cvref_t = ::std::remove_cvref_t<T>;
 		if constexpr (!::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
@@ -1862,25 +2119,33 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		}
 		else
 		{
-			if (decimal_exponent >= 0 || state.exact_truncated_nonzero)
-			{
-				return false;
-			}
 			::fast_io::details::scan_decfloat_bigint_for<no_cvref_t> real_digits;
 			if (!::fast_io::details::scan_decfloat_bigint_from_digits(real_digits, state))
 			{
 				return false;
 			}
-			auto const halfway{
-				::fast_io::details::scan_decfloat_adjusted_to_extended_halfway<no_cvref_t>(lower)};
 			::fast_io::details::scan_decfloat_bigint_for<no_cvref_t> theor_digits;
-			::fast_io::details::scan_decfloat_bigint_set_u64(theor_digits, halfway.mantissa);
-			auto const pow5_exponent{static_cast<::std::uint_least64_t>(-decimal_exponent)};
-			if (!::fast_io::details::scan_decfloat_bigint_mul_pow5(theor_digits, pow5_exponent))
+			::fast_io::details::scan_decfloat_bigint_set_u64(
+				theor_digits, boundary.mantissa);
+			if (decimal_exponent < 0)
 			{
-				return false;
+				if (!::fast_io::details::scan_decfloat_bigint_mul_pow5(
+						theor_digits,
+						static_cast<::std::uint_least64_t>(-decimal_exponent)))
+				{
+					return false;
+				}
 			}
-			auto const pow2_exponent{halfway.power2 - decimal_exponent};
+			else if (decimal_exponent > 0)
+			{
+				if (!::fast_io::details::scan_decfloat_bigint_mul_pow5(
+						real_digits,
+						static_cast<::std::uint_least64_t>(decimal_exponent)))
+				{
+					return false;
+				}
+			}
+			auto const pow2_exponent{boundary.power2 - decimal_exponent};
 			if (pow2_exponent > 0)
 			{
 				if (!::fast_io::details::scan_decfloat_bigint_shift_left_inplace(
@@ -1897,10 +2162,85 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 					return false;
 				}
 			}
-			auto const order{::fast_io::details::scan_decfloat_bigint_compare(real_digits, theor_digits)};
-			auto const lower_significand{
-				::fast_io::details::scan_decfloat_adjusted_significand<no_cvref_t>(lower)};
-			auto const selected{(order > 0 || (order == 0 && (lower_significand & 1u) != 0u)) ? upper : lower};
+			order = ::fast_io::details::scan_decfloat_bigint_compare(
+				real_digits, theor_digits);
+			if (order == 0 && state.exact_truncated_nonzero)
+			{
+				/*
+				The stored decimal is the lower endpoint of the omitted suffix.
+				A nonzero omitted digit makes the complete input strictly larger.
+				The exact-digit capacity theorem guarantees that a terminating
+				binary boundary cannot first differ beyond this prefix.
+				*/
+				order = 1;
+			}
+			return true;
+		}
+	}
+
+	template <typename T, ::fast_io::manipulators::floating_rounding rounding>
+	[[nodiscard]] inline constexpr bool
+	scan_decfloat_try_interval_compare(T &value, bool negative,
+									   scan_decfloat_significand_state<T> const &state,
+									   ::std::int_least64_t decimal_exponent,
+									   scan_decfloat_adjusted_mantissa lower,
+									   scan_decfloat_adjusted_mantissa upper,
+									   ::fast_io::parse_code &code) noexcept
+	{
+		using no_cvref_t = ::std::remove_cvref_t<T>;
+		if constexpr (!::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
+		{
+			return false;
+		}
+		else
+		{
+			int order{};
+			::fast_io::details::scan_decfloat_adjusted_mantissa selected;
+			if constexpr (::fast_io::details::floating_rounding_is_nearest<rounding>)
+			{
+				auto const halfway{
+					::fast_io::details::scan_decfloat_adjusted_to_extended_halfway<no_cvref_t>(
+						lower)};
+				if (!::fast_io::details::scan_decfloat_compare_exact_to_extended(
+						state, decimal_exponent, halfway, order))
+				{
+					return false;
+				}
+				auto const lower_significand{
+					::fast_io::details::scan_decfloat_adjusted_significand<no_cvref_t>(
+						lower)};
+				bool const select_upper{
+					order > 0 ||
+					(order == 0 &&
+					 ::fast_io::details::floating_rounding_nearest_tie_round_up<rounding>(
+						 negative,
+						 static_cast<::std::uint_least64_t>(
+							 (lower_significand << 1u) | 1u)))};
+				selected = select_upper ? upper : lower;
+			}
+			else
+			{
+				bool const round_up{
+					::fast_io::details::floating_rounding_directed_round_up<rounding>(
+						negative)};
+				auto const boundary{
+					::fast_io::details::scan_decfloat_adjusted_to_extended<no_cvref_t>(
+						round_up ? lower : upper)};
+				if (!::fast_io::details::scan_decfloat_compare_exact_to_extended(
+						state, decimal_exponent, boundary, order))
+				{
+					return false;
+				}
+				/*
+				For magnitude-up rounding, lower is the first representable
+				value not below the decimal interval's lower endpoint; it remains
+				the answer through exact equality.  For magnitude-down rounding,
+				upper is the last representable value not above the interval's
+				upper endpoint and wins from exact equality onward.
+				*/
+				selected = round_up ? (order > 0 ? upper : lower)
+									: (order >= 0 ? upper : lower);
+			}
 			::fast_io::details::scan_decfloat_to_float(negative, selected, value);
 			code = ((state.significand != 0 && selected.mantissa == 0 && selected.power2 == 0) ||
 					selected.power2 == ::fast_io::details::scan_decfloat_infinite_power<no_cvref_t>())
@@ -2994,19 +3334,19 @@ template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 				{
 					return ::fast_io::details::scan_decfloat_assign_adjusted(value, negative, state.significand, adjusted);
 				}
-				if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even)
+				auto decimal_exponent{::fast_io::details::scan_decfloat_saturating_add(
+					exponent, -static_cast<::std::int_least64_t>(state.fractional_digits))};
+				decimal_exponent = ::fast_io::details::scan_decfloat_saturating_add(
+					decimal_exponent,
+					static_cast<::std::int_least64_t>(
+						state.significant_digits - state.exact_stored_digits));
+				::fast_io::parse_code code{};
+				if (::fast_io::details::scan_decfloat_try_interval_compare<
+						no_cvref_t, rounding>(
+						value, negative, state, decimal_exponent,
+						adjusted, upper_adjusted, code))
 				{
-					auto decimal_exponent{::fast_io::details::scan_decfloat_saturating_add(
-						exponent, -static_cast<::std::int_least64_t>(state.fractional_digits))};
-					decimal_exponent = ::fast_io::details::scan_decfloat_saturating_add(
-						decimal_exponent,
-						static_cast<::std::int_least64_t>(state.significant_digits - state.exact_stored_digits));
-					::fast_io::parse_code code{};
-					if (::fast_io::details::scan_decfloat_try_nearest_even_compare(
-							value, negative, state, decimal_exponent, adjusted, upper_adjusted, code))
-					{
-						return code;
-					}
+					return code;
 				}
 			}
 		}
