@@ -388,6 +388,12 @@ public:
 	}
 	inline constexpr ::std::size_t padding_size() const noexcept
 	{
+		if (this->storage.address_end == this->storage.address_capacity)
+		{
+			// Default, moved-from, closed, released, and unpadded loaders all have an equal endpoint pair. Return before
+			// subtraction: the equal pair may be `{nullptr,nullptr}`, which is a valid empty state but not an array range.
+			return 0u;
+		}
 		return static_cast<::std::size_t>(this->storage.address_capacity - this->storage.address_end);
 	}
 	inline constexpr bool has_padding(::std::size_t n) const noexcept
@@ -551,6 +557,17 @@ public:
 inline constexpr basic_io_scatter_t<char> print_alias_define(io_alias_t, allocation_file_loader const &load) noexcept
 {
 	return {load.data(), load.size()};
+}
+
+/// @brief Exposes allocation-backed readable tail storage without extending the file range.
+/// @details `address_end` is the immutable semantic EOF used by `size()`/`end()`, while `address_capacity` is the
+///          allocation boundary. Their difference is exactly the readable character count promised by
+///          `contiguous_range_with_padding`; a zero result deliberately covers both an unpadded live file and an empty
+///          ownership state. The allocation remains alive until close, release, move, or destruction.
+inline constexpr ::std::size_t
+contiguous_range_padding_size(allocation_file_loader const &load) noexcept
+{
+	return load.padding_size();
 }
 
 /// @brief Marks an allocation-backed file loader as the owner of its aliased byte-character range.

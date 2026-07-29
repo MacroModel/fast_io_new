@@ -3,6 +3,42 @@
 namespace fast_io
 {
 
+/// @brief Reports the readable padding owned by a contiguous range.
+/// @details This is a run-time capability query, not a claim that every object of the provider type currently owns
+///          padding. For a particular range `r`, let `B = ranges::data(r)`, `E = ranges::end(r)`, and
+///          `N = ranges::size(r)`. For `N > 0`, `E == B + N`; for `N == 0`, `B == E` is sufficient and neither the
+///          provider nor consumer needs to perform arithmetic on a possibly null equal pair. If
+///          `P = contiguous_range_padding_size(r)`, the provider promises the following model:
+///
+///          * `P == 0` supplies no permission beyond `[B,E)`.
+///          * `P > 0` proves that `E` belongs to a storage range in which `E + P` is defined and `[E,E+P)` consists
+///            of live, contiguous, readable range-value objects owned by the same range lifetime. `P` is measured in
+///            range elements, not bytes.
+///          * `[B,E)` remains the complete semantic range. Padding does not change `size()`, `end()`, EOF, or the
+///            maximum cursor that a consumer may publish.
+///          * The query has no side effects and its result remains valid until an operation which may invalidate the
+///            range's data pointer, size, capacity, mapping, or ownership.
+///
+///          The padding values need not be initialized to a sentinel unless a stronger provider contract says so.
+///          Consequently a consumer may use them only for memory-safe speculative/vector loads whose semantic result
+///          is masked to `[B,E)`; changing bytes solely in `[E,E+P)` must not change parsing results or target effects.
+///
+///          Formally, compose this promise with `contiguous_scannable_with_padding` using the same `(B,E,P)`.
+///          Every scanner read is then in `[B,E+P)`, hence inside provider-owned live storage; every returned cursor is
+///          in `[B,E]`, hence outside the padding; and padding noninterference preserves the result of scanning the
+///          semantic sequence `[B,E)`. These three facts prove memory safety, unchanged logical EOF, and observational
+///          equivalence to a bounds-respecting scan. The C++ concept can check only the exact, non-throwing query
+///          expression; the range/storage/lifetime equations above are semantic obligations of its provider.
+/// @fn       contiguous_range_padding_size
+/// @param    T const&                                     the contiguous range
+/// @return   ::std::size_t                                readable padding in range elements; zero means none
+template <typename T>
+concept contiguous_range_with_padding = requires(::std::remove_cvref_t<T> const &range) {
+	{
+		contiguous_range_padding_size(range)
+	} noexcept -> ::std::same_as<::std::size_t>;
+};
+
 /// @brief    contiguous_scannable
 /// @details  That a type is contiguous scannable
 ///           is that it can be scanned from a contiguous memory region
@@ -23,6 +59,54 @@ concept contiguous_scannable = ::std::integral<char_type> && requires(char_type 
 		scan_contiguous_define(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end, t)
 	} -> ::std::same_as<parse_result<char_type const *>>;
 };
+
+/// @brief A whole-range scanner which may safely read a bounded amount past the semantic end.
+/// @details `scan_contiguous_define(tag, first, last, padding, target)` receives two distinct boundaries. `last` is
+///          the true terminal position of the input, while `padding` is the number of additional readable
+///          `char_type` objects immediately following it. The overload is intentionally separate from
+///          `contiguous_scannable`: recognizing the ordinary three-boundary-argument CPO does not prove that its
+///          implementation understands or preserves a semantic end distinct from its physical read limit.
+///
+///          Formal contract. Let `p = padding` and `S = [first,last)`. When `first != last`, let
+///          `n = last - first`; when they are equal, let `n = 0` without requiring pointer subtraction. If `p == 0`,
+///          let the readable domain `A = S` without forming `last + 0`; if `p > 0`, let
+///          `A = [first,last+p)`. The caller proves that all nontrivial pointer operations above are within one live
+///          storage range, that `n+p` is representable in both `size_t` and `ptrdiff_t`, and that every `char_type`
+///          object in `A` is readable for the call. The scanner:
+///
+///          1. may read only addresses in `A` and may not write through or retain either input pointer;
+///          2. must treat only `S` as input, so its returned iterator is in the closed interval `[first,last]`;
+///          3. must not consume padding: success, failure, consumed iterator, target effects, and thrown exceptions are
+///             invariant under replacing the values in `[last,last+p)` while keeping `S` fixed;
+///          4. has ordinary terminal whole-range semantics at `last`; padding is never an extra refill and cannot turn
+///             an incomplete token at the real EOF into a longer token.
+///
+///          For verification, write `R` for the set of addresses read and `i` for the returned iterator. Premise (1)
+///          gives `R subseteq A`, while the provider of the matching range-padding query proves `A` readable, hence no
+///          read is out of bounds. Premise (2) gives `first <= i <= last`, so committing `i` preserves the real file
+///          cursor and cannot enter `[last,last+p)`. Premise (3) makes the observable result a function of `S` alone.
+///          Therefore exposing padding changes only the implementation's legal load width, never the abstract parse.
+///          These are semantic requirements; the concept can structurally prove only the exact call and result type.
+///
+///          A zero `padding` value is valid and grants no over-read permission. Implementations may use the same
+///          overload as their scalar fallback, while scanners which also support unpadded ranges may additionally
+///          provide the ordinary `contiguous_scannable` CPO.
+/// @fn       scan_contiguous_define
+/// @param    ::fast_io::io_reserve_type_t<char_type, T>    tag-invoke
+/// @param    char_type const*                              beginning of the semantic input
+/// @param    char_type const*                              true one-past end of the semantic input
+/// @param    ::std::size_t                                 readable elements after the true end
+/// @param    T                                             the object to be scanned, can be any passing style
+/// @return   ::fast_io::parse_result<char_type const*>     next semantic cursor and parse status
+template <typename char_type, typename T>
+concept contiguous_scannable_with_padding =
+	::std::integral<char_type> &&
+	requires(char_type const *begin, char_type const *end, ::std::size_t padding, T &t) {
+		{
+			scan_contiguous_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end, padding, t)
+		} -> ::std::same_as<parse_result<char_type const *>>;
+	};
 
 namespace details
 {

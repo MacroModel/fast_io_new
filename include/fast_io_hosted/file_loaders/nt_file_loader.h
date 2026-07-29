@@ -633,6 +633,12 @@ public:
 	}
 	inline constexpr ::std::size_t padding_size() const noexcept
 	{
+		if (this->storage.address_end == this->storage.address_capacity)
+		{
+			// Avoid subtraction for the null disengaged state. A live unpadded mapping also has equal endpoints and
+			// correctly advertises zero additional readable characters.
+			return 0u;
+		}
 		return static_cast<::std::size_t>(storage.address_capacity - storage.address_end);
 	}
 	inline constexpr bool has_padding(::std::size_t n) const noexcept
@@ -826,6 +832,18 @@ inline constexpr basic_io_scatter_t<char> print_alias_define(::fast_io::io_alias
 														 nt_family_file_loader<family> const &load) noexcept
 {
 	return {load.data(), load.size()};
+}
+
+/// @brief Reports readable tail characters while preserving the NT mapping's real file endpoint.
+/// @details Every family specialization stores the semantic EOF in `address_end` and the end of the explicitly
+///          reserved file-plus-padding view in `address_capacity`. Returning their difference models
+///          `contiguous_range_with_padding` for both NT and Zw spellings without granting access to page rounding or
+///          changing `end()`.
+template <::fast_io::nt_family family>
+inline constexpr ::std::size_t
+contiguous_range_padding_size(nt_family_file_loader<family> const &load) noexcept
+{
+	return load.padding_size();
 }
 
 /// @brief Marks an NT-family file loader as the owner of its print-alias mapping.
