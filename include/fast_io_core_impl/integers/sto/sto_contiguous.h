@@ -563,6 +563,85 @@ inline simd_parse_result sse_parse(char unsigned const *buffer, char unsigned co
 	return {digits, parse_code::ok};
 }
 
+/*
+Parse one terminal decimal suffix shorter than a full SSE block.  The caller
+proves that 16 bytes are physically readable, while semantic_size remains the
+only lexical boundary.  Capping the movemask prefix at semantic_size makes the
+result independent of every padding byte.
+*/
+inline simd_parse_result
+sse_parse_terminal_padding_tail(char unsigned const *buffer,
+								::std::size_t semantic_size,
+								::std::uint_least64_t &res) noexcept
+{
+	auto digits{
+		static_cast<::std::size_t>(detect_length<false>(buffer))};
+	if (semantic_size < digits)
+	{
+		digits = semantic_size;
+	}
+	if (digits == 0u)
+	{
+		return {0u, parse_code::invalid};
+	}
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+	using namespace fast_io::intrinsics;
+	x86_64_v16qu chunk;
+	__builtin_memcpy(__builtin_addressof(chunk), buffer, 16);
+	x86_64_v16qu const zeros{
+		u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0',
+		u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0', u8'0'};
+	chunk -= zeros;
+	x86_64_v16qi shuffle_mask;
+	__builtin_memcpy(
+		__builtin_addressof(shuffle_mask), simd16_shift_table + digits,
+		sizeof(x86_64_v16qi));
+	chunk = (x86_64_v16qu)__builtin_ia32_pshufb128(
+		(x86_64_v16qi)chunk, shuffle_mask);
+	chunk = (x86_64_v16qu)__builtin_ia32_pmaddubsw128(
+		(x86_64_v16qi)chunk,
+		x86_64_v16qi{10, 1, 10, 1, 10, 1, 10, 1,
+					 10, 1, 10, 1, 10, 1, 10, 1});
+	chunk = (x86_64_v16qu)__builtin_ia32_pmaddwd128(
+		(x86_64_v8hi)chunk,
+		x86_64_v8hi{100, 1, 100, 1, 100, 1, 100, 1});
+	chunk = (x86_64_v16qu)__builtin_ia32_packusdw128(
+		(x86_64_v4si)chunk, (x86_64_v4si)chunk);
+	chunk = (x86_64_v16qu)__builtin_ia32_pmaddwd128(
+		(x86_64_v8hi)chunk,
+		x86_64_v8hi{10000, 1, 10000, 1, 0, 0, 0, 0});
+	::std::uint_least64_t chunk0;
+	__builtin_memcpy(
+		__builtin_addressof(chunk0), __builtin_addressof(chunk),
+		sizeof(chunk0));
+#else
+	__m128i chunk =
+		_mm_loadu_si128(reinterpret_cast<__m128i const *>(buffer));
+	chunk = _mm_sub_epi8(chunk, _mm_set1_epi8('0'));
+	chunk = _mm_shuffle_epi8(
+		chunk, _mm_loadu_si128(reinterpret_cast<__m128i const *>(
+				   simd16_shift_table + digits)));
+	chunk = _mm_maddubs_epi16(
+		chunk, _mm_set_epi8(
+				   1, 10, 1, 10, 1, 10, 1, 10,
+				   1, 10, 1, 10, 1, 10, 1, 10));
+	chunk = _mm_madd_epi16(
+		chunk, _mm_set_epi16(1, 100, 1, 100, 1, 100, 1, 100));
+	chunk = _mm_packus_epi32(chunk, chunk);
+	chunk = _mm_madd_epi16(
+		chunk, _mm_set_epi16(0, 0, 0, 0, 1, 10000, 1, 10000));
+	::std::uint_least64_t chunk0;
+	::std::memcpy(
+		__builtin_addressof(chunk0), __builtin_addressof(chunk),
+		sizeof(chunk0));
+#endif
+	res = static_cast<::std::uint_least64_t>(
+		((chunk0 & 0xffffffffu) *
+		 static_cast<::std::uint_least64_t>(100000000u)) +
+		(chunk0 >> 32u));
+	return {digits, parse_code::ok};
+}
+
 #endif
 
 template <char8_t base, ::std::integral char_type>
@@ -3661,6 +3740,135 @@ inline constexpr parse_result<char_type const *> scan_int_contiguous_define_impl
 	return scan_int_contiguous_none_space_part_define_impl<base, ((shbase && base != 10) && my_signed_integral<T>),
 														   skipzero, oct_c2y, allow_leading_plus>(first, last, t);
 }
+
+template <char8_t base, bool noskipws, bool shbase, bool skipzero,
+		  bool oct_c2y, bool allow_leading_plus = false,
+		  ::std::integral char_type, details::my_integral T>
+inline constexpr parse_result<char_type const *>
+scan_int_contiguous_padding_define_impl(
+	char_type const *first, char_type const *last, ::std::size_t padding,
+	T &t) noexcept
+{
+#if defined(__SSE4_1__) &&                                              \
+	((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+	using unsigned_type =
+		details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	if constexpr (
+		base == 10 && !shbase && !skipzero &&
+		sizeof(char_type) == sizeof(char8_t) &&
+		::fast_io::details::is_ascii<char_type> &&
+		sizeof(unsigned_type) <= sizeof(::std::uint_least64_t) &&
+		sizeof(unsigned_type) >= sizeof(::std::uint_least32_t))
+	{
+		FAST_IO_IF_NOT_CONSTEVAL
+		{
+			auto parse_first{first};
+			if constexpr (!noskipws)
+			{
+				parse_first =
+					::fast_io::details::find_space_common_impl<false, true>(
+						parse_first, last);
+			}
+			bool negative{};
+			if constexpr (my_signed_integral<T>)
+			{
+				if (parse_first != last &&
+					*parse_first ==
+						char_literal_v<u8'-', char_type>)
+				{
+					negative = true;
+					++parse_first;
+				}
+				else if constexpr (allow_leading_plus)
+				{
+					if (parse_first != last &&
+						*parse_first ==
+							char_literal_v<u8'+', char_type>)
+					{
+						++parse_first;
+					}
+				}
+			}
+			else if constexpr (allow_leading_plus)
+			{
+				if (parse_first != last &&
+					*parse_first == char_literal_v<u8'+', char_type>)
+				{
+					++parse_first;
+				}
+			}
+
+			if (parse_first != last)
+			{
+				auto const remaining{
+					static_cast<::std::size_t>(last - parse_first)};
+				using unsigned_char_type =
+					::std::make_unsigned_t<char_type>;
+				auto const first_digit{
+					static_cast<unsigned_char_type>(*parse_first)};
+				constexpr auto one{
+					static_cast<unsigned_char_type>(
+						char_literal_v<u8'1', char_type>)};
+				if (10u <= remaining && remaining < 16u &&
+					padding >= 16u - remaining &&
+					static_cast<unsigned_char_type>(
+						first_digit - one) < 9u)
+				{
+					::std::uint_least64_t parsed{};
+					auto const tail_result{
+						::fast_io::details::
+							sse_parse_terminal_padding_tail(
+								reinterpret_cast<char unsigned const *>(
+									parse_first),
+								remaining, parsed)};
+					auto const *const iter{
+						parse_first + tail_result.digits};
+					if (tail_result.code != parse_code::ok)
+					{
+						return {iter, tail_result.code};
+					}
+					constexpr unsigned_type umax{
+						static_cast<unsigned_type>(-1)};
+					if constexpr (my_signed_integral<T>)
+					{
+						constexpr unsigned_type imax{umax >> 1u};
+						if (parsed >
+							static_cast<::std::uint_least64_t>(
+								imax + negative))
+						{
+							return {iter, parse_code::overflow};
+						}
+						auto const narrowed{
+							static_cast<unsigned_type>(parsed)};
+						t = negative
+								? static_cast<T>(
+									  static_cast<unsigned_type>(0) -
+									  narrowed)
+								: static_cast<T>(narrowed);
+					}
+					else
+					{
+						if (parsed >
+							static_cast<::std::uint_least64_t>(umax))
+						{
+							return {iter, parse_code::overflow};
+						}
+						t = static_cast<T>(
+							static_cast<unsigned_type>(parsed));
+					}
+					return {iter, parse_code::ok};
+				}
+			}
+		}
+	}
+#else
+	(void)padding;
+#endif
+	return ::fast_io::details::scan_int_contiguous_define_impl<
+		base, noskipws, shbase, skipzero, oct_c2y,
+		allow_leading_plus>(first, last, t);
+}
 } // namespace details
 
 enum class scan_integral_context_phase : ::std::uint_least8_t
@@ -4388,6 +4596,22 @@ scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sca
 		begin, end, t.reference);
 }
 
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr parse_result<char_type const *>
+scan_contiguous_padding_define(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>,
+	char_type const *begin, char_type const *end, ::std::size_t padding,
+	::fast_io::manipulators::scalar_manip_t<flags, T &> t) noexcept
+{
+	return details::scan_int_contiguous_padding_define_impl<
+		flags.base, flags.noskipws, flags.showbase, flags.full,
+		flags.modern_octal, flags.allow_leading_plus>(
+		begin, end, padding, t.reference);
+}
+
 template <::std::integral char_type, manipulators::scalar_flags flags, typename State, details::my_integral T>
 inline constexpr parse_result<char_type const *>
 scan_context_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T &>>, State &state,
@@ -4406,6 +4630,17 @@ scan_context_eof_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sc
 {
 	return details::scan_context_eof_define_parse_impl<flags.base, flags.noskipws, flags.showbase, flags.full, flags.modern_octal>(
 		state, t.reference);
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type
+scan_context_terminal_padding_equivalent(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
 }
 
 namespace details

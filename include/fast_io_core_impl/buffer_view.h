@@ -39,6 +39,70 @@ struct basic_ibuffer_view_ref
 	native_handle_type ptr{};
 };
 
+template <::std::integral ch_type>
+struct basic_padded_ibuffer_view
+{
+	using char_type = ch_type;
+	using input_char_type = char_type;
+	char_type const *begin_ptr{};
+	char_type const *curr_ptr{};
+	char_type const *end_ptr{};
+	::std::size_t padding{};
+
+	inline constexpr basic_padded_ibuffer_view() noexcept = default;
+
+	template <::std::contiguous_iterator Iter>
+		requires ::std::same_as<::std::remove_cvref_t<::std::iter_value_t<Iter>>, char_type>
+	inline constexpr basic_padded_ibuffer_view(
+		Iter first, Iter last, ::std::size_t readable_padding) noexcept
+		: begin_ptr{::std::to_address(first)}, curr_ptr{begin_ptr},
+		  end_ptr{::std::to_address(last)}, padding{readable_padding}
+	{
+	}
+
+	template <::std::ranges::contiguous_range rg>
+		requires(
+			::std::same_as<::std::ranges::range_value_t<rg>, char_type> &&
+			!::std::is_array_v<::std::remove_cvref_t<rg>> &&
+			::fast_io::contiguous_range_with_padding<rg>)
+	inline explicit constexpr basic_padded_ibuffer_view(rg &r) noexcept
+		: basic_padded_ibuffer_view(
+			  ::std::ranges::cbegin(r), ::std::ranges::cend(r),
+			  contiguous_range_padding_size(r))
+	{
+	}
+
+	inline constexpr void clear() noexcept
+	{
+		curr_ptr = end_ptr;
+	}
+};
+
+template <::std::integral char_type>
+struct basic_padded_ibuffer_view_ref
+{
+	using input_char_type =
+		typename basic_padded_ibuffer_view<char_type>::input_char_type;
+	using native_handle_type = basic_padded_ibuffer_view<char_type> *;
+	native_handle_type ptr{};
+};
+
+template <::std::integral char_type>
+[[nodiscard]] inline constexpr ::std::size_t
+contiguous_range_padding_size(
+	basic_padded_ibuffer_view<char_type> const &view) noexcept
+{
+	return view.padding;
+}
+
+template <::std::integral char_type>
+[[nodiscard]] inline constexpr ::std::size_t
+contiguous_range_padding_size(
+	basic_padded_ibuffer_view_ref<char_type> view) noexcept
+{
+	return view.ptr->padding;
+}
+
 #if 0
 template<::std::integral ch_type,::std::contiguous_iterator Iter>
 requires ::std::same_as<::std::iter_value_t<Iter>,ch_type>
@@ -110,6 +174,77 @@ template <::std::integral ch_type>
 
 template <::std::integral ch_type>
 inline constexpr bool ibuffer_underflow_never(basic_ibuffer_view_ref<ch_type>) noexcept
+{
+	return true;
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_padded_ibuffer_view_ref<ch_type>
+input_stream_ref_define(basic_padded_ibuffer_view<ch_type> &other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_padded_ibuffer_view_ref<ch_type>
+input_stream_ref_define(basic_padded_ibuffer_view<ch_type> &&other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_padded_ibuffer_view_ref<ch_type>
+input_bytes_stream_ref_define(basic_padded_ibuffer_view<ch_type> &other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+inline constexpr basic_padded_ibuffer_view_ref<ch_type>
+input_bytes_stream_ref_define(basic_padded_ibuffer_view<ch_type> &&other) noexcept
+{
+	return {__builtin_addressof(other)};
+}
+
+template <::std::integral ch_type>
+[[nodiscard]] inline constexpr ch_type const *
+ibuffer_begin(basic_padded_ibuffer_view_ref<ch_type> view) noexcept
+{
+	return view.ptr->begin_ptr;
+}
+
+template <::std::integral ch_type>
+[[nodiscard]] inline constexpr ch_type const *
+ibuffer_curr(basic_padded_ibuffer_view_ref<ch_type> view) noexcept
+{
+	return view.ptr->curr_ptr;
+}
+
+template <::std::integral ch_type>
+[[nodiscard]] inline constexpr ch_type const *
+ibuffer_end(basic_padded_ibuffer_view_ref<ch_type> view) noexcept
+{
+	return view.ptr->end_ptr;
+}
+
+template <::std::integral ch_type>
+inline constexpr void ibuffer_set_curr(
+	basic_padded_ibuffer_view_ref<ch_type> view,
+	ch_type const *ptr) noexcept
+{
+	view.ptr->curr_ptr = ptr;
+}
+
+template <::std::integral ch_type>
+[[nodiscard]] inline constexpr bool
+ibuffer_underflow(basic_padded_ibuffer_view_ref<ch_type>) noexcept
+{
+	return false;
+}
+
+template <::std::integral ch_type>
+inline constexpr bool
+ibuffer_underflow_never(basic_padded_ibuffer_view_ref<ch_type>) noexcept
 {
 	return true;
 }
@@ -380,6 +515,11 @@ using wibuffer_view = basic_ibuffer_view<wchar_t>;
 using u8ibuffer_view = basic_ibuffer_view<char8_t>;
 using u16ibuffer_view = basic_ibuffer_view<char16_t>;
 using u32ibuffer_view = basic_ibuffer_view<char32_t>;
+using padded_ibuffer_view = basic_padded_ibuffer_view<char>;
+using padded_wibuffer_view = basic_padded_ibuffer_view<wchar_t>;
+using padded_u8ibuffer_view = basic_padded_ibuffer_view<char8_t>;
+using padded_u16ibuffer_view = basic_padded_ibuffer_view<char16_t>;
+using padded_u32ibuffer_view = basic_padded_ibuffer_view<char32_t>;
 using obuffer_view = basic_obuffer_view<char>;
 using wobuffer_view = basic_obuffer_view<wchar_t>;
 using u8obuffer_view = basic_obuffer_view<char8_t>;

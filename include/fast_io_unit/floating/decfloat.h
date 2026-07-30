@@ -2879,6 +2879,103 @@ scan_decfloat_skip_after_exact_limit_simd(char_type const *first, char_type cons
 	return first;
 }
 
+template <::std::size_t vec_size, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type const *
+scan_decfloat_skip_after_exact_limit_padding_simd(
+	char_type const *first, char_type const *last, bool &tail_nonzero,
+	::std::size_t padding) noexcept
+{
+	/*
+	The ordinary SIMD loop owns every complete semantic block.  Only its final
+	0<R<N suffix is eligible for the padded leaf, so ordinary scanner ABI and
+	loop code generation are completely independent of this protocol.
+	*/
+	first = ::fast_io::details::scan_decfloat_skip_after_exact_limit_simd<vec_size>(
+		first, last, tail_nonzero);
+#if ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC))) &&                  \
+	!defined(__AVX512F__) &&                                            \
+	(defined(__AVX2__) || defined(__SSE2__))
+	static_assert(sizeof(char_type) == sizeof(char8_t));
+	constexpr ::std::size_t N{vec_size / sizeof(char_type)};
+	auto const remaining{static_cast<::std::size_t>(last - first)};
+	if (remaining == 0u || N <= remaining || padding < N - remaining)
+	{
+		return first;
+	}
+
+	using unsigned_char_type =
+		::std::make_unsigned_t<::std::remove_cvref_t<char_type>>;
+	using signed_char_type = ::std::make_signed_t<unsigned_char_type>;
+	using simd_vector_type =
+		::fast_io::intrinsics::simd_vector<signed_char_type, N>;
+#if defined(__GNUC__) && !defined(__clang__)
+	constexpr ::std::size_t minimum_profitable_tail{4u};
+#else
+	constexpr ::std::size_t minimum_profitable_tail{3u};
+#endif
+	if (remaining < minimum_profitable_tail)
+	{
+		/*
+		For one to three decimal bytes the scalar cleanup is cheaper than
+		materializing a complete vector and extracting its mask.  Returning the
+		unchanged semantic cursor leaves that cleanup to the caller.
+		*/
+		return first;
+	}
+#if (__cpp_lib_bit_cast >= 201806L) && (!defined(__clang__) || __clang_major__ >= 22)
+	constexpr simd_vector_type zeroes{
+		::std::bit_cast<simd_vector_type>(
+			::fast_io::details::characters_array_impl<u8'0', char_type, N>)};
+	constexpr simd_vector_type nines{
+		::std::bit_cast<simd_vector_type>(
+			::fast_io::details::characters_array_impl<u8'9', char_type, N>)};
+#else
+	simd_vector_type zeroes;
+	zeroes.load(
+		::fast_io::details::characters_array_impl<u8'0', char_type, N>.data());
+	simd_vector_type nines;
+	nines.load(
+		::fast_io::details::characters_array_impl<u8'9', char_type, N>.data());
+#endif
+	simd_vector_type vec;
+	vec.load(first);
+	auto const invalid{~((zeroes <= vec) & (vec <= nines))};
+	auto accepted{
+		::fast_io::intrinsics::is_all_zeros(invalid)
+			? N
+			: static_cast<::std::size_t>(
+				  ::fast_io::intrinsics::vector_mask_countr_zero(invalid))};
+	if (remaining < accepted)
+	{
+		accepted = remaining;
+	}
+	auto const *const stop{first + accepted};
+	if (!tail_nonzero)
+	{
+		auto probe{first};
+		for (; probe != stop; ++probe)
+		{
+			if (*probe !=
+				::fast_io::char_literal_v<u8'0', char_type>)
+			{
+				tail_nonzero = true;
+				break;
+			}
+		}
+	}
+	first = stop;
+#else
+	(void)padding;
+#endif
+	return first;
+}
+
 template <typename T, ::std::integral char_type>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
@@ -2932,6 +3029,89 @@ inline constexpr char_type const *scan_decfloat_skip_after_exact_limit_run(
 		}
 	}
 	auto const skipped{static_cast<::std::uint_least64_t>(first - original_first)};
+	if (skipped)
+	{
+		if (after_decimal)
+		{
+			state.fractional_digits += skipped;
+		}
+		state.significant_digits += skipped;
+		if (tail_nonzero)
+		{
+			state.exact_truncated_nonzero = true;
+			state.truncated_nonzero = true;
+		}
+	}
+	return first;
+}
+
+template <typename T, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type const *
+scan_decfloat_skip_after_exact_limit_padding_run(
+	char_type const *first, char_type const *last, bool after_decimal,
+	scan_decfloat_significand_state<T> &state, ::std::size_t padding) noexcept
+{
+	auto const *const original_first{first};
+	auto tail_nonzero{state.exact_truncated_nonzero};
+	FAST_IO_IF_NOT_CONSTEVAL
+	{
+		if constexpr (
+			::fast_io::details::is_ascii<char_type> &&
+			sizeof(char_type) == sizeof(char8_t) &&
+			::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
+		{
+			constexpr auto simd_size{
+				::fast_io::intrinsics::
+					optimal_simd_vector_run_with_cpu_instruction_size_with_mask_countr};
+			if constexpr (simd_size != 0)
+			{
+				first =
+					::fast_io::details::
+						scan_decfloat_skip_after_exact_limit_padding_simd<
+							simd_size>(first, last, tail_nonzero, padding);
+			}
+			for (; static_cast<::std::size_t>(last - first) >=
+				   sizeof(::std::uint_least64_t);)
+			{
+				::std::uint_least64_t val;
+				::fast_io::freestanding::my_memcpy(
+					__builtin_addressof(val), first,
+					sizeof(::std::uint_least64_t));
+				if constexpr (::std::endian::little != ::std::endian::native)
+				{
+					val = ::fast_io::little_endian(val);
+				}
+				if (!::fast_io::details::scan_decfloat_ascii8_is_digits(val))
+				{
+					break;
+				}
+				if (!tail_nonzero &&
+					::fast_io::details::
+						scan_decfloat_ascii8_has_nonzero_digit(val))
+				{
+					tail_nonzero = true;
+				}
+				first += sizeof(::std::uint_least64_t);
+			}
+		}
+	}
+	char8_t digit{};
+	for (; first != last &&
+		   ::fast_io::details::scan_decfloat_decimal_digit(*first, digit);
+		 ++first)
+	{
+		if (!tail_nonzero && digit != 0)
+		{
+			tail_nonzero = true;
+		}
+	}
+	auto const skipped{
+		static_cast<::std::uint_least64_t>(first - original_first)};
 	if (skipped)
 	{
 		if (after_decimal)
@@ -3173,6 +3353,119 @@ scan_decfloat_digits(char_type const *first, char_type const *last, bool after_d
 	for (; first != last && ::fast_io::details::scan_decfloat_decimal_digit(*first, digit); ++first)
 	{
 		::fast_io::details::scan_decfloat_append_digit<T>(state, digit, after_decimal);
+	}
+	return first;
+}
+
+template <typename T, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type const *
+scan_decfloat_digits_padding(
+	char_type const *first, char_type const *last, bool after_decimal,
+	scan_decfloat_significand_state<T> &state, ::std::size_t padding) noexcept
+{
+	constexpr auto digit_limit{
+		::fast_io::details::scan_decfloat_significand_digit_limit<T>};
+	char8_t digit{};
+	if constexpr (
+		sizeof(char_type) == sizeof(char8_t) &&
+		::fast_io::details::is_ascii<char_type> &&
+		::std::numeric_limits<::std::uint_least64_t>::digits == 64u)
+	{
+		FAST_IO_IF_NOT_CONSTEVAL
+		{
+			for (; first != last && !state.has_nonzero_digit; ++first)
+			{
+				if (!::fast_io::details::scan_decfloat_decimal_digit(
+						*first, digit))
+				{
+					return first;
+				}
+				::fast_io::details::scan_decfloat_append_digit<T>(
+					state, digit, after_decimal);
+			}
+			if (static_cast<::std::size_t>(last - first) >=
+				2u * sizeof(::std::uint_least64_t))
+			{
+				for (; static_cast<::std::size_t>(last - first) >=
+					   sizeof(::std::uint_least64_t);)
+				{
+					if (state.has_nonzero_digit &&
+						state.stored_digits == digit_limit &&
+						state.exact_stored_digits ==
+							::fast_io::details::
+								scan_decfloat_exact_digit_capacity<T>)
+					{
+						first =
+							::fast_io::details::
+								scan_decfloat_skip_after_exact_limit_padding_run(
+									first, last, after_decimal, state, padding);
+						break;
+					}
+					::std::uint_least64_t val;
+					::fast_io::freestanding::my_memcpy(
+						__builtin_addressof(val), first,
+						sizeof(::std::uint_least64_t));
+					if constexpr (
+						::std::endian::little != ::std::endian::native)
+					{
+						val = ::fast_io::little_endian(val);
+					}
+					if (!::fast_io::details::
+							scan_decfloat_ascii8_is_digits(val))
+					{
+						break;
+					}
+					if (state.has_nonzero_digit &&
+						state.stored_digits == digit_limit)
+					{
+						if (after_decimal)
+						{
+							state.fractional_digits += 8u;
+						}
+						state.significant_digits += 8u;
+						auto const has_nonzero{
+							::fast_io::details::
+								scan_decfloat_ascii8_has_nonzero_digit(val)};
+						if (state.exact_stored_digits !=
+							::fast_io::details::
+								scan_decfloat_exact_digit_capacity<T>)
+						{
+							::fast_io::details::
+								scan_decfloat_append_exact_ascii8_digits(
+									state, val);
+						}
+						else if (!state.exact_truncated_nonzero &&
+								 has_nonzero)
+						{
+							state.exact_truncated_nonzero = true;
+						}
+						if (!state.truncated_nonzero && has_nonzero)
+						{
+							state.truncated_nonzero = true;
+						}
+					}
+					else
+					{
+						::fast_io::details::
+							scan_decfloat_append_eight_ascii_digits<T>(
+								state, after_decimal, val);
+					}
+					first += sizeof(::std::uint_least64_t);
+				}
+			}
+		}
+	}
+	for (; first != last &&
+		   ::fast_io::details::scan_decfloat_decimal_digit(*first, digit);
+		 ++first)
+	{
+		::fast_io::details::scan_decfloat_append_digit<T>(
+			state, digit, after_decimal);
 	}
 	return first;
 }
@@ -4004,6 +4297,152 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 	}
 }
 
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  scan_decfloat_supported_floating_point T,
+		  bool use_precision = false>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::parse_result<char_type const *>
+scan_decfloat_contiguous_padding_define_impl(
+	char_type const *begin, char_type const *end, T &value,
+	::std::size_t precision, ::std::size_t padding) noexcept
+{
+	auto first{begin};
+	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
+	constexpr auto minus{::fast_io::char_literal_v<u8'-', char_type>};
+	bool negative{};
+	if (first != end && *first == minus)
+	{
+		negative = true;
+		++first;
+	}
+	else if constexpr (flags.allow_leading_plus)
+	{
+		if (first != end && *first == plus)
+		{
+			++first;
+		}
+	}
+
+	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	if (first != end &&
+		::fast_io::details::scan_decfloat_special_start_char(*first))
+	{
+		auto const special_result{
+			::fast_io::details::
+				scan_hexfloat_special_value<flags.nan_parse_sign,
+											flags.nan_payload_scan>(
+					first, end, negative, value)};
+		if (special_result.matched)
+		{
+			return {special_result.iter, special_result.code};
+		}
+	}
+
+	::fast_io::details::scan_decfloat_significand_state<T>
+		significand_state;
+	first = ::fast_io::details::scan_decfloat_digits_padding<T, char_type>(
+		first, end, false, significand_state, padding);
+
+	if (first != end && *first == dot)
+	{
+		++first;
+		first =
+			::fast_io::details::scan_decfloat_digits_padding<T, char_type>(
+				first, end, true, significand_state, padding);
+	}
+
+	if (!significand_state.has_digit)
+	{
+		return {begin, ::fast_io::parse_code::invalid};
+	}
+
+	::std::int_least64_t exponent{};
+	constexpr auto lower_e{
+		::fast_io::char_literal_v<u8'e', char_type>};
+	constexpr auto upper_e{
+		::fast_io::char_literal_v<u8'E', char_type>};
+	if constexpr (
+		flags.floating ==
+		::fast_io::manipulators::floating_format::fixed)
+	{
+	}
+	else if (first != end && (*first == lower_e || *first == upper_e))
+	{
+		auto const *exponent_begin{first};
+		auto exponent_result{
+			::fast_io::details::scan_decfloat_exponent(
+				first + 1, end, exponent)};
+		if (exponent_result.code == ::fast_io::parse_code::ok)
+		{
+			first = exponent_result.iter;
+		}
+		else if (
+			::fast_io::details::scan_decfloat_exponent_prefix_may_extend(
+				exponent_begin, end))
+		{
+			return {end, ::fast_io::parse_code::partial};
+		}
+		else if constexpr (
+			flags.floating ==
+			::fast_io::manipulators::floating_format::scientific)
+		{
+			return exponent_result;
+		}
+		else
+		{
+			first = exponent_begin;
+		}
+	}
+	else if constexpr (
+		flags.floating ==
+		::fast_io::manipulators::floating_format::scientific)
+	{
+		return {first, ::fast_io::parse_code::invalid};
+	}
+
+	if (!significand_state.has_nonzero_digit)
+	{
+		value = negative ? -static_cast<T>(0.0) : static_cast<T>(0.0);
+		return {first, ::fast_io::parse_code::ok};
+	}
+	if constexpr (use_precision)
+	{
+		return {
+			first,
+			::fast_io::details::
+				scan_decfloat_assign_precision<T, flags.precision,
+											 flags.rounding>(
+					value, negative, significand_state, exponent, precision)};
+	}
+	else
+	{
+		if constexpr (
+			flags.rounding ==
+			::fast_io::manipulators::floating_rounding::
+				current_environment)
+		{
+			return {
+				first,
+				::fast_io::details::
+					scan_decfloat_assign_current_environment(
+						value, negative, significand_state, exponent)};
+		}
+		else
+		{
+			return {
+				first,
+				::fast_io::details::
+					scan_decfloat_assign<T, flags.rounding>(
+						value, negative, significand_state, exponent)};
+		}
+	}
+}
+
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  scan_decfloat_supported_floating_point T, bool use_precision = false>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -4178,6 +4617,153 @@ scan_decfloat_contiguous_define(char_type const *begin, char_type const *end, T 
 
 	return ::fast_io::details::scan_decfloat_contiguous_define_impl<char_type, flags, T, use_precision>(
 		begin, end, value, precision);
+}
+
+template <::std::integral char_type,
+		  scan_decfloat_supported_floating_point T>
+inline constexpr bool scan_decfloat_terminal_padding_leaf_available{
+#if ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	 !(defined(__arm64ec__) || defined(_M_ARM64EC))) &&                  \
+	!defined(__AVX512F__) &&                                            \
+	(defined(__AVX2__) || defined(__SSE2__))
+	sizeof(char_type) == sizeof(char8_t) &&
+		::fast_io::details::is_ascii<char_type> &&
+#if defined(__GNUC__) && !defined(__clang__)
+		/*
+		GCC binary32/binary64 amortize the padded parser body on the Linux
+		P-core matrix.  Its binary16/bfloat16, binary80, and binary128 bodies do
+		not, so their padded CPO shares the ordinary public implementation.
+		*/
+		(23u <= ::fast_io::details::
+					 iec559_traits<::std::remove_cvref_t<T>>::mbits &&
+		 ::fast_io::details::
+				 iec559_traits<::std::remove_cvref_t<T>>::mbits <= 52u)
+#elif defined(__clang__)
+		/*
+		Clang profits for binary16/bfloat16, binary32, and binary128.  Its
+		binary64/binary80 padded CPO likewise shares the ordinary public body.
+		*/
+		(::fast_io::details::
+			 iec559_traits<::std::remove_cvref_t<T>>::mbits <= 23u ||
+		 ::fast_io::details::
+			 iec559_traits<::std::remove_cvref_t<T>>::mbits == 112u)
+#else
+		true
+#endif
+#else
+	false
+#endif
+};
+
+template <::std::integral char_type,
+		  scan_decfloat_supported_floating_point T>
+inline constexpr bool
+	scan_decfloat_terminal_padding_dispatch_available{
+		scan_decfloat_terminal_padding_leaf_available<char_type, T> &&
+#if defined(__GNUC__) && !defined(__clang__)
+	/*
+	No measured GCC decimal type amortizes terminal dispatch against the
+	unchanged public context baseline.  Callers may still invoke the padded CPO
+	directly, while padded views retain ordinary public dispatch.
+	*/
+		false
+#elif defined(__clang__)
+		/*
+		Clang binary16/bfloat16 amortize terminal dispatch at the public view
+		boundary.  Binary32 and wider types keep the ordinary context path.
+		*/
+		::fast_io::details::
+			iec559_traits<::std::remove_cvref_t<T>>::mbits <= 10u
+#else
+		false
+#endif
+};
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  scan_decfloat_supported_floating_point T,
+		  bool use_precision = false>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::parse_result<char_type const *>
+scan_decfloat_contiguous_padding_define(
+	char_type const *begin, char_type const *end, T &value,
+	::std::size_t precision, ::std::size_t padding) noexcept
+{
+	if constexpr (
+		!::fast_io::details::
+			scan_decfloat_terminal_padding_leaf_available<char_type, T>)
+	{
+		(void)padding;
+		return ::fast_io::details::
+			scan_decfloat_contiguous_define<char_type, flags, T,
+										   use_precision>(
+				begin, end, value, precision);
+	}
+	else
+	{
+		/*
+		The padded parser can help only after the exact retained-prefix capacity
+		has been crossed.  Keeping shorter inputs on the ordinary entry avoids a
+		second large parser body in the common decimal path.
+		*/
+		constexpr ::std::size_t minimum_semantic_size{
+			::fast_io::details::scan_decfloat_exact_digit_capacity<T> +
+			1u};
+		if (padding == 0u ||
+			static_cast<::std::size_t>(end - begin) <
+				minimum_semantic_size)
+		{
+			return ::fast_io::details::
+				scan_decfloat_contiguous_define<char_type, flags, T,
+											   use_precision>(
+					begin, end, value, precision);
+		}
+		if constexpr (!flags.noskipws)
+		{
+			if (begin == end)
+			{
+				return {begin, ::fast_io::parse_code::end_of_file};
+			}
+			bool has_space{};
+			if constexpr (
+				sizeof(char_type) == sizeof(char8_t) &&
+				::fast_io::details::is_ascii<char_type>)
+			{
+				using unsigned_char_type =
+					::fast_io::details::my_make_unsigned_t<char_type>;
+				auto const ch{
+					static_cast<unsigned_char_type>(*begin)};
+				has_space =
+					ch <= static_cast<unsigned_char_type>(u8' ') &&
+					::fast_io::char_category::is_c_space(*begin);
+			}
+			else
+			{
+				has_space =
+					::fast_io::char_category::is_c_space(*begin);
+			}
+			if (has_space)
+			{
+				begin =
+					::fast_io::details::find_space_common_impl<
+						false, true>(begin, end);
+				if (begin == end)
+				{
+					return {
+						begin,
+						::fast_io::parse_code::end_of_file};
+				}
+			}
+		}
+		return ::fast_io::details::
+			scan_decfloat_contiguous_padding_define_impl<
+				char_type, flags, T, use_precision>(
+				begin, end, value, precision, padding);
+	}
 }
 
 enum class scan_decfloat_context_phase : ::std::uint_least8_t
@@ -4673,6 +5259,37 @@ scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sca
 	return ::fast_io::details::scan_decfloat_contiguous_define<char_type, flags>(begin, end, value.reference);
 }
 
+/// @brief Scans a decimal floating value with a provider-proved readable tail.
+/// @details The dispatcher supplies the true semantic `[begin,end)` and P readable elements after `end`.  Decimal
+///          SIMD code may use P only to complete a 16- or 32-byte unmasked load after the exact significand limit; it
+///          caps the valid-lane count at `end` and reduces sticky bits over semantic lanes only.  All other grammar
+///          branches remain bounded by `end`.  Therefore the returned iterator never enters padding and changing
+///          padding values cannot affect the parsed value, status, or rounding.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat)
+inline constexpr ::fast_io::parse_result<char_type const *>
+scan_contiguous_padding_define(
+	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T &>> tag,
+	char_type const *begin, char_type const *end, ::std::size_t padding,
+	::fast_io::manipulators::scalar_manip_t<flags, T &> value) noexcept
+{
+	(void)tag;
+	if constexpr (
+		!::fast_io::details::
+			scan_decfloat_terminal_padding_leaf_available<char_type, T>)
+	{
+		(void)padding;
+		return scan_contiguous_define(tag, begin, end, value);
+	}
+	else
+	{
+		return ::fast_io::details::
+			scan_decfloat_contiguous_padding_define<char_type, flags>(
+				begin, end, value.reference, 0u, padding);
+	}
+}
+
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  details::scan_decfloat_supported_floating_point T>
 	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat)
@@ -4683,6 +5300,38 @@ scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sca
 {
 	return ::fast_io::details::scan_decfloat_contiguous_define<char_type, flags, T, true>(
 		begin, end, value.reference, value.precision);
+}
+
+/// @brief Scans a precision-controlled decimal floating value with a provider-proved readable tail.
+/// @details This is the precision-manipulator form of the padded decimal protocol.  Precision changes only the final
+///          rounding assignment; the same SIMD proof bounds physical reads by `[begin,end+padding)`, semantic progress
+///          by `[begin,end]`, and sticky-bit accumulation by characters before `end`.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat)
+inline constexpr ::fast_io::parse_result<char_type const *>
+scan_contiguous_padding_define(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_precision_t<flags, T &>> tag,
+	char_type const *begin, char_type const *end, ::std::size_t padding,
+	::fast_io::manipulators::scalar_manip_precision_t<flags, T &> value) noexcept
+{
+	(void)tag;
+	if constexpr (
+		!::fast_io::details::
+			scan_decfloat_terminal_padding_leaf_available<char_type, T>)
+	{
+		(void)padding;
+		return scan_contiguous_define(tag, begin, end, value);
+	}
+	else
+	{
+		return ::fast_io::details::
+			scan_decfloat_contiguous_padding_define<
+				char_type, flags, T, true>(
+				begin, end, value.reference, value.precision, padding);
+	}
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
@@ -4784,6 +5433,41 @@ scan_context_eof_rewind_size(io_reserve_type_t<char_type,
 		return state.special_buffer.size;
 	}
 	return 0u;
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating !=
+				 ::fast_io::manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::
+				 scan_decfloat_terminal_padding_dispatch_available<
+					 char_type, T>)
+inline constexpr ::std::true_type
+scan_context_terminal_padding_equivalent(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating !=
+				 ::fast_io::manipulators::floating_format::hexfloat &&
+			 ::fast_io::details::
+				 scan_decfloat_terminal_padding_dispatch_available<
+					 char_type, T>)
+inline constexpr ::std::true_type
+scan_context_terminal_padding_equivalent(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::
+			scalar_manip_precision_t<flags, T &>>) noexcept
+{
+	return {};
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, details::my_floating_point T>

@@ -65,6 +65,58 @@ static_assert(scan_proxy_value_fallback_chunk_max_count * scan_owned_proxy_max_o
 namespace details
 {
 
+/// @brief Recognizes an ordinary whole-terminal scan path.
+/// @details A terminal-padding CPO is an optional accelerator layered on this ordinary protocol, never a replacement
+///          for it. Consequently the common input/scanner admission rule has exactly the pre-padding shape.
+template <typename input, typename char_type, typename T>
+concept input_contiguous_scannable =
+	::std::integral<char_type> &&
+	::fast_io::contiguous_scannable<char_type, T>;
+
+/// @brief Invokes the strongest contiguous scanning protocol jointly supported by the input and scanner.
+/// @details Let S=[first,last), and, when available, P=`contiguous_range_padding_size(in)`.  The padded branch receives
+///          `(S,P)` but its protocol requires a result cursor in `[first,last]` and padding noninterference.  The
+///          ordinary branch receives S alone.  Consequently both branches implement the same abstract scan; only the
+///          padded branch may issue reads in `[last,last+P)`.  The caller still validates and commits against `last`,
+///          so this helper cannot publish a cursor into padding.
+template <typename input, ::std::integral char_type, typename T>
+	requires input_contiguous_scannable<input, char_type, T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr ::fast_io::parse_result<char_type const *> scan_contiguous_invoke(
+	input &in, char_type const *first, char_type const *last, T &arg)
+{
+	using scanner_type = ::std::remove_cvref_t<T>;
+	if constexpr (
+		::fast_io::contiguous_range_with_padding<input> &&
+		::fast_io::terminal_contiguous_padding_scannable<char_type, T>)
+	{
+		/*
+		The conjunction proves both halves of the composed contract: the input
+		provides a readable physical suffix of P elements, and the scanner promises
+		to mask all semantics to the true end.  Query P exactly once so a custom
+		provider cannot make one scan observe inconsistent physical limits.
+		*/
+		auto const padding{contiguous_range_padding_size(in)};
+		if (padding != 0u) [[likely]]
+		{
+			return scan_contiguous_padding_define(
+				io_reserve_type<char_type, scanner_type>, first, last,
+				padding, arg);
+		}
+	}
+	/*
+	Padding is an opt-in terminal-tail acceleration.  An ordinary input type, a
+	scanner without the accelerator, or an explicitly padded view carrying P==0
+	all reach the original CPO with its original ABI.
+	*/
+	return scan_contiguous_define(
+		io_reserve_type<char_type, scanner_type>, first, last, arg);
+}
+
 /// @brief Commits a scanner iterator only after proving membership in the current chunk.
 template <typename input, typename current_pointer, ::std::integral char_type>
 inline constexpr bool scan_commit_iterator_if_in_current_chunk(
@@ -103,6 +155,63 @@ inline constexpr bool scan_commit_iterator_if_in_current_chunk(
 	}
 	ibuffer_set_curr(in, current_pointer_value + offset);
 	return true;
+}
+
+/// @brief Executes and commits one terminal contiguous scan.
+/// @details `scan_contiguous_invoke` proves protocol selection preserves `last` as semantic EOF.  The closed-interval
+///          validator below independently checks the customization's returned address before converting it to the
+///          backend cursor type.  Thus even a malformed padded scanner cannot commit into its readable suffix.  Status
+///          normalization is identical for ordinary and padded scanners: ok succeeds, terminal exhaustion reports
+///          false, and every other code throws.
+template <typename input, typename T>
+	requires ::fast_io::details::input_contiguous_scannable<
+		input, typename input::input_char_type, T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr bool scan_contiguous_status_impl(input &in, T &arg)
+{
+	using char_type = typename input::input_char_type;
+	auto curr{ibuffer_curr(in)};
+	auto end{ibuffer_end(in)};
+	auto [it, ec] = ::fast_io::details::scan_contiguous_invoke(
+		in, static_cast<char_type const *>(curr),
+		static_cast<char_type const *>(end), arg);
+	if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+			in, curr, static_cast<char_type const *>(curr),
+			static_cast<char_type const *>(end), it)) [[unlikely]]
+	{
+		/*
+		The scanner violated its closed semantic-cursor contract.  Rejecting the
+		result before cursor publication protects both the true file position and
+		the padding boundary.
+		*/
+		throw_parse_code(parse_code::invalid);
+	}
+	if (ec == parse_code::ok)
+	{
+		/*
+		A validated successful cursor has already been committed and lies at or
+		before the true end, so the public reporting result is success.
+		*/
+		return true;
+	}
+	if (ec == parse_code::end_of_file || ec == parse_code::partial)
+	{
+		/*
+		This function is called only after the input proves the current chunk is
+		terminal.  No refill can complete `partial`, so both terminal-short statuses
+		map to the existing false reporting result.
+		*/
+		return false;
+	}
+	/*
+	All remaining codes preserve their ordinary exception behavior.  Padding
+	changes legal load width only and cannot weaken error propagation.
+	*/
+	throw_parse_code(ec);
 }
 
 template <typename char_type, typename P, typename state_type>
@@ -452,8 +561,181 @@ inline constexpr bool scan_context_status_impl(input &in, P &arg)
 template <bool>
 inline constexpr bool type_not_scannable = false;
 
+template <typename input, typename T>
+inline constexpr bool scan_terminal_padding_dispatch_available = [] {
+	using char_type = typename input::input_char_type;
+	if constexpr (
+		!::fast_io::contiguous_range_with_padding<input> ||
+		!::fast_io::terminal_contiguous_padding_scannable<char_type, T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::context_scannable<char_type, T>)
+	{
+		return ::fast_io::terminal_padding_context_scannable<
+			char_type, T>;
+	}
+	else
+	{
+		return true;
+	}
+}();
+
+/*
+Keep the ordinary scalar dispatcher as a separate constrained specialization.
+Its body is the pre-padding implementation: it neither recognizes nor names a
+padding protocol.  This separation is deliberate.  Even a discarded
+`if constexpr` inside this very hot function changed GCC's inlining budget for
+ordinary integer scans, despite producing no padding operation at run time.
+*/
 template <typename stack_policy = ::fast_io::details::default_print_stack_policy,
 		  typename input, typename T>
+	requires(
+		!::fast_io::details::
+			scan_terminal_padding_dispatch_available<input, T>)
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+[[nodiscard]] inline constexpr bool scan_single_impl(input &in, T &arg)
+{
+	// Precise staging may be reached only after the direct current-chunk test fails (or unconditionally under ASan).
+	// Carrying the policy in this caller's identity prevents inlining that policy-dependent branch into an otherwise
+	// identically named scalar dispatcher. Context storage uses the same policy for the corresponding inline-state proof.
+	using char_type = typename input::input_char_type;
+	{
+		using scanner_type = ::std::remove_cvref_t<T>;
+		if constexpr (precise_reserve_scannable<char_type, T>)
+		{
+			constexpr ::std::size_t n{
+				scan_precise_reserve_size(io_reserve_type<char_type, scanner_type>)};
+			if constexpr (::fast_io::details::asan_state::current == ::fast_io::details::asan_state::activate)
+			{
+				// Sanitizer mode deliberately prevents a scanner from observing spare ibuffer capacity beyond its exact
+				// protocol extent. The common staging helper also preserves report-mode EOF and large-buffer policy.
+				return ::fast_io::details::scan_precise_reserve_staging<n, stack_policy>(in, arg);
+			}
+			else
+			{
+				if constexpr (n == 0u)
+				{
+					return ::fast_io::details::scan_precise_reserve_staging<0u, stack_policy>(in, arg);
+				}
+				auto curr_ptr{ibuffer_curr(in)};
+				auto end_ptr{ibuffer_end(in)};
+				if (curr_ptr == end_ptr)
+				{
+					if (!ibuffer_underflow(in)) [[unlikely]]
+					{
+						return false;
+					}
+					curr_ptr = ibuffer_curr(in);
+					end_ptr = ibuffer_end(in);
+					if (curr_ptr == end_ptr) [[unlikely]]
+					{
+						throw_parse_code(parse_code::invalid);
+					}
+				}
+				char_type const *curr{curr_ptr};
+				char_type const *end{end_ptr};
+				::std::size_t const diff{static_cast<::std::size_t>(end - curr)};
+				if (diff >= n) [[likely]]
+				{
+					// Fixed-extent input is consumed before validation. The staging path must consume while collecting data
+					// across refills and cannot generically rewind an underlying device; committing here gives direct,
+					// boundary, and sanitizer strategies one observable cursor rule.
+					ibuffer_set_curr(in, curr_ptr + n);
+					return ::fast_io::details::scan_precise_reserve_apply<char_type>(curr, arg);
+				}
+				return ::fast_io::details::scan_precise_reserve_staging<n, stack_policy>(in, arg);
+			}
+		}
+		else if constexpr (context_scannable<char_type, T>)
+		{
+			if constexpr (terminal_contiguous_context_scannable<char_type, T> &&
+						  ::fast_io::operations::decay::defines::has_ibuffer_underflow_never_define<input>)
+			{
+				// Capability presence is not a terminal proof: one observer type may report either mode at run time.
+				// Only the true branch may consume the semantic-equivalence promise made by the scanner marker.
+				if (ibuffer_underflow_never(in)) [[likely]]
+				{
+					auto curr{ibuffer_curr(in)};
+					auto end{ibuffer_end(in)};
+					auto [it, ec] = scan_contiguous_define(
+						io_reserve_type<char_type, scanner_type>, curr, end, arg);
+					if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+							in, curr, static_cast<char_type const *>(curr),
+							static_cast<char_type const *>(end), it)) [[unlikely]]
+					{
+						throw_parse_code(parse_code::invalid);
+					}
+					if (ec == parse_code::ok)
+					{
+						return true;
+					}
+					if (ec == parse_code::end_of_file || ec == parse_code::partial)
+					{
+						// `partial` has no distinct public meaning on a terminal buffer: no refill can complete it.
+						return false;
+					}
+					throw_parse_code(ec);
+				}
+				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+			}
+			else
+			{
+				// Context-only and refillable hybrid scanners deliberately share one instantiation shape. For a hybrid,
+				// success at the current chunk end may still be only a token prefix, and calling the contiguous CPO first is
+				// not generically transactional: it may commit before context reparses the original cursor. The common path
+				// is both the safe default and prevents capability recognition alone from changing GCC's call structure.
+				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+			}
+		}
+		else if constexpr (contiguous_scannable<char_type, T>)
+		{
+			static_assert(
+				::fast_io::operations::decay::defines::has_ibuffer_underflow_never_define<input>,
+				"A contiguous-only scanner requires a terminal ibuffer; refillable input needs a context scanner.");
+			if (!ibuffer_underflow_never(in)) [[unlikely]]
+			{
+				// The type supplies the query but this object is currently refillable. Without a context protocol there is
+				// no semantics-preserving fallback, so treating the current chunk as a complete token would be incorrect.
+				throw_parse_code(parse_code::invalid);
+			}
+			auto curr{ibuffer_curr(in)};
+			auto end{ibuffer_end(in)};
+			// Empty spans remain semantic input. A zero-width scanner may succeed without consuming a character, and a
+			// valid terminal view supplies an equal pointer pair even when its length is zero.
+			auto [it, ec] = scan_contiguous_define(
+				io_reserve_type<char_type, scanner_type>, curr, end, arg);
+			if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+					in, curr, static_cast<char_type const *>(curr),
+					static_cast<char_type const *>(end), it)) [[unlikely]]
+			{
+				throw_parse_code(parse_code::invalid);
+			}
+			if (ec == parse_code::ok)
+			{
+				return true;
+			}
+			if (ec == parse_code::end_of_file || ec == parse_code::partial)
+			{
+				return false;
+			}
+			throw_parse_code(ec);
+		}
+		else
+		{
+			constexpr bool not_scannable{context_scannable<char_type, T>};
+			static_assert(not_scannable, "type not scannable. need context_scannable");
+			return false;
+		}
+	}
+}
+
+template <typename stack_policy = ::fast_io::details::default_print_stack_policy,
+		  typename input, typename T>
+	requires ::fast_io::details::
+		scan_terminal_padding_dispatch_available<input, T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
@@ -600,33 +882,49 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 		}
 		else if constexpr (context_scannable<char_type, T>)
 		{
-			if constexpr (terminal_contiguous_context_scannable<char_type, T> &&
+			if constexpr (terminal_padding_context_scannable<char_type, T> &&
 						  ::fast_io::operations::decay::defines::has_ibuffer_underflow_never_define<input>)
 			{
 				// Capability presence is not a terminal proof: one observer type may report either mode at run time.
 				// Only the true branch may consume the semantic-equivalence promise made by the scanner marker.
 				if (ibuffer_underflow_never(in)) [[likely]]
 				{
-					auto curr{ibuffer_curr(in)};
-					auto end{ibuffer_end(in)};
-					auto [it, ec] = scan_contiguous_define(
-						io_reserve_type<char_type, scanner_type>, curr, end, arg);
-					if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-							in, curr, static_cast<char_type const *>(curr),
-							static_cast<char_type const *>(end), it)) [[unlikely]]
+					if constexpr (
+						::fast_io::contiguous_range_with_padding<input> &&
+						::fast_io::terminal_contiguous_padding_scannable<
+							char_type, T>)
 					{
-						throw_parse_code(parse_code::invalid);
+						return ::fast_io::details::
+							scan_contiguous_status_impl(in, arg);
 					}
-					if (ec == parse_code::ok)
+					else
 					{
-						return true;
+						auto curr{ibuffer_curr(in)};
+						auto end{ibuffer_end(in)};
+						auto [it, ec] = scan_contiguous_define(
+							io_reserve_type<char_type, scanner_type>,
+							curr, end, arg);
+						if (!::fast_io::details::
+								scan_commit_iterator_if_in_current_chunk(
+									in, curr,
+									static_cast<char_type const *>(curr),
+									static_cast<char_type const *>(end),
+									it)) [[unlikely]]
+						{
+							throw_parse_code(parse_code::invalid);
+						}
+						if (ec == parse_code::ok)
+						{
+							return true;
+						}
+						if (ec == parse_code::end_of_file ||
+							ec == parse_code::partial)
+						{
+							// `partial` has no distinct public meaning on a terminal buffer: no refill can complete it.
+							return false;
+						}
+						throw_parse_code(ec);
 					}
-					if (ec == parse_code::end_of_file || ec == parse_code::partial)
-					{
-						// `partial` has no distinct public meaning on a terminal buffer: no refill can complete it.
-						return false;
-					}
-					throw_parse_code(ec);
 				}
 				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 			}
@@ -650,27 +948,43 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				// no semantics-preserving fallback, so treating the current chunk as a complete token would be incorrect.
 				throw_parse_code(parse_code::invalid);
 			}
-			auto curr{ibuffer_curr(in)};
-			auto end{ibuffer_end(in)};
-			// Empty spans remain semantic input. A zero-width scanner may succeed without consuming a character, and a
-			// valid terminal view supplies an equal pointer pair even when its length is zero.
-			auto [it, ec] = scan_contiguous_define(
-				io_reserve_type<char_type, scanner_type>, curr, end, arg);
-			if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-					in, curr, static_cast<char_type const *>(curr),
-					static_cast<char_type const *>(end), it)) [[unlikely]]
+			if constexpr (
+				::fast_io::contiguous_range_with_padding<input> &&
+				::fast_io::terminal_contiguous_padding_scannable<
+					char_type, T>)
 			{
-				throw_parse_code(parse_code::invalid);
+				return ::fast_io::details::
+					scan_contiguous_status_impl(in, arg);
 			}
-			if (ec == parse_code::ok)
+			else
 			{
-				return true;
+				auto curr{ibuffer_curr(in)};
+				auto end{ibuffer_end(in)};
+				// Empty spans remain semantic input. A zero-width scanner may succeed without consuming a character, and a
+				// valid terminal view supplies an equal pointer pair even when its length is zero.
+				auto [it, ec] = scan_contiguous_define(
+					io_reserve_type<char_type, scanner_type>,
+					curr, end, arg);
+				if (!::fast_io::details::
+						scan_commit_iterator_if_in_current_chunk(
+							in, curr,
+							static_cast<char_type const *>(curr),
+							static_cast<char_type const *>(end),
+							it)) [[unlikely]]
+				{
+					throw_parse_code(parse_code::invalid);
+				}
+				if (ec == parse_code::ok)
+				{
+					return true;
+				}
+				if (ec == parse_code::end_of_file ||
+					ec == parse_code::partial)
+				{
+					return false;
+				}
+				throw_parse_code(ec);
 			}
-			if (ec == parse_code::end_of_file || ec == parse_code::partial)
-			{
-				return false;
-			}
-			throw_parse_code(ec);
 		}
 		else
 		{

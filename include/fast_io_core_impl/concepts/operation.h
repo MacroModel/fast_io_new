@@ -48,7 +48,7 @@ namespace fast_io
 ///          Consequently a consumer may use them only for memory-safe speculative/vector loads whose semantic result
 ///          is masked to `[B,E)`; changing bytes solely in `[E,E+P)` must not change parsing results or target effects.
 ///
-///          Formally, compose this promise with `contiguous_scannable_with_padding` using the same `(B,E,P)`.
+///          Formally, compose this promise with `terminal_contiguous_padding_scannable` using the same `(B,E,P)`.
 ///          Every scanner read is then in `[B,E+P)`, hence inside provider-owned live storage; every returned cursor is
 ///          in `[B,E]`, hence outside the padding; and padding noninterference preserves the result of scanning the
 ///          semantic sequence `[B,E)`. These three facts prove memory safety, unchanged logical EOF, and observational
@@ -85,12 +85,13 @@ concept contiguous_scannable = ::std::integral<char_type> && requires(char_type 
 	} -> ::std::same_as<parse_result<char_type const *>>;
 };
 
-/// @brief A whole-range scanner which may safely read a bounded amount past the semantic end.
-/// @details `scan_contiguous_define(tag, first, last, padding, target)` receives two distinct boundaries. `last` is
-///          the true terminal position of the input, while `padding` is the number of additional readable
-///          `char_type` objects immediately following it. The overload is intentionally separate from
-///          `contiguous_scannable`: recognizing the ordinary three-boundary-argument CPO does not prove that its
-///          implementation understands or preserves a semantic end distinct from its physical read limit.
+/// @brief A terminal whole-range scanner with a separate padding-aware CPO.
+/// @details `scan_contiguous_padding_define(tag, first, last, padding, target)` receives two distinct boundaries.
+///          `last` is the true terminal position of the input, while `padding` is the number of additional readable
+///          `char_type` objects immediately following it. The distinct CPO name is intentional: adding a padding
+///          parameter to the ordinary `scan_contiguous_define` overload set can alter the ABI, inlining, and register
+///          allocation of scanners which never consume padding. A type opts into this protocol only by defining the
+///          separately recognized terminal-padding operation.
 ///
 ///          Formal contract. Let `p = padding` and `S = [first,last)`. When `first != last`, let
 ///          `n = last - first`; when they are equal, let `n = 0` without requiring pointer subtraction. If `p == 0`,
@@ -113,10 +114,10 @@ concept contiguous_scannable = ::std::integral<char_type> && requires(char_type 
 ///          Therefore exposing padding changes only the implementation's legal load width, never the abstract parse.
 ///          These are semantic requirements; the concept can structurally prove only the exact call and result type.
 ///
-///          A zero `padding` value is valid and grants no over-read permission. Implementations may use the same
-///          overload as their scalar fallback, while scanners which also support unpadded ranges may additionally
-///          provide the ordinary `contiguous_scannable` CPO.
-/// @fn       scan_contiguous_define
+///          The dispatcher invokes this CPO only for a terminal input and a positive padding value. Implementations
+///          must fall back internally to the ordinary contiguous scanner when their specialized tail leaf is not
+///          applicable; eligibility failure may not modify the target.
+/// @fn       scan_contiguous_padding_define
 /// @param    ::fast_io::io_reserve_type_t<char_type, T>    tag-invoke
 /// @param    char_type const*                              beginning of the semantic input
 /// @param    char_type const*                              true one-past end of the semantic input
@@ -124,14 +125,18 @@ concept contiguous_scannable = ::std::integral<char_type> && requires(char_type 
 /// @param    T                                             the object to be scanned, can be any passing style
 /// @return   ::fast_io::parse_result<char_type const*>     next semantic cursor and parse status
 template <typename char_type, typename T>
-concept contiguous_scannable_with_padding =
-	::std::integral<char_type> &&
+concept terminal_contiguous_padding_scannable =
+	contiguous_scannable<char_type, T> &&
 	requires(char_type const *begin, char_type const *end, ::std::size_t padding, T &t) {
 		{
-			scan_contiguous_define(
+			scan_contiguous_padding_define(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end, padding, t)
 		} -> ::std::same_as<parse_result<char_type const *>>;
 	};
+
+template <typename char_type, typename T>
+concept contiguous_scannable_with_padding =
+	terminal_contiguous_padding_scannable<char_type, T>;
 
 namespace details
 {
@@ -275,6 +280,24 @@ concept terminal_contiguous_context_scannable =
 	contiguous_scannable<char_type, T> && context_scannable<char_type, T> && requires {
 		{
 			scan_context_terminal_contiguous_equivalent(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Opts a hybrid scanner into terminal padded-contiguous dispatch.
+/// @details This promise is intentionally distinct from
+///          `scan_context_terminal_contiguous_equivalent`. A scanner may use
+///          its padded CPO only when the input itself exposes terminal padding,
+///          without changing the ordinary context/contiguous selection or code
+///          generation for unpadded inputs.
+/// @fn       scan_context_terminal_padding_equivalent
+/// @return   ::std::true_type
+template <typename char_type, typename T>
+concept terminal_padding_context_scannable =
+	terminal_contiguous_padding_scannable<char_type, T> &&
+	context_scannable<char_type, T> && requires {
+		{
+			scan_context_terminal_padding_equivalent(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::true_type>;
 	};
