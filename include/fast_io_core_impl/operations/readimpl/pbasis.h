@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Positioned scalar input synthesis (primitive operation sublayer).
+ *
+ * This file derives typed and byte `pread_some`/`pread_all` operations from
+ * positioned provider CPOs or valid seek-plus-sequential fallbacks, advancing
+ * offsets with checked progress semantics. The same normalized observer is
+ * borrowed for all attempts. Scanner selection and public scan reporting are
+ * above this layer.
+ */
+
 namespace fast_io
 {
 namespace details

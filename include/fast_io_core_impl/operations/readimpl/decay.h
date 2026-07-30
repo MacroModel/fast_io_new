@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Normalized-observer entry points for primitive input (`operations::decay`).
+ *
+ * These functions expose the contiguous/scatter, typed/byte, sequential/
+ * positioned, some/all matrix after `input_stream_ref` has already selected an
+ * owned or borrowed observer representation. They preserve that choice and
+ * delegate to the synthesis graph without reopening normalization. Public
+ * pointer/span wrappers sit above; provider `_define` CPOs sit below.
+ */
+
 namespace fast_io::operations::decay
 {
 

@@ -1,4 +1,18 @@
 ﻿#pragma once
+
+/*
+ * Core environment/package umbrella.
+ *
+ * The `core`, `freestanding`, and `hosted` headers describe which language,
+ * allocation, exception, standard-library, and platform facilities are
+ * available. That packaging axis is orthogonal to the architectural
+ * FMT/IO/CPO responsibility axis. In particular, core already contains the
+ * public protocol vocabulary, semantic objects, primitive operations,
+ * freestanding print/scan engines, and concat; "core" does not mean "CPO only".
+ * Higher package umbrellas add implementations and devices without redefining
+ * those operation boundaries.
+ */
+
 // fast_io_core.h is required to be usable in freestanding environment with EVEN dynamic memory allocation and
 // exceptions are disabled.
 

@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Transcoder CPO vocabulary and result carriers (protocol level).
+ *
+ * Providers describe source/destination character domains, minimum output
+ * capacity, imaginary sizing, state, and exact conversion expressions through
+ * the tags and concepts in this file. These definitions advertise capability
+ * only; `ops.h` supplies normalized dispatch and callers own buffer bounds,
+ * state lifetime, and complete operation semantics.
+ */
+
 namespace fast_io
 {
 

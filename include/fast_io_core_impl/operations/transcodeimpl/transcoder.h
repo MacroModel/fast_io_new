@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Printable transcoder semantic adapter.
+ *
+ * `basic_transcoder_t` couples a bounded source scatter with a transcoder
+ * provider and exposes it through ordinary IO print forwarding/protocols. The
+ * adapter describes a value transformation; print/concat still select storage,
+ * buffering, synchronization, and final device or strlike transfer.
+ */
+
 namespace fast_io
 {
 

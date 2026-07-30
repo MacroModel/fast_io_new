@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Width/padding semantic node for the CPO/semantic level.
+ *
+ * These wrappers attach minimum width, placement, and optional fill character
+ * to one normalized child object. They preserve child lifetime and defer
+ * measurement, internal-shift discovery, padding, and emission to the IO
+ * planner and printable protocols. Width is therefore semantic structure, not
+ * a device write and not a format-language parser.
+ */
+
 #include "forward.h"
 
 namespace fast_io

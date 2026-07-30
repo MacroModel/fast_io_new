@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Built-in type-safe printf grammar provider (FMT level).
+ *
+ * This file connects percent-format parsing to the open compiler and
+ * replacement-rule protocols, including exact validation of value, dynamic
+ * width, and dynamic precision references. It translates accepted directives
+ * to the same typed IO object vocabulary used by brace formatting; no varargs,
+ * stream dispatch, allocation, or primitive writes occur here.
+ */
+
 #include "../types.h"
 #include "printf_parser.h"
 #include "builtin_diagnostics.h"

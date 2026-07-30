@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Public pointer-range output operations (`operations` namespace).
+ *
+ * `write_some`, `write_all`, and their byte/positioned variants accept a user
+ * stream handle, invoke `output_stream_ref` exactly once, validate character
+ * compatibility, and enter the normalized primitive synthesis layer. They are
+ * direct transfer APIs for existing memory ranges, not aliases of
+ * `print_freestanding` and not formatting operations.
+ */
+
 
 namespace fast_io
 {

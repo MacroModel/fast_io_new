@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Built-in brace grammar provider (FMT level).
+ *
+ * This file binds the brace parser to the open grammar-compilation CPO,
+ * validates ordinary and nested argument references against the typed call-site
+ * pack, and exposes each replacement to the common rule protocol. It owns
+ * brace-language meaning, not formatting strategy: accepted fields are
+ * translated into IO-level printable or semantic objects.
+ */
+
 #include "../types.h"
 #include "brace_parser.h"
 #include "builtin_diagnostics.h"

@@ -1,5 +1,17 @@
 #pragma once
 
+/*
+ * Format-to-concat continuation (FMT-to-IO boundary).
+ *
+ * Common lowering supplies this file with an ordered pack of literal and
+ * replacement components. The continuation performs no additional syntax work
+ * and hands the complete pack to
+ * `basic_general_concat_compiler_constant_checked_entry`, the IO-level
+ * materialization boundary. Destination sizing, allocation, alias/forward
+ * normalization, and printable CPO selection therefore remain shared with
+ * non-format concat.
+ */
+
 #include "lower.h"
 #include "../../fast_io_dsal/impl/misc/push_macros.h"
 

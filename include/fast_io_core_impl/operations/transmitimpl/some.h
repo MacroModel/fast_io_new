@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Bounded partial element transmit operation (IO level).
+ *
+ * `transmit_some` moves up to the requested equal-width element count and
+ * reports progress, using a provider whole-operation CPO or a generic buffered
+ * read/write loop. Its completion contract is transfer-specific and should not
+ * be confused with primitive `write_some` or scan parse status.
+ */
+
 namespace fast_io
 {
 

@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Positioned scalar output synthesis (primitive operation sublayer).
+ *
+ * This file derives typed and byte `pwrite_some`/`pwrite_all` operations from
+ * positioned provider CPOs or valid seek-plus-sequential fallbacks, while
+ * advancing offsets with checked progress semantics. One normalized observer
+ * is borrowed for the full algorithm. Formatting and stream-scenario policy
+ * are strictly above this layer.
+ */
+
 namespace fast_io
 {
 namespace details

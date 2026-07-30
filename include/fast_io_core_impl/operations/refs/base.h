@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * Public stream-reference normalization boundary (CPO level).
+ *
+ * `input_stream_ref`, `output_stream_ref`, and `io_stream_ref` project an
+ * arbitrary user handle to the observer used by operation algorithms. Each CPO
+ * is invoked exactly once at the public boundary. A mutable lvalue result may
+ * remain borrowed; a prvalue result is owned once; explicit semantic and ABI
+ * proofs govern any repeated by-value transport. Deeper `operations::decay`
+ * code must consume that normalized object rather than reopen the CPO.
+ */
+
 namespace fast_io::operations
 {
 

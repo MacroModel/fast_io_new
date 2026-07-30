@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Debug-presentation adapter (FMT level).
+ *
+ * Character, string, and textual range values are translated into escaped,
+ * quoted printable representations according to format-language debug rules.
+ * Measurement and rendering helpers expose ordinary fast_io reserve/context
+ * protocols so the shared IO planner can materialize them. This file defines
+ * presentation semantics only and never selects or writes to a device.
+ */
+
 #include "unicode.h"
 
 #include <cstddef>

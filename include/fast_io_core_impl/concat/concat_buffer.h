@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Generic growable staging destination for concat (IO level).
+ *
+ * This buffer adapts concat's chosen printable strategy to destinations that
+ * cannot be materialized safely in one direct contiguous pass. It owns growth
+ * and final transfer into the requested strlike type, while element
+ * normalization and representation still use the ordinary print protocols.
+ * It is an IO implementation device, not a public string or formatting syntax.
+ */
+
 namespace fast_io::details
 {
 

@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Bridge from a strlike destination to an output observer.
+ *
+ * Concat and staging algorithms can use this non-owning wrapper when a generic
+ * print/write path should target an existing string-like object. It translates
+ * strlike growth/buffer CPOs into output-stream capabilities while preserving
+ * the destination's ownership and writable-memory proofs. It is an internal
+ * protocol adapter, not a public string and not a formatting frontend.
+ */
+
 namespace fast_io
 {
 

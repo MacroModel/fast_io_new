@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * fast_io time-type bridge for chrono formatting (FMT level).
+ *
+ * Native fast_io timestamp/calendar values are classified and projected into
+ * the common chrono-format state defined by `time.h`. This file is a source
+ * adapter, not a clock service or output implementation; the resulting typed
+ * representation continues through ordinary IO formatting and transfer.
+ */
+
 // Native fast_io calendar providers are layered on the common time grammar and
 // emitter.  No standard-library chrono compatibility is provided here.
 #include "time.h"

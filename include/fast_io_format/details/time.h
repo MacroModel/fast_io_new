@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Chrono-format parser and semantic model (FMT level).
+ *
+ * Calendar fields, time-zone state, subsecond precision, padding, and chrono
+ * conversion specifications are compiled into structural state and typed
+ * printable adapters. The file owns chrono source-language meaning only.
+ * Numeric/text emission and all output-device behavior are delegated to
+ * existing IO printable protocols.
+ */
+
 #include "program.h"
 #include "../types.h"
 // Time lowering consumes only the freestanding print CPOs.  Pulling hosted

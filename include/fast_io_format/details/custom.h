@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * User-defined format-field extension protocol (FMT level).
+ *
+ * Custom parsers receive a structural view of one replacement specification
+ * and return structural state that later lowers a typed value to ordinary IO
+ * components. The protocol extends format-language interpretation without
+ * creating a second output system: produced objects still pass through normal
+ * print aliasing, semantic normalization, printable CPOs, and device transfer.
+ */
+
 #include "program.h"
 
 #include <concepts>

@@ -1,5 +1,23 @@
 ﻿#pragma once
 
+/*
+ * Freestanding scan execution pipeline (IO operation core).
+ *
+ * The public IO facade first obtains an input stream reference and applies
+ * `io_scan_alias`/`io_scan_forward` to each target. This file then owns the
+ * complete scan record: stable proxy storage, input mutex acquisition,
+ * whole-record `status_scan_define` dispatch, buffered chunk/refill control,
+ * and selection among precise-reserve, contiguous, terminal-padding, and
+ * context-scanner protocols. Returned cursors and parse codes are validated
+ * and normalized before the caller observes success, EOF, or an exception.
+ *
+ * This file neither parses a format language nor defines primitive input
+ * devices. `operations::decay` means that stream/source normalization has
+ * already occurred; lower read/ibuffer CPOs provide bytes and scanner CPOs
+ * define how one target consumes them. The `report` behavior of the user-facing
+ * `io::scan` facade remains above this level.
+ */
+
 namespace fast_io
 {
 

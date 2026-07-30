@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * String-oriented format adapters (FMT level).
+ *
+ * This file classifies string/scatter-like sources and provides the bounded
+ * views or printable wrappers required by format specifications. Character
+ * interpretation and format precision are translated here, but ownership,
+ * destination growth, scatter selection, and actual transfer are delegated to
+ * the ordinary IO and protocol levels.
+ */
+
 #include "semantic.h"
 // The classifications below name fast_io container templates directly; include
 // their declarations here instead of relying on a hosted umbrella include.

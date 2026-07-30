@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Sequential typed scatter-input synthesis (primitive operation sublayer).
+ *
+ * Character scatter destinations are filled through the strongest coherent
+ * scatter/contiguous, typed/byte CPO set exposed by the normalized input
+ * observer. The algorithms maintain descriptor and intra-descriptor progress
+ * for some/all completion. They supply characters to higher layers but never
+ * interpret a scannable target.
+ */
+
 namespace fast_io
 {
 

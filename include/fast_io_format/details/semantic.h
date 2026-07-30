@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * Format-specific semantic wrappers translated to IO protocols (FMT level).
+ *
+ * Some source-language rules cannot be represented by a bare scalar adapter,
+ * for example internal padding around a sign/base prefix or precision-driven
+ * presentation. The wrappers in this file retain that meaning while delegating
+ * conversion to existing printable leaves. They are declarative IO objects:
+ * orchestration, allocation, buffering, and device transfer remain outside
+ * the FMT level.
+ */
+
 // These semantic leaves model reserve-print protocols, not output devices.
 // Keeping the dependency freestanding preserves that distinction for both
 // concat front doors and for non-ASCII execution character sets.

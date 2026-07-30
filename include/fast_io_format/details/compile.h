@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Grammar compilation protocol and checked driver (FMT level).
+ *
+ * This header invokes an ADL grammar compiler for one structural literal,
+ * verifies the returned program shape, and converts parser failures into
+ * compile-time diagnostics. It is the open syntax-extension boundary between
+ * grammar-specific parsers and grammar-independent lowering. Compilation
+ * produces only structural format IR; it performs no IO.
+ */
+
 #include "../types.h"
 #include "program.h"
 

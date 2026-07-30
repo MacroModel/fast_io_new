@@ -1,4 +1,13 @@
-﻿namespace fast_io
+﻿/*
+ * Sequential byte-scatter input synthesis (primitive operation sublayer).
+ *
+ * This file bridges native byte destinations and one-byte typed scatter
+ * protocols with bounded descriptor materialization, then implements exact
+ * some/all progress. It adapts primitive device capability shapes; it is not a
+ * scanner protocol and grants no extra destination lifetime or bounds.
+ */
+
+namespace fast_io
 {
 
 namespace details

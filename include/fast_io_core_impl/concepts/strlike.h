@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * String-like destination protocols for IO materialization (CPO level).
+ *
+ * Concat and related operations use these concepts to construct, resize,
+ * append to, or write directly into an arbitrary string result. The basic
+ * `strlike` capability establishes result construction; stronger concepts
+ * advertise buffer access, exact resize/overwrite, SSO, initialization, and
+ * deferred-commit safety. These are destination capabilities, not format
+ * syntax and not printable source-object protocols.
+ */
+
 namespace fast_io
 {
 

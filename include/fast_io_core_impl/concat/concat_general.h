@@ -1,5 +1,22 @@
 ﻿#pragma once
 
+/*
+ * General concat sizing and materialization pipeline (IO operation core).
+ *
+ * Public concat calls arrive with a destination strlike type and an ordered
+ * source record. This file applies `io_print_alias`/forward exactly once,
+ * expands semantic `pack`/`cond`/`io_null`/`width` structure into the active
+ * record, and evaluates the compiler-constant gate while the required source
+ * evidence is still visible. It then selects direct destination construction,
+ * append/grow, generic buffering, or staging and chooses reserve, dynamic
+ * reserve, scatter, reserve-scatter, context, or direct printable leaves.
+ *
+ * Concat therefore belongs to the IO level, not the FMT level: it accepts
+ * already-typed components from format lowering as well as ordinary non-format
+ * arguments. It shares object CPOs with print but terminates in strlike
+ * allocation/commit protocols instead of stream write CPOs.
+ */
+
 #include "../operations/printimpl/scatter_copy.h"
 
 namespace fast_io::details::decay

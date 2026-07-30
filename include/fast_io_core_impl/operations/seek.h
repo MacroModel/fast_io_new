@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Public seek and flush operations (primitive IO level).
+ *
+ * These algorithms normalize a stream once, traverse complete mutex/unlocked
+ * projections, flush the appropriate buffer when required, and dispatch to
+ * element- or byte-based seek CPOs with checked conversions. The capability
+ * shapes are declared in `refs/seek.h`; this file gives them operation
+ * semantics and synchronization.
+ */
+
 namespace fast_io::operations
 {
 

@@ -1,5 +1,23 @@
 ﻿#pragma once
 
+/*
+ * Public IO scenario facade (IO level).
+ *
+ * `fast_io::io::print`, `println`, `perr`, `perrln`, `panic`, `panicln`, and
+ * `scan` add user-facing operation semantics around the generic freestanding
+ * engines. This level distinguishes an explicit stream from a default native
+ * sink, checks character-domain diagnostics, owns newline/error/cold/terminate
+ * behavior, and converts reporting scan results to the documented public
+ * result. It then normalizes the stream exactly once and enters the same
+ * pre-normalization/decay print core used by
+ * `operations::print_freestanding`, or the corresponding scan decay operation.
+ *
+ * The facade does not implement value formatting or raw device transfer.
+ * Printable/scannable objects are normalized by the IO protocols, complete
+ * operation strategy is selected by the freestanding engines, and final
+ * read/write capability is supplied by device CPOs.
+ */
+
 #if ((__STDC_HOSTED__ == 1 && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED == 1) && \
 	  !defined(_LIBCPP_FREESTANDING)) ||                                             \
 	 defined(FAST_IO_ENABLE_HOSTED_FEATURES))

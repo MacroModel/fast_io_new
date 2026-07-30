@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * RAII guards for normalized stream mutex protocols.
+ *
+ * Operation engines instantiate these guards only after `refs/mutex.h` has
+ * proved a complete mutex/unlocked-reference pair. The guard owns or borrows
+ * the projected mutex proxy, acquires it for one logical operation, and
+ * releases it on scope exit. It does not decide whether synchronization is
+ * needed or how a stream is normalized.
+ */
+
 namespace fast_io::operations::decay
 {
 

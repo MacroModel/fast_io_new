@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Shared admission, storage, and progress vocabulary for transmit (IO level).
+ *
+ * This file validates the two directional stream references and their complete
+ * mutex projections, defines transfer-count adaptation, and selects bounded
+ * fallback buffer sizes. Public transmit operations own each normalized
+ * observer once; every recursive or buffered continuation borrows those stable
+ * objects.
+ */
+
 namespace fast_io
 {
 

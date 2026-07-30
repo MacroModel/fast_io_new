@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * Shared scatter-copy policy for IO materialization.
+ *
+ * Print, concat, and related materializers use these helpers only after a
+ * caller has proved source extent, destination extent, stability, and
+ * non-overlap. This file chooses code shape for copying static or small
+ * run-time fragments; it is not a scatter-printable CPO and does not establish
+ * lifetime or capacity by itself. Larger transfers remain delegated to the
+ * core non-overlapping copy implementation.
+ */
+
 namespace fast_io::details::decay
 {
 

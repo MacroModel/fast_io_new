@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Element transmit-until-EOF operation (IO level).
+ *
+ * This operation drains an input observer into an equal-width output observer,
+ * tracks total progress through the extensible transmit-integer protocol, and
+ * prefers provider whole-operation CPOs where available. Generic execution
+ * composes normalized read/write primitives under one synchronization plan.
+ */
+
 namespace fast_io
 {
 

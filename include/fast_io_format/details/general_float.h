@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * General floating-presentation adapter (FMT level).
+ *
+ * The format-language `g`/`G` decision, alternate-form behavior, and
+ * fixed-versus-scientific wrapper are expressed here as printable objects.
+ * Numeric conversion remains delegated to existing fast_io floating protocols,
+ * and final width/scatter/buffer/device strategy remains an IO-level decision.
+ */
+
 #include "semantic.h"
 
 #include <concepts>

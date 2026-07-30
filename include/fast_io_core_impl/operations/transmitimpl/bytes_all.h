@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Exact-count byte transmit operation (IO level).
+ *
+ * This byte-domain counterpart prefers a provider
+ * `status_transmit_bytes_all_define` CPO and otherwise copies through the
+ * normalized byte read/write primitives until the requested count completes.
+ * Character interpretation is deliberately absent.
+ */
+
 namespace fast_io
 {
 

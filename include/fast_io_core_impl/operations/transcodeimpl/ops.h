@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Normalized transcoder execution (primitive transformation sublayer).
+ *
+ * These functions choose among byte- and element-oriented transcoder CPOs,
+ * normalize capacity units, and invoke the exact provider operation against
+ * stable state. They transform bounded memory ranges but do not select streams,
+ * allocate an IO destination, or define print/scan scenario behavior.
+ */
+
 namespace fast_io
 {
 

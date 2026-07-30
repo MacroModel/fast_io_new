@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Grammar-neutral compiled-program representation (FMT level).
+ *
+ * Parsers record literals, argument references, replacement specifications,
+ * and source diagnostics in the structural types defined here. The program is
+ * compile-time syntax IR: grammar providers produce it and `lower.h` consumes
+ * it. It never owns run-time arguments, output state, or device operations.
+ */
+
 #include "fixed_string.h"
 #include "../../fast_io_core.h"
 

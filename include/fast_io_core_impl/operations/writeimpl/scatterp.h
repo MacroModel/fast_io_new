@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Positioned typed scatter-output synthesis (primitive operation sublayer).
+ *
+ * The algorithms here combine an explicit byte position with typed scatter
+ * descriptor progress, using positioned scatter CPOs when available and
+ * coherent byte/contiguous fallbacks otherwise. Offset units and partial
+ * descriptor state remain explicit. The normalized observer is borrowed once;
+ * no formatting or destination selection occurs here.
+ */
+
 namespace fast_io
 {
 

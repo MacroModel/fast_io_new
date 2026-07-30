@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Transcoding decorator filter construction (IO/protocol bridge).
+ *
+ * This file recognizes and dispatches directional stream CPOs that combine a
+ * stream with a character transcoder/decorator. It establishes the filtered
+ * observer and state ownership only. Encoding conversion and device transfer
+ * remain delegated to the transcode and read/write operation layers.
+ */
+
 #pragma once
 
 namespace fast_io

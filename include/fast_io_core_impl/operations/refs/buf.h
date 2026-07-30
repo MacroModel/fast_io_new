@@ -1,4 +1,14 @@
 ﻿#pragma once
+
+/*
+ * Buffer-adapter admission probes (CPO level).
+ *
+ * These concepts determine whether a handle can first be normalized to an
+ * input and/or output observer and therefore wrapped by the corresponding
+ * buffering adapter. They are construction prerequisites only; ibuffer and
+ * obuffer cursor protocols are recognized in the directional stream headers.
+ */
+
 namespace fast_io
 {
 

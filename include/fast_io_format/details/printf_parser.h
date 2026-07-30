@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Parser for the type-safe printf-format source language (FMT level).
+ *
+ * This constant-evaluation stage resolves percent directives, flags, length
+ * syntax, and sequential or positional references into the shared structural
+ * program. It does not implement C varargs and does not format values. The
+ * printf rule validates the typed argument domain and common lowering converts
+ * accepted fields into ordinary fast_io IO objects.
+ */
+
 #include "program.h"
 
 #include <cstddef>

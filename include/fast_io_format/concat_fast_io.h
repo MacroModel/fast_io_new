@@ -1,5 +1,16 @@
 #pragma once
 
+/*
+ * fast_io-string materialization facade (FMT-to-IO boundary).
+ *
+ * These overloads apply the brace or printf grammar and lower the result to
+ * ordinary printable components, then request materialization into a
+ * `fast_io::basic_string`. Syntax interpretation belongs here; capacity
+ * planning, allocation, component normalization, and printable CPO selection
+ * belong to the shared IO concat engine. No stream or device protocol is
+ * introduced by this adapter.
+ */
+
 // Declare the reserve-print protocol before instantiating the destination
 // container; this header must remain usable without the hosted print facade.
 #include "../fast_io_freestanding.h"

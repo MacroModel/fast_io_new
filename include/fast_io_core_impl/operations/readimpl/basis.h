@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Sequential scalar input synthesis (primitive operation sublayer).
+ *
+ * Starting from the exact typed/byte read and ibuffer CPOs advertised by a
+ * normalized input observer, this file derives contiguous `read_some` and
+ * `read_all` behavior, including refill, retry, and progress handling. It fills
+ * raw character or byte ranges and does not interpret scanned target objects or
+ * format syntax.
+ */
+
 namespace fast_io
 {
 namespace details

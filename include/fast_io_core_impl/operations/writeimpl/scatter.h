@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Sequential typed scatter-output synthesis (primitive operation sublayer).
+ *
+ * Character scatter requests are executed through the strongest coherent
+ * scatter/contiguous, typed/byte CPO set exposed by the normalized output
+ * observer. The algorithms maintain descriptor and intra-descriptor progress
+ * for some/all completion. Scatter lifetime and element extents are caller
+ * contracts; no printable-object representation is selected here.
+ */
+
 namespace fast_io
 {
 

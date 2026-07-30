@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Iterator/range output adaptation (primitive operation sublayer).
+ *
+ * Non-contiguous iterator sources are copied or type-punned into bounded
+ * temporary blocks and forwarded to the normalized `write_all` machinery.
+ * Contiguous cases retain the direct transfer path. This file owns iteration
+ * and temporary-block progress only; printable conversion must already have
+ * happened before these APIs are selected.
+ */
+
 namespace fast_io
 {
 

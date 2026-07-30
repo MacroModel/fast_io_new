@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Conditional semantic record node (`cond`) for the CPO/semantic level.
+ *
+ * This node retains two alternative IO object graphs and a run-time selector;
+ * exactly one branch contributes to the active print/concat record. Branches
+ * are alias-normalized and stored with the same ownership rules as pack
+ * elements. Capacity and strategy planning must inspect only the selected
+ * branch, while neither branch is allowed to perform IO during construction.
+ */
+
 #include "forward.h"
 
 namespace fast_io

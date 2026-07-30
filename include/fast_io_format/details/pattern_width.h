@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Pattern-fill width adapter (FMT level).
+ *
+ * Format grammars may specify a fill pattern that is wider than one code unit.
+ * This file preserves that semantic requirement in a typed wrapper and exposes
+ * it through ordinary printable materialization protocols. It does not own
+ * output buffering or allocation; the IO level chooses how the wrapper and its
+ * child are rendered.
+ */
+
 #include "semantic.h"
 
 #include <cstddef>

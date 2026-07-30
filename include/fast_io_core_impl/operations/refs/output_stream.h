@@ -1,5 +1,17 @@
 ﻿#pragma once
 
+/*
+ * Normalized output-device capability matrix (CPO level).
+ *
+ * Against an output observer that has already crossed `output_stream_ref`,
+ * this file recognizes coherent obuffer cursors, whole-record
+ * `status_print_define`, typed and byte writes, sequential and positioned
+ * writes, some/all variants, contiguous/scatter forms, line-buffering, and
+ * reserve/flush hooks. Composite writable concepts describe available
+ * primitive synthesis paths. Formatting and complete-record strategy are
+ * selected by the IO print engine, not by these probes.
+ */
+
 namespace fast_io
 {
 

@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Shared primitive-operation progress helpers.
+ *
+ * Scatter prefix decomposition and device-specific scatter-count clamping are
+ * centralized here so read, write, and transmit algorithms use identical
+ * coordinate and limit rules. These helpers interpret already-valid primitive
+ * descriptors; they neither create printable scatters nor perform IO.
+ */
+
 namespace fast_io
 {
 

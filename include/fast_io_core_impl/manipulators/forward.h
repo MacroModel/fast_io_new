@@ -1,5 +1,15 @@
 #pragma once
 
+/*
+ * Forward declarations for the semantic print-object vocabulary.
+ *
+ * Keeping these structural node names independent of their implementations
+ * lets CPO recognition and operation planning classify nested semantic records
+ * without include cycles. A declaration here conveys no printable capability;
+ * the node definitions and their child/storage contracts live in the
+ * corresponding semantic headers.
+ */
+
 namespace fast_io
 {
 

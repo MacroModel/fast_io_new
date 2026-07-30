@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Exact-count element transmit operation (IO level).
+ *
+ * `transmit_all` moves the requested number of equal-width input/output
+ * elements, preferring a provider `status_transmit_all_define` operation and
+ * otherwise using the normalized read/write matrix until complete. It treats
+ * payload units opaquely and adds no formatting or scanning semantics.
+ */
+
 namespace fast_io
 {
 

@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Dynamic width and precision adaptation (FMT level).
+ *
+ * This file validates run-time integer controls selected by a compile-time
+ * field and expresses their meaning as typed formatting state. It bridges
+ * format grammar semantics to IO semantic/printable objects: range checking
+ * belongs here, while padding, storage, and emission strategy belong to the
+ * downstream IO and CPO levels.
+ */
+
 #include "arguments.h"
 
 #include <climits>

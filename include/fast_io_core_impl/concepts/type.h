@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Common data carriers and tag types for the CPO/protocol level.
+ *
+ * Scatter descriptors, progress results, reserve/scatter cursors, alias tags,
+ * `io_type`/`io_reserve_type` dispatch tags, seek positions, conversion
+ * results, and related structural values are declared here. They give unrelated
+ * device and object CPOs a stable common language. These carriers contain no
+ * orchestration policy and invoking them performs no IO.
+ */
+
 namespace fast_io
 {
 

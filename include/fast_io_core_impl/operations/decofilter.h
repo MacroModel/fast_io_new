@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Decorator filter construction and dispatch (IO/protocol bridge).
+ *
+ * These operations attach directional transformation objects to streams,
+ * selecting provider-defined filter construction when available and preserving
+ * source category so an rvalue decorator may become owned state. Stream and
+ * decorator normalization occur once; actual transformed transfer later uses
+ * the ordinary read/write operation matrix.
+ */
+
 namespace fast_io
 {
 namespace decorators

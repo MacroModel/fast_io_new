@@ -1,5 +1,21 @@
 ﻿#pragma once
 
+/*
+ * Central format-program lowering engine (FMT level).
+ *
+ * Upstream grammar providers supply a checked structural program and the
+ * public facade supplies stable typed arguments. This file walks the program
+ * in source order, decodes literal slices, invokes the open replacement-rule
+ * protocol, and calls a continuation with the resulting typed IO component
+ * pack. Print continuations forward that pack to `fast_io::io::print`; concat
+ * continuations forward it to the IO materialization engine.
+ *
+ * Lowering is representation-agnostic. It neither normalizes a stream nor
+ * calls printable leaf CPOs, allocates a destination, acquires a mutex, or
+ * performs writes. Compiler-constant visibility is preserved so the downstream
+ * IO operation can make its own code-generation decision.
+ */
+
 #include "arguments.h"
 #include "compile.h"
 #include "replacement_rules.h"

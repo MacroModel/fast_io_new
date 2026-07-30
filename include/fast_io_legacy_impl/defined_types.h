@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * Hosted default-device bridge used by the public IO facade (IO level).
+ *
+ * This file exposes `in()`, `out()`, and `err()` and the small continuations
+ * that route source-free print/scan calls to native standard streams. It is
+ * where a hosted scenario acquires a concrete default endpoint; explicit-stream
+ * operations bypass this choice. Once selected, the endpoint enters the same
+ * stream-reference, mutex, status, formatting/scanning, and primitive-transfer
+ * pipeline as every other device.
+ */
+
 #if __has_include(<stdio.h>)
 #include "c/impl.h"
 #endif

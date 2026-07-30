@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Byte transmit-until-EOF operation (IO level).
+ *
+ * This byte-domain counterpart drains an input to an output while reporting
+ * total byte progress, preferring provider status CPOs and otherwise composing
+ * normalized byte read/write operations. It does not decode, transcode, format,
+ * or scan the transferred payload.
+ */
+
 namespace fast_io
 {
 

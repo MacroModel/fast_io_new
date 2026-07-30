@@ -1,5 +1,15 @@
 #pragma once
 
+/*
+ * Structural compile-time argument vocabulary (CPO/semantic level).
+ *
+ * Static strings, fixed scatters, and related providers carry literal
+ * characters in the type/value system so FMT lowering and ordinary IO calls can
+ * expose exact extents to printable CPOs and compiler-constant planning. They
+ * are already IO objects, not format syntax. Materialization and transfer are
+ * still selected by print or concat.
+ */
+
 #include <concepts>
 #include <cstddef>
 #include <limits>

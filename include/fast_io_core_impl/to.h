@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * In-memory print/scan conversion pipeline (IO level).
+ *
+ * `to` and `inplace_to` compose existing printable producers with scannable
+ * consumers through bounded intermediate character fragments. This file owns
+ * the operation-level choice between repeatable scatter, reserve storage,
+ * dynamic materialization, and context scanning, including progress and EOF
+ * validation. It introduces no format grammar and no new leaf representation:
+ * both sides reuse the ordinary print/scan CPO vocabulary without a device.
+ */
+
 namespace fast_io
 {
 

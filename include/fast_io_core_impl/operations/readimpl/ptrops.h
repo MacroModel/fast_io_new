@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Public pointer-range input operations (`operations` namespace).
+ *
+ * `read_some`, `read_all`, and their byte/positioned variants accept a user
+ * stream handle, invoke `input_stream_ref` exactly once, validate character
+ * compatibility, and enter normalized primitive synthesis. They transfer into
+ * existing memory ranges; `io::scan` is the separate higher-level operation
+ * that interprets those characters as target values.
+ */
+
 namespace fast_io
 {
 

@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Built-in replacement-to-IO translations (FMT level).
+ *
+ * This file classifies parsed brace/printf specifications and maps them to
+ * identity forwarding, scalar manipulators, width/precision nodes, debug/range
+ * adapters, chrono adapters, or user customization. The result is a typed
+ * semantic record for the IO level. Actual reserve sizing, scatter planning,
+ * context formatting, and output transfer are intentionally downstream.
+ */
+
 #include "time.h"
 #include "fast_io_time.h"
 #include "builtin_diagnostics.h"

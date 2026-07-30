@@ -1,4 +1,13 @@
-﻿namespace fast_io
+﻿/*
+ * Positioned byte-scatter input synthesis (primitive operation sublayer).
+ *
+ * This is the native-byte counterpart of `scatterp.h`. It executes some/all
+ * positioned scatter reads, advances both byte offsets and descriptor cursors,
+ * and falls back only through capability-equivalent primitive paths. It
+ * provides bytes to callers without interpreting them as scan syntax.
+ */
+
+namespace fast_io
 {
 
 namespace details

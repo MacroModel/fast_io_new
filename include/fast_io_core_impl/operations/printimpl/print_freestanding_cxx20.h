@@ -1,5 +1,35 @@
 ﻿#pragma once
 
+/*
+ * Freestanding print execution pipeline (IO operation core).
+ *
+ * Upstream callers are either a public IO scenario facade or a lower-level
+ * caller with an explicit output. The public
+ * `operations::print_freestanding` entry validates the complete source record,
+ * obtains `output_stream_ref`, and preserves the original source expressions
+ * long enough for the pre-normalization compiler-constant query. Each value is
+ * then transformed exactly once by `io_print_alias` and
+ * `io_print_forward<output_char_type>`.
+ *
+ * The normalized record is expanded as semantic IO structure (`pack`, `cond`,
+ * `io_null`, and `width`), given stable owned-or-borrowed storage, synchronized
+ * through the stream mutex protocol, and offered first to a whole-record
+ * `status_print_define` customization. The generic continuation otherwise
+ * selects among reserve, dynamic-reserve, scatter, reserve-scatter,
+ * context-print, buffered/direct, and staged strategies before reaching the
+ * primitive write/obuffer operations.
+ *
+ * Namespace names describe normalization state rather than a simple height
+ * hierarchy: `operations` contains the public generic operation,
+ * `operations::defines` validates public expressions,
+ * `operations::decay` operates on normalized observers and values, and
+ * `operations::decay::defines` probes raw capabilities. Helpers named
+ * `print_freestanding_*` are continuations of this one operation, not additional
+ * public CPO entry points. `__builtin_constant_p` handling in this file is an IO
+ * code-generation policy; it is deliberately evaluated before aliasing so
+ * caller-expression evidence is not erased.
+ */
+
 #include "scatter_copy.h"
 
 namespace fast_io

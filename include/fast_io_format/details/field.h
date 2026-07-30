@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Typed field-presentation adapters (FMT level).
+ *
+ * Parsed scalar flags and precision are converted here into concrete
+ * manipulator types that reuse fast_io integer, floating, character, pointer,
+ * and boolean printable implementations. This is the last value-specific
+ * translation step before the IO level; it does not orchestrate a complete
+ * operation or call a device CPO.
+ */
+
 #include "compile.h"
 #include "debug.h"
 #include "dynamic.h"

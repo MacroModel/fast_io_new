@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Compile-time diagnostics for built-in format grammars (FMT level).
+ *
+ * Structural parser error codes and source offsets are mapped here to focused
+ * template diagnostics. This is a reporting leaf of syntax compilation; it
+ * has no run-time representation and is unrelated to IO status protocols such
+ * as `status_print_define` or scan parse results.
+ */
+
 #include "program.h"
 
 #include <cstddef>

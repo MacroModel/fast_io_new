@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Unicode validation and measurement support for format syntax (FMT level).
+ *
+ * Fill characters, precision limits, display width, escaping, and transcoded
+ * literal fragments require scalar-aware traversal independent of any device.
+ * These helpers provide that syntax/presentation analysis. They do not define
+ * stream decorators or codecvt device CPOs and do not perform output transfer.
+ */
+
 #include "semantic.h"
 #include "fixed_string.h"
 

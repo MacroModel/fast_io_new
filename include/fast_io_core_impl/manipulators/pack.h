@@ -1,5 +1,15 @@
 #pragma once
 
+/*
+ * Ordered semantic record node (`pack`) for the CPO/semantic level.
+ *
+ * A pack groups zero or more print objects so the IO planner can flatten them
+ * into one logical operation, preserving order and one mutex/status boundary.
+ * Construction applies print aliasing and selects lifetime-safe owned or
+ * borrowed storage for every child. The pack itself performs no formatting;
+ * active children are later interpreted by print or concat.
+ */
+
 #include "traits.h"
 
 namespace fast_io

@@ -1,5 +1,14 @@
 #pragma once
 
+/*
+ * Structural classification of semantic print objects.
+ *
+ * The IO planner uses these traits to distinguish pack expansion, conditional
+ * selection, and width nodes from ordinary printable leaves. Classification is
+ * deliberately separate from leaf printability: semantic nodes are normalized
+ * recursively until an active record of concrete leaf objects is obtained.
+ */
+
 #include "forward.h"
 #include "static_arg.h"
 

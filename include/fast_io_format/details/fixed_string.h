@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Structural literal carrier for the format frontend (FMT level).
+ *
+ * This file turns a source character array into an NTTP-safe value with an
+ * explicit character domain and extent. Parsers and grammar CPOs consume that
+ * structural value during constant evaluation. It is format source storage,
+ * not an IO scatter and not a printable-object customization.
+ */
+
 #include <concepts>
 #include <cstddef>
 #include <type_traits>

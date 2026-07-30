@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Foundational recognition helpers for the CPO/protocol level.
+ *
+ * These narrow concepts classify character domains, path/string source shapes,
+ * and other expression prerequisites used by public capability definitions.
+ * They prevent repeated ad-hoc trait logic and early hard diagnostics. They do
+ * not represent complete printable, scannable, or device capabilities.
+ */
+
 namespace fast_io::details
 {
 

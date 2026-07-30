@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Directional decorator-reference normalization (CPO level).
+ *
+ * These CPOs project a stream to the input, output, or bidirectional decorator
+ * object used by transformation algorithms. Storage follows the same
+ * borrow-or-own discipline as stream references: stable mutable lvalues may be
+ * borrowed and proxy prvalues are materialized once. This file selects the
+ * decorator object only; it does not execute a transcode or device operation.
+ */
+
 namespace fast_io
 {
 

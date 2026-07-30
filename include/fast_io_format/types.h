@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Public type vocabulary for the format frontend (FMT level).
+ *
+ * Grammar identities, fixed format strings, and open grammar constraints live
+ * here so syntax can be selected and checked without depending on a concrete
+ * output device. These types describe source-language structure only. They
+ * neither format values themselves nor participate in downstream stream
+ * reference, locking, buffering, or primitive-transfer protocols.
+ */
+
 #include <concepts>
 #include <type_traits>
 #include <utility>

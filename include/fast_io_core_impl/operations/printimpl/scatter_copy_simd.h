@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Target-aware implementation leaf for proved IO scatter copies.
+ *
+ * This header supplies the SIMD definition declared by `scatter_copy.h` after
+ * the core vector facilities are available. It changes only the copy mechanism
+ * for an already-approved put-area strategy. Protocol selection, range proofs,
+ * destination capacity, and device transfer remain responsibilities of the
+ * surrounding IO operation.
+ */
+
 namespace fast_io::details::decay
 {
 

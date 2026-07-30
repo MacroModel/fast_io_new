@@ -1,5 +1,16 @@
 #pragma once
 
+/*
+ * Standard-string materialization facade (FMT-to-IO boundary).
+ *
+ * These functions differ from `concat_fast_io.h` only in their destination
+ * family: the compiled format is lowered to the same typed IO component record
+ * and materialized through the same concat operation, using the registered
+ * `std::basic_string` strlike adapter. Parsing and field translation remain
+ * FMT concerns; sizing, allocation, and leaf formatting remain IO/protocol
+ * concerns.
+ */
+
 #include <string>
 
 // fast_io_unit/string.h defines std::basic_string print adapters in terms of

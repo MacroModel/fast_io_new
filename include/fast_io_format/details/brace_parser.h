@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Parser for the brace-format source language (FMT level).
+ *
+ * Constant evaluation decodes literal runs, replacement fields, fill
+ * characters, alignment, width, precision, and nested references into the
+ * grammar-neutral program model. This stage validates source syntax only.
+ * Argument-domain validation and typed replacement lowering are performed by
+ * the brace rule and common lowering protocol, respectively.
+ */
+
 #include "program.h"
 
 #include <climits>

@@ -1,5 +1,14 @@
 ﻿#pragma once
 
+/*
+ * Public span-based output operations (`operations` namespace).
+ *
+ * These overloads preserve span shape and return the unconsumed suffix for
+ * `some` operations while sharing the same single stream-normalization and
+ * primitive synthesis rules as pointer ranges. They are convenience front
+ * doors over transfer CPOs; they do not add print semantics or allocation.
+ */
+
 
 namespace fast_io::operations
 {

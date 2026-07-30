@@ -1,5 +1,16 @@
 ﻿#pragma once
 
+/*
+ * Normalized input-device capability matrix (CPO level).
+ *
+ * Against an input observer that has already crossed `input_stream_ref`, this
+ * file recognizes coherent ibuffer cursors, whole-record `status_scan_define`,
+ * typed and byte reads, sequential and positioned reads, some/all variants,
+ * and contiguous/scatter forms. Composite `readable` concepts summarize which
+ * primitive synthesis paths are available. No target scanning or refill loop
+ * is executed here; scan/read algorithms consume these exact capabilities.
+ */
+
 namespace fast_io
 {
 

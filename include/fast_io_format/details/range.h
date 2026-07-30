@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Range-format syntax and lowering support (FMT level).
+ *
+ * Range-specific presentations, separators, delimiters, element rules, and
+ * nested specifications are parsed and represented here. Accepted ranges are
+ * lowered compositionally into typed semantic/printable objects, so elements
+ * reuse the same format-rule protocol and the final record reuses the ordinary
+ * IO print or concat pipeline.
+ */
+
 #include "builtin_diagnostics.h"
 #include "custom.h"
 #include "debug.h"

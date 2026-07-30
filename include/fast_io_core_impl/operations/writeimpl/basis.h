@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Sequential scalar output synthesis (primitive operation sublayer).
+ *
+ * Starting from the exact typed/byte write and obuffer CPOs advertised by a
+ * normalized output observer, this file derives contiguous `write_some` and
+ * `write_all` behavior, including retry/progress and overflow paths. It moves
+ * fully materialized character or byte ranges and knows nothing about printable
+ * objects, semantic records, format syntax, or output scenarios.
+ */
+
 namespace fast_io
 {
 namespace details

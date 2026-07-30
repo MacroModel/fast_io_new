@@ -1,5 +1,13 @@
 ﻿#pragma once
 
+/*
+ * Bounded partial byte transmit operation (IO level).
+ *
+ * This byte-domain counterpart moves up to a requested byte count and returns
+ * the actual progress, preferring a provider whole-operation CPO before the
+ * generic normalized byte read/write loop. The payload remains opaque.
+ */
+
 namespace fast_io
 {
 

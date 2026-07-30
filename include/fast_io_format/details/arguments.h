@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Run-time argument view used by format lowering (FMT level).
+ *
+ * The public argument pack is projected into stable, uniquely indexed lvalue
+ * slots so a compiled field can select its value without recursive tuple
+ * machinery or accidental copies. This file preserves identity only for the
+ * lowering call; downstream alias/forward and semantic-node storage protocols
+ * still decide the representation accepted by IO.
+ */
+
 #include "../types.h"
 #include "program.h"
 

@@ -1,5 +1,17 @@
 ﻿#pragma once
 
+/*
+ * Stream synchronization projection protocol (CPO level).
+ *
+ * A synchronized stream must provide a coherent pair: a mutex reference and an
+ * unlocked stream reference for the same direction. This file validates that
+ * pair, follows recursive projections without cycles, and exposes the complete
+ * input/output/IO mutex capability consumed by operation-level critical
+ * sections. Lock acquisition order and operation extent belong to print/scan
+ * orchestration; the CPOs here only identify the synchronization domain and
+ * unlocked observer.
+ */
+
 namespace fast_io
 {
 

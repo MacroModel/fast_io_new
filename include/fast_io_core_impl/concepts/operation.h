@@ -1,5 +1,30 @@
 ﻿#pragma once
 
+/*
+ * Value representation and semantic policy protocols (CPO level).
+ *
+ * This file is the open object side of fast_io. Its major families are:
+ *
+ * - scan leaves: precise-reserve, contiguous, terminal-padding, iterative, and
+ *   context scanners;
+ * - print leaves: static/dynamic/precise reserve, scatter and reserve-scatter,
+ *   context, direct-output, staged, and cached representations;
+ * - source normalization: `io_print_alias`/`io_scan_alias` followed by
+ *   character-domain forwarding;
+ * - semantic objects: `io_null`, `parameter`, and the protocol support consumed
+ *   by pack/condition/width nodes;
+ * - proof and cost markers: borrowing, repeatability, deferred commit,
+ *   compiler-constant safety, ABI transport, coalescing, and stream thresholds.
+ *
+ * These concepts are deliberately not one flat "printable" hierarchy. A leaf
+ * capability says how an object can be materialized; a safety/equivalence
+ * marker says when a strategy may reuse or defer that representation; a cost
+ * marker chooses among already-correct strategies. The C++ expressions prove
+ * shape only, while provider comments define lifetime, bounds, state, and
+ * observational obligations. IO-level print/scan/concat code composes the
+ * capabilities into a complete operation.
+ */
+
 namespace fast_io
 {
 

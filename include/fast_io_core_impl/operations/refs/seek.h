@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Seek and buffer-flush capability probes (CPO level).
+ *
+ * Directional and bidirectional observers may expose element-based or
+ * byte-based seek operations plus explicit buffer-flush commands. This file
+ * checks the exact result contracts and combines compatible directional forms.
+ * It does not choose fallback direction or change a file position; read/write
+ * operation algorithms compose these capabilities when required.
+ */
+
 namespace fast_io
 {
 

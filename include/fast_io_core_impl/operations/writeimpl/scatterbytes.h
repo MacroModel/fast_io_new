@@ -1,4 +1,13 @@
-﻿namespace fast_io
+﻿/*
+ * Sequential byte-scatter output synthesis (primitive operation sublayer).
+ *
+ * This file bridges native byte descriptors and one-byte typed scatter
+ * protocols with bounded descriptor materialization, then implements exact
+ * some/all progress. It is a representation adapter between device primitive
+ * CPOs, not the print-level scatter formatter and not a source lifetime proof.
+ */
+
+namespace fast_io
 {
 
 namespace details

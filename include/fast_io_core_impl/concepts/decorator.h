@@ -1,5 +1,15 @@
 ﻿#pragma once
 
+/*
+ * Decorator/transformation object vocabulary (CPO level).
+ *
+ * This file recognizes the legacy byte-decorator shape used to transform
+ * ranges incrementally. It describes a provider capability only; directional
+ * decorator references, transcoding orchestration, buffer ownership, and
+ * device transfer are defined elsewhere. The detailed contract below records
+ * the cursor and lifetime obligations that callability cannot prove.
+ */
+
 namespace fast_io
 {
 

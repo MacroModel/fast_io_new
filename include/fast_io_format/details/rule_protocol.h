@@ -1,5 +1,15 @@
 #pragma once
 
+/*
+ * Open replacement-lowering protocol (FMT level).
+ *
+ * A compiled field, its structural source context, and the selected typed
+ * argument are presented to ADL rule providers through this file. Providers
+ * return a rule token whose lowering emits typed IO components. This is the
+ * extension boundary for format semantics, not a printable CPO: the returned
+ * components must ultimately satisfy the ordinary IO-level print protocols.
+ */
+
 #include <concepts>
 #include <limits>
 #include <type_traits>

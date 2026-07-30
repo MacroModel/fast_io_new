@@ -1,5 +1,18 @@
 #pragma once
 
+/*
+ * Public formatted-output facade (FMT-to-IO boundary).
+ *
+ * The functions in this file choose a format grammar, compile and lower the
+ * literal, and pass the resulting typed component sequence to
+ * `fast_io::io::print` or `fast_io::io::println`. Default-output overloads are
+ * scenario conveniences around the same lowering path. This file does not
+ * select reserve/scatter/context formatting strategies or issue writes; the IO
+ * operation core makes those decisions after stream and argument
+ * normalization. Value visibility is preserved across this boundary so the IO
+ * level may still apply its compiler-constant policy.
+ */
+
 // The output front door is the only format component that needs hosted stream
 // adapters and the default standard-output objects. Lowering itself remains
 // reusable by the freestanding concat front doors.
