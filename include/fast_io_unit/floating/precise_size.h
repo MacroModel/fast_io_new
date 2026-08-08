@@ -2432,6 +2432,12 @@ inline constexpr bool floating_precise_precision_supported{
 	::fast_io::details::print_floating_precision_valid<flags.precision> &&
 	flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment};
 
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+inline constexpr bool floating_precise_range_supported{
+	::fast_io::details::print_floating_scalar_supported<flags, flt> &&
+	flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+	flags.rounding != ::fast_io::manipulators::floating_rounding::current_environment};
+
 /*
 The x86 Clang bfloat16 workaround must cover the public CPO boundary itself.
 Without AVX512-BF16, copying the owning manipulator by value can rematerialize
@@ -2454,6 +2460,12 @@ using floating_precise_parameter_t = ::std::conditional_t<
 		::fast_io::details::floating_precise_field_parameter<manipulator, flt>,
 		manipulator>>;
 
+template <typename manipulator, typename flt>
+using floating_precise_range_parameter_t = ::std::conditional_t<
+	::fast_io::details::print_floating_requires_object_field_capture<flt>,
+	::fast_io::details::floating_precise_range_field_parameter<manipulator, flt>,
+	manipulator>;
+
 template <typename flt, typename parameter>
 [[nodiscard]] inline constexpr auto
 floating_precise_captured_fields(parameter const &value) noexcept
@@ -2470,7 +2482,514 @@ floating_precise_captured_fields(parameter const &value) noexcept
 	}
 }
 
+#if defined(__SIZEOF_INT128__)
+
+/*
+Exact-decimal size metadata
+===========================
+
+For a nonzero finite binary value x=M*2^E, let
+
+    K = floor(log2(x)),  a = floor(K*log10(2)).
+
+The binade [2^K,2^(K+1)) is narrower than one decade.  Consequently
+floor(log10(x)) is either a or a+1, and deciding which one needs exactly one
+comparison with 10^(a+1).  The 249-bit wide-Ryu power cache makes that
+comparison authoritative: its power-of-five prefix encloses the omitted tail;
+only an unresolved prefix equality falls back to the complete exact backend.
+
+After cancelling binary factors from M*2^E, its canonical decimal exponent q
+is also cheap.  E<0 gives q=E because the remaining M is odd and M*5^-E has no
+decimal trailing zero.  E>=0 gives q=min(v2(M)+E,v5(M)).  If d is the canonical
+coefficient length and r=floor(log10(x)), then r=q+d-1, hence d=r-q+1.
+
+This is a genuine metadata path: no coefficient limb array and no digit buffer
+is constructed in the normal run-time case.  Constant evaluation deliberately
+retains the independently tested exact-limb implementation, so compiler limits
+and run-time cache policy cannot become part of the constexpr result.
+*/
+
+[[nodiscard]] inline constexpr unsigned
+floating_precise_exact_bit_width(__uint128_t value) noexcept
+{
+	auto const high{static_cast<::std::uint_least64_t>(value >> 64u)};
+	if (high)
+	{
+		return 128u - static_cast<unsigned>(::std::countl_zero(high));
+	}
+	return 64u - static_cast<unsigned>(::std::countl_zero(
+		static_cast<::std::uint_least64_t>(value)));
+}
+
+[[nodiscard]] inline constexpr ::std::int_least32_t
+floating_precise_exact_floor_log10_pow2(
+	::std::int_least32_t exponent) noexcept
+{
+	/* floor(log10(2)*2^48).  On the complete binary16/bfloat16/binary32/
+	binary64/binary80/binary128 K-domain, |K|<=16495.  The truncation error is
+	below 5.77e-11 there, while exhaustive integer-boundary analysis gives a
+	minimum distance above 2.76e-5 (at K=-13301). */
+	constexpr ::std::int_least64_t multiplier{INT64_C(84732411018727)};
+	constexpr ::std::int_least64_t denominator{INT64_C(1) << 48u};
+	auto const product{static_cast<::std::int_least64_t>(exponent) * multiplier};
+	if (0 <= product)
+	{
+		return static_cast<::std::int_least32_t>(product / denominator);
+	}
+	return static_cast<::std::int_least32_t>(
+		-((-product + denominator - 1) / denominator));
+}
+
+[[nodiscard]] inline unsigned floating_precise_exact_cache_bit_width(
+	::std::uint_least64_t const *power) noexcept
+{
+	for (unsigned index{4u}; index; --index)
+	{
+		auto const value{power[index - 1u]};
+		if (value)
+		{
+			return (index - 1u) * 64u +
+				64u - static_cast<unsigned>(::std::countl_zero(value));
+		}
+	}
+	return 0u;
+}
+
+/* Compare M*2^binary_exponent with P*2^power_exponent.  P is the normalized
+249-bit little-endian cache integer, while M has at most 113 bits. */
+[[nodiscard]] inline int floating_precise_exact_compare_dyadics(
+	__uint128_t mantissa, ::std::int_least32_t binary_exponent,
+	::std::uint_least64_t const *power,
+	::std::int_least32_t power_exponent) noexcept
+{
+	auto const mantissa_bits{
+		::fast_io::details::floating_precise_exact_bit_width(mantissa)};
+	auto const power_bits{
+		::fast_io::details::floating_precise_exact_cache_bit_width(power)};
+	auto const left_top{static_cast<::std::int_least32_t>(mantissa_bits - 1u) +
+		binary_exponent};
+	auto const right_top{static_cast<::std::int_least32_t>(power_bits - 1u) +
+		power_exponent};
+	if (left_top != right_top)
+	{
+		return left_top < right_top ? -1 : 1;
+	}
+
+	/* Equal top exponents imply shift=power_bits-mantissa_bits>=0 because the
+	cache has 249 bits and every admitted significand has at most 113. */
+	auto const shift{static_cast<unsigned>(binary_exponent - power_exponent)};
+	auto const word_shift{shift / 64u};
+	auto const bit_shift{shift % 64u};
+	::std::uint_least64_t left[4u]{};
+	::std::uint_least64_t const words[2u]{
+		static_cast<::std::uint_least64_t>(mantissa),
+		static_cast<::std::uint_least64_t>(mantissa >> 64u)};
+	for (unsigned index{}; index != 2u; ++index)
+	{
+		auto const destination{word_shift + index};
+		if (destination < 4u)
+		{
+			left[destination] |= words[index] << bit_shift;
+		}
+		if (bit_shift && destination + 1u < 4u)
+		{
+			left[destination + 1u] |= words[index] >> (64u - bit_shift);
+		}
+	}
+	for (unsigned index{4u}; index; --index)
+	{
+		if (left[index - 1u] != power[index - 1u])
+		{
+			return left[index - 1u] < power[index - 1u] ? -1 : 1;
+		}
+	}
+	return 0;
+}
+
+[[nodiscard]] inline unsigned floating_precise_exact_product_bit_width(
+	__uint128_t mantissa, ::std::uint_least64_t const *power) noexcept
+{
+	::std::uint_least64_t const words[2u]{
+		static_cast<::std::uint_least64_t>(mantissa),
+		static_cast<::std::uint_least64_t>(mantissa >> 64u)};
+	::std::uint_least64_t product[6u]{};
+	for (unsigned left{}; left != 2u; ++left)
+	{
+		__uint128_t carry{};
+		for (unsigned right{}; right != 4u; ++right)
+		{
+			auto const output{left + right};
+			auto const value{static_cast<__uint128_t>(words[left]) *
+				power[right] + product[output] + carry};
+			product[output] = static_cast<::std::uint_least64_t>(value);
+			carry = value >> 64u;
+		}
+		product[left + 4u] = static_cast<::std::uint_least64_t>(carry);
+	}
+	for (unsigned index{6u}; index; --index)
+	{
+		auto const value{product[index - 1u]};
+		if (value)
+		{
+			return (index - 1u) * 64u +
+				64u - static_cast<unsigned>(::std::countl_zero(value));
+		}
+	}
+	return 0u;
+}
+
+enum class floating_precise_exact_power10_comparison : unsigned char
+{
+	below,
+	at_least,
+	ambiguous
+};
+
+[[nodiscard]] inline floating_precise_exact_power10_comparison
+floating_precise_exact_compare_power10(
+	__uint128_t mantissa, ::std::int_least32_t binary_exponent,
+	::std::int_least32_t decimal_exponent) noexcept
+{
+	using namespace ::fast_io::details::wide_ryu;
+	if (0 <= decimal_exponent)
+	{
+		auto const count{static_cast<::std::uint_least32_t>(decimal_exponent)};
+		::std::uint_least64_t power[4u];
+		generic_computePow5(count, power);
+		auto const cache_exponent{static_cast<::std::int_least32_t>(
+			pow5bits(static_cast<::std::int_least32_t>(count))) -
+			float_128_pow5_bitcount};
+		/* M*2^E >= 10^n iff M*2^(E-n) >= 5^n. */
+		auto const lower_comparison{
+			::fast_io::details::floating_precise_exact_compare_dyadics(
+				mantissa, binary_exponent - decimal_exponent, power,
+				cache_exponent)};
+		if (cache_exponent <= 0)
+		{
+			return lower_comparison < 0
+				? floating_precise_exact_power10_comparison::below
+				: floating_precise_exact_power10_comparison::at_least;
+		}
+		/* P*2^s <= 5^n < (P+1)*2^s. */
+		if (lower_comparison <= 0)
+		{
+			return floating_precise_exact_power10_comparison::below;
+		}
+		for (unsigned index{}; index != 4u; ++index)
+		{
+			if (++power[index])
+			{
+				break;
+			}
+		}
+		auto const upper_comparison{
+			::fast_io::details::floating_precise_exact_compare_dyadics(
+				mantissa, binary_exponent - decimal_exponent, power,
+				cache_exponent)};
+		return 0 <= upper_comparison
+			? floating_precise_exact_power10_comparison::at_least
+			: floating_precise_exact_power10_comparison::ambiguous;
+	}
+
+	auto const count{static_cast<::std::uint_least32_t>(-decimal_exponent)};
+	::std::uint_least64_t power[4u];
+	generic_computePow5(count, power);
+	auto const cache_exponent{static_cast<::std::int_least32_t>(
+		pow5bits(static_cast<::std::int_least32_t>(count))) -
+		float_128_pow5_bitcount};
+	/* M*2^E >= 10^-n iff M*5^n*2^(E+n) >= 1. */
+	auto const scaled_exponent{cache_exponent + binary_exponent - decimal_exponent};
+	auto const lower_top{static_cast<::std::int_least32_t>(
+		::fast_io::details::floating_precise_exact_product_bit_width(
+			mantissa, power) - 1u) + scaled_exponent};
+	if (0 <= lower_top)
+	{
+		return floating_precise_exact_power10_comparison::at_least;
+	}
+	if (cache_exponent <= 0)
+	{
+		return floating_precise_exact_power10_comparison::below;
+	}
+	for (unsigned index{}; index != 4u; ++index)
+	{
+		if (++power[index])
+		{
+			break;
+		}
+	}
+	auto const upper_top{static_cast<::std::int_least32_t>(
+		::fast_io::details::floating_precise_exact_product_bit_width(
+			mantissa, power) - 1u) + scaled_exponent};
+	return upper_top < 0
+		? floating_precise_exact_power10_comparison::below
+		: floating_precise_exact_power10_comparison::ambiguous;
+}
+
+template <typename flt>
+[[nodiscard]] inline constexpr ::fast_io::details::exact_decimal_layout
+floating_precise_exact_decimal_layout_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	if (::std::is_constant_evaluated())
+	{
+		return ::fast_io::details::exact_decimal_layout_from_binary<flt>(
+			mantissa, exponent);
+	}
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	/* binary16's complete coefficient is so small that its established limb
+	path is measurably faster than reconstructing a cached boundary power. */
+	if constexpr (trait::mbits == 10u && trait::ebits == 5u)
+	{
+		return ::fast_io::details::exact_decimal_layout_from_binary<flt>(
+			mantissa, exponent);
+	}
+	auto const original_mantissa{mantissa};
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		mantissa |= static_cast<mantissa_type>(
+			static_cast<mantissa_type>(1u) << trait::mbits);
+		binary_exponent = static_cast<::std::int_least32_t>(exponent) - bias -
+			static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent = 1 - bias -
+			static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	auto const wide_mantissa{static_cast<__uint128_t>(mantissa)};
+	auto const binary_floor{binary_exponent +
+		static_cast<::std::int_least32_t>(
+			::fast_io::details::floating_precise_exact_bit_width(wide_mantissa) - 1u)};
+	auto real_exponent{
+		::fast_io::details::floating_precise_exact_floor_log10_pow2(binary_floor)};
+	auto const boundary{real_exponent + 1};
+	auto const comparison{
+		::fast_io::details::floating_precise_exact_compare_power10(
+			wide_mantissa, binary_exponent, boundary)};
+	if (comparison == floating_precise_exact_power10_comparison::ambiguous)
+	{
+		return ::fast_io::details::exact_decimal_layout_from_binary<flt>(
+			original_mantissa, exponent);
+	}
+	real_exponent += static_cast<::std::int_least32_t>(
+		comparison == floating_precise_exact_power10_comparison::at_least);
+
+	auto reduced{wide_mantissa};
+	auto canonical_binary_exponent{binary_exponent};
+	for (; canonical_binary_exponent < 0 && (reduced & 1u) == 0u;
+		 ++canonical_binary_exponent)
+	{
+		reduced >>= 1u;
+	}
+	::std::int_least32_t decimal_exponent{};
+	if (canonical_binary_exponent < 0)
+	{
+		decimal_exponent = canonical_binary_exponent;
+	}
+	else
+	{
+		auto twos{canonical_binary_exponent};
+		auto factor{reduced};
+		for (; (factor & 1u) == 0u; factor >>= 1u)
+		{
+			++twos;
+		}
+		::std::int_least32_t fives{};
+		for (factor = reduced; factor % 5u == 0u; factor /= 5u)
+		{
+			++fives;
+		}
+		decimal_exponent = twos < fives ? twos : fives;
+	}
+	auto const size{real_exponent - decimal_exponent + 1};
+	return {static_cast<::std::size_t>(size), decimal_exponent};
+}
+
+#endif
+
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+[[nodiscard]] inline constexpr ::std::size_t
+floating_precise_exact_decimal_fields_size(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent, bool negative) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (exponent == exponent_mask)
+	{
+		return ::fast_io::details::floating_precise_special_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			trait::mbits>(mantissa, negative);
+	}
+	auto const sign_size{
+		::fast_io::details::floating_precise_sign_size<flags.showpos>(negative)};
+	if (mantissa == 0u && exponent == 0u)
+	{
+		constexpr ::std::size_t zero_size{
+			flags.floating ==
+					::fast_io::manipulators::floating_format::scientific
+				? 5u
+				: 1u + (flags.json_float ? 2u : 0u)};
+		return sign_size + zero_size;
+	}
+	auto const decimal{
+#if defined(__SIZEOF_INT128__)
+		::fast_io::details::floating_precise_exact_decimal_layout_from_binary<flt>(
+			mantissa, exponent)
+#else
+		::fast_io::details::exact_decimal_layout_from_binary<flt>(
+			mantissa, exponent)
+#endif
+	};
+	auto const real_exponent{decimal.exponent +
+							 static_cast<::std::int_least32_t>(decimal.size) - 1};
+	auto const fixed_size{[&]() constexpr noexcept {
+		auto const point{real_exponent + 1};
+		if (point <= 0)
+		{
+			return decimal.size + static_cast<::std::size_t>(1 - real_exponent);
+		}
+		auto const integer_digits{static_cast<::std::size_t>(point)};
+		if (integer_digits < decimal.size)
+		{
+			return decimal.size + 1u;
+		}
+		return integer_digits + (flags.json_float ? 2u : 0u);
+	}()};
+	auto const scientific_size{decimal.size +
+							   static_cast<::std::size_t>(decimal.size != 1u) +
+							   ::fast_io::details::floating_precise_decimal_exponent_size<flt>(
+								   real_exponent)};
+	::std::size_t magnitude_size{};
+	if constexpr (flags.floating ==
+				  ::fast_io::manipulators::floating_format::fixed)
+	{
+		magnitude_size = fixed_size;
+	}
+	else if constexpr (flags.floating ==
+					   ::fast_io::manipulators::floating_format::scientific)
+	{
+		magnitude_size = scientific_size;
+	}
+	else if constexpr (flags.floating ==
+					   ::fast_io::manipulators::floating_format::general)
+	{
+		magnitude_size = -4 <= real_exponent && real_exponent < 6
+							 ? fixed_size
+							 : scientific_size;
+	}
+	else
+	{
+		/* decimal chooses its layout before JSON's fixed-only `.0` suffix is
+		added.  Comparing the post-JSON fixed size would incorrectly switch an
+		integer such as 9000 from the writer's `9000.0` to a five-byte
+		scientific size. */
+		auto fixed_selection_size{fixed_size};
+		if constexpr (flags.json_float)
+		{
+			auto const point{real_exponent + 1};
+			if (0 < point &&
+				decimal.size <= static_cast<::std::size_t>(point))
+			{
+				fixed_selection_size -= 2u;
+			}
+		}
+		/* decimal selects fixed on a length tie, matching the writer. */
+		magnitude_size = fixed_selection_size <= scientific_size
+								 ? fixed_size
+								 : scientific_size;
+	}
+	return sign_size + magnitude_size;
+}
+
 } // namespace details
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(::fast_io::details::
+				 print_floating_exact_decimal_supported<flags, flt>)
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::exact_decimal_manip_t<flags, flt>>,
+	::fast_io::manipulators::exact_decimal_manip_t<flags, flt> const &value) noexcept
+{
+	(void)sizeof(char_type);
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{::fast_io::details::get_punned_result(value.reference)};
+	return ::fast_io::details::floating_precise_exact_decimal_fields_size<
+		flags, floating_type>(
+		fields.mantissa, fields.exponent, fields.sign);
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(::fast_io::details::
+				 print_floating_exact_decimal_supported<flags, flt>)
+inline constexpr char_type *print_reserve_precise_define(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::exact_decimal_manip_t<flags, flt>>,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::exact_decimal_manip_t<flags, flt> const &value) noexcept
+{
+	(void)precise_size;
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{::fast_io::details::get_punned_result(value.reference)};
+	return ::fast_io::details::print_floating_exact_decimal_fields_define<
+		flags, floating_type>(
+		iter, fields.mantissa, fields.exponent, fields.sign);
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_exact_decimal_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::exact_decimal_field_manip_t<flags, flt>>,
+	::fast_io::manipulators::exact_decimal_field_manip_t<flags, flt> value) noexcept
+{
+	(void)sizeof(char_type);
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	return ::fast_io::details::floating_precise_exact_decimal_fields_size<
+		flags, floating_type>(
+		fields.mantissa, fields.exponent, fields.sign);
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::print_floating_exact_decimal_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr char_type *print_reserve_precise_define(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::exact_decimal_field_manip_t<flags, flt>>,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::exact_decimal_field_manip_t<flags, flt> value) noexcept
+{
+	(void)precise_size;
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	return ::fast_io::details::print_floating_exact_decimal_fields_define<
+		flags, floating_type>(
+		iter, fields.mantissa, fields.exponent, fields.sign);
+}
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  ::fast_io::details::my_floating_point flt>
@@ -3012,6 +3531,502 @@ inline constexpr char_type *print_reserve_precise_define(
 			flags.nan_show_sign, flags.nan_show_type, flags.json_float>(
 				iter, widened, value.precision);
 	}
+}
+
+namespace details
+{
+
+template <::fast_io::manipulators::scalar_flags flags, typename flt>
+[[nodiscard]] inline constexpr ::std::size_t
+floating_precise_narrow_range_fields_size(
+	::fast_io::details::punning_result<::std::remove_cvref_t<flt>> fields,
+	::std::size_t minimum_precision,
+	::std::size_t maximum_precision) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	(void)::fast_io::details::normalize_floating_precision_range(
+		minimum_precision, maximum_precision);
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (fields.exponent == exponent_mask)
+	{
+		return ::fast_io::details::floating_precise_special_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			trait::mbits>(fields.mantissa, fields.sign);
+	}
+	::fast_io::details::floating_precision_range_plan plan{};
+	if (fields.mantissa == 0u && fields.exponent == 0u)
+	{
+		plan = ::fast_io::details::make_floating_precision_range_plan(
+			1u, minimum_precision, maximum_precision);
+	}
+	else
+	{
+		auto const decimal{
+			::fast_io::details::print_floating_shortest_decimal_fields<
+				flags.rounding, floating_type>(
+				fields.mantissa, fields.exponent, fields.sign)};
+		plan = ::fast_io::details::make_floating_precision_range_plan(
+			static_cast<::std::size_t>(
+				::fast_io::details::chars_len<10u, true>(decimal.m10)),
+			minimum_precision, maximum_precision);
+		if (plan.shortest)
+		{
+			return ::fast_io::details::floating_precise_sign_size<flags.showpos>(
+					   fields.sign) +
+				   ::fast_io::details::floating_precise_decimal_layout_size<
+					   floating_type, flags.floating, flags.json_float>(
+					   decimal.m10, decimal.e10);
+		}
+	}
+	if (plan.shortest)
+	{
+		return ::fast_io::details::floating_precise_shortest_fields_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			flags.floating, flags.rounding, flags.json_float, floating_type>(
+			fields.mantissa, fields.exponent, fields.sign);
+	}
+	auto const widened{
+		::fast_io::details::dragonbox_narrow_float_from_fields<floating_type>(
+			fields.mantissa, fields.exponent, fields.sign)};
+	if (plan.preserve)
+	{
+		return ::fast_io::details::floating_precise_precision_size<
+			flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+			flags.floating,
+			::fast_io::manipulators::floating_precision::
+				significant_preserve_trailing_zero,
+			flags.rounding, flags.json_float>(widened, plan.precision);
+	}
+	return ::fast_io::details::floating_precise_precision_size<
+		flags.showpos, flags.nan_show_sign, flags.nan_show_type,
+		flags.floating,
+		::fast_io::manipulators::floating_precision::significant,
+		flags.rounding, flags.json_float>(widened, plan.precision);
+}
+
+template <::fast_io::manipulators::scalar_flags flags, typename flt,
+		  ::std::integral char_type>
+inline constexpr char_type *floating_precise_narrow_range_fields_define(
+	char_type *iter,
+	::fast_io::details::punning_result<::std::remove_cvref_t<flt>> fields,
+	::std::size_t minimum_precision,
+	::std::size_t maximum_precision) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	using trait = ::fast_io::details::iec559_traits<floating_type>;
+	(void)::fast_io::details::normalize_floating_precision_range(
+		minimum_precision, maximum_precision);
+	constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+		(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) - 1u)};
+	if (fields.exponent == exponent_mask)
+	{
+		return ::fast_io::details::prsv_fp_nan_impl<
+			flags.showpos, flags.uppercase, flags.nan_show_sign,
+			flags.nan_show_type, trait::mbits>(
+			iter, fields.mantissa, fields.sign);
+	}
+	::fast_io::details::floating_precision_range_plan plan{};
+	if (fields.mantissa == 0u && fields.exponent == 0u)
+	{
+		plan = ::fast_io::details::make_floating_precision_range_plan(
+			1u, minimum_precision, maximum_precision);
+	}
+	else
+	{
+		auto const decimal{
+			::fast_io::details::print_floating_shortest_decimal_fields<
+				flags.rounding, floating_type>(
+				fields.mantissa, fields.exponent, fields.sign)};
+		plan = ::fast_io::details::make_floating_precision_range_plan(
+			static_cast<::std::size_t>(
+				::fast_io::details::chars_len<10u, true>(decimal.m10)),
+			minimum_precision, maximum_precision);
+		if (plan.shortest)
+		{
+			iter = ::fast_io::details::print_rsv_fp_sign_impl<flags.showpos>(
+				iter, fields.sign);
+			return ::fast_io::details::print_rsvflt_decimal_define_impl<
+				floating_type, flags.comma, flags.uppercase_e, flags.floating,
+				flags.json_float>(iter, decimal.m10, decimal.e10);
+		}
+	}
+	if (plan.shortest)
+	{
+		return ::fast_io::details::print_rsvflt_fields_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating, flags.rounding, flags.nan_show_sign,
+			flags.nan_show_type, flags.json_float, floating_type, true>(
+			iter, fields.mantissa, fields.exponent, fields.sign);
+	}
+	if constexpr (!::fast_io::details::is_ascii<char_type>)
+	{
+		if (fields.mantissa != 0u || fields.exponent != 0u)
+		{
+			if (plan.preserve)
+			{
+				return ::fast_io::details::
+					print_floating_precision_range_non_ascii_exact<
+						flags,
+						::fast_io::manipulators::floating_precision::
+							significant_preserve_trailing_zero,
+						floating_type>(iter, fields.mantissa, fields.exponent,
+									   plan.precision, fields.sign);
+			}
+			return ::fast_io::details::
+				print_floating_precision_range_non_ascii_exact<
+					flags,
+					::fast_io::manipulators::floating_precision::significant,
+					floating_type>(iter, fields.mantissa, fields.exponent,
+								   plan.precision, fields.sign);
+		}
+	}
+	auto const widened{
+		::fast_io::details::dragonbox_narrow_float_from_fields<floating_type>(
+			fields.mantissa, fields.exponent, fields.sign)};
+	if (plan.preserve)
+	{
+		return ::fast_io::details::print_rsvflt_precision_define_impl<
+			flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+			flags.floating,
+			::fast_io::manipulators::floating_precision::
+				significant_preserve_trailing_zero,
+			flags.rounding, flags.nan_show_sign, flags.nan_show_type,
+			flags.json_float>(iter, widened, plan.precision);
+	}
+	return ::fast_io::details::print_rsvflt_precision_define_impl<
+		flags.showpos, flags.uppercase, flags.uppercase_e, flags.comma,
+		flags.floating,
+		::fast_io::manipulators::floating_precision::significant,
+		flags.rounding, flags.nan_show_sign, flags.nan_show_type,
+		flags.json_float>(iter, widened, plan.precision);
+}
+
+} // namespace details
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::floating_precise_range_supported<flags, flt> &&
+		!::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::floating_scalar_precision_range_manip_t<
+						  flags, flt>>,
+	::fast_io::details::floating_precise_range_parameter_t<
+		::fast_io::manipulators::floating_scalar_precision_range_manip_t<
+			flags, flt>,
+		flt>
+		value) noexcept
+{
+	(void)sizeof(char_type);
+	using floating_type = ::std::remove_cvref_t<flt>;
+	if constexpr (requires { value.fields; })
+	{
+		return ::fast_io::details::floating_precise_narrow_range_fields_size<
+			flags, floating_type>(value.fields, value.minimum_precision,
+								  value.maximum_precision);
+	}
+	else
+	{
+		using trait = ::fast_io::details::iec559_traits<floating_type>;
+		(void)::fast_io::details::normalize_floating_precision_range(
+			value.minimum_precision, value.maximum_precision);
+		auto const fields{
+			::fast_io::details::get_punned_result(value.reference)};
+		constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) -
+			1u)};
+		if (fields.exponent == exponent_mask)
+		{
+			using scalar_type =
+				::fast_io::manipulators::scalar_manip_t<flags, flt>;
+			return ::fast_io::print_reserve_precise_size(
+				::fast_io::io_reserve_type<char_type, scalar_type>,
+				scalar_type{value.reference});
+		}
+		::fast_io::details::floating_precision_range_plan plan{};
+		if (fields.mantissa == 0u && fields.exponent == 0u)
+		{
+			plan = ::fast_io::details::make_floating_precision_range_plan(
+				1u, value.minimum_precision, value.maximum_precision);
+		}
+		else
+		{
+#if defined(__SIZEOF_INT128__)
+			if constexpr (::fast_io::details::
+							  fp_floating_point_is_ibm_double_double<floating_type>)
+			{
+				auto const decimal{::fast_io::details::
+									   print_floating_ibm_double_double_shortest_decimal<
+										   flags.rounding>(value.reference)};
+				plan = ::fast_io::details::make_floating_precision_range_plan(
+					static_cast<::std::size_t>(
+						::fast_io::details::chars_len<10u, true>(decimal.m10)),
+					value.minimum_precision, value.maximum_precision);
+				if (plan.shortest)
+				{
+					return ::fast_io::details::floating_precise_sign_size<
+							   flags.showpos>(fields.sign) +
+						   ::fast_io::details::floating_precise_decimal_layout_size<
+							   floating_type, flags.floating, flags.json_float>(
+							   decimal.m10, decimal.e10);
+				}
+			}
+			else
+#endif
+			{
+				auto const decimal{::fast_io::details::
+									   print_floating_shortest_decimal_fields<
+										   flags.rounding, floating_type>(
+										   fields.mantissa, fields.exponent, fields.sign)};
+				plan = ::fast_io::details::make_floating_precision_range_plan(
+					static_cast<::std::size_t>(
+						::fast_io::details::chars_len<10u, true>(decimal.m10)),
+					value.minimum_precision, value.maximum_precision);
+				if (plan.shortest)
+				{
+					return ::fast_io::details::floating_precise_sign_size<
+							   flags.showpos>(fields.sign) +
+						   ::fast_io::details::floating_precise_decimal_layout_size<
+							   floating_type, flags.floating, flags.json_float>(
+							   decimal.m10, decimal.e10);
+				}
+			}
+		}
+		if (plan.shortest)
+		{
+			using scalar_type =
+				::fast_io::manipulators::scalar_manip_t<flags, flt>;
+			return ::fast_io::print_reserve_precise_size(
+				::fast_io::io_reserve_type<char_type, scalar_type>,
+				scalar_type{value.reference});
+		}
+		if (plan.preserve)
+		{
+			constexpr auto precision_flags{
+				::fast_io::details::floating_precision_mani_flags_cache<
+					flags, ::fast_io::manipulators::floating_precision::
+							   significant_preserve_trailing_zero>};
+			using precision_type =
+				::fast_io::manipulators::scalar_manip_precision_t<
+					precision_flags, flt>;
+			return ::fast_io::print_reserve_precise_size(
+				::fast_io::io_reserve_type<char_type, precision_type>,
+				precision_type{value.reference, plan.precision});
+		}
+		constexpr auto precision_flags{
+			::fast_io::details::floating_precision_mani_flags_cache<
+				flags,
+				::fast_io::manipulators::floating_precision::significant>};
+		using precision_type =
+			::fast_io::manipulators::scalar_manip_precision_t<
+				precision_flags, flt>;
+		return ::fast_io::print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, precision_type>,
+			precision_type{value.reference, plan.precision});
+	}
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::floating_precise_range_supported<flags, flt> &&
+		!::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr char_type *print_reserve_precise_define(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::floating_scalar_precision_range_manip_t<
+						  flags, flt>>,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::details::floating_precise_range_parameter_t<
+		::fast_io::manipulators::floating_scalar_precision_range_manip_t<
+			flags, flt>,
+		flt>
+		value) noexcept
+{
+	using floating_type = ::std::remove_cvref_t<flt>;
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+				  !requires { value.fields; })
+	{
+		(void)precise_size;
+		using range_type = ::fast_io::manipulators::
+			floating_scalar_precision_range_manip_t<flags, flt>;
+		return ::fast_io::print_reserve_define(
+			::fast_io::io_reserve_type<char_type, range_type>, iter,
+			range_type{value.reference, value.minimum_precision,
+					   value.maximum_precision});
+	}
+	if constexpr (requires { value.fields; })
+	{
+		(void)precise_size;
+		return ::fast_io::details::floating_precise_narrow_range_fields_define<
+			flags, floating_type>(iter, value.fields, value.minimum_precision,
+								  value.maximum_precision);
+	}
+	else
+	{
+		using trait = ::fast_io::details::iec559_traits<floating_type>;
+		(void)::fast_io::details::normalize_floating_precision_range(
+			value.minimum_precision, value.maximum_precision);
+		auto const fields{
+			::fast_io::details::get_punned_result(value.reference)};
+		constexpr auto exponent_mask{static_cast<::std::uint_least32_t>(
+			(static_cast<typename trait::mantissa_type>(1u) << trait::ebits) -
+			1u)};
+		if (fields.exponent == exponent_mask)
+		{
+			using scalar_type =
+				::fast_io::manipulators::scalar_manip_t<flags, flt>;
+			return ::fast_io::print_reserve_precise_define(
+				::fast_io::io_reserve_type<char_type, scalar_type>, iter,
+				precise_size, scalar_type{value.reference});
+		}
+		::fast_io::details::floating_precision_range_plan plan{};
+		if (fields.mantissa == 0u && fields.exponent == 0u)
+		{
+			plan = ::fast_io::details::make_floating_precision_range_plan(
+				1u, value.minimum_precision, value.maximum_precision);
+		}
+		else
+		{
+#if defined(__SIZEOF_INT128__)
+			if constexpr (::fast_io::details::
+							  fp_floating_point_is_ibm_double_double<floating_type>)
+			{
+				auto const decimal{::fast_io::details::
+									   print_floating_ibm_double_double_shortest_decimal<
+										   flags.rounding>(value.reference)};
+				plan = ::fast_io::details::make_floating_precision_range_plan(
+					static_cast<::std::size_t>(
+						::fast_io::details::chars_len<10u, true>(decimal.m10)),
+					value.minimum_precision, value.maximum_precision);
+				if (plan.shortest)
+				{
+					iter = ::fast_io::details::print_rsv_fp_sign_impl<
+						flags.showpos>(iter, fields.sign);
+					return ::fast_io::details::
+						print_rsvflt_decimal_define_impl<
+							floating_type, flags.comma, flags.uppercase_e,
+							flags.floating, flags.json_float>(
+							iter, decimal.m10, decimal.e10);
+				}
+			}
+			else
+#endif
+			{
+				auto const decimal{::fast_io::details::
+									   print_floating_shortest_decimal_fields<
+										   flags.rounding, floating_type>(
+										   fields.mantissa, fields.exponent, fields.sign)};
+				plan = ::fast_io::details::make_floating_precision_range_plan(
+					static_cast<::std::size_t>(
+						::fast_io::details::chars_len<10u, true>(decimal.m10)),
+					value.minimum_precision, value.maximum_precision);
+				if (plan.shortest)
+				{
+					iter = ::fast_io::details::print_rsv_fp_sign_impl<
+						flags.showpos>(iter, fields.sign);
+					return ::fast_io::details::
+						print_rsvflt_decimal_define_impl<
+							floating_type, flags.comma, flags.uppercase_e,
+							flags.floating, flags.json_float>(
+							iter, decimal.m10, decimal.e10);
+				}
+			}
+		}
+		if (plan.shortest)
+		{
+			using scalar_type =
+				::fast_io::manipulators::scalar_manip_t<flags, flt>;
+			return ::fast_io::print_reserve_precise_define(
+				::fast_io::io_reserve_type<char_type, scalar_type>, iter,
+				precise_size, scalar_type{value.reference});
+		}
+		if (plan.preserve)
+		{
+			constexpr auto precision_flags{
+				::fast_io::details::floating_precision_mani_flags_cache<
+					flags, ::fast_io::manipulators::floating_precision::
+							   significant_preserve_trailing_zero>};
+			using precision_type =
+				::fast_io::manipulators::scalar_manip_precision_t<
+					precision_flags, flt>;
+			return ::fast_io::print_reserve_precise_define(
+				::fast_io::io_reserve_type<char_type, precision_type>, iter,
+				precise_size,
+				precision_type{value.reference, plan.precision});
+		}
+		constexpr auto precision_flags{
+			::fast_io::details::floating_precision_mani_flags_cache<
+				flags,
+				::fast_io::manipulators::floating_precision::significant>};
+		using precision_type =
+			::fast_io::manipulators::scalar_manip_precision_t<
+				precision_flags, flt>;
+		return ::fast_io::print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, precision_type>, iter,
+			precise_size,
+			precision_type{value.reference, plan.precision});
+	}
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::floating_precise_range_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+[[nodiscard]] inline constexpr ::std::size_t print_reserve_precise_size(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::
+						  floating_scalar_field_precision_range_manip_t<flags, flt>>,
+	::fast_io::manipulators::floating_scalar_field_precision_range_manip_t<
+		flags, flt>
+		value) noexcept
+{
+	(void)sizeof(char_type);
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	return ::fast_io::details::floating_precise_narrow_range_fields_size<
+		flags, floating_type>(fields, value.minimum_precision,
+							  value.maximum_precision);
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+	requires(
+		::fast_io::details::floating_precise_range_supported<flags, flt> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<flt>)
+inline constexpr char_type *print_reserve_precise_define(
+	io_reserve_type_t<char_type,
+					  ::fast_io::manipulators::
+						  floating_scalar_field_precision_range_manip_t<flags, flt>>,
+	char_type *iter, ::std::size_t precise_size,
+	::fast_io::manipulators::floating_scalar_field_precision_range_manip_t<
+		flags, flt>
+		value) noexcept
+{
+	(void)precise_size;
+	if constexpr (!::fast_io::details::is_ascii<char_type>)
+	{
+		using range_type = ::fast_io::manipulators::
+			floating_scalar_field_precision_range_manip_t<flags, flt>;
+		return ::fast_io::print_reserve_define(
+			::fast_io::io_reserve_type<char_type, range_type>, iter, value);
+	}
+	using floating_type = ::std::remove_cvref_t<flt>;
+	auto const fields{
+		::fast_io::details::floating_scalar_proxy_fields<floating_type>(
+			value.representation)};
+	return ::fast_io::details::floating_precise_narrow_range_fields_define<
+		flags, floating_type>(iter, fields, value.minimum_precision,
+							  value.maximum_precision);
 }
 
 } // namespace fast_io

@@ -1923,6 +1923,74 @@ to_chars_floating_standard_hex(
 
 } // namespace details
 
+/* Exact decimal already carries its presentation policy.  These overloads
+give the proxy the same all-or-error bounded-store contract as native floating
+to_chars, including exact-fit buffers and non-ASCII character domains. */
+template <::fast_io::details::character char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point floating_type>
+	requires(::fast_io::details::
+				 print_floating_exact_decimal_supported<flags, floating_type>)
+inline constexpr ::fast_io::basic_to_chars_result<char_type> to_chars(
+	char_type *first, char_type *last,
+	::fast_io::manipulators::exact_decimal_manip_t<
+		flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::to_chars_floating_emit(first, last, value);
+}
+
+template <::fast_io::details::character char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point floating_type>
+	requires(
+		::fast_io::details::print_floating_exact_decimal_supported<
+			flags, floating_type> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<floating_type>)
+inline constexpr ::fast_io::basic_to_chars_result<char_type> to_chars(
+	char_type *first, char_type *last,
+	::fast_io::manipulators::exact_decimal_field_manip_t<
+		flags, floating_type>
+		value) noexcept
+{
+	return ::fast_io::details::to_chars_floating_emit(first, last, value);
+}
+
+/* A significant-digit interval also has a value-dependent reserve bound.
+The precise protocol selects the same shortest/lower/upper branch a second
+time and writes only after the complete spelling is known to fit. */
+template <::fast_io::details::character char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point floating_type>
+	requires(
+		::fast_io::details::floating_precise_range_supported<
+			flags, floating_type> &&
+		!::fast_io::details::floating_scalar_requires_integer_proxy<
+			floating_type>)
+inline constexpr ::fast_io::basic_to_chars_result<char_type> to_chars(
+	char_type *first, char_type *last,
+	::fast_io::manipulators::floating_scalar_precision_range_manip_t<
+		flags, floating_type> const &value) noexcept
+{
+	return ::fast_io::details::to_chars_floating_emit(first, last, value);
+}
+
+template <::fast_io::details::character char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point floating_type>
+	requires(
+		::fast_io::details::floating_precise_range_supported<
+			flags, floating_type> &&
+		::fast_io::details::floating_scalar_requires_integer_proxy<
+			floating_type>)
+inline constexpr ::fast_io::basic_to_chars_result<char_type> to_chars(
+	char_type *first, char_type *last,
+	::fast_io::manipulators::
+		floating_scalar_field_precision_range_manip_t<flags, floating_type>
+			value) noexcept
+{
+	return ::fast_io::details::to_chars_floating_emit(first, last, value);
+}
+
 template <
 	::fast_io::manipulators::floating_rounding rounding =
 		::fast_io::manipulators::floating_rounding::nearest_to_even,

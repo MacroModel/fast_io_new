@@ -886,6 +886,98 @@ struct floating_scalar_field_manip_precision_t
 	::std::size_t precision;
 };
 
+/* A significant-digit interval keeps the ordinary shortest carrier whenever
+its digit count is already in [minimum, maximum].  Values below the interval
+use preserving precision at the lower edge; values above it round at the upper
+edge.  This is separate from exact_decimal, whose finite value is never
+silently truncated to satisfy a maximum. */
+template <scalar_flags flags, typename floating_type>
+struct floating_scalar_precision_range_manip_t
+{
+	using value_type = floating_type;
+	using scalar_flags_type = scalar_flags;
+	using manip_tag = manip_tag_t;
+	floating_type reference;
+	::std::size_t minimum_precision;
+	::std::size_t maximum_precision;
+};
+
+template <scalar_flags flags, typename floating_type>
+struct floating_scalar_field_precision_range_manip_t
+{
+	using value_type = floating_type;
+	using scalar_flags_type = scalar_flags;
+	using manip_tag = manip_tag_t;
+	::std::uint_least16_t representation;
+	::std::size_t minimum_precision;
+	::std::size_t maximum_precision;
+};
+
+template <::std::integral char_type, scalar_flags flags, typename T>
+inline constexpr ::std::true_type
+	print_semantic_optional_scatter_status_transparent_leaf(
+		::fast_io::io_reserve_type_t<
+			char_type,
+			floating_scalar_precision_range_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, scalar_flags flags, typename T>
+inline constexpr ::std::true_type
+	print_semantic_optional_scatter_status_transparent_leaf(
+		::fast_io::io_reserve_type_t<
+			char_type,
+			floating_scalar_field_precision_range_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+/*
+Exact decimal is a semantic formatting mode, not a decimal rounding policy.
+Keep it in a distinct proxy instead of extending scalar_flags::rounding: the
+ordinary scalar types and every nearest/directed-rounding instantiation then
+remain byte-for-byte unchanged.  The flags carried here control presentation
+(fixed/scientific/general/decimal, punctuation, sign and JSON spelling) only.
+*/
+template <scalar_flags flags, typename floating_type>
+struct exact_decimal_manip_t
+{
+	using value_type = floating_type;
+	using scalar_flags_type = scalar_flags;
+	using manip_tag = manip_tag_t;
+	floating_type reference;
+};
+
+/* Preserve the integer-owned bfloat16 transport on the Clang/x86 ABI where
+forming another native aggregate can silently retruncate the value. */
+template <scalar_flags flags, typename floating_type>
+struct exact_decimal_field_manip_t
+{
+	using value_type = floating_type;
+	using scalar_flags_type = scalar_flags;
+	using manip_tag = manip_tag_t;
+	::std::uint_least16_t representation;
+};
+
+template <::std::integral char_type, scalar_flags flags, typename T>
+inline constexpr ::std::true_type
+	print_semantic_optional_scatter_status_transparent_leaf(
+		::fast_io::io_reserve_type_t<
+			char_type, exact_decimal_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, scalar_flags flags, typename T>
+inline constexpr ::std::true_type
+	print_semantic_optional_scatter_status_transparent_leaf(
+		::fast_io::io_reserve_type_t<
+			char_type, exact_decimal_field_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
 } // namespace manipulators
 
 namespace details
@@ -1030,6 +1122,27 @@ rounding(floating_scalar_field_manip_precision_t<flags, T> value) noexcept
 		T>{value.representation, value.precision};
 }
 
+template <floating_rounding rounding_policy, scalar_flags flags, typename T>
+inline constexpr auto
+rounding(floating_scalar_precision_range_manip_t<flags, T> value) noexcept
+{
+	return floating_scalar_precision_range_manip_t<
+		::fast_io::details::floating_rounding_mani_flags_cache<
+			flags, rounding_policy>,
+		T>{value.reference, value.minimum_precision, value.maximum_precision};
+}
+
+template <floating_rounding rounding_policy, scalar_flags flags, typename T>
+inline constexpr auto
+rounding(floating_scalar_field_precision_range_manip_t<flags, T> value) noexcept
+{
+	return floating_scalar_field_precision_range_manip_t<
+		::fast_io::details::floating_rounding_mani_flags_cache<
+			flags, rounding_policy>,
+		T>{value.representation, value.minimum_precision,
+		   value.maximum_precision};
+}
+
 template <bool enabled = true, scalar_flags flags, typename T>
 	requires(flags.base == 10 && flags.floating != floating_format::hexfloat)
 inline constexpr auto json_float(scalar_manip_t<flags, T> value) noexcept
@@ -1063,6 +1176,109 @@ json_float(floating_scalar_field_manip_precision_t<flags, T> value) noexcept
 	return floating_scalar_field_manip_precision_t<
 		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
 		value.representation, value.precision};
+}
+
+template <bool enabled = true, scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat)
+inline constexpr auto
+json_float(floating_scalar_precision_range_manip_t<flags, T> value) noexcept
+{
+	return floating_scalar_precision_range_manip_t<
+		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
+		value.reference, value.minimum_precision, value.maximum_precision};
+}
+
+template <bool enabled = true, scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat)
+inline constexpr auto
+json_float(floating_scalar_field_precision_range_manip_t<flags, T> value) noexcept
+{
+	return floating_scalar_field_precision_range_manip_t<
+		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
+		value.representation, value.minimum_precision,
+		value.maximum_precision};
+}
+
+template <scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
+			 ::fast_io::details::my_floating_point<T>)
+[[nodiscard]] inline constexpr auto precision_range(
+	scalar_manip_t<flags, T> value, ::std::size_t minimum_precision,
+	::std::size_t maximum_precision) noexcept
+{
+	return floating_scalar_precision_range_manip_t<flags, T>{
+		value.reference, minimum_precision, maximum_precision};
+}
+
+template <scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
+			 ::fast_io::details::my_floating_point<T>)
+[[nodiscard]] inline constexpr auto precision_range(
+	floating_scalar_field_manip_t<flags, T> value,
+	::std::size_t minimum_precision,
+	::std::size_t maximum_precision) noexcept
+{
+	return floating_scalar_field_precision_range_manip_t<flags, T>{
+		value.representation, minimum_precision, maximum_precision};
+}
+
+template <typename T>
+	requires ::fast_io::details::my_floating_point<::std::remove_cvref_t<T>>
+[[nodiscard]] inline constexpr auto precision_range(
+	T &&value, ::std::size_t minimum_precision,
+	::std::size_t maximum_precision) noexcept
+{
+	return precision_range(::fast_io::details::make_floating_scalar_manip<
+							   floating_point_default_scalar_flags>(::std::forward<T>(value)),
+						   minimum_precision, maximum_precision);
+}
+
+template <scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
+			 flags.rounding == floating_rounding::nearest_to_even &&
+			 ::fast_io::details::my_floating_point<T>)
+[[nodiscard]] inline constexpr auto
+exact_decimal(scalar_manip_t<flags, T> value) noexcept
+{
+	return exact_decimal_manip_t<flags, T>{value.reference};
+}
+
+template <scalar_flags flags, typename T>
+	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
+			 flags.rounding == floating_rounding::nearest_to_even &&
+			 ::fast_io::details::my_floating_point<T>)
+[[nodiscard]] inline constexpr auto
+exact_decimal(floating_scalar_field_manip_t<flags, T> value) noexcept
+{
+	return exact_decimal_field_manip_t<flags, T>{value.representation};
+}
+
+template <typename T>
+	requires ::fast_io::details::my_floating_point<::std::remove_cvref_t<T>>
+[[nodiscard]] inline constexpr auto exact_decimal(T &&value) noexcept
+{
+	return exact_decimal(::fast_io::details::make_floating_scalar_manip<
+						 floating_point_default_scalar_flags>(::std::forward<T>(value)));
+}
+
+/* json_float is orthogonal presentation policy and may be applied on either
+side of exact_decimal without rebuilding a native floating object. */
+template <bool enabled = true, scalar_flags flags, typename T>
+[[nodiscard]] inline constexpr auto
+json_float(exact_decimal_manip_t<flags, T> value) noexcept
+{
+	return exact_decimal_manip_t<
+		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
+		value.reference};
+}
+
+template <bool enabled = true, scalar_flags flags, typename T>
+[[nodiscard]] inline constexpr auto
+json_float(exact_decimal_field_manip_t<flags, T> value) noexcept
+{
+	return exact_decimal_field_manip_t<
+		::fast_io::details::json_float_mani_flags_cache<flags, enabled>, T>{
+		value.representation};
 }
 
 template <floating_rounding rounding_policy, bool allow_leading_plus = false, typename scalar_type>

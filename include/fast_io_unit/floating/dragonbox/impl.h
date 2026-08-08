@@ -2250,9 +2250,6 @@ dragonbox_binary32_finite_fields_to_binary64(
 // target-format shortening are performed; only placement and live ranges may
 // differ.
 template <typename flt, ::fast_io::manipulators::floating_rounding rounding>
-#if __has_cpp_attribute(__gnu__::__cold__)
-[[__gnu__::__cold__]]
-#endif
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #endif
@@ -4493,6 +4490,401 @@ exact_precision_wide_pow2_anchor_table_instance() noexcept
 	return table;
 }
 
+/*
+The exact-decimal scalar mode can request every digit of binary80/binary128.
+For a minimum binary128 subnormal, growing a base-1e9 accumulator through all
+1178 multiplications by 5^14 is quadratic in the 11,529-digit result.  Anchors
+remain two chunks apart, so lookup leaves at most one full 5^14 multiplication.
+
+Building every dense anchor on the first extreme conversion cost about 1.2 ms
+on the measured x86-64 target.  Use three tiers instead:
+
+  * exponents below 896 retain the compact per-conversion loop;
+  * the first 64 dense anchors (896..2660) are constant-initialized;
+  * later ranges have constant-initialized segment seeds and independently
+    lazy 8-anchor dense blocks.
+
+Each seed is derived from the preceding constexpr seed in a separate constant
+evaluation.  This bounds GCC's per-initializer evaluator work while avoiding a
+generated numeric source table.  A first request for a very high exponent now
+constructs only its 8-anchor block, not all preceding blocks.  The ragged
+blocks and seeds are shared by binary80, binary128 and IBM double-double.
+
+This table is intentionally separate from exact_precision_from_binary.  That
+function remains the rounding-precision fallback used by existing modes; only
+the new exact-decimal proxy opts into this time/memory tradeoff.
+*/
+inline constexpr unsigned exact_decimal_pow5_anchor_chunk_count{2u};
+inline constexpr unsigned exact_decimal_pow5_anchor_stride{
+	exact_precision_pow5_chunk * exact_decimal_pow5_anchor_chunk_count};
+inline constexpr unsigned exact_decimal_pow5_anchor_minimum_exponent{
+	exact_precision_pow5_chunk * 64u};
+inline constexpr unsigned exact_decimal_pow5_anchor_maximum_exponent{16494u};
+inline constexpr ::std::size_t exact_decimal_pow5_anchor_first_index{
+	exact_decimal_pow5_anchor_minimum_exponent /
+	exact_decimal_pow5_anchor_stride};
+inline constexpr ::std::size_t exact_decimal_pow5_anchor_last_index{
+	exact_decimal_pow5_anchor_maximum_exponent /
+	exact_decimal_pow5_anchor_stride};
+inline constexpr ::std::size_t exact_decimal_pow5_anchor_extent{
+	exact_decimal_pow5_anchor_last_index -
+	exact_decimal_pow5_anchor_first_index + 1u};
+inline constexpr ::std::size_t exact_decimal_pow5_hot_anchor_extent{64u};
+inline constexpr ::std::size_t exact_decimal_pow5_runtime_first_index{
+	exact_decimal_pow5_anchor_first_index +
+	exact_decimal_pow5_hot_anchor_extent};
+inline constexpr ::std::size_t exact_decimal_pow5_runtime_segment_extent{8u};
+inline constexpr ::std::size_t exact_decimal_pow5_runtime_anchor_extent{
+	exact_decimal_pow5_anchor_last_index -
+	exact_decimal_pow5_runtime_first_index + 1u};
+inline constexpr ::std::size_t exact_decimal_pow5_runtime_segment_count{
+	(exact_decimal_pow5_runtime_anchor_extent +
+	 exact_decimal_pow5_runtime_segment_extent - 1u) /
+	exact_decimal_pow5_runtime_segment_extent};
+
+static_assert(exact_decimal_pow5_anchor_minimum_exponent %
+				  exact_decimal_pow5_anchor_stride ==
+			  0u);
+
+[[nodiscard]] inline constexpr ::std::size_t
+exact_decimal_pow5_anchor_limb_bound(::std::size_t anchor_index) noexcept
+{
+	/* log10(5) < 7/10.  The extra digit keeps the bound strict at an
+	integer product before conversion to base-1e9 limbs. */
+	auto const exponent{anchor_index * exact_decimal_pow5_anchor_stride};
+	auto const digits{(exponent * 7u + 9u) / 10u + 1u};
+	return (digits + exact_precision_limb_digits - 1u) /
+		   exact_precision_limb_digits;
+}
+
+template <::std::size_t first_index, ::std::size_t extent>
+[[nodiscard]] inline consteval ::std::size_t
+exact_decimal_pow5_anchor_block_flat_capacity() noexcept
+{
+	::std::size_t result{};
+	for (::std::size_t entry{}; entry != extent; ++entry)
+	{
+		result += ::fast_io::details::
+			exact_decimal_pow5_anchor_limb_bound(first_index + entry);
+	}
+	return result;
+}
+
+template <::std::size_t extent>
+struct exact_decimal_pow5_hot_anchor_table
+{
+	inline static constexpr ::std::size_t flat_capacity{
+		::fast_io::details::exact_decimal_pow5_anchor_block_flat_capacity<
+			exact_decimal_pow5_anchor_first_index, extent>()};
+	exact_precision_limb_type limbs[flat_capacity]{};
+	::std::size_t offsets[extent]{};
+	::std::size_t sizes[extent]{};
+
+	inline constexpr exact_decimal_pow5_hot_anchor_table() noexcept
+	{
+		limbs[0u] = 1u;
+		sizes[0u] = 1u;
+		for (::std::size_t chunk{};
+			 chunk != exact_decimal_pow5_anchor_first_index *
+						  exact_decimal_pow5_anchor_chunk_count;
+			 ++chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, sizes[0u], exact_precision_pow5_multiplier);
+		}
+		for (::std::size_t entry{1u}; entry != extent; ++entry)
+		{
+			offsets[entry] = offsets[entry - 1u] +
+							 ::fast_io::details::exact_decimal_pow5_anchor_limb_bound(
+								 exact_decimal_pow5_anchor_first_index + entry - 1u);
+			auto *const destination{limbs + offsets[entry]};
+			auto const *const source{limbs + offsets[entry - 1u]};
+			auto const previous_size{sizes[entry - 1u]};
+			for (::std::size_t index{}; index != previous_size; ++index)
+			{
+				destination[index] = source[index];
+			}
+			sizes[entry] = previous_size;
+			for (unsigned chunk{};
+				 chunk != exact_decimal_pow5_anchor_chunk_count; ++chunk)
+			{
+				::fast_io::details::exact_precision_multiply_small(
+					destination, sizes[entry],
+					exact_precision_pow5_multiplier);
+			}
+		}
+	}
+};
+
+struct exact_decimal_pow5_shared_storage_tag
+{};
+
+template <typename storage_tag>
+struct exact_decimal_pow5_anchor_storage
+{
+	inline static constexpr exact_decimal_pow5_hot_anchor_table<
+		exact_decimal_pow5_hot_anchor_extent>
+		hot{};
+};
+
+template <typename flt>
+struct exact_decimal_pow5_compact_anchor_storage
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	inline static constexpr ::std::size_t maximum_denominator_power{
+		(static_cast<::std::size_t>(1u) << (trait::ebits - 1u)) - 1u +
+		trait::mbits - 1u};
+	inline static constexpr ::std::size_t extent{
+		maximum_denominator_power / exact_decimal_pow5_anchor_stride -
+		exact_decimal_pow5_anchor_first_index + 1u};
+	inline static constexpr exact_decimal_pow5_hot_anchor_table<extent> hot{};
+};
+
+template <::std::size_t anchor_index>
+struct exact_decimal_pow5_anchor_seed
+{
+	inline static constexpr ::std::size_t capacity{
+		::fast_io::details::exact_decimal_pow5_anchor_limb_bound(anchor_index)};
+	exact_precision_limb_type limbs[capacity]{};
+	::std::size_t size{};
+};
+
+template <typename storage_tag, ::std::size_t segment>
+struct exact_decimal_pow5_anchor_seed_holder
+{
+	inline static constexpr ::std::size_t anchor_index{
+		exact_decimal_pow5_runtime_first_index +
+		segment * exact_decimal_pow5_runtime_segment_extent};
+	using seed_type = exact_decimal_pow5_anchor_seed<anchor_index>;
+
+	[[nodiscard]] inline static consteval seed_type make() noexcept
+	{
+		seed_type result{};
+		::std::size_t previous_index{};
+		if constexpr (segment == 0u)
+		{
+			previous_index = exact_decimal_pow5_runtime_first_index - 1u;
+			constexpr auto previous_entry{
+				exact_decimal_pow5_hot_anchor_extent - 1u};
+			auto const previous_size{
+				exact_decimal_pow5_anchor_storage<storage_tag>::hot
+					.sizes[previous_entry]};
+			auto const *const previous{
+				exact_decimal_pow5_anchor_storage<storage_tag>::hot.limbs +
+				exact_decimal_pow5_anchor_storage<storage_tag>::hot
+					.offsets[previous_entry]};
+			for (::std::size_t index{}; index != previous_size; ++index)
+			{
+				result.limbs[index] = previous[index];
+			}
+			result.size = previous_size;
+		}
+		else
+		{
+			previous_index =
+				exact_decimal_pow5_anchor_seed_holder<
+					storage_tag, segment - 1u>::anchor_index;
+			auto const &previous{
+				exact_decimal_pow5_anchor_seed_holder<
+					storage_tag, segment - 1u>::value};
+			for (::std::size_t index{}; index != previous.size; ++index)
+			{
+				result.limbs[index] = previous.limbs[index];
+			}
+			result.size = previous.size;
+		}
+		for (::std::size_t chunk{};
+			 chunk != (anchor_index - previous_index) *
+						  exact_decimal_pow5_anchor_chunk_count;
+			 ++chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				result.limbs, result.size,
+				exact_precision_pow5_multiplier);
+		}
+		return result;
+	}
+
+	inline static constexpr seed_type value{make()};
+};
+
+struct exact_decimal_pow5_anchor_view
+{
+	exact_precision_limb_type const *limbs{};
+	::std::size_t size{};
+};
+
+struct exact_decimal_pow5_constexpr_anchor_view
+{
+	exact_decimal_pow5_anchor_view anchor{};
+	::std::size_t anchor_index{};
+};
+
+template <typename storage_tag, ::std::size_t segment>
+[[nodiscard]] inline constexpr exact_decimal_pow5_constexpr_anchor_view
+exact_decimal_pow5_constexpr_seed_lookup() noexcept
+{
+	auto const &seed{
+		::fast_io::details::exact_decimal_pow5_anchor_seed_holder<
+			storage_tag, segment>::value};
+	return {{seed.limbs, seed.size},
+			::fast_io::details::exact_decimal_pow5_anchor_seed_holder<
+				storage_tag, segment>::anchor_index};
+}
+
+using exact_decimal_pow5_constexpr_seed_lookup_function =
+	exact_decimal_pow5_constexpr_anchor_view (*)() noexcept;
+
+template <typename storage_tag, typename sequence>
+struct exact_decimal_pow5_constexpr_seed_dispatch;
+
+template <typename storage_tag, ::std::size_t... segments>
+struct exact_decimal_pow5_constexpr_seed_dispatch<
+	storage_tag, ::std::index_sequence<segments...>>
+{
+	inline static constexpr exact_decimal_pow5_constexpr_seed_lookup_function
+		functions[]{
+			::fast_io::details::exact_decimal_pow5_constexpr_seed_lookup<
+				storage_tag, segments>...};
+};
+
+template <typename storage_tag>
+[[nodiscard]] inline constexpr exact_decimal_pow5_constexpr_anchor_view
+exact_decimal_pow5_constexpr_anchor_lookup(
+	::std::size_t anchor_index) noexcept
+{
+	if (anchor_index < exact_decimal_pow5_runtime_first_index)
+	{
+		auto const entry{
+			anchor_index - exact_decimal_pow5_anchor_first_index};
+		return {{exact_decimal_pow5_anchor_storage<storage_tag>::hot.limbs +
+					 exact_decimal_pow5_anchor_storage<storage_tag>::hot.offsets[entry],
+				 exact_decimal_pow5_anchor_storage<storage_tag>::hot.sizes[entry]},
+				anchor_index};
+	}
+	auto const segment{
+		(anchor_index - exact_decimal_pow5_runtime_first_index) /
+		exact_decimal_pow5_runtime_segment_extent};
+	using dispatch = ::fast_io::details::exact_decimal_pow5_constexpr_seed_dispatch<
+		storage_tag,
+		::std::make_index_sequence<exact_decimal_pow5_runtime_segment_count>>;
+	return dispatch::functions[segment]();
+}
+
+/* All lazy blocks perform the same copy-and-grow operation.  Keeping that
+runtime-only work in one outlined helper prevents every function-local-static
+wrapper from cloning the limb loop into exact-only text. */
+template <typename storage_tag>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline void exact_decimal_pow5_initialize_runtime_anchor_block(
+	exact_precision_limb_type *limbs, ::std::size_t *offsets,
+	::std::size_t *sizes, ::std::size_t first_index, ::std::size_t extent,
+	exact_precision_limb_type const *seed, ::std::size_t seed_size) noexcept
+{
+	::fast_io::details::non_overlapped_copy_n(seed, seed_size, limbs);
+	sizes[0u] = seed_size;
+	for (::std::size_t entry{1u}; entry != extent; ++entry)
+	{
+		offsets[entry] = offsets[entry - 1u] +
+						 ::fast_io::details::exact_decimal_pow5_anchor_limb_bound(
+							 first_index + entry - 1u);
+		auto *const destination{limbs + offsets[entry]};
+		auto const *const source{limbs + offsets[entry - 1u]};
+		auto const previous_size{sizes[entry - 1u]};
+		::fast_io::details::non_overlapped_copy_n(
+			source, previous_size, destination);
+		sizes[entry] = previous_size;
+		for (unsigned chunk{};
+			 chunk != exact_decimal_pow5_anchor_chunk_count; ++chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				destination, sizes[entry], exact_precision_pow5_multiplier);
+		}
+	}
+}
+
+template <typename storage_tag, ::std::size_t segment>
+struct exact_decimal_pow5_runtime_anchor_block
+{
+	inline static constexpr ::std::size_t first_index{
+		exact_decimal_pow5_runtime_first_index +
+		segment * exact_decimal_pow5_runtime_segment_extent};
+	inline static constexpr ::std::size_t remaining{
+		exact_decimal_pow5_anchor_last_index - first_index + 1u};
+	inline static constexpr ::std::size_t extent{
+		remaining < exact_decimal_pow5_runtime_segment_extent
+			? remaining
+			: exact_decimal_pow5_runtime_segment_extent};
+	inline static constexpr ::std::size_t flat_capacity{
+		::fast_io::details::exact_decimal_pow5_anchor_block_flat_capacity<
+			first_index, extent>()};
+	exact_precision_limb_type limbs[flat_capacity]{};
+	::std::size_t offsets[extent]{};
+	::std::size_t sizes[extent]{};
+
+	inline exact_decimal_pow5_runtime_anchor_block() noexcept
+	{
+		auto const &seed{
+			::fast_io::details::exact_decimal_pow5_anchor_seed_holder<
+				storage_tag, segment>::value};
+		::fast_io::details::
+			exact_decimal_pow5_initialize_runtime_anchor_block<storage_tag>(
+				limbs, offsets, sizes, first_index, extent, seed.limbs, seed.size);
+	}
+};
+
+template <typename storage_tag, ::std::size_t segment>
+[[nodiscard]] inline exact_decimal_pow5_anchor_view
+exact_decimal_pow5_runtime_anchor_lookup(::std::size_t anchor_index) noexcept
+{
+	static exact_decimal_pow5_runtime_anchor_block<storage_tag, segment> const
+		block{};
+	auto const entry{anchor_index - block.first_index};
+	return {block.limbs + block.offsets[entry], block.sizes[entry]};
+}
+
+using exact_decimal_pow5_runtime_anchor_lookup_function =
+	exact_decimal_pow5_anchor_view (*)(::std::size_t) noexcept;
+
+template <typename storage_tag, typename sequence>
+struct exact_decimal_pow5_runtime_anchor_dispatch;
+
+template <typename storage_tag, ::std::size_t... segments>
+struct exact_decimal_pow5_runtime_anchor_dispatch<
+	storage_tag, ::std::index_sequence<segments...>>
+{
+	inline static constexpr exact_decimal_pow5_runtime_anchor_lookup_function functions[]{
+		::fast_io::details::exact_decimal_pow5_runtime_anchor_lookup<
+			storage_tag, segments>...};
+};
+
+template <typename storage_tag>
+using exact_decimal_pow5_runtime_anchor_dispatch_type =
+	exact_decimal_pow5_runtime_anchor_dispatch<storage_tag,
+											   ::std::make_index_sequence<
+												   exact_decimal_pow5_runtime_segment_count>>;
+
+template <typename storage_tag>
+[[nodiscard]] inline exact_decimal_pow5_anchor_view
+exact_decimal_pow5_anchor_lookup(::std::size_t anchor_index) noexcept
+{
+	if (anchor_index < exact_decimal_pow5_runtime_first_index)
+	{
+		auto const entry{
+			anchor_index - exact_decimal_pow5_anchor_first_index};
+		return {exact_decimal_pow5_anchor_storage<storage_tag>::hot.limbs +
+					exact_decimal_pow5_anchor_storage<storage_tag>::hot.offsets[entry],
+				exact_decimal_pow5_anchor_storage<storage_tag>::hot.sizes[entry]};
+	}
+	auto const segment{
+		(anchor_index - exact_decimal_pow5_runtime_first_index) /
+		exact_decimal_pow5_runtime_segment_extent};
+	return exact_decimal_pow5_runtime_anchor_dispatch_type<
+		storage_tag>::functions[segment](anchor_index);
+}
+
 template <::std::size_t capacity>
 inline constexpr void exact_precision_add_limbs(
 	exact_precision_limb_type (&limbs)[capacity], ::std::size_t &size,
@@ -4507,7 +4899,7 @@ inline constexpr void exact_precision_add_limbs(
 			limbs[size++] = 0u;
 		}
 		auto const sum{static_cast<exact_precision_multiplier_type>(limbs[index]) +
-			(index < addend_size ? addend[index] : 0u) + carry};
+					   (index < addend_size ? addend[index] : 0u) + carry};
 		limbs[index] = static_cast<exact_precision_limb_type>(
 			sum % exact_precision_limb_base);
 		carry = sum / exact_precision_limb_base;
@@ -4552,6 +4944,196 @@ inline constexpr void exact_precision_multiply_anchor_by_mantissa(
 	}
 }
 
+/*
+Exact-decimal's sparse power-of-five anchor is very long while an IEEE
+significand occupies at most four base-1e9 limbs.  Treating the significand as
+four base-2^32 Horner words makes three complete passes over the anchor for
+each word (multiply, form an addend, add).  A rectangular base-1e9 multiply
+needs one pass per short-operand limb and keeps every partial product below
+1e18, so uint64_t is sufficient without a native 128-bit divide.
+
+Keep this helper exact-decimal-only.  The established precision/rounding
+fallback above deliberately retains its original multiplication path.
+*/
+template <::std::size_t capacity, typename mantissa_type>
+inline constexpr void exact_decimal_multiply_anchor_by_mantissa(
+	exact_precision_limb_type (&limbs)[capacity], ::std::size_t &size,
+	exact_precision_limb_type const *anchor, ::std::size_t anchor_size,
+	mantissa_type mantissa) noexcept
+{
+	constexpr ::std::size_t mantissa_limb_capacity{
+		(sizeof(mantissa_type) * ::std::numeric_limits<unsigned char>::digits +
+		 28u) /
+			29u +
+		1u};
+	exact_precision_limb_type mantissa_limbs[mantissa_limb_capacity]{};
+	::std::size_t mantissa_size{};
+	if constexpr (sizeof(mantissa_type) <=
+				  sizeof(exact_precision_multiplier_type))
+	{
+		using division_type = ::std::conditional_t<
+			(sizeof(mantissa_type) < sizeof(exact_precision_multiplier_type)),
+			exact_precision_multiplier_type, mantissa_type>;
+		constexpr auto division_base{
+			static_cast<division_type>(exact_precision_limb_base)};
+		for (; mantissa;)
+		{
+			auto const current{static_cast<division_type>(mantissa)};
+			mantissa_limbs[mantissa_size++] =
+				static_cast<exact_precision_limb_type>(current % division_base);
+			mantissa = static_cast<mantissa_type>(current / division_base);
+		}
+	}
+	else
+	{
+		::fast_io::details::exact_precision_initialize_wide_limbs(
+			mantissa_limbs, mantissa_size, mantissa);
+	}
+	if (!mantissa_size)
+	{
+		limbs[0u] = 0u;
+		size = 1u;
+		return;
+	}
+
+	auto const result_bound{anchor_size + mantissa_size};
+	for (::std::size_t index{}; index != result_bound; ++index)
+	{
+		limbs[index] = 0u;
+	}
+	for (::std::size_t anchor_index{}; anchor_index != anchor_size;
+		 ++anchor_index)
+	{
+		exact_precision_multiplier_type carry{};
+		for (::std::size_t mantissa_index{};
+			 mantissa_index != mantissa_size; ++mantissa_index)
+		{
+			auto const output_index{anchor_index + mantissa_index};
+			auto const product{
+				static_cast<exact_precision_multiplier_type>(
+					anchor[anchor_index]) *
+					mantissa_limbs[mantissa_index] +
+				limbs[output_index] + carry};
+			limbs[output_index] = static_cast<exact_precision_limb_type>(
+				product % exact_precision_limb_base);
+			carry = product / exact_precision_limb_base;
+		}
+		limbs[anchor_index + mantissa_size] =
+			static_cast<exact_precision_limb_type>(carry);
+	}
+	size = result_bound;
+	while (1u < size && !limbs[size - 1u])
+	{
+		--size;
+	}
+}
+
+struct exact_decimal_two_digit_table
+{
+	unsigned char digits[200u]{};
+
+	consteval exact_decimal_two_digit_table() noexcept
+	{
+		for (unsigned value{}; value != 100u; ++value)
+		{
+			digits[value * 2u] = static_cast<unsigned char>(value / 10u);
+			digits[value * 2u + 1u] =
+				static_cast<unsigned char>(value % 10u);
+		}
+	}
+};
+
+inline constexpr exact_decimal_two_digit_table
+	exact_decimal_two_digit_table_instance{};
+
+inline constexpr void exact_decimal_write_four_digits(
+	unsigned char *destination, exact_precision_limb_type value) noexcept
+{
+	auto const high{value / 100u};
+	auto const low{value - high * 100u};
+	auto const *const high_digits{
+		exact_decimal_two_digit_table_instance.digits + high * 2u};
+	auto const *const low_digits{
+		exact_decimal_two_digit_table_instance.digits + low * 2u};
+	destination[0u] = high_digits[0u];
+	destination[1u] = high_digits[1u];
+	destination[2u] = low_digits[0u];
+	destination[3u] = low_digits[1u];
+}
+
+inline constexpr void exact_decimal_write_nine_digits(
+	unsigned char *destination, exact_precision_limb_type value) noexcept
+{
+	auto const first{value / 100000000u};
+	auto const tail{value - first * 100000000u};
+	auto const middle{tail / 10000u};
+	auto const last{tail - middle * 10000u};
+	destination[0u] = static_cast<unsigned char>(first);
+	::fast_io::details::exact_decimal_write_four_digits(destination + 1u,
+														middle);
+	::fast_io::details::exact_decimal_write_four_digits(destination + 5u,
+														last);
+}
+
+template <typename flt>
+[[nodiscard]] inline constexpr exact_precision_decimal<flt>
+exact_decimal_from_limbs(exact_precision_limb_type const *limbs,
+						 ::std::size_t limb_size, ::std::int_least32_t exponent) noexcept
+{
+	exact_precision_decimal<flt> decimal{};
+	decimal.exponent = exponent;
+	unsigned char top_digits[exact_precision_limb_digits]{};
+	::fast_io::details::exact_decimal_write_nine_digits(
+		top_digits, limbs[limb_size - 1u]);
+	::std::size_t first{};
+	for (; first + 1u != exact_precision_limb_digits && !top_digits[first];
+		 ++first)
+	{
+	}
+	for (; first != exact_precision_limb_digits; ++first)
+	{
+		decimal.digits[decimal.size++] = top_digits[first];
+	}
+	for (auto index{limb_size - 1u}; index; --index)
+	{
+		::fast_io::details::exact_decimal_write_nine_digits(
+			decimal.digits + decimal.size, limbs[index - 1u]);
+		decimal.size += exact_precision_limb_digits;
+	}
+	return decimal;
+}
+
+struct exact_decimal_layout
+{
+	::std::size_t size{};
+	::std::int_least32_t exponent{};
+};
+
+[[nodiscard]] inline constexpr exact_decimal_layout
+exact_decimal_layout_from_limbs(exact_precision_limb_type const *limbs,
+								::std::size_t limb_size, ::std::int_least32_t exponent) noexcept
+{
+	auto top{limbs[limb_size - 1u]};
+	::std::size_t top_digits{};
+	for (; top; top /= 10u)
+	{
+		++top_digits;
+	}
+	auto size{(limb_size - 1u) * exact_precision_limb_digits + top_digits};
+	::std::size_t trailing_zeroes{};
+	::std::size_t index{};
+	for (; index + 1u != limb_size && !limbs[index]; ++index)
+	{
+		trailing_zeroes += exact_precision_limb_digits;
+	}
+	for (auto value{limbs[index]}; value && value % 10u == 0u; value /= 10u)
+	{
+		++trailing_zeroes;
+	}
+	return {size - trailing_zeroes,
+			exponent + static_cast<::std::int_least32_t>(trailing_zeroes)};
+}
+
 template <typename flt>
 inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
@@ -4582,13 +5164,13 @@ inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 		{
 			auto const chunk_count{static_cast<::std::uint_least32_t>(
 				binary_exponent / static_cast<::std::int_least32_t>(
-					exact_precision_pow2_chunk))};
+									  exact_precision_pow2_chunk))};
 			auto const anchor_index{static_cast<::std::size_t>(
 				chunk_count / exact_precision_pow2_anchor_chunk_count)};
 			if (anchor_index)
 			{
 				auto const &anchor{::fast_io::details::
-					exact_precision_wide_pow2_anchor_table_instance<flt>()};
+									   exact_precision_wide_pow2_anchor_table_instance<flt>()};
 				::fast_io::details::exact_precision_multiply_anchor_by_mantissa(
 					limbs, limb_size, anchor.limbs[anchor_index],
 					anchor.sizes[anchor_index], mantissa);
@@ -4688,6 +5270,288 @@ inline constexpr exact_precision_decimal<flt> exact_precision_from_binary(
 		++decimal.exponent;
 	}
 	return decimal;
+}
+
+/* Exact-decimal precise-size needs only the normalized coefficient length and
+decimal exponent.  Keep this limb-only twin separate from the established
+rounding backend above: it avoids materializing thousands of digit bytes while
+leaving every ordinary precision/rounding instantiation untouched. */
+template <typename flt>
+[[nodiscard]] inline constexpr exact_decimal_layout
+exact_precision_layout_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	::std::int_least32_t binary_exponent{};
+	if (exponent)
+	{
+		mantissa |= static_cast<mantissa_type>(
+			static_cast<mantissa_type>(1u) << trait::mbits);
+		binary_exponent =
+			static_cast<::std::int_least32_t>(exponent) - bias -
+			static_cast<::std::int_least32_t>(trait::mbits);
+	}
+	else
+	{
+		binary_exponent = 1 - bias -
+						  static_cast<::std::int_least32_t>(trait::mbits);
+	}
+
+	exact_precision_limb_type limbs[exact_precision_limb_capacity<flt>]{};
+	::std::size_t limb_size{};
+	bool initialized_from_anchor{};
+	if constexpr (::fast_io::details::exact_precision_is_wide_binary<flt>)
+	{
+		if (!::std::is_constant_evaluated() && 0 < binary_exponent)
+		{
+			auto const chunk_count{static_cast<::std::uint_least32_t>(
+				binary_exponent / static_cast<::std::int_least32_t>(
+									  exact_precision_pow2_chunk))};
+			auto const anchor_index{static_cast<::std::size_t>(
+				chunk_count / exact_precision_pow2_anchor_chunk_count)};
+			if (anchor_index)
+			{
+				auto const &anchor{
+					::fast_io::details::
+						exact_precision_wide_pow2_anchor_table_instance<flt>()};
+				::fast_io::details::exact_precision_multiply_anchor_by_mantissa(
+					limbs, limb_size, anchor.limbs[anchor_index],
+					anchor.sizes[anchor_index], mantissa);
+				binary_exponent -= static_cast<::std::int_least32_t>(
+					anchor_index * exact_precision_pow2_anchor_chunk_count *
+					exact_precision_pow2_chunk);
+				initialized_from_anchor = true;
+			}
+		}
+	}
+	if (!initialized_from_anchor)
+	{
+		if constexpr (sizeof(mantissa_type) <=
+					  sizeof(exact_precision_multiplier_type))
+		{
+			using division_type = ::std::conditional_t<
+				(sizeof(mantissa_type) <
+				 sizeof(exact_precision_multiplier_type)),
+				exact_precision_multiplier_type, mantissa_type>;
+			constexpr auto division_base{
+				static_cast<division_type>(exact_precision_limb_base)};
+			for (; mantissa;)
+			{
+				auto const current{static_cast<division_type>(mantissa)};
+				limbs[limb_size++] = static_cast<exact_precision_limb_type>(
+					current % division_base);
+				mantissa = static_cast<mantissa_type>(
+					current / division_base);
+			}
+		}
+		else
+		{
+			::fast_io::details::exact_precision_initialize_wide_limbs(
+				limbs, limb_size, mantissa);
+		}
+	}
+	auto const decimal_exponent{binary_exponent < 0 ? binary_exponent : 0};
+	if (binary_exponent < 0)
+	{
+		auto count{static_cast<::std::uint_least32_t>(-binary_exponent)};
+		for (; exact_precision_pow5_chunk <= count;
+			 count -= exact_precision_pow5_chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, exact_precision_pow5_multiplier);
+		}
+		if (count)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size,
+				::fast_io::details::exact_precision_small_power(5u, count));
+		}
+	}
+	else
+	{
+		auto count{static_cast<::std::uint_least32_t>(binary_exponent)};
+		for (; exact_precision_pow2_chunk <= count;
+			 count -= exact_precision_pow2_chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, exact_precision_pow2_multiplier);
+		}
+		if (count)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size,
+				static_cast<exact_precision_multiplier_type>(1u) << count);
+		}
+	}
+	return ::fast_io::details::exact_decimal_layout_from_limbs(
+		limbs, limb_size, decimal_exponent);
+}
+
+template <bool layout_only, typename flt>
+inline constexpr ::std::conditional_t<layout_only, exact_decimal_layout,
+									  exact_precision_decimal<flt>>
+exact_decimal_from_binary_impl(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	using trait = ::fast_io::details::iec559_traits<flt>;
+	using mantissa_type = typename trait::mantissa_type;
+	auto const original_mantissa{mantissa};
+	constexpr ::std::int_least32_t bias{
+		(static_cast<::std::int_least32_t>(1u) << (trait::ebits - 1u)) - 1};
+	constexpr ::std::size_t maximum_denominator_power{
+		static_cast<::std::size_t>(bias) + trait::mbits - 1u};
+	static_assert(maximum_denominator_power <=
+					  exact_decimal_pow5_anchor_maximum_exponent,
+				  "extend the shared exact-decimal pow5 anchor domain for this format");
+	if constexpr (maximum_denominator_power <
+				  exact_decimal_pow5_anchor_minimum_exponent)
+	{
+		if constexpr (layout_only)
+		{
+			return ::fast_io::details::exact_precision_layout_from_binary<flt>(
+				original_mantissa, exponent);
+		}
+		else
+		{
+			return ::fast_io::details::exact_precision_from_binary<flt>(
+				original_mantissa, exponent);
+		}
+	}
+	else
+	{
+		::std::int_least32_t binary_exponent{};
+		if (exponent)
+		{
+			mantissa |= static_cast<mantissa_type>(
+				static_cast<mantissa_type>(1u) << trait::mbits);
+			binary_exponent =
+				static_cast<::std::int_least32_t>(exponent) - bias -
+				static_cast<::std::int_least32_t>(trait::mbits);
+		}
+		else
+		{
+			binary_exponent = 1 - bias -
+							  static_cast<::std::int_least32_t>(trait::mbits);
+		}
+		/* Canonicalize S*2^e before selecting the power of five.  Every
+		removed binary factor saves one decimal factor and cannot introduce a
+		base-ten trailing zero because the remaining significand is odd. */
+		for (; binary_exponent < 0 &&
+			   (mantissa & static_cast<mantissa_type>(1u)) == 0u;
+			 ++binary_exponent)
+		{
+			mantissa >>= 1u;
+		}
+		if (binary_exponent >= 0 ||
+			static_cast<::std::uint_least32_t>(-binary_exponent) <
+				exact_decimal_pow5_anchor_minimum_exponent)
+		{
+			/* Passing canonicalized fields back would change their raw-field
+			meaning, so the established path receives the saved original input. */
+			if constexpr (layout_only)
+			{
+				return ::fast_io::details::exact_precision_layout_from_binary<flt>(
+					original_mantissa, exponent);
+			}
+			else
+			{
+				return ::fast_io::details::exact_precision_from_binary<flt>(
+					original_mantissa, exponent);
+			}
+		}
+
+		exact_precision_limb_type
+			limbs[exact_precision_limb_capacity<flt>]{};
+		::std::size_t limb_size{};
+		auto count{static_cast<::std::uint_least32_t>(-binary_exponent)};
+		auto const chunk_count{count / exact_precision_pow5_chunk};
+		auto const anchor_index{static_cast<::std::size_t>(
+			chunk_count / exact_decimal_pow5_anchor_chunk_count)};
+		auto selected_anchor_index{anchor_index};
+		exact_decimal_pow5_anchor_view anchor{};
+		if constexpr (maximum_denominator_power <
+					  exact_decimal_pow5_runtime_first_index *
+						  exact_decimal_pow5_anchor_stride)
+		{
+			using compact_storage =
+				::fast_io::details::exact_decimal_pow5_compact_anchor_storage<flt>;
+			auto const entry{
+				anchor_index - exact_decimal_pow5_anchor_first_index};
+			anchor = {compact_storage::hot.limbs +
+						  compact_storage::hot.offsets[entry],
+					  compact_storage::hot.sizes[entry]};
+		}
+		else if (::std::is_constant_evaluated())
+		{
+			auto const selected{
+				::fast_io::details::exact_decimal_pow5_constexpr_anchor_lookup<
+					::fast_io::details::exact_decimal_pow5_shared_storage_tag>(
+					anchor_index)};
+			anchor = selected.anchor;
+			selected_anchor_index = selected.anchor_index;
+		}
+		else
+		{
+			anchor = ::fast_io::details::exact_decimal_pow5_anchor_lookup<
+				::fast_io::details::exact_decimal_pow5_shared_storage_tag>(
+				anchor_index);
+		}
+		::fast_io::details::exact_decimal_multiply_anchor_by_mantissa(
+			limbs, limb_size, anchor.limbs, anchor.size, mantissa);
+		count -= static_cast<::std::uint_least32_t>(
+			selected_anchor_index * exact_decimal_pow5_anchor_stride);
+		for (; exact_precision_pow5_chunk <= count;
+			 count -= exact_precision_pow5_chunk)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size, exact_precision_pow5_multiplier);
+		}
+		if (count)
+		{
+			::fast_io::details::exact_precision_multiply_small(
+				limbs, limb_size,
+				::fast_io::details::exact_precision_small_power(5u, count));
+		}
+
+		if constexpr (layout_only)
+		{
+			return ::fast_io::details::exact_decimal_layout_from_limbs(
+				limbs, limb_size, binary_exponent);
+		}
+		else
+		{
+			auto const decimal{
+				::fast_io::details::exact_decimal_from_limbs<flt>(
+					limbs, limb_size, binary_exponent)};
+			/* The normalized significand is odd, so S*5^k cannot end in zero. */
+			return decimal;
+		}
+	}
+}
+
+template <typename flt>
+inline constexpr exact_precision_decimal<flt>
+exact_decimal_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	return ::fast_io::details::exact_decimal_from_binary_impl<false, flt>(
+		mantissa, exponent);
+}
+
+template <typename flt>
+[[nodiscard]] inline constexpr exact_decimal_layout
+exact_decimal_layout_from_binary(
+	typename ::fast_io::details::iec559_traits<flt>::mantissa_type mantissa,
+	::std::uint_least32_t exponent) noexcept
+{
+	return ::fast_io::details::exact_decimal_from_binary_impl<true, flt>(
+		mantissa, exponent);
 }
 
 template <::fast_io::manipulators::floating_rounding rounding, typename flt>
