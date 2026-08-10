@@ -1026,7 +1026,9 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
 	{
-		if (20u <= diff) [[unlikely]]
+		if (20u <= diff &&
+			char_is_digit<10u, char_type>(
+				static_cast<unsigned_char_type>(first[7u]))) [[unlikely]]
 		{
 			auto parse_eight_digits = [](char_type const *digits,
 										 ::std::uint_least64_t &value) noexcept {
@@ -4594,6 +4596,62 @@ scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sca
 	return details::scan_int_contiguous_define_impl<flags.base, flags.noskipws, flags.showbase, flags.full,
 													flags.modern_octal, flags.allow_leading_plus>(
 		begin, end, t.reference);
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::size_t scan_context_current_chunk_minimum_size(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	using unsigned_type =
+		::fast_io::details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	return (::fast_io::details::print_integer_reserved_size_cache<
+			flags.base, false, ::fast_io::details::my_signed_integral<T>,
+			false, unsigned_type>)+3u;
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr parse_result<char_type const *>
+scan_context_current_chunk_define(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>,
+	char_type const *begin, char_type const *end,
+	::fast_io::manipulators::scalar_manip_t<flags, T &> target) noexcept
+{
+	using unsigned_type =
+		::fast_io::details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	constexpr ::std::size_t context_capacity{
+		scan_context_current_chunk_minimum_size(
+			io_reserve_type<
+				char_type,
+				::fast_io::manipulators::scalar_manip_t<flags, T &>>) -
+		1u};
+	// Small fragments are the context state machine's intended workload. Avoid a speculative parse when the chunk is
+	// not even large enough to contain the scanner's complete bounded payload plus an in-chunk terminator.
+	if (static_cast<::std::size_t>(end - begin) <= context_capacity) [[unlikely]]
+	{
+		return {begin, parse_code::partial};
+	}
+	T value{};
+	auto result{details::scan_int_contiguous_define_impl<
+		flags.base, flags.noskipws, flags.showbase, flags.full,
+		flags.modern_octal, flags.allow_leading_plus>(
+		begin, end, value)};
+	if (result.iter == end)
+	{
+		// The terminal scanner may have accepted the final prefix and written `value`; neither is observable on a
+		// chunk-boundary miss. The real target and stream cursor remain untouched for context retry.
+		return {begin, parse_code::partial};
+	}
+	if (result.code == parse_code::ok)
+	{
+		target.reference = value;
+	}
+	return result;
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags,

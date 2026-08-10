@@ -267,6 +267,46 @@ concept context_scannable = ::std::integral<char_type> && requires(char_type con
 	};
 };
 
+/// @brief Optional transactional fast path for a context scanner on one buffered input chunk.
+/// @details `scan_context_current_chunk_minimum_size(tag)` advertises the smallest buffer capacity for which dispatching
+///          this accelerator is useful. The dispatcher enables it only when the input has a compile-time minimum-window
+///          protocol at least that large; context-oriented small buffers retain their original code shape.
+///
+///          `scan_context_current_chunk_define(tag, first, last, target)` may complete a value only when the supplied
+///          chunk contains enough input to decide the result without relying on `last` as semantic EOF. A miss must
+///          return exactly `{first, parse_code::partial}` and must not modify `target`; the dispatcher then invokes the
+///          ordinary context state machine from the unchanged cursor. Any decisive result must return an iterator in
+///          `[first,last)`, because `last` is treated as a chunk boundary even for a terminal input. This separate CPO
+///          avoids the former unsafe optimization of invoking a terminal contiguous scanner speculatively and then
+///          attempting to repair its target effects when the token reached `last`.
+///
+///          The operation is an accelerator only. Context-only scanners and hybrid scanners that do not provide the
+///          transactional CPO retain the identical context dispatch and code shape. Structural recognition can prove
+///          only the call and result type; the no-effect-on-partial rule is a semantic requirement on the customization.
+template <typename char_type, typename T>
+concept current_chunk_context_scannable =
+	context_scannable<char_type, T> &&
+	requires {
+		typename ::std::integral_constant<::std::size_t,
+										  scan_context_current_chunk_minimum_size(
+											  io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
+		{
+			scan_context_current_chunk_minimum_size(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::size_t>;
+		requires(scan_context_current_chunk_minimum_size(
+					 io_reserve_type<char_type, ::std::remove_cvref_t<T>>) != 0u);
+		requires(scan_context_current_chunk_minimum_size(
+					 io_reserve_type<char_type, ::std::remove_cvref_t<T>>) <
+				 static_cast<::std::size_t>(PTRDIFF_MAX));
+	} &&
+	requires(char_type const *begin, char_type const *end, T &t) {
+		{
+			scan_context_current_chunk_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end, t)
+		} -> ::std::same_as<parse_result<char_type const *>>;
+	};
+
 /// @brief Opts a hybrid scanner into terminal contiguous dispatch.
 /// @details Merely providing both contiguous and context CPOs proves two syntactic capabilities, not that selecting
 ///          either one is observationally interchangeable. This marker is the scanner author's proof that, when the

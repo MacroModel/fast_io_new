@@ -558,6 +558,83 @@ inline constexpr bool scan_context_status_impl(input &in, P &arg)
 	}
 }
 
+/// @brief Attempts one explicitly transactional scan on the currently available buffered chunk.
+/// @return `true` only when the value completed. A `false` result is an exact no-progress miss and instructs the caller
+///         to enter the unchanged context state machine. Decisive parse errors are committed and thrown here.
+template <typename input, typename T>
+	requires ::fast_io::current_chunk_context_scannable<
+		typename input::input_char_type, T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
+{
+	using char_type = typename input::input_char_type;
+	using scanner_type = ::std::remove_cvref_t<T>;
+	auto const current_pointer{ibuffer_curr(in)};
+	auto const end_pointer{ibuffer_end(in)};
+	if (current_pointer == end_pointer)
+	{
+		return false;
+	}
+	auto const first{static_cast<char_type const *>(current_pointer)};
+	auto const last{static_cast<char_type const *>(end_pointer)};
+	auto [it, ec] = scan_context_current_chunk_define(
+		io_reserve_type<char_type, scanner_type>, first, last, arg);
+	if (ec == parse_code::partial)
+	{
+		// A miss is transactional: neither cursor nor target may have changed. Requiring the original iterator makes the
+		// cursor half of that contract mechanically checkable before the context fallback is entered.
+		if (it != first) [[unlikely]]
+		{
+			throw_parse_code(parse_code::invalid);
+		}
+		return false;
+	}
+	if (it == last || ec == parse_code::end_of_file) [[unlikely]]
+	{
+		// This protocol never assigns EOF meaning to the chunk end. A decisive result must leave at least one character
+		// proving that the token ended inside the supplied chunk.
+		throw_parse_code(parse_code::invalid);
+	}
+	if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+			in, current_pointer, first, last, it)) [[unlikely]]
+	{
+		throw_parse_code(parse_code::invalid);
+	}
+	if (ec == parse_code::ok)
+	{
+		return true;
+	}
+	throw_parse_code(ec);
+}
+
+template <typename input, typename T>
+inline constexpr bool scan_context_current_chunk_dispatch_available_impl() noexcept
+{
+	using char_type = typename input::input_char_type;
+	using scanner_type = ::std::remove_cvref_t<T>;
+	if constexpr (
+		!::fast_io::current_chunk_context_scannable<char_type, T> ||
+		!::fast_io::operations::decay::defines::has_ibuffer_minimum_size_operations<input>)
+	{
+		return false;
+	}
+	else
+	{
+		return ibuffer_minimum_size_define(
+				   ::fast_io::io_reserve_type<char_type, input>) >=
+			   scan_context_current_chunk_minimum_size(
+				   ::fast_io::io_reserve_type<char_type, scanner_type>);
+	}
+}
+
+template <typename input, typename T>
+inline constexpr bool scan_context_current_chunk_dispatch_available{
+	scan_context_current_chunk_dispatch_available_impl<input, T>()};
+
 template <bool>
 inline constexpr bool type_not_scannable = false;
 
@@ -679,16 +756,16 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					}
 					throw_parse_code(ec);
 				}
-				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 			}
-			else
+			if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
 			{
-				// Context-only and refillable hybrid scanners deliberately share one instantiation shape. For a hybrid,
-				// success at the current chunk end may still be only a token prefix, and calling the contiguous CPO first is
-				// not generically transactional: it may commit before context reparses the original cursor. The common path
-				// is both the safe default and prevents capability recognition alone from changing GCC's call structure.
-				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+				if (::fast_io::details::scan_context_current_chunk_try(in, arg)) [[likely]]
+				{
+					return true;
+				}
 			}
+			// Context-only scanners and transactional misses preserve the original stateful path exactly.
+			return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 		}
 		else if constexpr (contiguous_scannable<char_type, T>)
 		{
@@ -926,16 +1003,15 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 						throw_parse_code(ec);
 					}
 				}
-				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 			}
-			else
+			if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
 			{
-				// Context-only and refillable hybrid scanners deliberately share one instantiation shape. For a hybrid,
-				// success at the current chunk end may still be only a token prefix, and calling the contiguous CPO first is
-				// not generically transactional: it may commit before context reparses the original cursor. The common path
-				// is both the safe default and prevents capability recognition alone from changing GCC's call structure.
-				return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+				if (::fast_io::details::scan_context_current_chunk_try(in, arg)) [[likely]]
+				{
+					return true;
+				}
 			}
+			return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 		}
 		else if constexpr (contiguous_scannable<char_type, T>)
 		{
