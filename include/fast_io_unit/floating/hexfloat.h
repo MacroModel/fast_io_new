@@ -94,8 +94,8 @@ template <char8_t lower, char8_t upper, ::std::integral char_type>
 template <::std::integral char_type>
 [[nodiscard]] inline constexpr bool scan_hexfloat_caseless_equal_ascii(char_type ch, char8_t lower) noexcept
 {
-	auto const lower_ch{::fast_io::char_literal_add<char_type, u8'\0'>(lower)};
-	auto const upper_ch{::fast_io::char_literal_add<char_type, u8'\0'>(
+	auto const lower_ch{::fast_io::char_literal<char_type>(lower)};
+	auto const upper_ch{::fast_io::char_literal<char_type>(
 		static_cast<char8_t>(lower - static_cast<char8_t>(u8'a' - u8'A')))};
 	return ch == lower_ch || ch == upper_ch;
 }
@@ -146,26 +146,56 @@ scan_hexfloat_special_value(char_type const *first, char_type const *end, bool n
 	{
 		return {};
 	}
+	// Treat special values as complete token words.  An alphanumeric or '_'
+	// continuation is therefore invalid rather than a delimiter.  This rule is
+	// essential for refillable scanners: after an ambiguous suffix has crossed
+	// a chunk boundary, their CPO contract has no putback operation with which to
+	// restore the already-consumed code units.
 	if (::fast_io::details::scan_hexfloat_caseless_equal<u8'i', u8'I'>(*first))
 	{
-		if (end - first < 3 ||
-			!::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(first[1]) ||
-			!::fast_io::details::scan_hexfloat_caseless_equal<u8'f', u8'F'>(first[2]))
+		constexpr char8_t infinity[]{u8"infinity"};
+		auto scan{first};
+		::std::size_t matched{};
+		for (; scan != end && matched != 8u; ++scan, ++matched)
 		{
-			return {first, ::fast_io::parse_code::invalid, true};
+			if (!::fast_io::details::scan_hexfloat_caseless_equal_ascii(
+					*scan, infinity[matched]))
+			{
+				if (matched == 3u &&
+					!::fast_io::details::scan_hexfloat_nan_sequence_char(*scan))
+				{
+					::fast_io::details::fp_assign_infinity(value, negative);
+					return {scan, ::fast_io::parse_code::ok, true};
+				}
+				auto invalid_end{scan};
+				while (invalid_end != end &&
+					   ::fast_io::details::scan_hexfloat_nan_sequence_char(
+						   *invalid_end))
+				{
+					++invalid_end;
+				}
+				return {invalid_end, ::fast_io::parse_code::invalid, true};
+			}
 		}
-		auto iter{first + 3};
-		if (end - iter >= 5 &&
-			::fast_io::details::scan_hexfloat_caseless_equal<u8'i', u8'I'>(iter[0]) &&
-			::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(iter[1]) &&
-			::fast_io::details::scan_hexfloat_caseless_equal<u8'i', u8'I'>(iter[2]) &&
-			::fast_io::details::scan_hexfloat_caseless_equal<u8't', u8'T'>(iter[3]) &&
-			::fast_io::details::scan_hexfloat_caseless_equal<u8'y', u8'Y'>(iter[4]))
+		if (matched < 3u || (3u < matched && matched < 8u))
 		{
-			iter += 5;
+			// A context scanner may retain this exact prefix and wait for a
+			// refill, but a terminal contiguous scan must reject it. Returning
+			// invalid lets the context wrapper make that distinction.
+			return {scan, ::fast_io::parse_code::invalid, true};
+		}
+		if (matched == 8u && scan != end &&
+			::fast_io::details::scan_hexfloat_nan_sequence_char(*scan))
+		{
+			do
+			{
+				++scan;
+			} while (scan != end &&
+					 ::fast_io::details::scan_hexfloat_nan_sequence_char(*scan));
+			return {scan, ::fast_io::parse_code::invalid, true};
 		}
 		::fast_io::details::fp_assign_infinity(value, negative);
-		return {iter, ::fast_io::parse_code::ok, true};
+		return {scan, ::fast_io::parse_code::ok, true};
 	}
 	if (::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(*first))
 	{
@@ -203,6 +233,16 @@ scan_hexfloat_special_value(char_type const *first, char_type const *end, bool n
 					}
 				}
 			}
+		}
+		if (iter != end &&
+			::fast_io::details::scan_hexfloat_nan_sequence_char(*iter))
+		{
+			do
+			{
+				++iter;
+			} while (iter != end &&
+					 ::fast_io::details::scan_hexfloat_nan_sequence_char(*iter));
+			return {iter, ::fast_io::parse_code::invalid, true};
 		}
 		if (indeterminate)
 		{
@@ -263,6 +303,55 @@ scan_hexfloat_special_parse_may_extend(char_type const *first, char_type const *
 	return false;
 }
 
+template <bool allow_leading_plus, ::std::integral char_type>
+[[nodiscard]] inline constexpr bool
+scan_hexfloat_special_invalid_prefix_may_extend(
+	char_type const *first, char_type const *last) noexcept
+{
+	if (first == last)
+	{
+		return false;
+	}
+	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
+	constexpr auto minus{::fast_io::char_literal_v<u8'-', char_type>};
+	if (*first == plus)
+	{
+		if constexpr (!allow_leading_plus)
+		{
+			return false;
+		}
+		++first;
+	}
+	else if (*first == minus)
+	{
+		++first;
+	}
+	auto const size{static_cast<::std::size_t>(last - first)};
+	if (size == 0u)
+	{
+		return false;
+	}
+	auto exact_prefix = [first, size](char8_t const *word,
+									::std::size_t word_size) constexpr noexcept {
+		if (word_size <= size)
+		{
+			return false;
+		}
+		for (::std::size_t index{}; index != size; ++index)
+		{
+			if (!::fast_io::details::scan_hexfloat_caseless_equal_ascii(
+					first[index], word[index]))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	constexpr char8_t infinity[]{u8"infinity"};
+	constexpr char8_t nan[]{u8"nan"};
+	return exact_prefix(infinity, 8u) || exact_prefix(nan, 3u);
+}
+
 template <::fast_io::manipulators::floating_nan_payload_scan nan_payload_scan, ::std::integral char_type>
 [[nodiscard]] inline constexpr bool
 scan_hexfloat_special_end_may_extend(char_type const *first, char_type const *last) noexcept
@@ -287,14 +376,51 @@ scan_hexfloat_special_end_may_extend(char_type const *first, char_type const *la
 		{
 			return true;
 		}
-		if constexpr (nan_payload_scan != ::fast_io::manipulators::floating_nan_payload_scan::none)
+		if (::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[0]) &&
+			::fast_io::details::scan_hexfloat_caseless_equal<u8'a', u8'A'>(scan[1]) &&
+			::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[2]))
 		{
-			if (::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[0]) &&
-				::fast_io::details::scan_hexfloat_caseless_equal<u8'a', u8'A'>(scan[1]) &&
-				::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[2]))
+			return true;
+		}
+	}
+	else if (len == 8u)
+	{
+		constexpr char8_t infinity[]{u8"infinity"};
+		bool exact_infinity{true};
+		for (::std::size_t index{}; index != 8u; ++index)
+		{
+			if (!::fast_io::details::scan_hexfloat_caseless_equal_ascii(
+					scan[index], infinity[index]))
 			{
-				return true;
+				exact_infinity = false;
+				break;
 			}
+		}
+		if (exact_infinity)
+		{
+			// A following identifier character makes the special token invalid.
+			// Hold exact "infinity" through one refill so chunked parsing can make
+			// the same boundary decision as a complete contiguous span.
+			return true;
+		}
+	}
+	if constexpr (nan_payload_scan != ::fast_io::manipulators::floating_nan_payload_scan::none)
+	{
+		if (5u <= len &&
+			::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[0]) &&
+			::fast_io::details::scan_hexfloat_caseless_equal<u8'a', u8'A'>(scan[1]) &&
+			::fast_io::details::scan_hexfloat_caseless_equal<u8'n', u8'N'>(scan[2]) &&
+			scan[3] == ::fast_io::char_literal_v<u8'(', char_type> &&
+			scan[len - 1u] == ::fast_io::char_literal_v<u8')', char_type>)
+		{
+			for (::std::size_t index{4u}; index + 1u != len; ++index)
+			{
+				if (!::fast_io::details::scan_hexfloat_nan_sequence_char(scan[index]))
+				{
+					return false;
+				}
+			}
+			return true;
 		}
 	}
 	return false;
@@ -1201,7 +1327,8 @@ scan_hexfloat_contiguous_scalar_define_impl(char_type const *begin, char_type co
 	first = ::fast_io::details::scan_hexfloat_significand_run<stored_hex_digits_limit>(first, end, false,
 																					   significand_state);
 
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	if (first != end && *first == dot)
 	{
 		++first;
@@ -1301,7 +1428,8 @@ scan_hexfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 	first = ::fast_io::details::scan_hexfloat_significand_run<stored_hex_digits_limit>(first, end, false,
 																					   significand_state);
 
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	if (first != end && *first == dot)
 	{
 		++first;
@@ -1456,8 +1584,8 @@ inline constexpr char_type *print_rsvhexfloat_digit_impl(char_type *iter, ::std:
 	}
 	else
 	{
-		*iter = static_cast<char_type>(
-			char_literal_v<(uppercase ? u8'A' : u8'a'), char_type> + static_cast<char_type>(digit - 10u));
+		*iter = ::fast_io::char_literal_add<
+			char_type, (uppercase ? u8'A' : u8'a')>(digit - 10u);
 	}
 	++iter;
 	return iter;
@@ -2082,8 +2210,9 @@ scan_hexfloat_context_special_define(
 	}
 	if (parse_result.code == ::fast_io::parse_code::invalid)
 	{
-		if (buffer_begin != buffer_end &&
-			!::fast_io::char_category::is_c_space(*(buffer_end - 1)))
+		if (::fast_io::details::
+				scan_hexfloat_special_invalid_prefix_may_extend<flags.allow_leading_plus>(
+					buffer_begin, buffer_end))
 		{
 			if (append_result.truncated)
 			{
@@ -2112,7 +2241,8 @@ scan_hexfloat_context_numeric_define(
 	constexpr auto zero{::fast_io::char_literal_v<u8'0', char_type>};
 	constexpr auto lower_x{::fast_io::char_literal_v<u8'x', char_type>};
 	constexpr auto upper_x{::fast_io::char_literal_v<u8'X', char_type>};
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	constexpr auto lower_p{::fast_io::char_literal_v<u8'p', char_type>};
 	constexpr auto upper_p{::fast_io::char_literal_v<u8'P', char_type>};
 	for (;;)
@@ -2367,28 +2497,34 @@ scan_hexfloat_context_eof(
 // return type, although the resulting scalar_flags object is structural.  The
 // existing cache form is accepted by all supported frontends and changes only
 // template spelling: it starts with the ordinary hexfloat policy and then sets
-// the two scan-only bits, so every flag has the same value as the former direct
+// the scan policy bits, so every flag has the same value as the former direct
 // initializer.
 inline constexpr ::fast_io::manipulators::scalar_flags set_hexfloat_scan_flags(
 	::fast_io::manipulators::scalar_flags flags, bool noskipws,
-	bool allow_leading_plus) noexcept
+	bool allow_leading_plus, bool comma) noexcept
 {
 	flags.noskipws = noskipws;
 	flags.allow_leading_plus = allow_leading_plus;
+	flags.comma = comma;
 	return flags;
 }
 
-template <bool noskipws, bool prefix, bool allow_leading_plus>
+template <bool noskipws, bool prefix, bool allow_leading_plus, bool comma = false>
 inline constexpr ::fast_io::manipulators::scalar_flags hexfloat_scan_mani_flags_cache{
 	::fast_io::details::set_hexfloat_scan_flags(
 		::fast_io::details::hexafloat_mani_flags_cache<false, false, prefix>,
-		noskipws, allow_leading_plus)};
+		noskipws, allow_leading_plus, comma)};
 
 } // namespace details
 
 namespace manipulators
 {
 
+/// @brief Scans a hexadecimal floating token with a mandatory binary exponent into `t`.
+/// @details The numeric grammar is `[sign] [0x] hexadecimal-significand p[sign]decimal-exponent`: `prefix=true`
+///          requires `0x`/`0X` for numeric values, while the exponent is always required. By default leading whitespace
+///          is skipped, a leading `+` is rejected, period is the radix point, and conversion rounds nearest-to-even.
+///          `inf`/`infinity` and `nan` spellings are also recognized and do not require the numeric prefix.
 template <bool noskipws = false, bool prefix = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
@@ -2399,6 +2535,9 @@ hexfloat_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans hexadecimal floating input using an explicitly selected rounding policy.
+/// @details Grammar and `noskipws`/`prefix`/`allow_leading_plus` behavior match the primary `hexfloat_get`; only an
+///          inexact value's conversion to the destination binary format changes according to `rounding_policy`.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false, bool prefix = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
@@ -2411,6 +2550,10 @@ hexfloat_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a `0x`-prefixed hexadecimal floating token with a mandatory binary exponent.
+/// @details Numeric input must contain `0x`/`0X` after any accepted sign and must contain `p`/`P` plus decimal exponent
+///          digits. Leading whitespace is skipped unless `noskipws` is true; `+` is accepted only when
+///          `allow_leading_plus` is true. Special values remain unprefixed.
 template <bool noskipws = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
@@ -2421,6 +2564,9 @@ hexfloat0x_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans required-prefix hexadecimal floating input with an explicit rounding policy.
+/// @details The accepted representation is identical to `hexfloat0x_get`; `rounding_policy` determines the result when
+///          discarded significand bits, overflow boundaries, or subnormal boundaries require rounding.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
@@ -2429,6 +2575,68 @@ inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_
 									::fast_io::manipulators::floating_precision::significant, rounding_policy>,
 								scalar_type &>
 hexfloat0x_get(scalar_type &t) noexcept
+{
+	return {t};
+}
+
+/// @brief Scans a comma-radix hexadecimal floating token with a mandatory binary exponent.
+/// @details Comma replaces period as the significand radix point; period is not accepted as an alternative. `prefix`
+///          optionally requires `0x`/`0X` for numeric values, leading whitespace is skipped unless `noskipws`, and a
+///          leading `+` requires `allow_leading_plus`. The default rounding is nearest-to-even.
+template <bool noskipws = false, bool prefix = false, bool allow_leading_plus = false,
+		  ::fast_io::details::my_floating_point scalar_type>
+inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
+									noskipws, prefix, allow_leading_plus, true>,
+								scalar_type &>
+comma_hexfloat_get(scalar_type &t) noexcept
+{
+	return {t};
+}
+
+/// @brief Scans comma-radix hexadecimal floating input with an explicit rounding policy.
+/// @details The token grammar matches `comma_hexfloat_get`, including its mandatory `p`/`P` exponent and exclusive
+///          comma radix. `rounding_policy` controls only conversion of an inexact mathematical value to `scalar_type`.
+template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
+		  bool prefix = false, bool allow_leading_plus = false,
+		  ::fast_io::details::my_floating_point scalar_type>
+inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
+									::fast_io::details::hexfloat_scan_mani_flags_cache<
+										noskipws, prefix, allow_leading_plus, true>,
+									::fast_io::manipulators::floating_precision::significant,
+									rounding_policy>,
+								scalar_type &>
+comma_hexfloat_get(scalar_type &t) noexcept
+{
+	return {t};
+}
+
+/// @brief Scans a required-`0x` comma-radix hexadecimal floating token.
+/// @details Numeric input requires both `0x`/`0X` and a complete `p`/`P` exponent. Comma is the only accepted radix
+///          point, whitespace behavior follows `noskipws`, and a leading `+` is conditional on `allow_leading_plus`;
+///          special `inf`/`nan` values do not carry the prefix.
+template <bool noskipws = false, bool allow_leading_plus = false,
+		  ::fast_io::details::my_floating_point scalar_type>
+inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
+									noskipws, true, allow_leading_plus, true>,
+								scalar_type &>
+comma_hexfloat0x_get(scalar_type &t) noexcept
+{
+	return {t};
+}
+
+/// @brief Scans required-prefix comma-radix hexadecimal input with explicit rounding.
+/// @details Accepted syntax matches `comma_hexfloat0x_get`; the template `rounding_policy` determines the destination
+///          value whenever the hexadecimal input is not exactly representable. It does not relax prefix, exponent,
+///          whitespace, sign, or radix requirements.
+template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
+		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
+inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
+									::fast_io::details::hexfloat_scan_mani_flags_cache<
+										noskipws, true, allow_leading_plus, true>,
+									::fast_io::manipulators::floating_precision::significant,
+									rounding_policy>,
+								scalar_type &>
+comma_hexfloat0x_get(scalar_type &t) noexcept
 {
 	return {t};
 }

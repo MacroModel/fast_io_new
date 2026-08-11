@@ -6,12 +6,20 @@ namespace fast_io
 namespace manipulators
 {
 
+/// @brief Hidden carrier for an integer followed by the library's English-style ordinal suffix.
+/// @details The current formatter forces `th` when `(value / 100) % 10 == 1`; otherwise it selects `st`, `nd`, or `rd`
+///          only for final digits `1`, `2`, or `3`, using `th` for every other remainder.
 template <typename T>
 struct ordinal_t
 {
 	T reference;
 };
 
+/// @brief Formats an integer with the library's current English-style ordinal suffix rule.
+/// @details Results include `1st`, `2nd`, `3rd`, and `4th`, but this implementation tests the hundreds digit—not the
+///          conventional tens digit—for the forced-`th` exception: for example, `11` becomes `11st`, while every value
+///          from `100` through `199` receives `th`. Negative final remainders also fall back to `th`. This manipulator
+///          is not locale-aware and must not be used when grammatically correct English ordinals are required.
 template <::fast_io::details::my_integral T>
 inline constexpr auto ordinal(T t) noexcept
 {

@@ -19,6 +19,8 @@ println("vec.begin():",fast_io::mnp::pointervw(vec.begin())," vec.end()",fast_io
 */
 namespace manipulators
 {
+/// @brief Hidden carrier that forces one integral code unit to be rendered as a character.
+/// @details This disambiguates character output from numeric integral formatting; `reference` is copied by value.
 template <typename T>
 struct chvw_t
 {
@@ -26,6 +28,9 @@ struct chvw_t
 	T reference;
 };
 
+/// @brief Non-owning character scatter whose run-time length is bounded by compile-time capacity `N`.
+/// @details Every constructor and consumer enforces `len <= N`; exceeding the bound terminates because reserve output
+///          relies on `N` as a hard write-capacity proof. The referenced characters remain caller-owned.
 template <::std::integral ch_type, ::std::size_t N>
 struct small_scatter_t
 {
@@ -33,6 +38,8 @@ struct small_scatter_t
 	ch_type const *base{};
 	::std::size_t len{};
 
+	/// @brief Constructs an empty bounded scatter.
+	/// @details `base` is null and `len` is zero; assigning fields later must still preserve `len <= N`.
 	inline constexpr small_scatter_t() noexcept = default;
 
 	/// @brief Constructs a run-time extent whose capacity remains bounded by the type-level reserve proof.
@@ -46,6 +53,8 @@ struct small_scatter_t
 		validate();
 	}
 
+	/// @brief Enforces the type-level capacity invariant.
+	/// @details Terminates when `len > N`; it performs no pointer-validity or lifetime check.
 	inline constexpr void validate() const noexcept
 	{
 		if (N < len) [[unlikely]]
@@ -80,6 +89,9 @@ struct bounded_cstr_scatter_t
 	}
 };
 
+/// @brief Non-owning character scatter whose exact length `N` is encoded in its type.
+/// @details `base` must address at least `N` readable code units for the complete print operation. Conversion erases
+///          the static length into an ordinary scatter without copying characters.
 template <::std::integral ch_type, ::std::size_t N>
 struct static_scatter_t
 {
@@ -92,6 +104,8 @@ struct static_scatter_t
 	}
 };
 
+/// @brief Renders one integral code unit as a character rather than as its numeric value.
+/// @details The code unit is copied into a semantic carrier; no encoding conversion or validation is performed.
 template <::std::integral T>
 inline constexpr chvw_t<T> chvw(T ch) noexcept
 {
@@ -100,6 +114,9 @@ inline constexpr chvw_t<T> chvw(T ch) noexcept
 	return {ch};
 }
 
+/// @brief Resolves a non-null terminated OS-string wrapper to its complete borrowed scatter.
+/// @details Length discovery scans until the first terminator, so the pointer must reference a readable terminated
+///          sequence. This hidden alias hook performs no allocation.
 template <::std::integral char_type>
 inline constexpr basic_io_scatter_t<char_type> print_alias_define(io_alias_t, basic_os_c_str<char_type> bas) noexcept
 {
@@ -107,6 +124,8 @@ inline constexpr basic_io_scatter_t<char_type> print_alias_define(io_alias_t, ba
 	return {ptr, ::fast_io::cstr_len(ptr)};
 }
 
+/// @brief Resolves a known-size terminated OS-string wrapper to a borrowed scatter.
+/// @details Exactly `n` code units are exposed; the hook trusts the wrapper's caller-supplied extent.
 template <::std::integral char_type>
 inline constexpr basic_io_scatter_t<char_type>
 print_alias_define(io_alias_t, basic_os_c_str_with_known_size<char_type> bas) noexcept
@@ -114,6 +133,8 @@ print_alias_define(io_alias_t, basic_os_c_str_with_known_size<char_type> bas) no
 	return {bas.ptr, bas.n};
 }
 
+/// @brief Resolves a counted non-terminated OS string wrapper to a borrowed scatter.
+/// @details The result exposes exactly `[ptr, ptr + n)` and does not inspect a terminator.
 template <::std::integral char_type>
 inline constexpr basic_io_scatter_t<char_type>
 print_alias_define(io_alias_t, basic_os_str_known_size_without_null_terminated<char_type> bas) noexcept
@@ -133,6 +154,8 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_os_c_str<char_t
 	return {};
 }
 
+/// @brief Preserves borrowed-scatter provenance for a known-size terminated OS string wrapper.
+/// @details The alias result still points into caller-owned storage and therefore retains the wrapper's lifetime rules.
 template <::std::integral char_type>
 inline constexpr ::std::true_type
 print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_os_c_str_with_known_size<char_type>>) noexcept
@@ -140,6 +163,8 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_os_c_str_with_k
 	return {};
 }
 
+/// @brief Preserves borrowed-scatter provenance for a counted non-terminated OS string wrapper.
+/// @details The alias hook forwards the caller's storage directly, so the original lifetime requirement remains.
 template <::std::integral char_type>
 inline constexpr ::std::true_type print_borrowed_scatter_source(
 	io_reserve_type_t<char_type, basic_os_str_known_size_without_null_terminated<char_type>>) noexcept
@@ -147,12 +172,18 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 	return {};
 }
 
+/// @brief Creates a bounded C-string view by searching at most `n` code units for a terminator.
+/// @details The resulting length excludes the terminator. `ch` must address `n` readable code units unless an earlier
+///          terminator is encountered; the returned view remains non-owning.
 template <::std::integral char_type>
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c_str(char_type const *ch, ::std::size_t n) noexcept
 {
 	return {ch, ::fast_io::cstr_nlen(ch, n)};
 }
 
+/// @brief Creates a bounded C-string view from a character array.
+/// @details At most `n - 1` elements are searched, treating the final array slot as the conventional terminator
+///          position rather than part of the returned text.
 template <::std::integral char_type, ::std::size_t n>
 	requires(n != 0)
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c_str_carr(char_type const (&cstr)[n]) noexcept
@@ -161,12 +192,16 @@ inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c
 	return os_c_str(cstr, nm1);
 }
 
+/// @brief Creates a known-size null-terminated C-string wrapper without scanning.
+/// @details The caller promises that the supplied size and termination contract are valid for downstream consumers.
 template <::std::integral char_type>
 inline constexpr basic_os_c_str_with_known_size<char_type> os_c_str_null_terminated(char_type const *ch, ::std::size_t n) noexcept
 {
 	return {ch, n};
 }
 
+/// @brief Creates a known-size C-string wrapper from an array's first `n - 1` elements.
+/// @details The array is expected to use its last element as the terminator; no run-time verification is performed.
 template <::std::integral char_type, ::std::size_t n>
 	requires(n != 0)
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c_str_null_terminated_carr(char_type const (&cstr)[n]) noexcept
@@ -175,6 +210,9 @@ inline constexpr basic_os_str_known_size_without_null_terminated<char_type> os_c
 	return os_c_str_null_terminated(cstr, nm1);
 }
 
+/// @brief Converts a character array into the smallest useful non-owning semantic scatter.
+/// @details The final array element is excluded as a terminator. Empty text becomes `io_null`, one code unit becomes
+///          `chvw_t`, short text carries static extent, and larger text uses an ordinary borrowed scatter.
 template <::std::integral char_type, ::std::size_t n>
 	requires(n != 0)
 inline constexpr auto small_scatter(char_type const (&s)[n]) noexcept
@@ -202,9 +240,14 @@ inline constexpr auto small_scatter(char_type const (&s)[n]) noexcept
 	}
 }
 
+/// @brief Rejects a null pointer for the bounded C-string overload.
+/// @details A readable character source is required before a bounded terminator search can be performed.
 template <::std::integral T>
 inline constexpr void os_c_str(decltype(nullptr), ::std::size_t) noexcept = delete;
 
+/// @brief Creates a borrowed string view from a contiguous iterator pair.
+/// @details `[first, last)` must be a valid range within one contiguous allocation. No terminator is required and no
+///          characters are copied.
 template <::std::contiguous_iterator Iter>
 	requires ::std::integral<::std::iter_value_t<Iter>>
 inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::iter_value_t<Iter>>> strvw(Iter first,
@@ -213,6 +256,8 @@ inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::iter_value_t<It
 	return {::std::to_address(first), static_cast<::std::size_t>(last - first)};
 }
 
+/// @brief Creates a borrowed string view over an integral contiguous range.
+/// @details The returned scatter refers directly to the range's storage; the source must outlive its consumption.
 template <::std::ranges::contiguous_range rg>
 	requires ::std::integral<::std::ranges::range_value_t<rg>>
 inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::ranges::range_value_t<rg>>> strvw(rg &&r) noexcept
@@ -220,6 +265,9 @@ inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::ranges::range_v
 	return {::std::ranges::data(r), ::std::ranges::size(r)};
 }
 
+/// @brief Treats a contiguous integral range as a bounded C string.
+/// @details Scanning stops at the first terminator or the range end. The result excludes the terminator and borrows the
+///          source storage.
 template <::std::ranges::contiguous_range rg>
 	requires(::std::integral<::std::ranges::range_value_t<rg>>)
 inline constexpr basic_os_str_known_size_without_null_terminated<::std::remove_cvref_t<::std::ranges::range_value_t<rg>>>
@@ -229,6 +277,8 @@ os_c_str(rg &&r) noexcept
 	return {p, ::fast_io::cstr_nlen(p, ::std::ranges::size(r))};
 }
 
+/// @brief Exposes an enumeration's underlying integer value for numeric formatting.
+/// @details No symbolic name lookup is attempted; signedness and width are exactly those of the enum's underlying type.
 template <typename enumtype>
 	requires(::std::is_enum_v<enumtype>)
 inline constexpr ::std::underlying_type_t<enumtype> enum_int_view(enumtype enm) noexcept

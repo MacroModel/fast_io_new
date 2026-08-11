@@ -101,9 +101,14 @@ inline constexpr ::fast_io::details::cond_alias_type<T> cond_store(T &&t)
 namespace manipulators
 {
 
+/// @brief Identifies a semantic node that selects one of two printable arms at run time.
+/// @details The tag is consumed by print/concat planning and has no printable representation itself.
 struct condition_manip_tag_t
 {};
 
+/// @brief Stores two normalized printable alternatives and the predicate selecting the first arm.
+/// @details Both arms are constructed when the manipulator is created; only the selected arm is formatted. The factory
+///          may reverse physical member order to reduce padding while inversely adjusting `pred`, preserving semantics.
 template <typename T1, typename T2>
 struct condition
 {
@@ -130,6 +135,9 @@ struct condition
 	alias_type2 t2;
 };
 
+/// @brief Selects exactly one of two printable alternatives at formatting time.
+/// @details `pred == true` emits `t1`, otherwise `t2`. Both arguments are normalized and stored immediately, so their
+///          construction side effects occur regardless of which arm is later emitted. No separator is added.
 template <typename T1, typename T2>
 	requires(::fast_io::details::cond_alias_storable<T1> &&
 			 ::fast_io::details::cond_alias_storable<T2>)
@@ -166,6 +174,9 @@ inline constexpr auto cond(bool pred, T1 &&t1, T2 &&t2) noexcept(::fast_io::deta
 	}
 }
 
+/// @brief Conditionally emits one printable value or nothing.
+/// @details `pred == true` emits `t1`; `false` selects `io_null`. The argument is still normalized and stored when the
+///          manipulator is created.
 template <typename T1>
 	requires ::fast_io::details::cond_alias_storable<T1>
 inline constexpr auto cond(bool pred, T1 &&t1) noexcept(::fast_io::details::cond_alias_nothrow_constructible<T1>)

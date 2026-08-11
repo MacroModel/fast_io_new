@@ -2282,6 +2282,10 @@ scan_context_eof_define(io_reserve_type_t<char_type, fast_io::parameter<iso8601_
 
 namespace manipulators
 {
+/// @brief Formats a timestamp as fixed seconds with exactly `n` fractional decimal digits.
+/// @details The stored `seconds` and `subseconds` fields are copied unchanged into the fixed formatter; `off_to_epoch`
+///          does not adjust the numeric seconds, despite the internal carrier being `unix_timestamp`. No exponent is
+///          emitted, trailing zeroes fill exactly `n` positions, and discarded subsecond digits round nearest-to-even.
 template <::std::int_least64_t off_to_epoch>
 inline constexpr auto fixed(basic_timestamp<off_to_epoch> t, ::std::size_t n) noexcept
 {
@@ -2290,6 +2294,9 @@ inline constexpr auto fixed(basic_timestamp<off_to_epoch> t, ::std::size_t n) no
 		::fast_io::unix_timestamp>{{t.seconds, t.subseconds}, n};
 }
 
+/// @brief Formats a timestamp as fixed seconds with `n` fractional digits and comma radix.
+/// @details Semantics match the period-radix timestamp `fixed` overload, including its lack of `off_to_epoch` numeric
+///          adjustment; comma replaces the fractional separator.
 template <::std::int_least64_t off_to_epoch>
 inline constexpr auto comma_fixed(basic_timestamp<off_to_epoch> t, ::std::size_t n) noexcept
 {

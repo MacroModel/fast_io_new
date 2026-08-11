@@ -3591,7 +3591,15 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fill_zeros_impl(char_type 
 template <bool comma, ::std::integral char_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *fill_zero_point_impl(char_type *iter) noexcept
 {
-	if constexpr (comma)
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		*iter = ::fast_io::char_literal_v<u8'0', char_type>;
+		++iter;
+		*iter = ::fast_io::char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+		return iter + 1u;
+	}
+	else if constexpr (comma)
 	{
 		if constexpr (::std::same_as<char_type, char>)
 		{
@@ -12653,8 +12661,8 @@ inline constexpr char_type *print_rsv_fp_fixed_precision_impl(char_type *iter,
 		{
 			for (auto index{length}; index != 0u; value /= 10u)
 			{
-				destination[--index] = static_cast<char_type>(
-					::fast_io::char_literal_v<u8'0', char_type> + value % 10u);
+				destination[--index] =
+					::fast_io::char_literal_add<char_type>(value % 10u);
 			}
 		}
 		else

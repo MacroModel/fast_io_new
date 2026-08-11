@@ -15,6 +15,10 @@ namespace fast_io
 namespace manipulators
 {
 
+/// @brief Couples a borrowed character scatter with a transcoder as an experimental semantic request.
+/// @details The source and transcoder storage are non-owning according to `transcoder_value_type`, so factories accept
+///          only stable lvalues. The current file provides forwarding/protocol recognition but no complete print emitter;
+///          this carrier is therefore not itself a generally printable transcode result.
 template <::std::integral chartype, typename T>
 struct basic_transcoder_t
 {
@@ -32,14 +36,11 @@ struct basic_transcoder_t
 	transcoder_value_type transcoder;
 };
 
-/// Creates a non-owning transcode request from two explicitly borrowed lvalues.
-///
-/// The request stores a character scatter and a pointer to the transcoder.  It
-/// cannot extend either lifetime, so accepting a temporary source or transcoder
-/// would leave a dangling member before a later print operation starts.  The
-/// source-side borrowed marker is deliberately checked before aliasing: the
-/// shape of a returned scatter alone cannot prove that its characters outlive
-/// this wrapper.
+/// @brief Creates an experimental non-owning transcode request from two explicitly borrowed lvalues.
+/// @details The request stores a character scatter and a pointer to the transcoder and cannot extend either lifetime.
+///          The source-side borrowed marker is checked before aliasing because scatter shape alone does not prove
+///          lifetime. No complete print emitter currently consumes the returned carrier, so construction alone does not
+///          define or produce converted output.
 template <typename stryp, typename T>
 	requires(::std::is_lvalue_reference_v<stryp &&> && ::std::is_lvalue_reference_v<T &&> &&
 			 alias_printable<stryp> &&
@@ -65,6 +66,9 @@ inline constexpr auto transcode(stryp &&sct, T &&t)
 		source, __builtin_addressof(t)};
 }
 
+/// @brief Resolves a borrowed transcoder pointer for the requested output character domain.
+/// @details This hidden forwarding CPO preserves the source scatter and replaces the pointer with the transcoder's
+///          character-domain-specific forwarded state.
 template <::std::integral to_char_type, ::std::integral from_char_type, typename T>
 inline constexpr auto status_io_print_forward(::fast_io::io_alias_type_t<to_char_type>, ::fast_io::manipulators::basic_transcoder_t<from_char_type, T *> t)
 {

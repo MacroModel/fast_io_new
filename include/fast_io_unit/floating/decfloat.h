@@ -4102,7 +4102,8 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 				return {};
 			}
 
-			constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+			constexpr auto dot{::fast_io::char_literal_v<
+				(flags.comma ? u8',' : u8'.'), char_type>};
 			if (first != end && *first == dot)
 			{
 				++first;
@@ -4328,7 +4329,8 @@ scan_decfloat_contiguous_padding_define_impl(
 		}
 	}
 
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	if (first != end &&
 		::fast_io::details::scan_decfloat_special_start_char(*first))
 	{
@@ -4492,7 +4494,8 @@ scan_decfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 		}
 	}
 
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	if (first != end &&
 		::fast_io::details::scan_decfloat_special_start_char(*first))
 	{
@@ -4965,8 +4968,9 @@ scan_decfloat_context_special_define(::fast_io::details::scan_decfloat_context<c
 	}
 	if (parse_result.code == ::fast_io::parse_code::invalid)
 	{
-		if (buffer_begin != buffer_end &&
-			!::fast_io::char_category::is_c_space(*(buffer_end - 1)))
+		if (::fast_io::details::
+				scan_hexfloat_special_invalid_prefix_may_extend<flags.allow_leading_plus>(
+					buffer_begin, buffer_end))
 		{
 			if (append_result.truncated)
 			{
@@ -5024,7 +5028,8 @@ scan_decfloat_context_numeric_define(::fast_io::details::scan_decfloat_context<c
 {
 	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
 	constexpr auto minus{::fast_io::char_literal_v<u8'-', char_type>};
-	constexpr auto dot{::fast_io::char_literal_v<u8'.', char_type>};
+	constexpr auto dot{::fast_io::char_literal_v<
+		(flags.comma ? u8',' : u8'.'), char_type>};
 	for (;;)
 	{
 		switch (state.phase)

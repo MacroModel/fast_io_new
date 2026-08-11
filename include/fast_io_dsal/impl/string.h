@@ -1952,6 +1952,9 @@ inline constexpr ::fast_io::parse_code scan_context_eof_define(
 
 namespace manipulators
 {
+/// @brief Reads one line into a fast_io DSAL `basic_string` destination.
+/// @details Characters up to line feed are stored and ordinary spaces are preserved; the line feed is consumed but not
+///          stored, a preceding carriage return is retained, and the destination is borrowed.
 template <::std::integral char_type, typename allocator_type>
 inline constexpr ::fast_io::manipulators::scalar_manip_t<::fast_io::containers::details::fast_io_string_default_scalar_flags<false, true>,
 														 ::fast_io::containers::basic_string<char_type, allocator_type> &>
@@ -1960,6 +1963,8 @@ line_get(::fast_io::containers::basic_string<char_type, allocator_type> &line_st
 	return {line_str};
 }
 
+/// @brief Reads the complete remaining input into a fast_io DSAL `basic_string` destination.
+/// @details No whitespace delimiter is special; completion follows the enclosing whole-input scan protocol.
 template <::std::integral char_type, typename allocator_type>
 inline constexpr ::fast_io::manipulators::whole_get_t<::fast_io::containers::basic_string<char_type, allocator_type> &>
 whole_get(::fast_io::containers::basic_string<char_type, allocator_type> &whole_str) noexcept

@@ -37,12 +37,18 @@ namespace fast_io
 
 namespace manipulators
 {
+/// @brief Forward declaration of the explicit one-character semantic carrier.
+/// @details The complete type is supplied by the pointer/scatter manipulator layer.
 template <typename T>
 struct chvw_t;
 
+/// @brief Forward declaration of a borrowed character scatter with exact type-level extent.
+/// @details The complete type owns no characters.
 template <::std::integral char_type, ::std::size_t extent>
 struct static_scatter_t;
 
+/// @brief Forward declaration of a bounded C-string scatter used by compiler-constant planning.
+/// @details The complete type carries a run-time length no greater than `extent`.
 template <::std::integral char_type, ::std::size_t extent>
 struct bounded_cstr_scatter_t;
 } // namespace manipulators
@@ -22911,6 +22917,7 @@ namespace manipulators
 {
 
 /// @brief Represents one compile-time literal slot in a compiled scatter plan.
+/// @details The literal is type-owned, excludes its terminating null from `size`, and needs no run-time patching.
 /// @tparam literal the structural string-literal value
 template <::fast_io::details::decay::basic_compiled_scatter_literal_storage literal>
 struct compiled_scatter_literal_t
@@ -22927,6 +22934,7 @@ struct compiled_scatter_literal_t
 };
 
 /// @brief Represents one runtime-patched slot in a compiled scatter plan.
+/// @details `index_value` selects the corresponding dynamic argument descriptor; the component owns no payload.
 /// @tparam index_value the zero-based runtime argument index used to fill the slot
 template <::std::size_t index_value>
 struct compiled_scatter_dynamic_t
@@ -22937,11 +22945,13 @@ struct compiled_scatter_dynamic_t
 };
 
 /// @brief Creates a compile-time literal component for make_scatter_plan.
+/// @details The variable template is stateless and stores the structural literal in its component type.
 /// @tparam literal the string literal to store in the plan blueprint
 template <::fast_io::details::decay::basic_compiled_scatter_literal_storage literal>
 inline constexpr compiled_scatter_literal_t<literal> scatter_literal{};
 
 /// @brief Creates a runtime component for make_scatter_plan.
+/// @details The variable template records only the zero-based dynamic argument index.
 /// @tparam index the zero-based runtime argument index used to patch this slot
 template <::std::size_t index>
 inline constexpr compiled_scatter_dynamic_t<index> scatter_dynamic{};

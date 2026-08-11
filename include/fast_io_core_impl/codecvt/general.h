@@ -647,6 +647,10 @@ inline constexpr bool print_alias_test_codecvt_impl() noexcept
 namespace manipulators
 {
 
+/// @brief Non-owning transcoding request from `src_scheme` to `dst_scheme`.
+/// @details The source scatter is borrowed and must remain valid through formatting. Transcoding consumes exactly the
+///          stored code units and produces destination code units; malformed-input behavior is defined by the codecvt
+///          backend rather than by this carrier.
 template <encoding_scheme src_scheme, encoding_scheme dst_scheme, ::std::integral char_type>
 struct code_cvt_t
 {
@@ -654,6 +658,9 @@ struct code_cvt_t
 	basic_io_scatter_t<char_type> reference;
 };
 
+/// @brief Marks codecvt carriers transparent to optional-scatter semantic grouping.
+/// @details This hidden proof changes no conversion result; it states that grouping cannot alter source observation or
+///          destination-dependent status behavior.
 template <::std::integral output_char_type, encoding_scheme src_scheme,
 		  encoding_scheme dst_scheme, ::std::integral source_char_type>
 inline constexpr ::std::true_type
@@ -667,6 +674,9 @@ print_semantic_optional_scatter_status_transparent_leaf(
 	return {};
 }
 
+/// @brief Transcodes a printable character source between compile-time encoding schemes.
+/// @details The source is first resolved to a borrowed scatter and no ownership is taken. Defaults treat both ends as
+///          the execution character set. This manipulator performs encoding conversion, not locale translation.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, typename T>
 	requires(::fast_io::details::codecvt::print_alias_test_codecvt_impl<T>())
@@ -691,6 +701,8 @@ inline constexpr auto code_cvt(T const &t) noexcept
 	}
 }
 
+/// @brief Transcodes an existing borrowed scatter between compile-time encoding schemes.
+/// @details The scatter's character type supplies source code-unit width; its storage must outlive formatting.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type>
 inline constexpr auto code_cvt(basic_io_scatter_t<char_type> t) noexcept
@@ -698,6 +710,8 @@ inline constexpr auto code_cvt(basic_io_scatter_t<char_type> t) noexcept
 	return code_cvt_t<src_scheme, dst_scheme, char_type>{t};
 }
 
+/// @brief Transcodes a bounded small scatter while preserving its run-time extent check.
+/// @details `t.validate()` enforces `len <= N` before the capacity type is erased into the codecvt carrier.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type, ::std::size_t N>
 inline constexpr auto code_cvt(small_scatter_t<char_type, N> t) noexcept
@@ -709,6 +723,8 @@ inline constexpr auto code_cvt(small_scatter_t<char_type, N> t) noexcept
 	return code_cvt_t<src_scheme, dst_scheme, char_type>{{t.base, t.len}};
 }
 
+/// @brief Transcodes a static-extent scatter between compile-time encoding schemes.
+/// @details Exactly `N` source code units are consumed; no terminator scan or copy occurs before conversion.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type, ::std::size_t N>
 inline constexpr auto code_cvt(static_scatter_t<char_type, N> t) noexcept
@@ -716,6 +732,8 @@ inline constexpr auto code_cvt(static_scatter_t<char_type, N> t) noexcept
 	return code_cvt_t<src_scheme, dst_scheme, char_type>{{t.base, N}};
 }
 
+/// @brief Transcodes a non-null terminated C string between compile-time encoding schemes.
+/// @details The source is scanned to its terminator, so `cstr` must address a readable terminated sequence.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type>
 inline constexpr auto code_cvt_os_c_str(char_type const *cstr) noexcept
@@ -723,6 +741,8 @@ inline constexpr auto code_cvt_os_c_str(char_type const *cstr) noexcept
 	return ::fast_io::manipulators::code_cvt<src_scheme, dst_scheme>(::fast_io::manipulators::os_c_str(cstr));
 }
 
+/// @brief Transcodes at most `n` code units from a bounded C string.
+/// @details Source length stops at the first terminator or `n`; the terminator is not included in the converted text.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral char_type>
 inline constexpr auto code_cvt_os_c_str(char_type const *cstr, ::std::size_t n) noexcept
@@ -730,6 +750,9 @@ inline constexpr auto code_cvt_os_c_str(char_type const *cstr, ::std::size_t n) 
 	return ::fast_io::manipulators::code_cvt<src_scheme, dst_scheme>(::fast_io::mnp::os_c_str(cstr, n));
 }
 
+/// @brief Computes a conservative destination reserve for a codecvt carrier.
+/// @details This hidden CPO returns an upper bound derived from source/destination code-unit widths; it does not perform
+///          conversion or inspect source contents.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral src_char_type,
 		  ::std::integral dst_char_type>
@@ -740,6 +763,8 @@ print_reserve_size(io_reserve_type_t<dst_char_type, code_cvt_t<src_scheme, dst_s
 	return details::cal_full_reserve_size<sizeof(src_char_type), sizeof(dst_char_type)>(v.reference.len);
 }
 
+/// @brief Returns the fixed stack staging size used by dynamic codecvt reserve output.
+/// @details The hidden CPO is type-based and independent of source contents.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral src_char_type,
 		  ::std::integral dst_char_type>
@@ -749,6 +774,9 @@ print_reserve_static_stack_size(io_reserve_type_t<dst_char_type, code_cvt_t<src_
 	return ::fast_io::details::dynamic_reserve_default_static_stack_size<dst_char_type>();
 }
 
+/// @brief Executes the requested conversion into a caller-provided destination buffer.
+/// @details The hidden reserve CPO assumes the caller allocated the bound returned above and returns one-past the last
+///          emitted destination code unit.
 template <encoding_scheme src_scheme = encoding_scheme::execution_charset,
 		  encoding_scheme dst_scheme = encoding_scheme::execution_charset, ::std::integral src_char_type,
 		  ::std::integral char_type>

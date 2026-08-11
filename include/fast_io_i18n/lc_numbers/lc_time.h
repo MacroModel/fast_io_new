@@ -1395,6 +1395,9 @@ namespace manipulators
 /*
 do not use them. they are experimental
 */
+/// @brief Formats a timestamp with the locale's composite date-and-time pattern.
+/// @details Locale-aware output interprets the `d_t_fmt` program (the `%c`-style representation). This experimental
+///          manipulator stores a reference, so the timestamp must remain alive until printing completes.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::d_t_fmt>,
 								iso8601_timestamp const &>
 d_t_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1402,6 +1405,9 @@ d_t_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's date-only pattern.
+/// @details Locale-aware output interprets the `d_fmt` program (the `%x`-style representation). The manipulator is
+///          experimental and borrows the referenced timestamp rather than copying it.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::d_fmt>,
 								iso8601_timestamp const &>
 d_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1409,6 +1415,9 @@ d_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's time-only pattern.
+/// @details Locale-aware output interprets the `t_fmt` program (the `%X`-style representation). The experimental
+///          manipulator borrows `tsp`, which must outlive materialization.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::t_fmt>,
 								iso8601_timestamp const &>
 t_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1416,6 +1425,9 @@ t_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's 12-hour AM/PM time pattern.
+/// @details Locale-aware output interprets `t_fmt_ampm`, including the locale's own AM/PM designators. This is an
+///          experimental reference-holding manipulator; it does not own the timestamp.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::t_fmt_ampm>,
 								iso8601_timestamp const &>
 t_fmt_ampm(iso8601_timestamp const &tsp) noexcept
@@ -1423,6 +1435,9 @@ t_fmt_ampm(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's extended date utility pattern.
+/// @details Locale-aware output interprets the locale `date_fmt` program (commonly associated with `%+`). The exact
+///          spelling is locale data, not a fixed ISO representation; the experimental carrier borrows `tsp`.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::date_fmt>,
 								iso8601_timestamp const &>
 date_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1430,6 +1445,9 @@ date_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's era-aware composite date-and-time pattern.
+/// @details The `era_d_t_fmt` program is used when nonempty; otherwise output falls back to ordinary `d_t_fmt`. The
+///          experimental manipulator holds only a reference to the timestamp.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::era_d_t_fmt>,
 								iso8601_timestamp const &>
 era_d_t_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1437,6 +1455,9 @@ era_d_t_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's era-aware date-only pattern.
+/// @details The `era_d_fmt` program is used when nonempty and ordinary `d_fmt` is the fallback. The exact calendar-era
+///          spelling comes from locale data, and the experimental carrier borrows `tsp`.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::era_d_fmt>,
 								iso8601_timestamp const &>
 era_d_fmt(iso8601_timestamp const &tsp) noexcept
@@ -1444,6 +1465,9 @@ era_d_fmt(iso8601_timestamp const &tsp) noexcept
 	return {tsp};
 }
 
+/// @brief Formats a timestamp with the locale's era-aware time-only pattern.
+/// @details The `era_t_fmt` program is used when nonempty and ordinary `t_fmt` is the fallback. This experimental
+///          reference-holding manipulator does not copy or own the timestamp.
 inline constexpr scalar_manip_t<::fast_io::details::base_lc_time_flags_cache<lc_time_flag::era_t_fmt>,
 								iso8601_timestamp const &>
 era_t_fmt(iso8601_timestamp const &tsp) noexcept

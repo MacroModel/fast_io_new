@@ -121,6 +121,9 @@ print_semantic_optional_scatter_status_transparent_leaf(
 namespace manipulators
 {
 
+/// @brief Captures the caller's current `std::source_location` as a printable value.
+/// @details The default argument is evaluated at the call site; passing an explicit location returns that location
+///          unchanged. Formatting later emits the library-defined file/line/column/function representation.
 inline
 #ifdef __cpp_consteval
 	consteval

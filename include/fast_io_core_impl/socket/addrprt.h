@@ -513,6 +513,9 @@ print_reserve_define(::fast_io::io_reserve_type_t<char_type, ::fast_io::manipula
 namespace manipulators
 {
 
+/// @brief Applies an expert-supplied compile-time IP output policy to an address or endpoint value.
+/// @details The policy controls IPv6 compression/case/brackets/full width, port visibility, and mapped-IPv6 spelling.
+///          Invalid semantic combinations are not normalized; prefer higher-level IP manipulators for ordinary use.
 template <ip_flags flags, ::fast_io::details::iptypesimpl iptype>
 inline constexpr ip_manip_t<flags, ::std::remove_cvref_t<iptype>> ip_generic(iptype ipaddr) noexcept
 {

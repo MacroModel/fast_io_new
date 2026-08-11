@@ -31,17 +31,11 @@
 namespace fast_io::manipulators
 {
 
-/// Preserves format-specific sign/prefix semantics while delegating scalar conversion.
-///
-/// `width(..., internal, '0')` asks a printable leaf where the digit sequence begins.  The
-/// generic integer scalar reports only its sign and the generic floating scalar has no such
-/// CPO; neither answer includes a base prefix.  A format such as `#06x` would consequently
-/// place zeros before `0x`.  This wrapper supplies the complete shift while retaining the
-/// existing integer/float implementation for size calculation and digit generation.
-///
-/// `space_sign` is implemented by asking the mature scalar formatter for an ordinary plus
-/// sign and replacing that one code unit after emission.  This preserves negative zero, NaN
-/// sign policy, precise sizing, and internal padding without maintaining a second sign parser.
+/// @brief Preserves format-specific sign and base-prefix semantics while delegating scalar conversion.
+/// @details `base_prefix_size` extends the internal-padding shift so zero fill follows a sign and radix prefix—for
+///          example, `#06x` produces `0x` before its padding. When `space_sign` is true, a generated positive `+` is
+///          replaced by one space after emission; negative zero, NaN sign policy, digit generation, and sizing remain
+///          those of the wrapped scalar.
 template <typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 struct format_scalar_t
 {

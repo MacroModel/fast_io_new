@@ -1224,11 +1224,10 @@ inline constexpr auto rgvw(rg &&r, char_type const (&sep)[n])
 		::std::forward<rg>(r), printed};
 }
 
-/// @brief Creates a range-printing view with a string-like separator.
-/// @details Separator aliasing is performed once and the resulting character type drives element forwarding. The
-///          sized-versus-sentinel proof is the same as for literal separators: object-dependent sizing is enabled only
-///          for multi-pass ranges, and a scatter element must also opt into borrowed/repeatable observation. All other
-///          cases retain direct streaming semantics.
+/// @brief Names the result type of applying the print-alias protocol to a string-like separator.
+/// @details The probe uses a mutable lvalue of the separator's underlying type because the eventual factory aliases its
+///          named parameter exactly once. This hidden alias preserves references returned by the alias CPO until later
+///          code explicitly removes transport cv/ref qualifiers.
 template <typename T>
 using range_separator_alias_result_t = decltype(print_alias_define(
 	::fast_io::io_alias, ::std::declval<::std::remove_reference_t<T> &>()));
@@ -1253,10 +1252,16 @@ concept stable_range_separator =
 			::std::remove_cvref_t<T>>;
 	};
 
+/// @brief Extracts the separator code-unit type from a stable string-like separator alias.
+/// @details This hidden alias removes transport cv/ref qualifiers and is defined only for separators accepted by the
+///          preceding alias protocol.
 template <typename T>
 using range_separator_char_type_t = typename ::std::remove_cvref_t<
 	::fast_io::manipulators::range_separator_alias_result_t<T>>::value_type;
 
+/// @brief Creates a non-owning range view with a stable string-like separator.
+/// @details The borrowed range and separator source must both outlive formatting. Each range element is normalized and
+///          separators are inserted only between elements, never before the first or after the last.
 template <::std::ranges::range rg, ::fast_io::manipulators::stable_range_separator T>
 	requires(::std::ranges::borrowed_range<rg> &&
 			 ::fast_io::manipulators::range_element_print_forwardable<
@@ -1273,6 +1278,9 @@ inline constexpr auto rgvw(rg &&r, T &&sep)
 		static_cast<::fast_io::basic_io_scatter_t<char_type>>(printed));
 }
 
+/// @brief Creates an owning range view for a non-borrowed rvalue range with a stable string-like separator.
+/// @details The range is moved into the result, while the separator remains a proved-stable borrowed scatter. Element
+///          ordering and between-elements-only separator insertion match the non-owning overload.
 template <::std::ranges::range rg, ::fast_io::manipulators::stable_range_separator T>
 	requires(!::std::ranges::borrowed_range<rg> &&
 			 !::std::is_lvalue_reference_v<rg> &&

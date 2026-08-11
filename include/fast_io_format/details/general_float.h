@@ -21,22 +21,11 @@
 namespace fast_io::manipulators
 {
 
-/**
- * Selects the C/Python/printf general floating presentation after rounding.
- *
- * A general conversion with significant precision `P` uses scientific notation
- * exactly when the exponent of the *rounded* decimal result is less than -4 or
- * is at least P.  The core general scalar has a deliberately different,
- * type-wide fixed window, so the format frontend supplies independently
- * configured fixed and scientific leaves and lets this semantic leaf choose
- * between them.  `alternate_form` is a type property because `#` belongs to the
- * compile-time format program; both children must already encode the matching
- * preserve-trailing-zero policy.
- *
- * The leaf owns both alternatives rather than erasing either one behind a
- * callback.  Consequently ADL can still see their ordinary reserve writers,
- * and the print/concat dispatchers retain a single contiguous materialization.
- */
+/// @brief Selects the C/Python/printf general floating presentation after precision rounding.
+/// @details For significant precision `P`, the scientific child is selected exactly when the rounded decimal exponent
+///          is below `-4` or at least `P`; otherwise the fixed child is emitted. `alternate_form` records `#` behavior,
+///          so both children must carry the matching trailing-zero policy. The object owns both typed alternatives to
+///          preserve their ordinary reserve-print protocols and selects exactly one at materialization time.
 template <typename fixed_type, typename scientific_type, bool alternate_form>
 struct general_float_t
 {

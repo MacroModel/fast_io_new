@@ -108,6 +108,26 @@ inline constexpr char_type char_literal_add(T offs) noexcept
 	{
 		FAST_IO_ASSUME(0 <= offs && offs < 10);
 	}
+	/*
+	A non-native wide execution charset is not required to represent a source
+	character as a bare arithmetic code value.  GCC can, for example, retain
+	conversion-state bytes in an IBM single-byte wide literal.  When none of the
+	known continuous layouts below describes the representation, adding to the
+	encoded integer mutates a state byte rather than advancing the abstract
+	character.  Map the resulting ASCII semantic character through the execution
+	charset in that uncommon case.  ASCII, classic EBCDIC, and the recognized
+	non-native-endian layouts retain the original arithmetic fast path.
+	*/
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>) &&
+		!::fast_io::details::is_classic_ebcdic<char_type> &&
+		!(::std::same_as<char_type, wchar_t> &&
+		  ::fast_io::details::wide_is_none_execution_endian))
+	{
+		return ::fast_io::char_literal<char_type>(static_cast<char8_t>(
+			static_cast<::fast_io::details::my_make_unsigned_t<T>>(ch) +
+			static_cast<::fast_io::details::my_make_unsigned_t<T>>(offs)));
+	}
 	// The future cpp standard prohibits arithmetic between different char_types, but allows the same char_type to be arithmetic, so doing an integral_lifting
 	// and then calculating gives the same result as direct arithmetic
 

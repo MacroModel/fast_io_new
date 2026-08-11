@@ -1837,13 +1837,10 @@ template <typename integer_type>
 namespace fast_io::manipulators
 {
 
-/**
- * Printable semantic leaf produced by brace time lowering.
- *
- * The format literal and time source slice are type properties.  The object
- * itself stores only normalized value state.  Consequently neither a format
- * pointer nor a token-program address crosses the public print/concat boundary.
- */
+/// @brief Carries a normalized chrono value for one compile-time brace-format time field.
+/// @details `format_literal` and `specification` select the exact chrono presentation as type properties, while the
+///          object stores only normalized value state. Printing therefore emits the requested calendar/time spelling
+///          without retaining a run-time format pointer or token-program address in the manipulator.
 template <::fast_io::fmt::basic_fixed_string format_literal,
 		  ::fast_io::fmt::details::source_slice specification,
 		  typename storage_type>

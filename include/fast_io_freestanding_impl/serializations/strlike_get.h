@@ -14,6 +14,9 @@ inline constexpr ::fast_io::manipulators::scalar_flags strlike_default_scalar_fl
 namespace manipulators
 {
 
+/// @brief Hidden carrier for a mutable string-like scan destination.
+/// @details `reference` is obtained through `io_strlike_ref`; the enclosing scalar or whole-object wrapper selects
+///          token, line, or complete-input semantics.
 template <typename T>
 struct basic_strlike_get
 {
@@ -29,6 +32,9 @@ struct basic_strlike_get
 	T reference;
 };
 
+/// @brief Reads one whitespace-delimited token into a mutable string-like destination.
+/// @details Leading C whitespace is skipped, then code units are copied until the next C whitespace. The delimiter is
+///          not part of the stored value and the terminating whitespace remains at the returned scan position.
 template <typename T>
 inline constexpr auto strlike_get(T &reference) noexcept
 {
@@ -38,6 +44,10 @@ inline constexpr auto strlike_get(T &reference) noexcept
 		{io_strlike_ref(io_alias, reference)}};
 }
 
+/// @brief Reads one line into a mutable string-like destination.
+/// @details Input is copied until line-feed according to the scanner's line contract; ordinary spaces are preserved
+///          rather than terminating the token. The line-feed is consumed but is not stored; no carriage-return
+///          normalization is performed by this manipulator.
 template <typename T>
 inline constexpr auto strlike_line_get(T &reference) noexcept
 {
@@ -47,6 +57,9 @@ inline constexpr auto strlike_line_get(T &reference) noexcept
 		{io_strlike_ref(io_alias, reference)}};
 }
 
+/// @brief Reads the complete remaining input into a mutable string-like destination.
+/// @details No whitespace or line delimiter has special meaning. Completion is determined by the enclosing whole-input
+///          scan operation rather than by the first token boundary.
 template <typename T>
 inline constexpr auto strlike_whole_get(T &reference) noexcept
 {

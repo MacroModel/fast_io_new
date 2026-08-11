@@ -6,6 +6,9 @@ namespace fast_io
 namespace manipulators
 {
 
+/// @brief Hidden carrier for reading exactly `n` code units into a string-like destination.
+/// @details `reference` is the destination adapter selected by `io_strlike_ref`; `n` is an exact count rather than a
+///          delimiter or capacity. Context scanning may fill the destination across multiple input chunks.
 template <typename T>
 struct basic_str_get_all
 {
@@ -21,6 +24,9 @@ struct basic_str_get_all
 	::std::size_t n;
 };
 
+/// @brief Reads exactly `n` code units into a mutable string-like destination.
+/// @details The destination is reset/reserved by the scanner and input is copied without whitespace or delimiter
+///          interpretation. End of input before `n` code units is incomplete/failure under the scan protocol.
 template <typename T>
 inline constexpr auto str_get_all(T &reference, ::std::size_t n) noexcept
 {

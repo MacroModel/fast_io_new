@@ -65,15 +65,10 @@ template <::std::integral char_type, ::std::random_access_iterator iterator>
 namespace fast_io::manipulators
 {
 
-/**
- * Adds the radix point required by printf's alternate floating spelling.
- *
- * The scalar backends intentionally omit a radix point when a fractional
- * precision of zero is requested.  printf's `#` flag changes exactly that
- * case.  Keeping the adjustment as a semantic leaf preserves the scalar
- * backend, including its sign/prefix metadata, and avoids building a second
- * floating conversion path merely to insert one code unit before an exponent.
- */
+/// @brief Adds the radix point required by printf's alternate floating spelling.
+/// @details The scalar backends intentionally omit a radix point when a fractional precision of zero is requested,
+///          whereas printf's `#` flag requires it. The wrapper conditionally inserts exactly one radix code unit before
+///          any exponent and otherwise preserves the wrapped scalar's digits, sign, prefix, and sizing semantics.
 template <typename value_type>
 struct printf_force_radix_t
 {

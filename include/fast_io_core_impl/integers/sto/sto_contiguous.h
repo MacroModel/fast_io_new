@@ -4456,6 +4456,8 @@ inline constexpr parse_code scan_context_eof_define_parse_impl(State &st, T &t) 
 namespace manipulators
 {
 
+/// @brief Hidden scan carrier that reads one input code unit into a destination.
+/// @details `reference` is borrowed and must outlive the scan. No numeric conversion or encoding transcoding occurs.
 template <typename char_type>
 struct ch_get_t
 {
@@ -4463,12 +4465,21 @@ struct ch_get_t
 	char_type &reference;
 };
 
+/// @brief Scans one code unit into an integral destination.
+/// @details Leading C whitespace is skipped, then exactly the first non-whitespace code unit is consumed and assigned
+///          without digit interpretation or encoding transcoding. It therefore cannot be used to read a whitespace
+///          code unit verbatim.
 template <::fast_io::details::my_integral T>
 inline constexpr ch_get_t<T &> ch_get(T &reference) noexcept
 {
 	return {reference};
 }
 
+/// @brief Scans an integer in compile-time radix `bs` using an explicitly configurable grammar.
+/// @details `noskipws` disables leading-space skipping; `skipzero` admits and discards redundant leading zeroes;
+///          `prefix` requires `0b`, `0t`, legacy `0`/modern `0o`, or `0x` for bases 2, 3, 8, and 16. Other non-decimal
+///          bases use `0[bs]` with the base written in decimal (for example `0[12]`); base 10 ignores `prefix`.
+///          `oct_c2y` selects `0o`, and a leading `+` is opt-in.
 template <::std::size_t bs, bool noskipws = false, bool skipzero = false, bool prefix = false, bool oct_c2y = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_integral scalar_type>
 	requires(2 <= bs && bs <= 36)
@@ -4481,6 +4492,9 @@ base_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a binary integer with an optional required `0b` prefix.
+/// @details Whitespace, redundant-leading-zero, and leading-plus policies are selected independently by the template
+///          arguments. Only binary digits participate in the token.
 template <bool noskipws = false, bool skipzero = false, bool prefix = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4491,6 +4505,8 @@ bin_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a binary integer and requires the `0b` prefix.
+/// @details `noskipws`, `skipzero`, and leading-plus behavior match `bin_get`.
 template <bool noskipws = false, bool skipzero = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4501,6 +4517,9 @@ bin0b_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans an octal integer with configurable prefix grammar.
+/// @details `prefix` requires a prefix; `oct_c2y` chooses modern `0o` rather than legacy leading zero. Whitespace,
+///          redundant zeroes, and leading `+` remain independently selectable.
 template <bool noskipws = false, bool skipzero = false, bool prefix = false, bool oct_c2y = false,
 		  bool allow_leading_plus = false, ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4511,6 +4530,8 @@ oct_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans an octal integer and requires the legacy leading-zero prefix.
+/// @details Modern `0o` is not selected by this overload; whitespace, redundant zeroes, and leading `+` are configurable.
 template <bool noskipws = false, bool skipzero = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4521,6 +4542,9 @@ oct0_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans an octal integer and requires the modern `0o` prefix.
+/// @details The prefix grammar is distinct from `oct0_get`; both lowercase and grammar-supported case variants are
+///          handled by the scanner rather than by an output-case flag.
 template <bool noskipws = false, bool skipzero = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4531,6 +4555,9 @@ oct0o_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a decimal integer without a radix prefix.
+/// @details `skipzero` controls whether redundant leading zeroes are accepted, `noskipws` controls initial whitespace,
+///          and leading `+` is rejected unless explicitly enabled.
 template <bool noskipws = false, bool skipzero = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4541,6 +4568,9 @@ dec_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a hexadecimal integer with an optionally required `0x` prefix.
+/// @details Hex digit case is accepted according to the scanner grammar. Whitespace, redundant zeroes, and leading-plus
+///          handling are compile-time options.
 template <bool noskipws = false, bool skipzero = false, bool prefix = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4551,6 +4581,8 @@ hex_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a hexadecimal integer and requires the `0x` prefix.
+/// @details It otherwise shares `hex_get` whitespace, redundant-zero, and leading-plus policies.
 template <bool noskipws = false, bool skipzero = false, bool allow_leading_plus = false,
 		  ::fast_io::details::my_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
@@ -4561,6 +4593,9 @@ hex0x_get(scalar_type &t) noexcept
 	return {t};
 }
 
+/// @brief Scans a prefixed hexadecimal address representation into an unsigned integer.
+/// @details The `0x` prefix is required and redundant leading zeroes are accepted, matching full-width address output;
+///          no pointer validity or address-space conversion is performed.
 template <bool noskipws = false, bool allow_leading_plus = false, ::fast_io::details::my_unsigned_integral scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::base_scan_mani_flags_cache<
 									16, noskipws, true, true, false, allow_leading_plus>,

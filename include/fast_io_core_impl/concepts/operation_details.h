@@ -96,6 +96,9 @@ concept constructible_to_os_c_str_or_nullptr = constructible_to_os_c_str<T> ||
 namespace manipulators
 {
 
+/// @brief Non-owning wrapper for a null-terminated operating-system character string.
+/// @details The pointer must be non-null and remain valid through consumption; length is discovered by scanning for the
+///          terminator, so use a bounded/known-size wrapper when the readable extent is limited.
 template <::std::integral ch_type>
 struct basic_os_c_str
 {
@@ -107,14 +110,21 @@ struct basic_os_c_str
 	}
 };
 
+/// @brief Wraps a non-null pointer as a null-terminated OS string view.
+/// @details No characters are copied and no validation is performed until a consumer obtains the C string.
 template <::std::integral char_type>
 inline constexpr basic_os_c_str<char_type> os_c_str(char_type const *cstr) noexcept
 {
 	return {cstr};
 }
 
+/// @brief Rejects an untyped null pointer for the non-null `os_c_str` contract.
+/// @details Use `os_c_str_or_nullptr` when null is an intentional semantic value.
 inline constexpr void os_c_str(decltype(nullptr)) = delete;
 
+/// @brief Non-owning OS C-string wrapper that explicitly permits a null pointer.
+/// @details `is_nullptr()` distinguishes the null semantic state; non-null pointers retain the ordinary terminated-string
+///          lifetime and readability requirements.
 template <::std::integral ch_type>
 struct basic_os_c_str_or_nullptr
 {
@@ -130,12 +140,17 @@ struct basic_os_c_str_or_nullptr
 	}
 };
 
+/// @brief Wraps a pointer as a nullable null-terminated OS string view.
+/// @details No ownership is taken; a null pointer remains observable through `is_nullptr()`.
 template <::std::integral char_type>
 inline constexpr basic_os_c_str_or_nullptr<char_type> os_c_str_or_nullptr(char_type const *cstr) noexcept
 {
 	return {cstr};
 }
 
+/// @brief Non-owning OS string wrapper carrying a known size while preserving a C-string contract.
+/// @details The caller guarantees that `ptr` addresses at least `n` code units and that the representation satisfies
+///          the consuming API's termination requirements.
 template <::std::integral ch_type>
 struct basic_os_c_str_with_known_size
 {
@@ -164,6 +179,8 @@ struct basic_os_c_str_with_known_size
 	}
 };
 
+/// @brief Wraps a C-string pointer together with its known character count.
+/// @details The range is `[cstr, cstr + n)`; no bound or terminator validation is performed by the factory.
 template <::std::integral char_type>
 inline constexpr basic_os_c_str_with_known_size<char_type> os_c_str_with_known_size(char_type const *cstr,
 																					::std::size_t n) noexcept
@@ -171,8 +188,14 @@ inline constexpr basic_os_c_str_with_known_size<char_type> os_c_str_with_known_s
 	return {cstr, n};
 }
 
+/// @brief Rejects an untyped null pointer for the known-size non-null C-string contract.
+/// @details A null pointer has no readable `n`-element range; use a nullable wrapper or an explicitly typed pointer only
+///          where the consuming API documents a valid null representation.
 inline constexpr void os_c_str_with_known_size(decltype(nullptr), ::std::size_t) = delete;
 
+/// @brief Non-owning counted OS character range that does not promise null termination.
+/// @details The pointer must address at least `n` readable code units. Consumers requiring a C terminator must not use
+///          this wrapper as a substitute for `basic_os_c_str_with_known_size`.
 template <::std::integral ch_type>
 struct basic_os_str_known_size_without_null_terminated
 {
@@ -197,6 +220,8 @@ struct basic_os_str_known_size_without_null_terminated
 	}
 };
 
+/// @brief Creates a counted, non-null-terminated OS string view from pointer and length.
+/// @details The range is borrowed and no scan, copy, or terminator check occurs.
 template <::std::integral char_type>
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type>
 os_str_known_size_without_null_terminated(char_type const *cstr, ::std::size_t n) noexcept
@@ -204,6 +229,8 @@ os_str_known_size_without_null_terminated(char_type const *cstr, ::std::size_t n
 	return {cstr, n};
 }
 
+/// @brief Creates a counted, non-null-terminated OS string view from a half-open pointer range.
+/// @details `end` must be reachable from `cstr` within the same array object and must not precede it.
 template <::std::integral char_type>
 inline constexpr basic_os_str_known_size_without_null_terminated<char_type>
 os_str_known_size_without_null_terminated(char_type const *cstr, char_type const *end) noexcept
@@ -211,6 +238,9 @@ os_str_known_size_without_null_terminated(char_type const *cstr, char_type const
 	return {cstr, static_cast<::std::size_t>(end - cstr)};
 }
 
+/// @brief Rejects an untyped null pointer for the counted non-null OS string contract.
+/// @details The deleted overload prevents `nullptr` plus a count from silently manufacturing a borrowed range whose
+///          `data()` cannot satisfy the stated readability requirement.
 inline constexpr void os_str_known_size_without_null_terminated(decltype(nullptr), ::std::size_t) = delete;
 
 } // namespace manipulators

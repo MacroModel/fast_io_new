@@ -331,9 +331,34 @@ inline constexpr ::std::size_t print_rsv_fp_size_with_special_cache{
 template <bool showpos, ::std::integral char_type>
 inline constexpr char_type *print_rsv_fp_sign_impl(char_type *iter, bool sign) noexcept;
 
+template <::std::integral char_type, ::std::size_t n>
+	requires(n != 0u)
+inline constexpr char_type *copy_floating_ascii_literal(
+	char8_t const (&literal)[n], char_type *iter) noexcept
+{
+	for (::std::size_t index{}; index + 1u != n; ++index)
+	{
+		*iter = ::fast_io::char_literal<char_type>(literal[index]);
+		++iter;
+	}
+	return iter;
+}
+
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_inf_literal_impl(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"INF", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"inf", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -385,6 +410,18 @@ inline constexpr char_type *prsv_fp_inf_literal_impl(char_type *iter) noexcept
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_nan_literal_impl(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"NAN", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"nan", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -436,6 +473,18 @@ inline constexpr char_type *prsv_fp_nan_literal_impl(char_type *iter) noexcept
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_nan_ind_literal_impl(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"(IND)", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"(ind)", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -487,6 +536,18 @@ inline constexpr char_type *prsv_fp_nan_ind_literal_impl(char_type *iter) noexce
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_nan_snan_literal_impl(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"(SNAN)", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"(snan)", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -1156,6 +1217,18 @@ inline constexpr char_type *prsv_fp_nan_impl(char_type *iter, mantissa_type mant
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_hex_0(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"0P+0", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"0p+0", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -1207,6 +1280,18 @@ inline constexpr char_type *prsv_fp_hex_0(char_type *iter) noexcept
 template <bool comma = false, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_hex1d(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (comma)
+		{
+			return copy_floating_ascii_literal(u8"1,", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"1.", iter);
+		}
+	}
 	if constexpr (comma)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -1258,6 +1343,18 @@ inline constexpr char_type *prsv_fp_hex1d(char_type *iter) noexcept
 template <bool comma = false, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_hex0d(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (comma)
+		{
+			return copy_floating_ascii_literal(u8"0,", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"0.", iter);
+		}
+	}
 	if constexpr (comma)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -1309,6 +1406,18 @@ inline constexpr char_type *prsv_fp_hex0d(char_type *iter) noexcept
 template <bool uppercase, ::std::integral char_type>
 inline constexpr char_type *prsv_fp_hex0p0(char_type *iter) noexcept
 {
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"0P+0", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"0p+0", iter);
+		}
+	}
 	if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
@@ -1368,7 +1477,19 @@ inline constexpr char_type *prsv_fp_dece0(char_type *iter) noexcept
 	abstract spelling in the destination execution character type; using
 	typed literals avoids assuming that narrow `char` is ASCII.
 	*/
-	if constexpr (uppercase)
+	if constexpr (!::fast_io::details::is_ascii<char_type> &&
+		(::std::same_as<char_type, char> || ::std::same_as<char_type, wchar_t>))
+	{
+		if constexpr (uppercase)
+		{
+			return copy_floating_ascii_literal(u8"0E+00", iter);
+		}
+		else
+		{
+			return copy_floating_ascii_literal(u8"0e+00", iter);
+		}
+	}
+	else if constexpr (uppercase)
 	{
 		if constexpr (::std::same_as<char_type, char>)
 		{
