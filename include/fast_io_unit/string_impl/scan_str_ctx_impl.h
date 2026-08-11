@@ -121,6 +121,29 @@ inline constexpr io_type_t<scan_string_context> scan_context_type(
 	return {};
 }
 
+/// The string scanner obtains its cursor only from the bounded whitespace/line-feed searches above. Assigning or
+/// appending to the destination cannot alter the supplied input span, so every transition returns a member of the
+/// original closed range for every supported character type.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename traits,
+		  typename allocator_type>
+inline constexpr ::std::true_type scan_context_result_in_range(
+	io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<
+									 flags, ::std::basic_string<char_type, traits, allocator_type> &>>) noexcept
+{
+	return {};
+}
+
+/// Default `std::basic_string` token scanning appends every character up to the first C whitespace and accepts that
+/// accumulated token at EOF. For a source-proved nonempty whitespace-free fragment, range construction therefore has
+/// the identical value while avoiding a redundant delimiter search and context transition.
+template <::std::integral char_type, typename traits, typename allocator_type>
+inline constexpr ::std::true_type scan_c_space_free_fragment_constructible(
+	io_reserve_type_t<char_type,
+		::std::basic_string<char_type, traits, allocator_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename traits,
 		  typename allocator_type>
 inline constexpr parse_result<char_type const *> scan_context_define(

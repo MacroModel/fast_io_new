@@ -157,6 +157,30 @@ inline constexpr bool scan_commit_iterator_if_in_current_chunk(
 	return true;
 }
 
+/// @brief Publishes a scanner cursor after its leaf CPO has proved closed-range provenance.
+/// @details The marker admitting this helper proves `result` belongs to the same array as `[first,last]`, so ordinary
+///          pointer subtraction is defined.  Exact pointer backends take the still cheaper direct assignment.  Keeping
+///          this operation separate prevents the generic address/alignment validator from entering trusted hot paths.
+template <typename input, typename current_pointer, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr void scan_commit_bounded_iterator(
+	input &in, current_pointer current_pointer_value, char_type const *first,
+	char_type const *result)
+{
+	if constexpr (::std::same_as<current_pointer, char_type const *>)
+	{
+		ibuffer_set_curr(in, result);
+	}
+	else
+	{
+		ibuffer_set_curr(in, current_pointer_value + (result - first));
+	}
+}
+
 /// @brief Executes and commits one terminal contiguous scan.
 /// @details `scan_contiguous_invoke` proves protocol selection preserves `last` as semantic EOF.  The closed-interval
 ///          validator below independently checks the customization's returned address before converting it to the
@@ -179,9 +203,16 @@ inline constexpr bool scan_contiguous_status_impl(input &in, T &arg)
 	auto [it, ec] = ::fast_io::details::scan_contiguous_invoke(
 		in, static_cast<char_type const *>(curr),
 		static_cast<char_type const *>(end), arg);
-	if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-			in, curr, static_cast<char_type const *>(curr),
-			static_cast<char_type const *>(end), it)) [[unlikely]]
+	if constexpr (
+		::fast_io::contiguous_scanner_result_in_range<char_type, T> &&
+		!::fast_io::contiguous_range_with_padding<input>)
+	{
+		::fast_io::details::scan_commit_bounded_iterator(
+			in, curr, static_cast<char_type const *>(curr), it);
+	}
+	else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+				 in, curr, static_cast<char_type const *>(curr),
+				 static_cast<char_type const *>(end), it)) [[unlikely]]
 	{
 		/*
 		The scanner violated its closed semantic-cursor contract.  Rejecting the
@@ -468,8 +499,14 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 		}
 		auto [it, ec] = scan_context_define(
 			io_reserve_type<char_type, scanner_type>, state, curr, end, arg);
-		if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-				in, curr, static_cast<char_type const *>(curr), static_cast<char_type const *>(end), it)) [[unlikely]]
+		if constexpr (::fast_io::context_scanner_result_in_range<char_type, P>)
+		{
+			::fast_io::details::scan_commit_bounded_iterator(
+				in, curr, static_cast<char_type const *>(curr), it);
+		}
+		else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+					 in, curr, static_cast<char_type const *>(curr),
+					 static_cast<char_type const *>(end), it)) [[unlikely]]
 		{
 			// Validate before committing: no parse code makes an out-of-range iterator a valid cursor.
 			throw_parse_code(parse_code::invalid);
@@ -739,9 +776,14 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					auto end{ibuffer_end(in)};
 					auto [it, ec] = scan_contiguous_define(
 						io_reserve_type<char_type, scanner_type>, curr, end, arg);
-					if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-							in, curr, static_cast<char_type const *>(curr),
-							static_cast<char_type const *>(end), it)) [[unlikely]]
+					if constexpr (::fast_io::contiguous_scanner_result_in_range<char_type, T>)
+					{
+						::fast_io::details::scan_commit_bounded_iterator(
+							in, curr, static_cast<char_type const *>(curr), it);
+					}
+					else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+								 in, curr, static_cast<char_type const *>(curr),
+								 static_cast<char_type const *>(end), it)) [[unlikely]]
 					{
 						throw_parse_code(parse_code::invalid);
 					}
@@ -784,9 +826,14 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			// valid terminal view supplies an equal pointer pair even when its length is zero.
 			auto [it, ec] = scan_contiguous_define(
 				io_reserve_type<char_type, scanner_type>, curr, end, arg);
-			if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-					in, curr, static_cast<char_type const *>(curr),
-					static_cast<char_type const *>(end), it)) [[unlikely]]
+			if constexpr (::fast_io::contiguous_scanner_result_in_range<char_type, T>)
+			{
+				::fast_io::details::scan_commit_bounded_iterator(
+					in, curr, static_cast<char_type const *>(curr), it);
+			}
+			else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+						 in, curr, static_cast<char_type const *>(curr),
+						 static_cast<char_type const *>(end), it)) [[unlikely]]
 			{
 				throw_parse_code(parse_code::invalid);
 			}
@@ -1418,7 +1465,16 @@ template <scan_proxy_fallback_transport transport, typename stack_policy,
 #endif
 inline constexpr bool scan_controls_scalar_fallback_select(input &in, Args &...args)
 {
-	if constexpr (transport == scan_proxy_fallback_transport::whole_value)
+	// A short scalar pack is smaller than the outlined ABI bridge and benefits from sharing the terminal/current cursor
+	// directly across adjacent leaf scans.  Larger packs keep the bounded outline: it prevents the refill/context bodies
+	// and proxy-address setup from growing with every call site, which is the code-size case this controller was added for.
+	if constexpr (sizeof...(Args) <= 4u)
+	{
+		auto targets{::fast_io::containers::forward_as_tuple(args...)};
+		return ::fast_io::details::decay::scan_controls_scalar_tuple<stack_policy>(
+			in, targets, ::std::index_sequence_for<Args...>{});
+	}
+	else if constexpr (transport == scan_proxy_fallback_transport::whole_value)
 	{
 		return ::fast_io::details::decay::scan_controls_scalar_fallback_owned<stack_policy>(
 			in, args...);

@@ -155,6 +155,21 @@ inline constexpr auto cond(bool pred, T1 &&t1, T2 &&t2) noexcept(::fast_io::deta
 		return ::fast_io::io_null;
 	}
 	else if constexpr (
+		::std::same_as<t1aliastype, t2aliastype> &&
+		!::std::is_reference_v<t1aliastype> &&
+		::std::is_trivially_copyable_v<t1aliastype> &&
+		::std::is_nothrow_move_constructible_v<t1aliastype>)
+	{
+		// The two normalized arms have one representation and no observable destruction. Construct both first so alias
+		// evaluation keeps the semantic node's ordering/effect rule, then return only the selected value. This collapses
+		// the common homogeneous condition before print planning without changing either argument's normalization.
+		t1aliastype first{
+			::fast_io::details::cond_store(::std::forward<T1>(t1))};
+		t2aliastype second{
+			::fast_io::details::cond_store(::std::forward<T2>(t2))};
+		return pred ? ::std::move(first) : ::std::move(second);
+	}
+	else if constexpr (
 		sizeof(condition<t2aliastype, t1aliastype>) <
 		sizeof(condition<t1aliastype, t2aliastype>))
 	{

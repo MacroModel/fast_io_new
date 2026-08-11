@@ -79,9 +79,12 @@ inline constexpr bool inplace_to_decay_context_consume(state &s, T &t, char_type
 		// The CPO result must designate this supplied fragment. Check membership before accepting even `ok`, because a
 		// successful code paired with an escaped iterator would otherwise make the next suffix and pointer arithmetic
 		// invalid; this is a range proof, not a statement about ownership of the underlying character storage.
-		if (!::fast_io::details::scan_iterator_in_current_chunk(current, last, it)) [[unlikely]]
+		if constexpr (!::fast_io::context_scanner_result_in_range<char_type, T>)
 		{
-			::fast_io::throw_parse_code(::fast_io::parse_code::invalid);
+			if (!::fast_io::details::scan_iterator_in_current_chunk(current, last, it)) [[unlikely]]
+			{
+				::fast_io::throw_parse_code(::fast_io::parse_code::invalid);
+			}
 		}
 		if (ec == ::fast_io::parse_code::ok)
 		{
@@ -314,11 +317,15 @@ inline constexpr void deal_with_single_to(char_type const *buffer_begin, char_ty
 	// and names the unqualified proxy representation.
 	auto const result{scan_contiguous_define(
 		io_reserve_type<char_type, ::std::remove_cvref_t<T>>, buffer_begin, buffer_end, t)};
-	if (!::fast_io::details::scan_iterator_in_current_chunk(buffer_begin, buffer_end, result.iter)) [[unlikely]]
+	if constexpr (!::fast_io::contiguous_scanner_result_in_range<char_type, T>)
 	{
-		// The conversion bridge owns only the materialized fragment. Validate before observing success so an escaped
-		// iterator cannot be accepted merely because this path intentionally permits an unconsumed suffix.
-		throw_parse_code(parse_code::invalid);
+		if (!::fast_io::details::scan_iterator_in_current_chunk(buffer_begin, buffer_end, result.iter)) [[unlikely]]
+		{
+			// The conversion bridge owns only the materialized fragment. Validate before observing success so an escaped
+			// iterator cannot be accepted merely because this path intentionally permits an unconsumed suffix. A scanner
+			// that explicitly proves the closed-range contract has already discharged this check at its leaf boundary.
+			throw_parse_code(parse_code::invalid);
+		}
 	}
 	if (result.code != parse_code::ok)
 	{
@@ -1313,8 +1320,19 @@ inline constexpr T basic_to_decay(Args... args)
 		// Construct the target only when the already-normalized source pack has a concrete conversion strategy.
 		if constexpr (available)
 		{
+			// A single source-proved lexical token and a target-proved range constructor need no incremental delimiter
+			// search. Both proof CPOs are required: arbitrary printables may contain spaces, while arbitrary strlike scan
+			// targets may assign semantics other than the built-in string token grammar.
+			if constexpr (
+				sizeof...(Args) == 1u &&
+				::fast_io::c_space_free_fragment_constructible_scan_target<char_type, T> &&
+				(::fast_io::c_space_free_print_fragment<char_type, Args> && ...))
+			{
+				return ::fast_io::details::decay::basic_general_concat_phase1_decay_ref_impl<
+					false, char_type, T>(args...);
+			}
 			// Scalar targets are value-initialized so a scanner can safely assign only the fields required by its protocol.
-			if constexpr (::std::is_scalar_v<T>)
+			else if constexpr (::std::is_scalar_v<T>)
 			{
 				T v{};
 				basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),

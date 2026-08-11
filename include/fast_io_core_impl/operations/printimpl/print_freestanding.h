@@ -3978,6 +3978,54 @@ inline constexpr void print_single_pass_stage_and_write(
 #endif
 }
 
+/// @brief Returns the currently writable character count without subtracting a lazy null cursor pair.
+/// @details Audited outputs expose either an all-null lazy window or one ordered allocation. Their run-time address
+///          distance is therefore both defined for the null state and numerically identical to array subtraction for
+///          the live state. Constant evaluation retains language pointer subtraction after the non-null proof.
+template <::std::integral char_type, typename output_type>
+inline constexpr ::std::size_t print_obuffer_remaining_size(
+	char_type *current, char_type *end) noexcept
+{
+	if constexpr (::fast_io::obuffer_address_distance_safe<char_type, output_type>)
+	{
+		if (::std::is_constant_evaluated())
+		{
+			return current == nullptr ? 0u : static_cast<::std::size_t>(end - current);
+		}
+		auto const current_address{reinterpret_cast<::std::uintptr_t>(current)};
+		auto const end_address{reinterpret_cast<::std::uintptr_t>(end)};
+		return static_cast<::std::size_t>((end_address - current_address) / sizeof(char_type));
+	}
+	else
+	{
+		if (current == nullptr || end == nullptr)
+		{
+			return 0u;
+		}
+		auto const difference{end - current};
+		return difference < 0 ? 0u : static_cast<::std::size_t>(difference);
+	}
+}
+
+/// @brief Identifies the normalized carrier for an ordinary signed 64-bit scalar.
+template <typename value_type>
+inline consteval bool print_signed_64_scalar_carrier() noexcept
+{
+	if constexpr (requires {
+					  typename value_type::scalar_flags_type;
+					  typename value_type::value_type;
+				  })
+	{
+		return ::std::same_as<
+			::std::remove_cvref_t<typename value_type::value_type>,
+			::std::int64_t>;
+	}
+	else
+	{
+		return false;
+	}
+}
+
 /// @brief Proves the exact grow-in-place protocol for one already-normalized source and output.
 /// @details Source and destination evidence remain deliberately separate. The source promises a cached exact size,
 ///          non-throwing checked emission, and independence from destination relocation. The output promises both an
@@ -4009,8 +4057,8 @@ template <bool line, ::std::integral char_type, typename output_type,
 	requires ::fast_io::details::decay::
 		print_cached_precise_growable_obuffer_available_v<
 			char_type, output_type, value_type>
-inline constexpr void print_cached_precise_growable_obuffer(
-	output_type &output, value_type &value)
+	inline constexpr void print_cached_precise_growable_obuffer(
+		output_type &output, value_type &value)
 {
 	using source_type = ::std::remove_cvref_t<value_type>;
 	::std::size_t const payload_size{print_reserve_precise_size(
@@ -4197,6 +4245,17 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		constexpr ::std::size_t real_size{print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>)};
 		constexpr ::std::size_t size{real_size + static_cast<::std::size_t>(line)};
 		static_assert(real_size < PTRDIFF_MAX);
+		constexpr bool prefer_static_reserve_staging{
+#if defined(__aarch64__) || defined(_M_ARM64)
+			::std::same_as<char_type, char> && real_size == 20u &&
+			::fast_io::details::decay::print_signed_64_scalar_carrier<value_type>() &&
+			requires(output &staging_output) {
+				print_static_reserve_staging_output_define(staging_output);
+			}
+#else
+			false
+#endif
+		};
 #if 0
 		if constexpr(contiguous_output_stream<output>)
 		{
@@ -4216,17 +4275,32 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		else
 #endif
 		{
-			if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> &&
-						  !asan_activated)
+			if constexpr (prefer_static_reserve_staging)
+			{
+				// The formatter keeps its fixed-address fast path, then the owning buffer
+				// absorbs the short result through its established write CPO.
+				char_type buffer[size];
+				char_type *iter{print_reserve_define(
+					::fast_io::io_reserve_type<char_type, value_type>, buffer, t)};
+				if constexpr (line)
+				{
+					*iter++ = lfch;
+				}
+				decltype(auto) staging_output{
+					print_static_reserve_staging_output_define(outstm)};
+				::fast_io::operations::decay::write_all_decay(
+					staging_output, buffer, iter);
+			}
+			else if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> &&
+							   !asan_activated)
 			{
 				// Buffered streams first try to emit the static reserve output into the current put area.
 				char_type *bcurr{obuffer_curr(outstm)};
 				char_type *bend{obuffer_end(outstm)};
-				::std::ptrdiff_t const diff{
-					bcurr == nullptr || bend == nullptr ? -1 : bend - bcurr};
 				// Equality is a valid exact fit: emission may commit the put cursor to `bend`.  The former strict
 				// comparison forced a flush or temporary allocation despite having precisely enough live storage.
-				bool fits{static_cast<::std::ptrdiff_t>(size) <= diff};
+				bool fits{size <= ::fast_io::details::decay::print_obuffer_remaining_size<
+									  char_type, output>(bcurr, bend)};
 				if constexpr (minimum_buffer_output_stream_require_size_impl<output, size>)
 				{
 					// Streams with a sufficient declared minimum buffer can flush once and then emit in place.
@@ -4236,10 +4310,8 @@ inline constexpr void print_control_single(output &outstm, T &t)
 						obuffer_minimum_size_flush_prepare_define(outstm);
 						bcurr = obuffer_curr(outstm);
 					}
-					if (bcurr == nullptr) [[unlikely]]
-					{
-						::fast_io::fast_terminate();
-					}
+					// The minimum-size CPO contract guarantees a live put area after a miss;
+					// rechecking null here adds a branch to every buffered scalar emission.
 					bcurr = print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, bcurr, t);
 					if constexpr (line)
 					{
@@ -7607,10 +7679,9 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 					constexpr ::std::size_t buffersize{rsvresult.neededspace + static_cast<::std::size_t>(needprintlf)};
 					char_type *bcurr{obuffer_curr(optstm)};
 					char_type *bend{obuffer_end(optstm)};
-					::std::ptrdiff_t const diff{
-						bcurr == nullptr || bend == nullptr ? -1 : bend - bcurr};
 					// A reserve prefix may end exactly at `bend`; no sentinel character is stored in the put area.
-					bool fits{static_cast<::std::ptrdiff_t>(buffersize) <= diff};
+					bool fits{buffersize <= ::fast_io::details::decay::print_obuffer_remaining_size<
+												char_type, outputstmtype>(bcurr, bend)};
 					if constexpr (minimum_buffer_output_stream_require_size_impl<outputstmtype, buffersize>)
 					{
 						// Streams with a sufficient minimum put area can prepare the buffer once before writing in place.
@@ -7620,10 +7691,8 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 							obuffer_minimum_size_flush_prepare_define(optstm);
 							bcurr = obuffer_curr(optstm);
 						}
-						if (bcurr == nullptr) [[unlikely]]
-						{
-							::fast_io::fast_terminate();
-						}
+						// A successful minimum-buffer prepare is the capacity proof; avoid a
+						// redundant null guard in the hot grouped-reserve path.
 						bcurr = ::fast_io::details::decay::print_n_reserve<rsvresult.position, char_type>(
 							bcurr, t, args...);
 						if constexpr (needprintlf)
@@ -7994,6 +8063,10 @@ struct print_semantic_value_prefix_continuation
 	/// @param    tail_args the tail arguments
 	/// @return   decltype(auto) the downstream continuation result
 	template <typename... TailArgs>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	FAST_IO_GNU_ALWAYS_INLINE
+#endif
 	inline constexpr decltype(auto) operator()(TailArgs &&...tail_args) const
 	{
 		return (*contptr)(::std::forward<T>(*valueptr), ::std::forward<TailArgs>(tail_args)...);
@@ -8298,6 +8371,10 @@ inline constexpr decltype(auto) print_semantic_select_condition_branch(continuat
 
 /// @brief    Completes condition selection for a normalized semantic run.
 template <::std::integral char_type, typename continuation>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&cont)
 {
 	return ::std::forward<continuation>(cont)();
@@ -8307,6 +8384,10 @@ inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&
 /// @details  This removes inactive branch cost from the strategy model and prevents condition-pack boundaries from
 ///           fragmenting an otherwise coalescible run.
 template <::std::integral char_type, typename continuation, typename T, typename... Args>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr decltype(auto) print_semantic_select_conditions(continuation &&cont, T &&t, Args &&...args)
 {
 	if constexpr (::fast_io::details::decay::print_semantic_top_level_condition_v<T>)
@@ -13503,6 +13584,18 @@ inline consteval bool print_semantic_precise_coalesce_strategy_selected() noexce
 		return false;
 	}
 	else if constexpr (
+		contains_width &&
+		::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> &&
+		(::fast_io::details::decay::print_semantic_bounded_size_ok<
+			 char_type,
+			 ::fast_io::details::decay::print_semantic_forwarded_arg_t<
+				 char_type, Args>>::value && ...))
+	{
+		// A writable put area turns an inexpensive width bound into the capacity proof for one-pass child emission.
+		// Exact sizing would traverse a reserve-bounded scalar only to repeat its conversion during materialization.
+		return false;
+	}
+	else if constexpr (
 		semantic_leaf_count >=
 			::fast_io::details::decay::print_semantic_precise_materialization_leaf_threshold &&
 		run_static_bound != SIZE_MAX)
@@ -14776,6 +14869,10 @@ struct print_semantic_emit_flat_runtime_continuation
 	/// @tparam   FilteredArgs the filtered argument types
 	/// @param    filtered_args the filtered arguments
 	template <typename... FilteredArgs>
+#if (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || \
+	(defined(__clang__) && __clang_major__ >= 13)
+	FAST_IO_GNU_ALWAYS_INLINE
+#endif
 	inline constexpr void operator()(FilteredArgs &&...filtered_args) const
 	{
 		constexpr bool has_remaining_semantic_node{
@@ -16158,6 +16255,101 @@ inline constexpr decltype(auto) print_freestanding_decay(outputstmtype optstm, A
 {
 	return ::fast_io::operations::decay::print_freestanding_decay_impl<line>(
 		optstm, args...);
+}
+
+/// @brief Recognizes one width around a plain type-bounded leaf for direct put-area materialization.
+/// @details The child bound is a type constant, so checking `max(width, child_bound)` does not inspect or format the
+///          child.  This is intentionally disjoint from the source-authored one-pass protocol below: dynamic or
+///          composite sources retain that stronger CPO and its complete-run planner.
+template <::std::integral char_type, typename outputstmtype, typename T>
+inline consteval bool print_semantic_single_width_put_area_run() noexcept
+{
+	if constexpr (
+		!::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> ||
+		!::fast_io::single_pass_bounded_obuffer_materialization_safe<
+			char_type, outputstmtype> ||
+		!::fast_io::details::decay::print_buffered_mixed_nothrow_put_area<
+			outputstmtype, char_type> ||
+		!::fast_io::details::decay::print_semantic_execution_node_v<T>)
+	{
+		return false;
+	}
+	else
+	{
+		using node_expression = decltype(
+			::fast_io::details::decay::print_semantic_node_ref(
+				::std::declval<T &>()));
+		using node_type = ::std::remove_cvref_t<node_expression>;
+		if constexpr (!::fast_io::details::decay::print_semantic_width_v<node_type>)
+		{
+			return false;
+		}
+		else
+		{
+			using child_expression = decltype((::std::declval<node_expression>().reference));
+			using child_type =
+				::fast_io::details::decay::print_semantic_stable_input_forward_t<
+					char_type, child_expression>;
+			return !::fast_io::details::decay::print_semantic_execution_node_v<child_type> &&
+				   ::fast_io::details::decay::print_semantic_static_bounded_size<
+					   char_type, child_type>::available;
+		}
+	}
+}
+
+/// @brief Emits one plain type-bounded width without entering complete semantic run planning.
+/// @details A successful capacity proof formats the child once into unpublished put-area storage and commits once.
+///          A miss has observed only destination cursors and the width scalar, so the established checked dispatcher
+///          remains the exact continuation and can refresh, allocate, or stream according to destination policy.
+template <bool line, typename outputstmtype, typename width_source_type>
+	requires(
+		requires { typename outputstmtype::output_char_type; } &&
+		::fast_io::operations::decay::print_semantic_single_width_put_area_run<
+			typename outputstmtype::output_char_type, outputstmtype,
+			width_source_type>() &&
+		!::fast_io::operations::decay::print_semantic_single_pass_bounded_put_area_run<
+			typename outputstmtype::output_char_type, outputstmtype,
+			width_source_type>() &&
+		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
+			outputstmtype> &&
+		!::fast_io::operations::decay::defines::has_status_print_define<
+			line, outputstmtype, width_source_type>)
+inline constexpr void print_freestanding_decay_borrowed_output(
+	outputstmtype &optstm, width_source_type width_source)
+{
+	using char_type = typename outputstmtype::output_char_type;
+	auto &&node_ref{
+		::fast_io::details::decay::print_semantic_node_ref(width_source)};
+	using child_expression = decltype((node_ref.reference));
+	using child_type =
+		::fast_io::details::decay::print_semantic_stable_input_forward_t<
+			char_type, child_expression>;
+	constexpr ::std::size_t child_bound{
+		::fast_io::details::decay::print_semantic_static_bounded_size<
+			char_type, child_type>::size};
+	::std::size_t required{node_ref.width < child_bound ? child_bound : node_ref.width};
+	if constexpr (line)
+	{
+		required = ::fast_io::details::intrinsics::add_or_overflow_die(
+			required, static_cast<::std::size_t>(1u));
+	}
+	char_type *const current{obuffer_curr(optstm)};
+	char_type *const end{obuffer_end(optstm)};
+	if (current != nullptr && end != nullptr && current <= end &&
+		static_cast<::std::size_t>(end - current) >= required) [[likely]]
+	{
+		char_type *iter{
+			::fast_io::operations::decay::print_semantic_emit_unchecked_arg<
+				char_type, true>(current, width_source)};
+		if constexpr (line)
+		{
+			*iter++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+		}
+		obuffer_set_curr(optstm, iter);
+		return;
+	}
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(
+		optstm, width_source);
 }
 
 /// @brief Gives a destination-neutral bounded semantic run one shared put-area attempt.

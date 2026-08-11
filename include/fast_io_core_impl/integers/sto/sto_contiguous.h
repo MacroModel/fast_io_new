@@ -1012,79 +1012,6 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 	T res{out};
 
 	/*
-	A 20-character decimal range for an unsigned type whose storage width matches
-	uint_least64_t is the maximum-width case on the measured AArch64 targets.  AArch64
-	validates 8+8+4 SWAR blocks, rejects a possible 21st digit, and compares the
-	last split against the corresponding quotient and remainder of the maximum
-	value of uint_least64_t before multiplying.
-	Those checks prove the final arithmetic cannot overflow.  Failed validation
-	falls through to the general scanner.  Native M4 retained this path; no native
-	traditional-AArch64 timing is inferred from cross-target assembly.
-	*/
-#if defined(__aarch64__) || defined(_M_ARM64)
-	if constexpr (base == 10u && sizeof(char_type) == sizeof(char8_t) &&
-				  ::fast_io::details::is_ascii<char_type> &&
-				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
-	{
-		if (20u <= diff &&
-			char_is_digit<10u, char_type>(
-				static_cast<unsigned_char_type>(first[7u]))) [[unlikely]]
-		{
-			auto parse_eight_digits = [](char_type const *digits,
-										 ::std::uint_least64_t &value) noexcept {
-				::std::uint_least64_t word;
-				::fast_io::freestanding::my_memcpy(__builtin_addressof(word), digits, sizeof(word));
-				word = ::fast_io::little_endian(word);
-				if ((((word + 0x4646464646464646u) | (word - 0x3030303030303030u)) &
-					 0x8080808080808080u) != 0u) [[unlikely]]
-				{
-					return false;
-				}
-				constexpr ::std::uint_least64_t mask{0x000000FF000000FFu};
-				constexpr ::std::uint_least64_t mul1{
-					100u + (static_cast<::std::uint_least64_t>(1000000u) << 32u)};
-				constexpr ::std::uint_least64_t mul2{
-					1u + (static_cast<::std::uint_least64_t>(10000u) << 32u)};
-				word -= 0x3030303030303030u;
-				word = word * 10u + (word >> 8u);
-				value = (((word & mask) * mul1) + (((word >> 16u) & mask) * mul2)) >> 32u;
-				return true;
-			};
-			::std::uint_least64_t high;
-			::std::uint_least64_t low;
-			if (parse_eight_digits(first, high) && parse_eight_digits(first + 8, low)) [[likely]]
-			{
-				::std::uint_least32_t word;
-				::fast_io::freestanding::my_memcpy(__builtin_addressof(word), first + 16, sizeof(word));
-				word = ::fast_io::little_endian(word);
-				if ((((word + 0x46464646u) | (word - 0x30303030u)) & 0x80808080u) == 0u) [[likely]]
-				{
-					word -= 0x30303030u;
-					word = word * 10u + (word >> 8u);
-					auto const tail{static_cast<::std::uint_least64_t>(
-						((word & 0x000000FFu) * 100u) + ((word >> 16u) & 0x000000FFu))};
-					auto const high16{high * 100000000u + low};
-					auto const next{first + 20};
-					if (next != last && char_is_digit<10u, char_type>(
-											static_cast<unsigned_char_type>(*next))) [[unlikely]]
-					{
-						return {skip_digits<10u>(next + 1, last), parse_code::overflow};
-					}
-					constexpr auto risky_value{static_cast<::std::uint_least64_t>(-1) / 10000u};
-					constexpr auto risky_digit{static_cast<::std::uint_least64_t>(-1) % 10000u};
-					if (risky_value < high16 || (high16 == risky_value && risky_digit < tail)) [[unlikely]]
-					{
-						return {next, parse_code::overflow};
-					}
-					out = static_cast<T>(high16 * 10000u + tail);
-					return {next, parse_code::ok};
-				}
-			}
-		}
-	}
-#endif
-
-	/*
 	All multi-byte scalar SWAR blocks below canonicalize the loaded word to
 	little-endian lane order.  Consequently the first code unit occupies the low
 	lane, countr_zero locates the earliest invalid input unit, and the documented
@@ -1221,6 +1148,52 @@ runtime_scan_int_contiguous_none_simd_space_part_define_impl(char_type const *fi
 							}
 							first += sizeof(::std::uint_least64_t);
 						}
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+						if constexpr (base_char_type == 10u && my_unsigned_integral<T> &&
+									  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+						{
+							// Once two packed blocks have produced the first sixteen digits, finish a possible
+							// maximum-width decimal in place.  This shares the validation already paid by the
+							// ordinary large-range scanner instead of speculatively reparsing from byte zero.
+							if (static_cast<::std::size_t>(last - first) >= 4u &&
+								static_cast<::std::size_t>(first - (first_phase_last - mn_val)) == 16u)
+							{
+								::std::uint_least32_t word;
+								::fast_io::freestanding::my_memcpy(
+									__builtin_addressof(word), first, sizeof(word));
+								word = ::fast_io::little_endian(word);
+								if ((((word + 0x46464646u) | (word - 0x30303030u)) &
+									 0x80808080u) == 0u) [[likely]]
+								{
+									word -= 0x30303030u;
+									word = word * 10u + (word >> 8u);
+									auto const tail{static_cast<::std::uint_least64_t>(
+										((word & 0x000000FFu) * 100u) +
+										((word >> 16u) & 0x000000FFu))};
+									auto const next{first + 4u};
+									if (next != last && char_is_digit<10u, char_type>(
+													   static_cast<unsigned_char_type>(*next))) [[unlikely]]
+									{
+										return {skip_digits<10u>(next + 1u, last), parse_code::overflow};
+									}
+									constexpr auto risky_value{
+										static_cast<::std::uint_least64_t>(-1) / 10000u};
+									constexpr auto risky_digit{
+										static_cast<::std::uint_least64_t>(-1) % 10000u};
+									if (risky_value < static_cast<unsigned_type>(res) ||
+										(static_cast<unsigned_type>(res) == risky_value &&
+										 risky_digit < tail)) [[unlikely]]
+									{
+										return {next, parse_code::overflow};
+									}
+									out = static_cast<T>(
+										static_cast<unsigned_type>(res) * 10000u + tail);
+									return {next, parse_code::ok};
+								}
+							}
+						}
+#endif
 					}
 
 					if constexpr (max_size >= sizeof(::std::uint_least32_t))
@@ -2889,7 +2862,11 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 #endif
 	if constexpr (base <= 16 && sizeof(char_type) == sizeof(char8_t) &&
 				  ::fast_io::details::is_ascii<char_type> &&
-				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t))
+				  sizeof(unsigned_type) <= sizeof(::std::uint_least64_t)
+#if defined(__aarch64__) || defined(_M_ARM64)
+				  && !(base == 10u && my_signed_integral<T>)
+#endif
+	)
 	{
 		constexpr bool inline_nonoverflowing_alnum{
 			10u < base && base < 16u &&
@@ -3579,7 +3556,9 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	not a native traditional-core or unmeasured-compiler timing claim.
 	*/
 #if defined(__aarch64__) || defined(_M_ARM64)
-	if constexpr (((5u <= base && base <= 9u) || 16u < base) && my_unsigned_integral<T> &&
+	if constexpr (((((5u <= base && base <= 9u) || 16u < base) &&
+					my_unsigned_integral<T>) ||
+				   (base == 10u && my_signed_integral<T>)) &&
 				  sizeof(char_type) == sizeof(char8_t) &&
 				  ::fast_io::details::is_ascii<char_type> &&
 				  sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
@@ -3590,6 +3569,8 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 		{
 			// The first digit is already validated and mapped above. Starting the
 			// AArch64 accumulator with it removes one table load and one loop trip.
+			// The unsigned-width bound also covers a signed destination's accumulator;
+			// its narrower positive/negative limit remains checked after parsing.
 			res = static_cast<unsigned_type>(first_digit);
 			parse_first = first + 1;
 		}
@@ -4625,16 +4606,68 @@ scan_context_type(io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_m
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_integral T>
 inline constexpr parse_result<char_type const *>
 scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T &>>,
-					   char_type const *begin, char_type const *end,
-					   ::fast_io::manipulators::scalar_manip_t<flags, T &> t) noexcept
+						   char_type const *begin, char_type const *end,
+						   ::fast_io::manipulators::scalar_manip_t<flags, T &> t) noexcept
 {
 	return details::scan_int_contiguous_define_impl<flags.base, flags.noskipws, flags.showbase, flags.full,
-													flags.modern_octal, flags.allow_leading_plus>(
+												flags.modern_octal, flags.allow_leading_plus>(
 		begin, end, t.reference);
 }
 
+/// The integer leaf advances only by bounded pointer iteration over `[begin,end]` and every early/error result returns
+/// one of those cursors.  Advertising that proof lets buffered terminal dispatch commit directly while open third-party
+/// scanner CPOs retain generic address and alignment validation.
 template <::std::integral char_type, manipulators::scalar_flags flags,
 		  details::my_integral T>
+inline constexpr ::std::true_type scan_contiguous_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+/// Every integer context transition advances by bounded iteration over the exact supplied chunk. This is independent
+/// of whether the token completes, remains partial, or reports an error, so trusted context dispatch can publish its
+/// cursor without repeating the generic address/alignment proof on every refill phase.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type scan_context_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+/// Integer formatting emits only digits and optional lexical punctuation (sign, base prefix, digit separator). None of
+/// those spellings is a C whitespace character in the selected execution-character domain, so a target which separately
+/// accepts a complete whitespace-free fragment may consume the full formatted range without a token-search pass.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type print_fragment_c_space_free(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
+/// Integer contiguous and context leaves implement the same complete-input grammar, overflow policy, target assignment,
+/// and consumed cursor.  On a terminal input the context EOF transition therefore has no observable behavior absent
+/// from the contiguous result.  Refillable chunks do not consume this proof and retain the context state machine.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type scan_context_terminal_contiguous_equivalent(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+			  details::my_integral T>
 inline constexpr ::std::size_t scan_context_current_chunk_minimum_size(
 	io_reserve_type_t<
 		char_type,

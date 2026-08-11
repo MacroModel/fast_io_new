@@ -74,6 +74,22 @@ concept range_constructible_strlike =
 		{ strlike_construct_define(io_strlike_type<char_type, T>, first, first) } -> ::std::same_as<T>;
 	};
 
+/// @brief Proves that a scan target's ordinary token result may be range-constructed from one C-space-free fragment.
+/// @details The target provider promises that, from its initial state, scanning a nonempty complete fragment containing
+///          no C whitespace through EOF has exactly the same value and externally visible effects as constructing `T`
+///          from that full character range. This is deliberately separate from the source marker: neither side alone
+///          may bypass the context protocol, and unmarked/custom targets retain ordinary scanning.
+template <typename char_type, typename T>
+concept c_space_free_fragment_constructible_scan_target =
+	::std::integral<char_type> &&
+	::fast_io::range_constructible_strlike<char_type, ::std::remove_cvref_t<T>> &&
+	requires {
+		{
+			scan_c_space_free_fragment_constructible(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Defines the construction/storage boundary for a string-like concat result.
 /// @details `T` must be a complete, unqualified, default-constructible object and provide either exact range
 ///          construction or the writable cursor protocol. A cursor provider has the additional semantic obligation

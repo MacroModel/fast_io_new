@@ -890,7 +890,7 @@ inline constexpr bool try_sized_range_view_put_area_direct_scatter(
 ///          non-throwing, publishing the final cursor once is observationally
 ///          equivalent on outputs which explicitly permit deferred commit.
 template <::std::integral char_type, ::std::contiguous_iterator It,
-	typename output>
+		  typename output>
 	requires(
 		::fast_io::sized_range_view_contiguous_staged<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
@@ -946,6 +946,77 @@ try_sized_range_view_put_area_staged(
 	}
 	auto *const final{
 		::fast_io::sized_range_view_staged_define(initial, value)};
+	obuffer_set_curr(out, final);
+	return true;
+}
+
+/// @brief Emits a fixed-reserve sized range into one already-sufficient put area.
+/// @details The ordinary one-pass range formatter publishes the output cursor after every element pair. That is the
+///          right fallback when the destination must grow or flush, but it is unnecessary for an append destination
+///          whose current put area already contains the complete static reserve bound. In that case the range reserve
+///          protocol is itself a one-traversal writer, so using it here removes all intermediate CPO redispatch and
+///          cursor commits without reintroducing the discarded measurement pass which `print_put_area_preferred`
+///          deliberately avoids.
+///
+///          This is not inferred from the presence of cursor CPOs alone. The element formatter must have a static
+///          reserve bound, the complete range writer must be non-throwing, and the destination must explicitly permit
+///          deferred cursor publication. A failed overflow/capacity proof performs no writes and leaves the established
+///          streaming path in control.
+template <::std::integral char_type, ::std::input_iterator It, typename output>
+	requires(
+		::fast_io::reserve_printable<
+			char_type, typename ::fast_io::sized_range_view_t<char_type, It>::forwarded_value_type> &&
+		::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It> &&
+		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
+		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
+try_sized_range_view_put_area_reserved(
+	output &out, sized_range_view_t<char_type, It> const &value) noexcept
+{
+	if (value.size == 0u)
+	{
+		return true;
+	}
+	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
+	using value_type = typename view_type::forwarded_value_type;
+	constexpr auto element_tag{
+		::fast_io::io_reserve_type<char_type, value_type>};
+	constexpr ::std::size_t element_reserve{
+		print_reserve_size(element_tag)};
+	constexpr ::std::size_t maximum_size{
+		(::std::numeric_limits<::std::size_t>::max)()};
+	if constexpr (element_reserve != 0u)
+	{
+		if (value.size > maximum_size / element_reserve)
+		{
+			return false;
+		}
+	}
+	::std::size_t required{value.size * element_reserve};
+	if (value.sep.len != 0u)
+	{
+		auto const separator_count{value.size - 1u};
+		if (separator_count > (maximum_size - required) / value.sep.len)
+		{
+			return false;
+		}
+		required += separator_count * value.sep.len;
+	}
+
+	char_type *const initial{obuffer_curr(out)};
+	char_type *const end{obuffer_end(out)};
+	if (initial == nullptr || end == nullptr)
+	{
+		return false;
+	}
+	auto const available_difference{end - initial};
+	if (available_difference < 0 ||
+		static_cast<::std::size_t>(available_difference) < required)
+	{
+		return false;
+	}
+	auto *const final{print_reserve_define(
+		::fast_io::io_reserve_type<char_type, view_type>, initial, value)};
 	obuffer_set_curr(out, final);
 	return true;
 }
@@ -1014,6 +1085,18 @@ inline constexpr void print_define(io_reserve_type_t<char_type, sized_range_view
 		static_assert(extent != 0u);
 		if (extent <= t.size &&
 			::fast_io::try_sized_range_view_put_area_staged(out, t))
+		{
+			return;
+		}
+	}
+	if constexpr (
+		::fast_io::reserve_printable<
+			char_type, typename ::fast_io::sized_range_view_t<char_type, It>::forwarded_value_type> &&
+		::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It> &&
+		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
+		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
+	{
+		if (::fast_io::try_sized_range_view_put_area_reserved(out, t))
 		{
 			return;
 		}

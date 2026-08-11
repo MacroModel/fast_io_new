@@ -329,6 +329,28 @@ inline constexpr ::std::true_type print_single_pass_bounded_obuffer_materializat
 
 template <::std::integral char_type, typename io_buffer_type>
 	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
+inline constexpr ::std::true_type obuffer_address_distance_safe_define(
+	::fast_io::io_reserve_type_t<char_type, basic_io_buffer_ref<io_buffer_type>>) noexcept
+{
+	// The lazy state is exactly {nullptr,nullptr,nullptr}; every initialized state is one ordered allocation window.
+	return {};
+}
+
+/// @brief Exposes the exact owning buffer only to the static-reserve staging strategy.
+/// @details Formatting a signed full-width decimal into a stable local buffer is materially faster on AArch64 than
+///          advancing the conversion directly through a large streaming put area. Returning the owner lets the final
+///          short write retain the ordinary buffered write graph and its allocation/flush policy. The core dispatcher
+///          admits this CPO only for that measured scalar/architecture combination; other reserve outputs continue to
+///          use direct put-area materialization.
+template <typename io_buffer_type>
+inline constexpr io_buffer_type &print_static_reserve_staging_output_define(
+	basic_io_buffer_ref<io_buffer_type> iobref) noexcept
+{
+	return *iobref.iobptr;
+}
+
+template <::std::integral char_type, typename io_buffer_type>
+	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
 inline constexpr ::std::size_t
 	obuffer_minimum_size_define(::fast_io::io_reserve_type_t<char_type, basic_io_buffer_ref<io_buffer_type>>)
 {

@@ -85,6 +85,42 @@ concept contiguous_scannable = ::std::integral<char_type> && requires(char_type 
 	} -> ::std::same_as<parse_result<char_type const *>>;
 };
 
+/// @brief Proves that an ordinary contiguous scanner always returns a cursor in its supplied closed range.
+/// @details The base contiguous protocol exposes an open ADL customization point, so a dispatcher cannot infer pointer
+///          provenance merely from the return type.  Without this marker it validates the returned address and element
+///          alignment before publishing a cursor.  A provider returning `true_type` promises that every result of
+///          `scan_contiguous_define(tag, first, last, target)`, for every parse code and target effect, is either `first`,
+///          `last`, or a pointer to a live `char_type` element between them in the same array.  That promise makes direct
+///          pointer commit valid and removes the generic integer-address validation from trusted leaf scanners.
+///
+///          This is a proof marker, not a preference or cost hint.  It does not cover context or padding CPOs, does not
+///          authorize reads outside `[first,last)`, and does not weaken any parse-code rule.  Third-party scanners remain
+///          checked unless they explicitly accept the complete semantic obligation.
+/// @fn       scan_contiguous_result_in_range
+/// @return   ::std::true_type
+template <typename char_type, typename T>
+concept contiguous_scanner_result_in_range =
+	contiguous_scannable<char_type, T> && requires {
+		{
+			scan_contiguous_result_in_range(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Proves that one normalized printable fragment never emits a C whitespace character.
+/// @details This source-side marker allows an in-memory conversion to distinguish a complete lexical token from an
+///          arbitrary printable range. The promise covers every value of the advertised printable type and the exact
+///          character domain named by the tag. It does not imply a static size, replayability, or absence of other
+///          punctuation. Providers opt in by returning `true_type` from `print_fragment_c_space_free(tag)`.
+template <typename char_type, typename T>
+concept c_space_free_print_fragment =
+	::std::integral<char_type> && requires {
+		{
+			print_fragment_c_space_free(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief A terminal whole-range scanner with a separate padding-aware CPO.
 /// @details `scan_contiguous_padding_define(tag, first, last, padding, target)` receives two distinct boundaries.
 ///          `last` is the true terminal position of the input, while `padding` is the number of additional readable
@@ -266,6 +302,26 @@ concept context_scannable = ::std::integral<char_type> && requires(char_type con
 		} -> ::std::same_as<parse_code>;
 	};
 };
+
+/// @brief Proves that every ordinary context-scanner transition returns a cursor in its supplied closed range.
+/// @details Context scanning is an open ADL protocol just like contiguous scanning. Generic dispatch therefore checks
+///          the numeric address and element alignment of every returned iterator before publishing it. A provider may
+///          remove that repeated validation by returning `true_type` from this marker and accepting the complete proof
+///          obligation for every state, parse code, target effect, and input span passed to `scan_context_define`.
+///
+///          This marker covers only the ordinary stateful CPO. It does not prove the separate transactional current-
+///          chunk accelerator, the EOF transition, or a contiguous scanner. Third-party context scanners remain
+///          checked unless they explicitly advertise this contract.
+/// @fn       scan_context_result_in_range
+/// @return   ::std::true_type
+template <typename char_type, typename T>
+concept context_scanner_result_in_range =
+	context_scannable<char_type, T> && requires {
+		{
+			scan_context_result_in_range(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
 
 /// @brief Optional transactional fast path for a context scanner on one buffered input chunk.
 /// @details `scan_context_current_chunk_minimum_size(tag)` advertises the smallest buffer capacity for which dispatching
@@ -2154,6 +2210,20 @@ concept single_pass_bounded_obuffer_materialization_safe =
 				io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
 		} -> ::std::same_as<::std::true_type>;
 	});
+
+/// @brief Proves that a put area's cursor/end pair has a safe address-distance representation.
+/// @details The provider promises that each observed pair is either two null sentinels or two pointers into the same
+///          live character array with `current <= end`. At run time a dispatcher may consequently compute remaining
+///          capacity from their unsigned addresses; the null pair yields zero and the live pair yields the same element
+///          count as pointer subtraction, without performing undefined subtraction on lazy null sentinels. This marker
+///          does not authorize writes, cursor folding, or reuse across another output operation.
+template <typename char_type, typename output>
+concept obuffer_address_distance_safe = ::std::integral<char_type> && requires {
+	{
+		obuffer_address_distance_safe_define(
+			io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
+	} -> ::std::same_as<::std::true_type>;
+};
 
 /// @brief Marks an output whose put area is safe for the compiler-constant materialization strategy.
 /// @details The general deferred-commit marker remains the default proof. An output may instead opt in only to this

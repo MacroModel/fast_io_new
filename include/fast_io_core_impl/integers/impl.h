@@ -3300,6 +3300,9 @@ inline char_type *print_reserve_hexadecimal_16_ssse3(char_type *first, T value) 
 template <::std::size_t base, bool uppercase = false, ::std::integral char_type,
 		  typename result_type = char_type *, my_unsigned_integral T>
 	requires(base == 2u || base == 4u || base == 8u || base == 16u || base == 32u)
+#if defined(__aarch64__) || defined(_M_ARM64)
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
 inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T value) noexcept
 {
 	/*
@@ -3497,65 +3500,71 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 	}
 	else if constexpr (base == 16u)
 	{
-		if (value < static_cast<T>(16777216u)) [[likely]]
+		constexpr ::std::size_t aarch64_type_bits{::std::numeric_limits<T>::digits};
+		bool within_table_range{true};
+		if constexpr (aarch64_type_bits > 40u)
 		{
-			if (value < static_cast<T>(256u))
+			/*
+			One outer range split serves both table tiers. Random full-width
+			integers now pay one rejected comparison before the common backward
+			writer instead of separately rejecting the 24- and 40-bit tiers.
+			Values admitted here retain the complete short table graph below.
+			*/
+			within_table_range = value < static_cast<T>(1099511627776u);
+		}
+		if (within_table_range)
+		{
+			if (value < static_cast<T>(16777216u))
 			{
-				if (value < static_cast<T>(16u))
+				if (value < static_cast<T>(256u))
 				{
-					*first = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
-						static_cast<char8_t>(value));
-					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 1u);
+					if (value < static_cast<T>(16u))
+					{
+						*first = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+							static_cast<char8_t>(value));
+						return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 1u);
+					}
+					constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
+					::std::size_t const index{static_cast<::std::size_t>(value) * 2u};
+					non_overlapped_copy_n(table + index, 2u, first);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 2u);
 				}
 				constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
-				::std::size_t const index{static_cast<::std::size_t>(value) * 2u};
-				non_overlapped_copy_n(table + index, 2u, first);
-				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 2u);
-			}
-			constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
-			if (value < static_cast<T>(65536u))
-			{
-				T const high{static_cast<T>(value >> 8u)};
+				if (value < static_cast<T>(65536u))
+				{
+					T const high{static_cast<T>(value >> 8u)};
+					::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
+					if (high < static_cast<T>(16u))
+					{
+						first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
+							static_cast<char8_t>(high));
+						non_overlapped_copy_n(table + low_index, 2u, first + 1u);
+						return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 3u);
+					}
+					::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
+					non_overlapped_copy_n(table + high_index, 2u, first);
+					non_overlapped_copy_n(table + low_index, 2u, first + 2u);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 4u);
+				}
+				T const high{static_cast<T>(value >> 16u)};
+				::std::size_t const middle_index{
+					static_cast<::std::size_t>((value >> 8u) & static_cast<T>(255u)) * 2u};
 				::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
 				if (high < static_cast<T>(16u))
 				{
 					first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
 						static_cast<char8_t>(high));
-					non_overlapped_copy_n(table + low_index, 2u, first + 1u);
-					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 3u);
+					non_overlapped_copy_n(table + middle_index, 2u, first + 1u);
+					non_overlapped_copy_n(table + low_index, 2u, first + 3u);
+					return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 5u);
 				}
 				::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
 				non_overlapped_copy_n(table + high_index, 2u, first);
-				non_overlapped_copy_n(table + low_index, 2u, first + 2u);
-				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 4u);
+				non_overlapped_copy_n(table + middle_index, 2u, first + 2u);
+				non_overlapped_copy_n(table + low_index, 2u, first + 4u);
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
 			}
-			T const high{static_cast<T>(value >> 16u)};
-			::std::size_t const middle_index{
-				static_cast<::std::size_t>((value >> 8u) & static_cast<T>(255u)) * 2u};
-			::std::size_t const low_index{static_cast<::std::size_t>(value & static_cast<T>(255u)) * 2u};
-			if (high < static_cast<T>(16u))
-			{
-				first[0] = ::fast_io::details::charliteralofnumber<char_type, uppercase>(
-					static_cast<char8_t>(high));
-				non_overlapped_copy_n(table + middle_index, 2u, first + 1u);
-				non_overlapped_copy_n(table + low_index, 2u, first + 3u);
-				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 5u);
-			}
-			::std::size_t const high_index{static_cast<::std::size_t>(high) * 2u};
-			non_overlapped_copy_n(table + high_index, 2u, first);
-			non_overlapped_copy_n(table + middle_index, 2u, first + 2u);
-			non_overlapped_copy_n(table + low_index, 2u, first + 4u);
-			return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 6u);
-		}
-		constexpr ::std::size_t aarch64_type_bits{::std::numeric_limits<T>::digits};
-		if constexpr (aarch64_type_bits > 24u)
-		{
-			bool within_short_range{true};
-			if constexpr (aarch64_type_bits > 40u)
-			{
-				within_short_range = value < static_cast<T>(1099511627776u);
-			}
-			if (within_short_range)
+			if constexpr (aarch64_type_bits > 24u)
 			{
 				constexpr auto const *table{power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
 				::std::size_t const index0{
@@ -3606,6 +3615,30 @@ inline constexpr result_type print_reserve_power_of_two_main(char_type *first, T
 				non_overlapped_copy_n(table + index1, 2u, first + 4u);
 				non_overlapped_copy_n(table + index0, 2u, first + 6u);
 				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 8u);
+			}
+		}
+		if constexpr (aarch64_type_bits > 60u)
+		{
+			/*
+			A value at least 2^60 has exactly sixteen hexadecimal digits. The
+			fixed representation lets the common full-width case skip countl_zero,
+			length arithmetic, and all residual-width branches while retaining the
+			same two-digit table used by the short tiers. Uniform uint64 input takes
+			this path for fifteen out of sixteen values; smaller values keep either
+			the table-specialized or generic variable-width formatter.
+			*/
+			if (value >= (static_cast<T>(1u) << 60u))
+			{
+				constexpr auto const *table{
+					power_of_two_digits_table<char_type, base, 2u, uppercase>.data()};
+				for (::std::size_t byte_index{}; byte_index != 8u; ++byte_index)
+				{
+					auto const shift{static_cast<unsigned>((7u - byte_index) * 8u)};
+					auto const byte{static_cast<::std::size_t>(
+						(value >> shift) & static_cast<T>(255u))};
+					non_overlapped_copy_n(table + byte * 2u, 2u, first + byte_index * 2u);
+				}
+				return ::fast_io::details::print_reserve_power_of_two_result<result_type>(first + 16u);
 			}
 		}
 	}
@@ -5311,9 +5344,25 @@ inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, T
 	{
 		return details::print_integer_reserved_size_cache<10, false, false, false, char8_t>;
 	}
+	else if constexpr (details::my_signed_integral<::std::remove_cvref_t<T>>)
+	{
+		/*
+		The unmanipulated decimal spelling never requests `full`, so its exact
+		static bound is one sign plus the decimal width of the signed maximum.
+		The minimum has the same decimal width on every binary integral type.
+		Do not borrow the wider scalar-manipulator cache here: that cache must
+		also cover `mnp::full`, whose unsigned-width spelling is deliberately one
+		character larger for int64_t. Besides saving stack, the exact twenty-byte
+		int64_t bound preserves natural alignment for the local reserve buffer.
+		*/
+		return ::fast_io::details::cal_max_int_size<
+				   ::std::remove_cvref_t<T>, 10u>() +
+			   1u;
+	}
 	else
 	{
-		return details::print_integer_reserved_size_cache<10, false, false, false, ::std::remove_cvref_t<T>>;
+		return ::fast_io::details::cal_max_int_size<
+			::std::remove_cvref_t<T>, 10u>();
 	}
 }
 
@@ -5376,6 +5425,20 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 	else if constexpr (::std::same_as<::std::remove_cv_t<T>, ::std::byte>)
 	{
 		return details::print_integer_reserved_size_cache<flags.base, flags.showbase, flags.showpos, flags.modern_octal, char8_t>;
+	}
+	else if constexpr (
+		::fast_io::details::my_signed_integral<::std::remove_cvref_t<T>> &&
+		flags.base == 10u && !flags.alphabet && !flags.showbase && !flags.showpos &&
+		!flags.uppercase_showbase && !flags.modern_octal && !flags.uppercase &&
+		!flags.comma && !flags.full &&
+		flags.placement == ::fast_io::manipulators::scalar_placement::none &&
+		flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+	{
+		/* The default integer alias reaches this carrier. Unlike the shared
+		full-capable cache, this policy cannot request an unsigned-width spelling. */
+		return ::fast_io::details::cal_max_int_size<
+				   ::std::remove_cvref_t<T>, 10u>() +
+			   1u;
 	}
 	else
 	{

@@ -391,6 +391,13 @@ inline constexpr ::std::true_type print_deferred_obuffer_commit_safe(
 	return {};
 }
 
+template <::std::integral char_type>
+inline constexpr ::std::true_type obuffer_address_distance_safe_define(
+	io_reserve_type_t<char_type, basic_obuffer_view_ref<char_type>>) noexcept
+{
+	return {};
+}
+
 #if 0
 template<::std::integral ch_type,::std::contiguous_iterator Iter>
 requires ::std::same_as<::std::iter_value_t<Iter>,ch_type>
