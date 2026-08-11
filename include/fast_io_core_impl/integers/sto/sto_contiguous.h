@@ -4657,7 +4657,7 @@ scan_context_current_chunk_define(
 	char_type const *begin, char_type const *end,
 	::fast_io::manipulators::scalar_manip_t<flags, T &> target) noexcept
 {
-	using unsigned_type =
+	[[maybe_unused]] using unsigned_type =
 		::fast_io::details::my_make_unsigned_t<::std::remove_cvref_t<T>>;
 	constexpr ::std::size_t context_capacity{
 		scan_context_current_chunk_minimum_size(
