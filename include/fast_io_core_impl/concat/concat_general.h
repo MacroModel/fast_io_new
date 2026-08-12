@@ -15,6 +15,20 @@
  * already-typed components from format lowering as well as ordinary non-format
  * arguments. It shares object CPOs with print but terminates in strlike
  * allocation/commit protocols instead of stream write CPOs.
+ *
+ * At the value-semantics level, constructing a fresh string with concat may
+ * resemble formatting into a whole-input scanner, for example
+ * `to<decltype(mnp::whole_get(str))>(args...)`. That spelling is not a usable
+ * substitute. `whole_get(str)` is a scanner carrier bound to the existing
+ * object `str`; its type contains that borrowed reference, whereas `to<T>` is a
+ * value-producing operation which must first construct a new `T` and then scan
+ * into it. Naming only the carrier's type loses the bound object and normally
+ * leaves `T` non-default-constructible. Use concat when the operation must
+ * create and return a new string-like value. For an explicitly supplied
+ * existing destination, `inplace_to(mnp::whole_get(str), args...)` is the
+ * corresponding print-to-whole-scan composition. This semantic relationship
+ * does not imply a shared implementation: concat owns direct strlike
+ * materialization, while inplace_to remains a print/scan pipeline.
  */
 
 #include "../operations/printimpl/scatter_copy.h"
@@ -3876,6 +3890,27 @@ inline constexpr T basic_general_concat_checked(Args &&...args)
 ///          the ordinary checked implementation above, so an unknown integer/floating value performs no proxy
 ///          construction, size query, or branch at run time. Format lowering reaches this same entry with literals and
 ///          fields already translated to print/concat leaves; it owns no independent materialization policy.
+/// @note Choose the string operation by its destination and parsing semantics:
+///       - `concat(args...)` constructs and returns a fresh string-like value. It materializes the printable record
+///         directly through strlike construction/growth protocols and does not reinterpret the produced characters
+///         with a scanner. This is the intended operation for printable-to-string materialization.
+///       - `print(ostring_ref, args...)` sends the same printable record directly to an existing string-like output
+///         adapter. It appends at the current output cursor; it does not clear the destination and performs no scan.
+///         Prefer this form when the caller owns an existing destination and append semantics are desired. For an empty
+///         or deliberately cleared destination it commonly provides the most direct reusable-storage path.
+///       - `inplace_to(mnp::whole_get(str), args...)` first formats the arguments and then consumes all resulting code
+///         units with the whole-input scanner. It replaces the logical contents of `str`, including when the printed
+///         record contains whitespace. This is a print-to-scan conversion into an existing object, not an output-stream
+///         spelling of concat, and its scan state/EOF processing may cost more than direct string output.
+///       - `to<T>(args...)` constructs a new `T` and scans the formatted representation according to `T`'s ordinary
+///         scan grammar. In particular, a default string scanner is token-oriented, so `to<std::string>("ab c")`
+///         produces `"ab"`, unlike concat or whole-input scanning.
+///       Although `to<decltype(mnp::whole_get(str))>(args...)` may appear to request concat-like whole-string
+///       semantics, it is not a usable replacement. `whole_get(str)` is a scanner carrier bound to the existing object
+///       `str`; `decltype` preserves only its type, while `to<T>` must construct a new `T`. The carrier contains a
+///       reference member and therefore normally has no default constructor. Use concat for a new string, direct print
+///       for appending to an existing string, and inplace_to with whole_get only when replacement through the generic
+///       print/scan conversion model is specifically required.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires strlike<char_type, T>
 // This is the concat-level builtin-query boundary, not an implementation
