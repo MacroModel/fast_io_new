@@ -238,7 +238,9 @@ print_reserve_static_stack_size(io_reserve_type_t<char_type, sized_range_view_t<
 ///          object in the emitter lambda; its destructor must therefore be non-throwing. Reference results create no
 ///          such owned object.
 template <::std::integral char_type, ::std::input_iterator It>
-inline constexpr bool sized_range_view_nothrow_reserve_define_v = []() constexpr {
+[[nodiscard]] inline consteval bool
+sized_range_view_nothrow_reserve_define() noexcept
+{
 	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
 	using forwarded_expression_type = typename view_type::forwarded_expression_type;
 	using forwarded_value_type = typename view_type::forwarded_value_type;
@@ -294,7 +296,11 @@ inline constexpr bool sized_range_view_nothrow_reserve_define_v = []() constexpr
 			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
 		};
 	}
-}();
+}
+
+template <::std::integral char_type, ::std::input_iterator It>
+inline constexpr bool sized_range_view_nothrow_reserve_define_v =
+	::fast_io::sized_range_view_nothrow_reserve_define<char_type, It>();
 
 /*
 Contiguous staged-range extension
@@ -398,7 +404,7 @@ template <::std::integral char_type, ::std::input_iterator It>
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>>,
 											 char_type *__restrict ptr, sized_range_view_t<char_type, It> t)
 #if __cpp_lib_string_resize_and_overwrite >= 202110L
-	noexcept(::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It>)
+	noexcept(::fast_io::sized_range_view_nothrow_reserve_define<char_type, It>())
 #endif
 {
 	if (t.size == 0)
@@ -721,7 +727,9 @@ inline constexpr void print_freestanding_decay_unforwarded(outputstmtype &optstm
 ///          intermediate cursor publication. The independent stream-side marker must prove that those publications are
 ///          foldable and that its own output-associated hooks do not alter direct-scatter semantics.
 template <::std::integral char_type, ::std::input_iterator It>
-inline constexpr bool sized_range_view_nothrow_direct_scatter_v = []() constexpr {
+[[nodiscard]] inline consteval bool
+sized_range_view_nothrow_direct_scatter() noexcept
+{
 	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
 	using forwarded_expression_type = typename view_type::forwarded_expression_type;
 	using forwarded_value_type = typename view_type::forwarded_value_type;
@@ -754,7 +762,11 @@ inline constexpr bool sized_range_view_nothrow_direct_scatter_v = []() constexpr
 			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
 		};
 	}
-}();
+}
+
+template <::std::integral char_type, ::std::input_iterator It>
+inline constexpr bool sized_range_view_nothrow_direct_scatter_v =
+	::fast_io::sized_range_view_nothrow_direct_scatter<char_type, It>();
 
 /// @brief Proves the exact, non-throwing put-area operations used by direct scatter streaming.
 /// @details The range header precedes the general output-operation concepts in the freestanding include graph, so this
@@ -787,9 +799,9 @@ concept sized_range_view_nothrow_put_area = ::std::integral<char_type> && requir
 ///          two GCC 15 cold-helper experiments changed fitting-loop register allocation and regressed 16--512 element
 ///          string sinks by 13--56 percent. Replacing the pair bridge with primitive writes is not a valid size remedy;
 ///          it can change status dispatch, lock scope, alias lifetime, and the prefix visible on an allocation failure.
-template <::std::integral char_type, ::std::input_iterator It, typename output>
-	requires(
-		::fast_io::sized_range_view_nothrow_direct_scatter_v<char_type, It> &&
+	template <::std::integral char_type, ::std::input_iterator It, typename output>
+		requires(
+			::fast_io::sized_range_view_nothrow_direct_scatter<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 #if __has_cpp_attribute(__gnu__::__noinline__) && __has_cpp_attribute(__gnu__::__aligned__)
@@ -966,7 +978,7 @@ template <::std::integral char_type, ::std::input_iterator It, typename output>
 	requires(
 		::fast_io::reserve_printable<
 			char_type, typename ::fast_io::sized_range_view_t<char_type, It>::forwarded_value_type> &&
-		::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It> &&
+		::fast_io::sized_range_view_nothrow_reserve_define<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool
@@ -1092,7 +1104,7 @@ inline constexpr void print_define(io_reserve_type_t<char_type, sized_range_view
 	if constexpr (
 		::fast_io::reserve_printable<
 			char_type, typename ::fast_io::sized_range_view_t<char_type, It>::forwarded_value_type> &&
-		::fast_io::sized_range_view_nothrow_reserve_define_v<char_type, It> &&
+		::fast_io::sized_range_view_nothrow_reserve_define<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 	{
@@ -1102,7 +1114,7 @@ inline constexpr void print_define(io_reserve_type_t<char_type, sized_range_view
 		}
 	}
 	if constexpr (
-		::fast_io::sized_range_view_nothrow_direct_scatter_v<char_type, It> &&
+		::fast_io::sized_range_view_nothrow_direct_scatter<char_type, It>() &&
 		::fast_io::sized_range_view_nothrow_put_area<output, char_type> &&
 		::fast_io::deferred_obuffer_commit_safe<char_type, output>)
 	{

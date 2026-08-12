@@ -13560,7 +13560,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 		if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
 						   ((trait::mbits == 23u && trait::ebits == 8u) ||
 							(trait::mbits == 52u && trait::ebits == 11u)) &&
-						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
+						   ::fast_io::details::da::scalar_shortest_supported<flt, char_type> &&
 						   ::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type>)
 		{
 			if constexpr (exact_bounds)
@@ -13941,7 +13941,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *print_rsvflt_fields_define
 		else if constexpr (rounding == ::fast_io::manipulators::floating_rounding::nearest_to_even &&
 						   ((trait::mbits == 23u && trait::ebits == 8u) ||
 							(trait::mbits == 52u && trait::ebits == 11u)) &&
-						   ::fast_io::details::da::scalar_ascii_shortest_supported &&
+						   ::fast_io::details::da::scalar_shortest_supported<flt, char_type> &&
 						   ((sizeof(char_type) == 4u &&
 							 (::std::same_as<char_type, wchar_t> || ::std::same_as<char_type, char32_t>)) ||
 							(::std::same_as<char_type, char16_t> && trait::mbits == 52u && trait::ebits == 11u)))

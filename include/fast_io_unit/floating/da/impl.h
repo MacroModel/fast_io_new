@@ -119,9 +119,31 @@ inline constexpr bool staged_prepares_sign{
 #endif
 };
 
-/// @brief Indicates whether the direct scalar ASCII emitter is available for the current implementation.
-inline constexpr bool scalar_ascii_shortest_supported{
+/// @brief Selects the direct DA scalar emitter for one source/destination pair.
+/// @details Binary64 wins across the audited compiler matrix. Binary32 is more
+///          sensitive to register allocation: Linux x86-64 GCC 11--15 and
+///          upstream Clang 17--22 produce a faster complete one-value caller
+///          with the ordinary Dragonbox path, while GCC 16 preserves DA's
+///          advantage. Later GNU majors inherit that measured transition.
+///          Staged multi-value conversion is governed independently by
+///          `staged_supported`; disabling this scalar placement therefore does
+///          not remove the profitable range/group schedule. Four-byte output
+///          character types retain DA because their separately audited generic
+///          renderer improves for binary32 as well as binary64.
+template <typename flt, typename char_type>
+inline constexpr bool scalar_shortest_supported{
+	!::std::same_as<::std::remove_cvref_t<flt>, float> ||
+	(sizeof(char_type) == 4u) ||
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__)
 	true
+#elif defined(__linux__) && defined(__x86_64__) && defined(__LP64__) && \
+	defined(__GNUC__) && !defined(__clang__) && 16 <= __GNUC__ && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+	true
+#else
+	false
+#endif
 };
 
 struct signed_conversion_result

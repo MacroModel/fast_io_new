@@ -2363,6 +2363,116 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			return {next, parse_code::ok};
 		}
 	}
+	/*
+	A long unsigned decimal has no applicable high-base or bounded-short
+	specialization below.  Enter the shared SWAR scanner before testing those
+	strategies.  The same maximum-width proof used by the generic fallback seeds
+	the already validated first digit only when unsigned overflow is impossible.
+	Clang 20+ and GCC 14 or older use the measured 8+1/8+2 uint32_t
+	kernel here.  Clang 17--19 use the shared SWAR path, while GCC 15+
+	keeps its measured nine-digit kernel below.
+	*/
+	if constexpr (base == 10u && my_unsigned_integral<T> &&
+				  (sizeof(unsigned_type) == sizeof(::std::uint_least64_t) ||
+				   (sizeof(unsigned_type) == sizeof(::std::uint_least32_t)
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__)
+					&& __GNUC__ <= 14
+#endif
+				   )) &&
+				  sizeof(char_type) == sizeof(char8_t) &&
+				  ::fast_io::details::is_ascii<char_type>)
+	{
+		auto const decimal_remaining{static_cast<::std::size_t>(last - first)};
+		if (8u < decimal_remaining)
+		{
+#if (defined(__clang__) && __clang_major__ >= 20) ||                                      \
+	(defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) &&            \
+	 !defined(__CUDACC__) && __GNUC__ <= 14)
+			if constexpr (sizeof(unsigned_type) == sizeof(::std::uint_least32_t))
+			{
+				FAST_IO_IF_NOT_CONSTEVAL
+				{
+					::std::uint_least64_t high;
+					::std::uint_least64_t low;
+					if (scan_int_contiguous_x86_parse_four_digits<10u>(first, high) &&
+						scan_int_contiguous_x86_parse_four_digits<10u>(first + 4u, low)) [[likely]]
+					{
+						auto ninth{static_cast<unsigned_char_type>(first[8u])};
+						if (!char_digit_to_literal<10u, char_type>(ninth)) [[likely]]
+						{
+							auto const prefix{high * 10000u + low};
+							auto iter{first + 9u};
+							if (iter == last)
+							{
+								t = static_cast<T>(prefix * 10u + ninth);
+								return {iter, parse_code::ok};
+							}
+							auto tenth{static_cast<unsigned_char_type>(*iter)};
+							if (char_digit_to_literal<10u, char_type>(tenth)) [[unlikely]]
+							{
+								t = static_cast<T>(prefix * 10u + ninth);
+								return {iter, parse_code::ok};
+							}
+							++iter;
+							if (iter != last &&
+								char_is_digit<10u, char_type>(
+									static_cast<unsigned_char_type>(*iter))) [[unlikely]]
+							{
+								return {skip_digits<10u>(iter + 1u, last), parse_code::overflow};
+							}
+							auto const value{prefix * 100u + ninth * 10u + tenth};
+							constexpr unsigned_type umax{static_cast<unsigned_type>(-1)};
+							if (static_cast<::std::uint_least64_t>(umax) < value) [[unlikely]]
+							{
+								return {iter, parse_code::overflow};
+							}
+							t = static_cast<T>(value);
+							return {iter, parse_code::ok};
+						}
+					}
+				}
+			}
+#endif
+			unsigned_type decimal_value{};
+			auto decimal_first{first};
+			if constexpr (sizeof(unsigned_type) == sizeof(::std::uint_least32_t))
+			{
+				constexpr ::std::size_t max_digits{
+					::fast_io::details::max_int_size_result<unsigned_type, base>};
+				if (decimal_remaining < max_digits ||
+					(decimal_remaining == max_digits &&
+					 !char_is_digit<base, char_type>(
+						 static_cast<unsigned_char_type>(last[-1])))) [[likely]]
+				{
+					decimal_value = static_cast<unsigned_type>(first_digit);
+					decimal_first = first + 1u;
+				}
+			}
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && !defined(__CUDACC__) && __GNUC__ == 11
+			else if constexpr (sizeof(unsigned_type) == sizeof(::std::uint_least64_t))
+			{
+				constexpr ::std::size_t max_digits{
+					::fast_io::details::max_int_size_result<unsigned_type, base>};
+				if (decimal_remaining < max_digits ||
+					(decimal_remaining == max_digits &&
+					 !char_is_digit<base, char_type>(
+						 static_cast<unsigned_char_type>(last[-1])))) [[likely]]
+				{
+					decimal_value = static_cast<unsigned_type>(first_digit);
+					decimal_first = first + 1u;
+				}
+			}
+#endif
+			auto const ret{
+				scan_int_contiguous_none_simd_space_part_define_impl<base>(
+					decimal_first, last, decimal_value)};
+			if (ret.code == parse_code::ok) [[likely]]
+			{
+				t = static_cast<T>(decimal_value);
+			}
+			return ret;
+		}
+	}
 	if constexpr (17u <= base && sizeof(T) == 1u &&
 				  ::fast_io::details::is_ascii<char_type>)
 	{
@@ -3668,11 +3778,104 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 	return {it, parse_code::ok};
 }
 
+/*
+The default unsigned 64-bit decimal CPO has a much smaller strategy space than
+the general radix scanner.  Keeping it separate prevents the high-base,
+signed, prefix, and redundant-zero strategies from affecting its inlining
+decision.  The long arm still uses the shared overflow-aware SWAR core, while
+one- through eight-digit tokens retain the bounded no-overflow recurrence.
+*/
+template <bool noskipws, ::std::integral char_type, my_unsigned_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr parse_result<char_type const *>
+scan_int_contiguous_unsigned_decimal_define_impl(
+	char_type const *first, char_type const *last, T &t) noexcept
+{
+	using unsigned_char_type = ::std::make_unsigned_t<char_type>;
+	using unsigned_type = my_make_unsigned_t<::std::remove_cvref_t<T>>;
+	if constexpr (!noskipws)
+	{
+		first = ::fast_io::details::find_space_common_impl<false, true>(first, last);
+		if (first == last)
+		{
+			return {first, parse_code::end_of_file};
+		}
+	}
+	else if (first == last) [[unlikely]]
+	{
+		return {first, parse_code::invalid};
+	}
+
+	unsigned_char_type first_digit{static_cast<unsigned_char_type>(*first)};
+	if (char_digit_to_literal<10u, char_type>(first_digit)) [[unlikely]]
+	{
+		return {first, parse_code::invalid};
+	}
+	auto const second{first + 1u};
+	if (*first == char_literal_v<u8'0', char_type>) [[unlikely]]
+	{
+		if (second == last ||
+			!char_is_digit<10u, char_type>(
+				static_cast<unsigned_char_type>(*second))) [[likely]]
+		{
+			t = {};
+			return {second, parse_code::ok};
+		}
+		return {second, parse_code::invalid};
+	}
+	if (second == last ||
+		!char_is_digit<10u, char_type>(
+			static_cast<unsigned_char_type>(*second))) [[likely]]
+	{
+		t = static_cast<T>(first_digit);
+		return {second, parse_code::ok};
+	}
+
+	auto const remaining{static_cast<::std::size_t>(last - first)};
+	auto short_last{last};
+	if (8u < remaining &&
+		!char_is_digit<10u, char_type>(
+			static_cast<unsigned_char_type>(first[8u])))
+	{
+		short_last = first + 8u;
+	}
+	if (static_cast<::std::size_t>(short_last - first) <= 8u) [[likely]]
+	{
+		unsigned_type value{static_cast<unsigned_type>(first_digit)};
+		auto iter{second};
+		for (; iter != short_last; ++iter)
+		{
+			auto digit{static_cast<unsigned_char_type>(*iter)};
+			if (char_digit_to_literal<10u, char_type>(digit)) [[unlikely]]
+			{
+				break;
+			}
+			value = static_cast<unsigned_type>(value * 10u + digit);
+		}
+		t = static_cast<T>(value);
+		return {iter, parse_code::ok};
+	}
+
+	unsigned_type value{};
+	auto const ret{
+		scan_int_contiguous_none_simd_space_part_define_impl<10u>(
+			first, last, value)};
+	if (ret.code == parse_code::ok) [[likely]]
+	{
+		t = static_cast<T>(value);
+	}
+	return ret;
+}
+
 template <char8_t base, bool noskipws, bool shbase, bool skipzero, bool oct_c2y,
 		  bool allow_leading_plus = false,
 		  ::std::integral char_type, details::my_integral T>
 inline constexpr parse_result<char_type const *> scan_int_contiguous_define_impl(char_type const *first,
-																				 char_type const *last, T &t) noexcept
+																	 char_type const *last, T &t) noexcept
 {
 	if constexpr (!noskipws)
 	{
@@ -4602,6 +4805,41 @@ scan_context_type(io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_m
 {
 	return details::scan_context_type_impl_int<flags.base, char_type, T>();
 }
+
+#if (defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC)) &&                    \
+	((defined(__clang__) && __clang_major__ >= 18) ||                    \
+	 (defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 14))
+/*
+Select the compact default-decimal graph at the customization-point boundary.
+This overload is more constrained than the general scalar CPO below, so an
+unrelated radix, signed type, wide/non-ASCII character type, prefix policy, or
+leading-zero policy never inherits its code-generation choice.
+*/
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_unsigned_integral T>
+	requires(flags.base == 10u && !flags.showbase && !flags.full &&
+			 !flags.allow_leading_plus &&
+			 sizeof(char_type) == sizeof(char8_t) &&
+			 ::fast_io::details::is_ascii<char_type> &&
+			 sizeof(T) == sizeof(::std::uint_least64_t))
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr parse_result<char_type const *>
+scan_contiguous_define(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>,
+	char_type const *begin, char_type const *end,
+	::fast_io::manipulators::scalar_manip_t<flags, T &> t) noexcept
+{
+	return details::scan_int_contiguous_unsigned_decimal_define_impl<
+		flags.noskipws>(begin, end, t.reference);
+}
+#endif
 
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_integral T>
 inline constexpr parse_result<char_type const *>

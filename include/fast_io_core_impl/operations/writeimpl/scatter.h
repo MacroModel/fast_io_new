@@ -545,6 +545,28 @@ inline constexpr void scatter_write_all_impl(outstmtype &outsm,
 			return ::fast_io::details::scatter_write_all_cold_impl(outsm, i, static_cast<::std::size_t>(e - i));
 		}
 	}
+	else if constexpr (
+		::fast_io::operations::decay::defines::has_scatter_write_all_overflow_define<outstmtype>)
+	{
+		/*
+		A native all-scatter CPO already owns completion of one legal request.
+		Keep the overwhelmingly common fitting request in the caller so a constant
+		descriptor count folds directly to the backend call.  The former unconditional
+		cold hop made GCC 11/12/15/16 retain an extra call even when `n` and the
+		backend limit were compile-time constants.  Oversized requests still enter the
+		existing consecutive-batch loop, so this placement change cannot alter the
+		maximum-count contract or descriptor order.
+		*/
+		constexpr ::std::size_t maximum{
+			::fast_io::details::scatter_write_maximum_count_or_unlimited<
+				typename outstmtype::output_char_type, outstmtype>()};
+		if (n <= maximum)
+		{
+			return scatter_write_all_overflow_define(outsm, pscatters, n);
+		}
+		return ::fast_io::details::scatter_write_all_cold_impl(
+			outsm, pscatters, n);
+	}
 	else
 	{
 		return ::fast_io::details::scatter_write_all_cold_impl(outsm, pscatters, n);
