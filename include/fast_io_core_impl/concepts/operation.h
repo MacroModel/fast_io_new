@@ -380,6 +380,22 @@ concept terminal_contiguous_context_scannable =
 		} -> ::std::same_as<::std::true_type>;
 	};
 
+/// @brief Publishes a target-side cost preference for small complete-input staging in `to`.
+/// @details Terminal contiguous/context equivalence is the legality proof; this independent marker says only that, for
+///          a small complete character run, one contiguous scan is normally preferable to repeated context transitions.
+///          It grants no permission to materialize observable sources, allocate dynamic storage, or assume a target-
+///          derived input bound. The `to` relation planner combines this preference with source purity and boundedness.
+/// @fn       to_terminal_contiguous_staging_preferred
+/// @return   ::std::true_type
+template <typename char_type, typename T>
+concept to_terminal_contiguous_staging_preferred_target =
+	::std::integral<char_type> && requires {
+		{
+			to_terminal_contiguous_staging_preferred(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Opts a hybrid scanner into terminal padded-contiguous dispatch.
 /// @details This promise is intentionally distinct from
 ///          `scan_context_terminal_contiguous_equivalent`. A scanner may use
@@ -515,6 +531,32 @@ template <typename char_type, typename T>
 concept single_pass_bounded_materialization_source =
 	::fast_io::details::single_pass_bounded_materialization_adl::protocol<
 		char_type, T>;
+
+/// @brief Allows `to` to format a normalized source even when the scanner may not consume its characters.
+/// @details The exact-true marker promises that fully formatting the unchanged object once and discarding the result is
+///          observationally equivalent to not formatting it: no visible side effect, state consumption, additional
+///          exception, or unstable spelling may result. This is deliberately stronger than borrowed/repeatable scatter
+///          provenance and deliberately independent of every size protocol. Unmarked user sources retain lazy suffix
+///          formatting even when their representation otherwise looks cheap or bounded.
+/// @fn       print_eager_materialization_safe
+/// @return   ::std::true_type
+template <typename char_type, typename T>
+concept eager_materialization_safe_printable =
+	::std::integral<char_type> && requires {
+		{
+			print_eager_materialization_safe(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+template <::std::integral char_type, ::std::integral source_char_type>
+	requires(::std::same_as<char_type, ::std::remove_cv_t<source_char_type>>)
+inline constexpr ::std::true_type
+print_eager_materialization_safe(io_reserve_type_t<char_type, source_char_type>) noexcept
+{
+	// A same-domain character leaf is copied as one code unit and has no formatter state or failure path.
+	return {};
+}
 
 /// @brief Calls the size member of the selected destination-neutral source protocol.
 /// @details Protocol selection occurs once for the complete marker/size pair. This generic accessor is the only
@@ -2125,6 +2167,14 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, basic_io_scatter_t<ch
 	return {};
 }
 
+template <::std::integral char_type>
+inline constexpr ::std::true_type
+print_eager_materialization_safe(io_reserve_type_t<char_type, basic_io_scatter_t<char_type>>) noexcept
+{
+	// Observing an already-normalized descriptor has no formatter action beyond reading its stored pointer and length.
+	return {};
+}
+
 /// @brief Marks a scatter source whose observation is independent of every destination's published cursor state.
 /// @details Borrowed/repeatable provenance proves descriptor lifetime and stable bytes, but it deliberately does not
 ///          make a producer pure: a `noexcept` customization may still inspect an output object's cursor through shared
@@ -3513,6 +3563,18 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, parameter<value_type>
 	// A reference specialization preserves the caller's source; an owning specialization keeps the source object inside
 	// the wrapper for the entire enclosing operation. Neither form creates separate character scratch, so it preserves
 	// (but cannot create) the underlying source's borrowed-lifetime and repeatability guarantee.
+	return {};
+}
+
+/// @brief Preserves an eager-materialization proof through normalized parameter transport.
+/// @details The wrapper changes ownership/category only. It forwards an existing proof for the exact member expression
+///          but never grants speculative formatting to an arbitrary lvalue merely because it was wrapped.
+template <::std::integral char_type, typename value_type>
+	requires eager_materialization_safe_printable<
+		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
+inline constexpr ::std::true_type
+print_eager_materialization_safe(io_reserve_type_t<char_type, parameter<value_type>>) noexcept
+{
 	return {};
 }
 

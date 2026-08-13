@@ -121,6 +121,16 @@ inline constexpr char_type *print_reserve_define(
 		value.data, value.size, output);
 }
 
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::details::compiler_constant_text_materialized<char_type>>) noexcept
+{
+	// This internal proxy is an immutable pointer/length spelling emitted by a bounded non-throwing copy.
+	return {};
+}
+
 /// @brief Opts standard strings into retained-scatter composition when they are range lvalue elements.
 /// @details fast_io's standard-string alias is a direct `{data(), size()}` view, so the characters have exactly the
 ///          lifetime of the source string and advancing a stable range iterator cannot overwrite an earlier element's
@@ -135,6 +145,16 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 	// A user-defined traits or allocator type contributes an associated namespace to ADL. That namespace may replace
 	// the ordinary alias/forwarding protocol with scratch-backed or stateful semantics, so structural contiguity alone
 	// cannot prove retained lifetime or repeatability. The standard specialization has no user-owned associated namespace.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	// The default specialization aliases only its stable data pointer and size; no formatter hook is executed.
 	return {};
 }
 
@@ -345,6 +365,15 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
 {
 	// Custom traits add an ADL namespace and may replace the view's otherwise trivial print protocol.
+	return {};
+}
+
+template <::std::integral char_type, typename traits_type>
+	requires ::std::same_as<traits_type, ::std::char_traits<char_type>>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, ::std::basic_string_view<char_type, traits_type>>) noexcept
+{
+	// The default view contributes only its stored pointer and length and has no formatter state or failure path.
 	return {};
 }
 

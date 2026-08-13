@@ -5501,6 +5501,17 @@ print_reserve_define(io_reserve_type_t<char_type, ::fast_io::manipulators::scala
 	}
 }
 
+/// Integer scalar manipulators own only passive formatting flags and a scalar value. Their reserve spelling is
+/// deterministic, non-throwing, and does not mutate or consume either object state or external state.
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires(details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte> ||
+			 ::std::same_as<::std::remove_cvref_t<T>, ::std::nullptr_t>)
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
+}
+
 /// @brief Exposes the type-static, non-throwing reserve contract of an integral scalar to semantic IO policy.
 /// @details For base b >= 2, an N-bit magnitude has at most ceil(N/log2(b)) digits; the existing reserve size adds the
 ///          finite sign and prefix maxima encoded by `flags`. `print_reserve_define` above implements exactly that flag
@@ -5727,6 +5738,17 @@ inline constexpr char_type *print_reserve_define(
 			flags.base, flags.showbase, flags.uppercase_showbase, flags.showpos,
 			flags.uppercase, flags.full, flags.modern_octal>(iter, value.reference);
 	}
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags, typename T>
+	requires((details::my_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>) &&
+			 (!flags.alphabet || ::std::same_as<::std::remove_cv_t<T>, bool>) &&
+			 flags.percentage == ::fast_io::manipulators::percentage_flag::none)
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type,
+					  manipulators::compiler_constant_scalar_manip_t<flags, T>>) noexcept
+{
+	return {};
 }
 
 namespace details

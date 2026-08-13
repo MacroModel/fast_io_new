@@ -686,6 +686,13 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 }
 
 template <::std::integral char_type>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	::fast_io::io_reserve_type_t<char_type, ::fast_io::containers::basic_string_view<char_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type>
 inline constexpr ::std::true_type print_scatter_output_state_independent(
 	::fast_io::io_reserve_type_t<char_type, ::fast_io::containers::basic_string_view<char_type>>) noexcept
 {

@@ -314,6 +314,14 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 }
 
 template <::std::integral char_type, ::std::size_t extent>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<
+		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, ::std::size_t extent>
 inline constexpr ::std::true_type print_scatter_output_state_independent(
 	io_reserve_type_t<
 		char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
@@ -354,6 +362,13 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
 {
 	// Like a raw scatter, this type borrows storage explicitly supplied by its caller.
+	return {};
+}
+
+template <::std::integral char_type>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, basic_prfch_cacheable_io_scatter_t<char_type>>) noexcept
+{
 	return {};
 }
 
@@ -457,6 +472,14 @@ print_borrowed_scatter_source(io_reserve_type_t<char_type, source_char_type[n]>)
 	return {};
 }
 
+template <::std::integral char_type, typename source_char_type, ::std::size_t n>
+	requires(::std::same_as<char_type, ::std::remove_cv_t<source_char_type>>)
+inline constexpr ::std::true_type
+print_eager_materialization_safe(io_reserve_type_t<char_type, source_char_type[n]>) noexcept
+{
+	return {};
+}
+
 template <typename T>
 	requires(::std::ranges::contiguous_range<T> && requires(T &&t) { t.substr(); })
 inline constexpr basic_io_scatter_t<::std::remove_cvref_t<::std::ranges::range_value_t<T>>>
@@ -509,6 +532,13 @@ print_reserve_precise_define(io_reserve_type_t<char_type, manipulators::chvw_t<p
 	return print_reserve_define(io_reserve_type<char_type, manipulators::chvw_t<pchar_type>>, iter, ch);
 }
 
+template <::std::integral char_type, ::std::integral pchar_type>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, manipulators::chvw_t<pchar_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, ::std::size_t N>
 inline constexpr ::std::size_t
 print_reserve_size(io_reserve_type_t<char_type, ::fast_io::manipulators::static_scatter_t<char_type, N>>) noexcept
@@ -551,6 +581,13 @@ print_reserve_precise_define(io_reserve_type_t<char_type, ::fast_io::manipulator
 	// Precise concat and ordinary reserve output share one lowering policy; otherwise the same semantic leaf would regain
 	// fragmented memcpy stores merely by crossing the destination concept boundary.
 	return ::fast_io::details::decay::static_scatter_copy_n<N>(scatter.base, iter);
+}
+
+template <::std::integral char_type, ::std::size_t N>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, ::fast_io::manipulators::static_scatter_t<char_type, N>>) noexcept
+{
+	return {};
 }
 
 template <::std::integral char_type, ::std::size_t N>
@@ -598,6 +635,13 @@ print_reserve_precise_define(io_reserve_type_t<char_type, ::fast_io::manipulator
 {
 	scatter.validate();
 	return ::fast_io::details::small_scatter_print_reserve_define_impl(iter, scatter.base, scatter.len);
+}
+
+template <::std::integral char_type, ::std::size_t N>
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	io_reserve_type_t<char_type, ::fast_io::manipulators::small_scatter_t<char_type, N>>) noexcept
+{
+	return {};
 }
 
 // Fixed reserve leaves are identity members of compiler-constant runs.  Their ordinary CPOs already use the compact

@@ -4904,6 +4904,18 @@ inline constexpr ::std::true_type scan_context_terminal_contiguous_equivalent(
 	return {};
 }
 
+/// Integer conversion normally benefits from replacing several context transitions with one scan over a small terminal
+/// stack staging range. Legality remains independently guarded by `scan_context_terminal_contiguous_equivalent`.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type to_terminal_contiguous_staging_preferred(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, manipulators::scalar_flags flags,
 			  details::my_integral T>
 inline constexpr ::std::size_t scan_context_current_chunk_minimum_size(

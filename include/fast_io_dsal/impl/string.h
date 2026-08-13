@@ -1630,6 +1630,15 @@ inline constexpr ::std::true_type print_borrowed_scatter_source(
 template <::std::integral char_type, typename allocator_type>
 	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
 			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
+inline constexpr ::std::true_type print_eager_materialization_safe(
+	::fast_io::io_reserve_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			 ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>)
 inline constexpr ::std::true_type print_scatter_output_state_independent(
 	::fast_io::io_reserve_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
 {

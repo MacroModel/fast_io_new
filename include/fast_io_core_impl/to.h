@@ -234,6 +234,132 @@ inline constexpr void inplace_to_decay_buffer_context_impl(char_type *buffer, st
 	}
 }
 
+/// @brief Returns the byte-capped local staging capacity shared by `to`'s small stack plans.
+/// @details The operation cap is deliberately independent of the potentially much larger configured GNU/Linux stack
+///          budget. A stricter user-configured budget remains authoritative, and wide character domains round down to
+///          a whole number of code units.
+template <::std::integral char_type>
+inline consteval ::std::size_t to_small_stack_capacity() noexcept
+{
+	constexpr ::std::size_t preferred_bytes{256u};
+	constexpr ::std::size_t preferred_size{preferred_bytes / sizeof(char_type)};
+	constexpr ::std::size_t configured_size{
+		::fast_io::details::decay::print_stack_buffer_max_size<char_type>()};
+	return configured_size < preferred_size ? configured_size : preferred_size;
+}
+
+/// @brief Scans one current reserve/scatter fragment using bounded stack scratch when its own policy permits it.
+/// @details Run-time reserve sizing is intentionally performed only for `arg`. A scanner which completes here prevents
+///          every suffix size query and formatter call, preserving the historical lazy suffix semantics. Dynamic
+///          producers with the non-fatal bounded-size protocol may use this operation's 256-byte cap directly; other
+///          dynamic producers require the existing static-stack hint and must fit both limits. Larger current fragments
+///          receive an isolated dynamic allocation which is released before the next fragment is considered.
+template <::std::size_t scratch_capacity, ::std::integral char_type, typename state, typename T, typename Arg1,
+		  typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
+	char_type *scratch, state &s, T &t, Arg1 arg, Args... args)
+{
+	bool completed{};
+	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg1>)
+	{
+		auto const scatter{print_scatter_define(io_reserve_type<char_type, Arg1>, arg)};
+		auto const first{scatter.base};
+		auto const last{::fast_io::details::scan_scatter_end(first, scatter.len)};
+		completed = ::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, first, last);
+	}
+	else
+	{
+		::std::size_t reserve_size;
+		bool use_stack{};
+		if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg1>)
+		{
+			if constexpr (scratch_capacity != 0u &&
+						  ::fast_io::single_pass_bounded_materialization_source<char_type, Arg1>)
+			{
+				::std::size_t maximum_size{scratch_capacity};
+				if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg1>)
+				{
+					constexpr ::std::size_t producer_capacity{
+						print_reserve_static_stack_size(io_reserve_type<char_type, Arg1>)};
+					if (producer_capacity < maximum_size)
+					{
+						maximum_size = producer_capacity;
+					}
+				}
+				if (maximum_size != 0u)
+				{
+					reserve_size = ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+						arg, maximum_size);
+					use_stack = reserve_size != SIZE_MAX && reserve_size <= maximum_size;
+				}
+			}
+			if (!use_stack)
+			{
+				reserve_size = print_reserve_size(io_reserve_type<char_type, Arg1>, arg);
+				if constexpr (scratch_capacity != 0u &&
+							  ::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg1>)
+				{
+					constexpr ::std::size_t producer_capacity{
+						print_reserve_static_stack_size(io_reserve_type<char_type, Arg1>)};
+					use_stack = reserve_size <= scratch_capacity && reserve_size <= producer_capacity;
+				}
+			}
+		}
+		else
+		{
+			reserve_size = print_reserve_size(io_reserve_type<char_type, Arg1>);
+			if constexpr (scratch_capacity != 0u)
+			{
+				use_stack = reserve_size <= scratch_capacity;
+			}
+		}
+
+		if (use_stack)
+		{
+			auto const last{print_reserve_define(io_reserve_type<char_type, Arg1>, scratch, arg)};
+			auto const scratch_end{reserve_size == 0u ? scratch : scratch + reserve_size};
+			if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+					scratch, scratch_end, last)) [[unlikely]]
+			{
+				::fast_io::fast_terminate();
+			}
+			completed = ::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, scratch, last);
+		}
+		else
+		{
+			::fast_io::details::local_operator_new_array_ptr<char_type> buffer(reserve_size);
+			auto const first{buffer.ptr};
+			auto const last{print_reserve_define(io_reserve_type<char_type, Arg1>, first, arg)};
+			auto const buffer_end{reserve_size == 0u ? first : first + reserve_size};
+			if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+					first, buffer_end, last)) [[unlikely]]
+			{
+				::fast_io::fast_terminate();
+			}
+			completed = ::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, first, last);
+		}
+	}
+
+	if (completed)
+	{
+		return;
+	}
+	if constexpr (sizeof...(Args) != 0u)
+	{
+		::fast_io::details::inplace_to_decay_bounded_buffer_context_impl<scratch_capacity, char_type>(
+			scratch, s, t, args...);
+	}
+	else
+	{
+		::fast_io::details::inplace_to_decay_context_finish<char_type>(s, t);
+	}
+}
+
 template <::std::integral char_type, bool ln, typename T, typename... Args>
 inline constexpr ::std::size_t calculate_print_normal_maxium_size_main(::std::size_t mx_value) noexcept
 {
@@ -372,6 +498,131 @@ inline constexpr char_type *to_impl_with_reserve_recursive(char_type *p, T t, Ar
 	{
 		return to_impl_with_reserve_recursive<char_type>(p, args...);
 	}
+}
+
+/// @brief Tests whether one normalized source can participate in terminal stack coalescing.
+/// @details The source must separately authorize speculative formatting. Materialization then follows the same
+///          representation priority as the mature contiguous `to` path: repeatable named scatter, type-level reserve,
+///          or a dynamic reserve source with the destination-neutral non-fatal bounded-size protocol.
+template <::std::integral char_type, typename T>
+inline constexpr bool to_terminal_stack_component_v =
+	::fast_io::eager_materialization_safe_printable<char_type, T> &&
+	(::fast_io::details::to_repeatable_named_scatter_v<char_type, T> ||
+	 ::fast_io::reserve_printable<char_type, T> ||
+	 (::fast_io::dynamic_reserve_printable<char_type, T> &&
+	  ::fast_io::single_pass_bounded_materialization_source<char_type, T>));
+
+/// @brief Relation proof for one stack-only terminal contiguous execution plan.
+template <typename char_type, typename Target, typename... Sources>
+concept to_terminal_stack_candidate =
+	::std::integral<char_type> && (sizeof...(Sources) > 1u) &&
+	(::fast_io::details::to_small_stack_capacity<char_type>() != 0u) &&
+	::fast_io::terminal_contiguous_context_scannable<char_type, Target> &&
+	::fast_io::to_terminal_contiguous_staging_preferred_target<char_type, Target> &&
+	(::fast_io::details::to_terminal_stack_component_v<char_type, Sources> && ...);
+
+/// @brief Measures one eager-safe terminal component without materializing its reserve spelling.
+/// @return `false` when this optional plan cannot fit; no parse result is represented here.
+/// @details Scatter observation is captured into the caller's descriptor slot so the successful plan never calls its
+///          CPO twice. Static reserve sizing is type-only, while a dynamic component uses only the destination-neutral
+///          non-fatal bounded query. A rejected later component therefore discards at most pure measurements and
+///          descriptors; it never causes an already-measured reserve formatter to run twice in the context fallback.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::to_terminal_stack_component_v<char_type, T>
+inline constexpr bool to_terminal_stack_measure_one(
+	::std::size_t remaining, ::std::size_t &bound,
+	::fast_io::basic_io_scatter_t<char_type> &scatter, T &value)
+{
+	if constexpr (::fast_io::details::to_repeatable_named_scatter_v<char_type, T>)
+	{
+		scatter = print_scatter_define(io_reserve_type<char_type, T>, value);
+		bound = scatter.len;
+		if (remaining < bound)
+		{
+			return false;
+		}
+		return true;
+	}
+	else
+	{
+		if constexpr (::fast_io::reserve_printable<char_type, T>)
+		{
+			bound = print_reserve_size(io_reserve_type<char_type, T>);
+		}
+		else
+		{
+			bound = ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
+				value, remaining);
+		}
+		if (bound == SIZE_MAX || remaining < bound)
+		{
+			return false;
+		}
+		return true;
+	}
+}
+
+/// @brief Emits one already-admitted terminal component exactly once.
+template <::std::integral char_type, typename T>
+	requires ::fast_io::details::to_terminal_stack_component_v<char_type, T>
+inline constexpr char_type *to_terminal_stack_emit_one(
+	char_type *current, ::std::size_t bound,
+	::fast_io::basic_io_scatter_t<char_type> scatter, T &value)
+{
+	if constexpr (::fast_io::details::to_repeatable_named_scatter_v<char_type, T>)
+	{
+		return copy_scatter(scatter, current);
+	}
+	else
+	{
+		auto const component_end{bound == 0u ? current : current + bound};
+		auto const actual_end{print_reserve_define(io_reserve_type<char_type, T>, current, value)};
+		if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+				current, component_end, actual_end)) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		return actual_end;
+	}
+}
+
+/// @brief Coalesces a complete eager-safe source pack into the fixed local buffer and scans it contiguously once.
+/// @return `false` only when a source bound does not fit; scanner errors retain their ordinary exception behavior.
+template <::std::size_t capacity, ::std::integral char_type, typename Target, typename... Sources>
+	requires ::fast_io::details::to_terminal_stack_candidate<char_type, Target, Sources...>
+inline constexpr bool try_to_terminal_stack_contiguous(
+	char_type (&buffer)[capacity], Target &target, Sources &...sources)
+{
+	::std::size_t bounds[sizeof...(Sources)]{};
+	::fast_io::basic_io_scatter_t<char_type> scatters[sizeof...(Sources)]{};
+	::std::size_t total{};
+	::std::size_t index{};
+	bool fits{true};
+	auto const measure = [&]<typename Source>(Source &source)
+	{
+		if (!fits)
+		{
+			return;
+		}
+		fits = ::fast_io::details::to_terminal_stack_measure_one<char_type>(
+			capacity - total, bounds[index], scatters[index], source);
+		if (fits)
+		{
+			total += bounds[index];
+		}
+		++index;
+	};
+	(measure(sources), ...);
+	if (!fits)
+	{
+		return false;
+	}
+	char_type *current{buffer};
+	index = 0u;
+	((current = ::fast_io::details::to_terminal_stack_emit_one<char_type>(
+		  current, bounds[index], scatters[index], sources), ++index), ...);
+	::fast_io::details::deal_with_single_to<char_type>(buffer, current, target);
+	return true;
 }
 
 template <::std::integral char_type, typename T, typename... Args>
@@ -520,44 +771,59 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 			if constexpr (context_scannable<char_type, T> &&
 						  (!(contiguous_scannable<char_type, T> && sizeof...(args) == 1)))
 			{
-				using state_type = ::fast_io::details::scan_context_state_t<char_type, T>;
-				::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) {
-					if constexpr (all_scatters)
-					{
-						::fast_io::details::inplace_to_decay_buffer_scatter_context_impl<char_type>(
-							state, t, args...);
-					}
-					else if constexpr (no_need_dynamic_reserve)
-					{
-						constexpr ::std::size_t maximum_reserve_size{
-							::fast_io::details::calculate_print_normal_maxium_size<char_type, false, Args...>()};
-						if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<
-								maximum_reserve_size, char_type>)
+				constexpr bool terminal_stack_candidate{
+					::fast_io::details::to_terminal_stack_candidate<char_type, T, Args...>};
+				constexpr ::std::size_t small_stack_capacity{
+					::fast_io::details::to_small_stack_capacity<char_type>()};
+				constexpr ::std::size_t stack_scratch_extent{
+					(terminal_stack_candidate || !no_need_dynamic_reserve) && small_stack_capacity != 0u
+						? small_stack_capacity
+						: 1u};
+				char_type stack_scratch[stack_scratch_extent];
+				bool terminal_stack_completed{};
+				if constexpr (terminal_stack_candidate)
+				{
+					terminal_stack_completed =
+						::fast_io::details::try_to_terminal_stack_contiguous<small_stack_capacity, char_type>(
+							stack_scratch, t, args...);
+				}
+				if (!terminal_stack_completed)
+				{
+					using state_type = ::fast_io::details::scan_context_state_t<char_type, T>;
+					::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) {
+						if constexpr (all_scatters)
 						{
-							// One reusable fragment buffer fits the configured hot-stack budget.
-							char_type buffer[maximum_reserve_size];
-							::fast_io::details::inplace_to_decay_buffer_context_impl<char_type>(
-								buffer, state, t, args...);
+							::fast_io::details::inplace_to_decay_buffer_scatter_context_impl<char_type>(
+								state, t, args...);
+						}
+						else if constexpr (no_need_dynamic_reserve)
+						{
+							constexpr ::std::size_t maximum_reserve_size{
+								::fast_io::details::calculate_print_normal_maxium_size<char_type, false, Args...>()};
+							if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<
+									maximum_reserve_size, char_type>)
+							{
+								// One reusable fragment buffer fits the configured hot-stack budget.
+								char_type buffer[maximum_reserve_size];
+								::fast_io::details::inplace_to_decay_buffer_context_impl<char_type>(
+									buffer, state, t, args...);
+							}
+							else
+							{
+								// A type-level reserve bound is a capacity proof, not permission to enlarge every caller's
+								// frame. The dynamic branch preserves reuse once the policy limit is exceeded.
+								::fast_io::details::local_operator_new_array_ptr<char_type> buffer(maximum_reserve_size);
+								::fast_io::details::inplace_to_decay_buffer_context_impl<char_type>(
+									buffer.ptr, state, t, args...);
+							}
 						}
 						else
 						{
-							// A type-level reserve bound is a capacity proof, not permission to enlarge every caller's
-							// frame. The dynamic branch preserves reuse once the policy limit is exceeded.
-							::fast_io::details::local_operator_new_array_ptr<char_type> buffer(maximum_reserve_size);
-							::fast_io::details::inplace_to_decay_buffer_context_impl<char_type>(
-								buffer.ptr, state, t, args...);
+							::fast_io::details::inplace_to_decay_bounded_buffer_context_impl<
+								small_stack_capacity, char_type>(stack_scratch, state, t, args...);
 						}
-					}
-					else
-					{
-						::std::size_t const maximum_reserve_size{
-							::fast_io::details::calculate_print_normal_dynamic_maxium_main<char_type, false>(
-								0, args...)};
-						::fast_io::details::local_operator_new_array_ptr<char_type> heap_buffer(maximum_reserve_size);
-						::fast_io::details::inplace_to_decay_buffer_context_impl<char_type>(
-							heap_buffer.ptr, state, t, args...);
-					}
-				});
+					});
+				}
 			}
 			else if constexpr (contiguous_scannable<char_type, T>)
 			{
