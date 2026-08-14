@@ -1484,6 +1484,9 @@ inline constexpr void inplace_to_compiler_constant_checked_entry(
 
 } // namespace details
 
+inline namespace io
+{
+
 /// @brief Applies the shared compiler-constant source gate to an explicit character-domain inplace conversion.
 template <::std::integral char_type, typename T, typename... Args>
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
@@ -1561,6 +1564,8 @@ inline constexpr void u32inplace_to(T &&t, Args &&...args)
 	::fast_io::basic_inplace_to<char32_t>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
 }
+
+} // namespace io
 
 namespace decay
 {
@@ -1686,6 +1691,9 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 
 } // namespace details
 
+inline namespace io
+{
+
 /// @brief Constructs a target in the requested character domain through the shared compiler-constant source boundary.
 template <::std::integral char_type, typename T, typename... Args>
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
@@ -1766,5 +1774,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 {
 	return ::fast_io::basic_to<char32_t, T>(::std::forward<Args>(args)...);
 }
+
+} // namespace io
 
 } // namespace fast_io

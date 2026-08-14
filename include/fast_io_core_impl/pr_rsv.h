@@ -313,6 +313,9 @@ inline constexpr ::fast_io::parse_result<char_type const *> parse_by_scan_impl(c
 
 } // namespace details
 
+inline namespace io
+{
+
 template <::std::integral char_type, typename T>
 #if __has_cpp_attribute(nodiscard)
 [[nodiscard("NEVER discard return pointer and parse code from parse_by_scan")]]
@@ -333,5 +336,7 @@ inline constexpr ::fast_io::parse_result<char_type const *> parse_by_scan(char_t
 		static_assert(allscannable, "type not scannable. need context_scannable");
 	}
 }
+
+} // namespace io
 
 } // namespace fast_io
