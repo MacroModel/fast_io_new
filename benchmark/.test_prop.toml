@@ -6,3 +6,6 @@ asan = true
 
 ["0012.isa"] # no auto-gen test. only to see the output assembly
 ignore = true
+
+["0024.ipc"]
+platform = "windows"

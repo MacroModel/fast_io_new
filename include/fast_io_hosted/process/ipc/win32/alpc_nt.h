@@ -1299,7 +1299,8 @@ inline void alpc_send(basic_nt_family_alpc_ipc_universal_observer<family, ch_typ
 }
 
 template <nt_family family, ::std::integral ch_type>
-inline nt_alpc_ipc_message alpc_receive(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port)
+inline void alpc_receive(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port,
+						 nt_alpc_ipc_message &message)
 {
 	if (!port) [[unlikely]]
 	{
@@ -1311,9 +1312,16 @@ inline nt_alpc_ipc_message alpc_receive(basic_nt_family_alpc_ipc_universal_obser
 	{
 		throw_nt_error(0xc0000184u);
 	}
-	nt_alpc_ipc_message message;
 	::fast_io::win32::nt::details::nt_alpc_receive_message_impl<family>(
 		port.handle->port_handle, port.handle->message_attribute, message, nullptr);
+	return;
+}
+
+template <nt_family family, ::std::integral ch_type>
+inline nt_alpc_ipc_message alpc_receive(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port)
+{
+	nt_alpc_ipc_message message;
+	::fast_io::alpc_receive(port, message);
 	return message;
 }
 
@@ -1366,8 +1374,8 @@ inline bool alpc_receive_for(basic_nt_family_alpc_ipc_universal_observer<family,
 }
 
 template <nt_family family, ::std::integral ch_type>
-inline nt_alpc_ipc_message alpc_request(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port,
-										::std::span<::std::byte const> bytes)
+inline void alpc_request(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port,
+						 ::std::span<::std::byte const> bytes, nt_alpc_ipc_message &response)
 {
 	if (!port) [[unlikely]]
 	{
@@ -1381,12 +1389,20 @@ inline nt_alpc_ipc_message alpc_request(basic_nt_family_alpc_ipc_universal_obser
 	{
 		throw_nt_error(0xc0000184u);
 	}
-	nt_alpc_ipc_message response;
 	auto const first{bytes.empty() ? nullptr : bytes.data()};
 	::fast_io::win32::nt::details::nt_alpc_send_message_impl<family>(
 		port.handle->port_handle, 0x00020000u /*ALPC_MSGFLG_SYNC_REQUEST*/, 0u,
 		first, first ? first + bytes.size() : nullptr, port.handle->message_attribute,
 		__builtin_addressof(response));
+	return;
+}
+
+template <nt_family family, ::std::integral ch_type>
+inline nt_alpc_ipc_message alpc_request(basic_nt_family_alpc_ipc_universal_observer<family, ch_type> port,
+										::std::span<::std::byte const> bytes)
+{
+	nt_alpc_ipc_message response;
+	::fast_io::alpc_request(port, bytes, response);
 	return response;
 }
 

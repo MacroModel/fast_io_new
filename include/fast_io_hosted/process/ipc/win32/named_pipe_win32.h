@@ -223,7 +223,14 @@ inline void win32_family_named_pipe_ipc_server_wait_for_connect_impl(void *pipe_
 {
 	if (!::fast_io::win32::ConnectNamedPipe(pipe_handle, nullptr)) [[unlikely]]
 	{
-		throw_win32_error();
+		auto const error{::fast_io::win32::GetLastError()};
+		// A client is allowed to open the pipe after CreateNamedPipe and before
+		// ConnectNamedPipe.  In that case the connection is already established
+		// and ConnectNamedPipe reports ERROR_PIPE_CONNECTED instead of success.
+		if (error != 535u /*ERROR_PIPE_CONNECTED*/) [[unlikely]]
+		{
+			throw_win32_error(error);
+		}
 	}
 }
 
