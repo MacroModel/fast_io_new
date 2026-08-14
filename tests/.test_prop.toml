@@ -27,3 +27,6 @@ ignore = true
 
 ["0036.sto"]
 ignore = true
+
+["0037.alpc"]
+platform = "windows"

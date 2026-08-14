@@ -841,7 +841,7 @@ public:
 #else
 				::operator new(n)
 #endif
-				;
+					;
 		}
 		if constexpr (::fast_io::details::has_allocate_aligned_impl<alloc>)
 		{
@@ -868,7 +868,7 @@ public:
 #else
 				::operator new(n)
 #endif
-				;
+					;
 		}
 		if constexpr (::fast_io::details::has_allocate_aligned_zero_impl<alloc>)
 		{
@@ -898,7 +898,8 @@ public:
 #else
 				::operator new(n)
 #endif
-				, n};
+					,
+				n};
 		}
 		else
 		{
@@ -925,7 +926,8 @@ public:
 #else
 				::operator new(n)
 #endif
-				, n};
+					,
+				n};
 		}
 		else
 		{
@@ -1500,7 +1502,9 @@ public:
 																   (::fast_io::details::has_reallocate_at_least_impl<alloc> ||
 																	::fast_io::details::has_reallocate_aligned_at_least_impl<alloc> ||
 																	::fast_io::details::has_reallocate_zero_at_least_impl<alloc> ||
-																	::fast_io::details::has_reallocate_aligned_zero_at_least_impl<alloc>));
+																	::fast_io::details::has_reallocate_aligned_zero_at_least_impl<alloc> ||
+																	::fast_io::details::has_reallocate_conditional_zero_at_least_impl<alloc> ||
+																	::fast_io::details::has_reallocate_aligned_conditional_zero_at_least_impl<alloc>));
 	static inline ::fast_io::allocation_least_result
 	reallocate_at_least(void *p, ::std::size_t n) noexcept
 		requires(!has_status && has_reallocate)
@@ -1521,6 +1525,14 @@ public:
 		{
 			return allocator_type::reallocate_aligned_zero_at_least(p, default_alignment, n);
 		}
+		else if constexpr (::fast_io::details::has_reallocate_conditional_zero_at_least_impl<alloc>)
+		{
+			return allocator_type::reallocate_conditional_zero_at_least(p, n, false);
+		}
+		else if constexpr (::fast_io::details::has_reallocate_aligned_conditional_zero_at_least_impl<alloc>)
+		{
+			return allocator_type::reallocate_aligned_conditional_zero_at_least(p, default_alignment, n, false);
+		}
 		else if constexpr (::fast_io::details::has_reallocate_impl<alloc>)
 		{
 			return {allocator_type::reallocate(p, n), n};
@@ -1536,6 +1548,14 @@ public:
 		else if constexpr (::fast_io::details::has_reallocate_aligned_zero_impl<alloc>)
 		{
 			return {allocator_type::reallocate_aligned_zero(p, default_alignment, n), n};
+		}
+		else if constexpr (::fast_io::details::has_reallocate_conditional_zero_impl<alloc>)
+		{
+			return {allocator_type::reallocate_conditional_zero(p, n, false), n};
+		}
+		else if constexpr (::fast_io::details::has_reallocate_aligned_conditional_zero_impl<alloc>)
+		{
+			return {allocator_type::reallocate_aligned_conditional_zero(p, default_alignment, n, false), n};
 		}
 	}
 
