@@ -13,12 +13,14 @@
 namespace fast_io
 {
 
-#if defined(_WIN32) && !defined(__CYGWIN__) && !defined(__WINE__)
+#if (defined(_WIN32) && !defined(__WINE__)) || defined(__CYGWIN__)
 #if !defined(_WIN32_WINDOWS)
 using native_shared_memory = nt_shared_memory;
 #else
 using native_shared_memory = win32_shared_memory;
 #endif
+#else
+using native_shared_memory = posix_shared_memory;
 #endif
 
 } // namespace fast_io
