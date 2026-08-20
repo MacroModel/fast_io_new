@@ -90,14 +90,14 @@
 namespace fast_io::fmt::details
 {
 
-/** Recognizes an output stream without imposing a character domain. */
+/** @brief Recognizes an output stream without imposing a character domain. */
 template <typename output_type>
 concept format_output = requires(output_type &output) {
 	typename ::std::remove_cvref_t<
 		decltype(::fast_io::operations::output_stream_ref(output))>::output_char_type;
 };
 
-/** Proves that an output reference consumes the requested code-unit domain. */
+/** @brief Proves that an output reference consumes the requested code-unit domain. */
 template <typename output_type, typename char_type>
 concept format_output_for = format_output<output_type> &&
 							::std::same_as<typename ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(
@@ -105,7 +105,7 @@ concept format_output_for = format_output<output_type> &&
 										   char_type>;
 
 /**
- * Named continuation that sends a lowered component pack to the ordinary print front door.
+ * @brief Sends a lowered component pack to the ordinary print operation core.
  *
  * This callback is the innermost of four value-visible links in the
  * format-to-print constant bridge. GCC's combination grid proves that removing
@@ -125,17 +125,28 @@ struct print_lowered_components
 {
 	output_type &&output;
 
+	/** @brief Emits lowered components under the original output lifetime category. */
 	template <typename... component_types>
 	FAST_IO_FMT_GCC_CALLBACK_INLINE
 	inline constexpr void operator()(component_types &&...components) const
 	{
 		// Formatting ends at typed components, including the empty component
-		// pack. The IO entry owns the complete-record semantics: an ordinary
+		// pack. This IO boundary owns the complete-record semantics: an ordinary
 		// empty run is a no-op, while an exact zero-argument status CPO may make
 		// that run observable. Skipping this call in the format layer would both
 		// bypass that provider contract and make `fmt::print<"">(out)` differ
-		// from `io::print(out)`.
-		::fast_io::io::print(output, components...);
+		// from `io::print(out)`. The output is deliberately normalized here: the
+		// named callback member preserves established lvalue strategy selection,
+		// while the separate lifetime category still lets an original temporary
+		// owner receive checked finish after successful emission.
+		::fast_io::operations::basic_output_operation_guard<
+			output_type &, output_type &&>
+			guard{output};
+		decltype(auto) outref{guard.ref()};
+		::fast_io::operations::decay::
+			print_freestanding_compiler_constant_pre_normalization<false>(
+				outref, components...);
+		guard.commit();
 	}
 };
 

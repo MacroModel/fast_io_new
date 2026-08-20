@@ -4632,14 +4632,6 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		// Reserve-scatters printable arguments are emitted through the scatter descriptor materialization path.
 		::fast_io::details::decay::print_control_single_reserve_scatters<line, output, char_type>(outstm, t);
 	}
-	else if constexpr (::fast_io::transcode_imaginary_printable<char_type, value_type>)
-	{
-		// Recognition must never degrade into a successful call that emits nothing. Keep this assertion dependent so
-		// unrelated printable instantiations remain valid while any accidental direct dispatch fails at compile time
-		// until a transcode emitter with defined ownership and error semantics is implemented.
-		static_assert(!::std::same_as<value_type, value_type>,
-					  "transcode-imaginary printing has no freestanding emitter");
-	}
 	else if constexpr (context_printable<char_type, value_type>)
 	{
 		// One owned state spans every producer window. The shared owner keeps small states allocation-free while moving
@@ -10016,7 +10008,6 @@ inline constexpr bool print_semantic_optional_scatter_barrier_argument_v =
 			!::fast_io::reserve_printable<char_type, source_type> &&
 			!::fast_io::dynamic_reserve_printable<char_type, source_type> &&
 			!::fast_io::reserve_scatters_printable<char_type, source_type> &&
-			!::fast_io::transcode_imaginary_printable<char_type, source_type> &&
 			!::fast_io::staged_printable<char_type, source_type> &&
 			!::fast_io::single_pass_staging_printable<char_type, source_type> &&
 			!::fast_io::compiler_constant_printable<char_type, source_type>};
@@ -23053,12 +23044,17 @@ concept print_freestanding_okay_for_line =
 template <bool line, typename output, typename... Args>
 inline constexpr void print_freestanding(output &&outstm, Args &&...args)
 {
-	decltype(auto) outref = ::fast_io::operations::output_stream_ref(outstm);
+	// Keep the normalized observer alive for the complete print and finish an
+	// explicitly opted-in temporary only after every argument has been emitted.
+	// Lvalue adapters remain open so multiple print calls share one engine state.
+	::fast_io::operations::basic_output_operation_guard<output &&> guard{outstm};
+	decltype(auto) outref = guard.ref();
 	// The source-normalization bridge is shared with nested formatters. Public entry owns output normalization; the
 	// bridge owns exactly one source normalization, so recursive printing cannot accidentally normalize either twice.
 	::fast_io::operations::decay::
 		print_freestanding_compiler_constant_pre_normalization<line>(
 			outref, ::std::forward<Args>(args)...);
+	guard.commit();
 }
 
 } // namespace operations
@@ -24223,7 +24219,7 @@ struct basic_compiled_scatter_plan
 							  ::std::forward<Args>(args)...);
 	}
 
-	/// @brief Emits the compiled plan directly to an output stream.
+	/// @brief Emits the compiled plan under one checked output-operation lifetime.
 	/// @tparam output the output stream type
 	/// @tparam Args   the runtime argument types
 	/// @param  outstm the destination stream
@@ -24236,18 +24232,23 @@ struct basic_compiled_scatter_plan
 				  (sizeof...(Args) != 0u && direct_sources_acceptable<Args...>)))
 	inline constexpr void print(output &&outstm, Args &&...args) const
 	{
-		decltype(auto) outref = ::fast_io::operations::output_stream_ref(outstm);
+		// Compiled scatter plans obey the same owner-lifetime rule as the ordinary
+		// print front door; plan selection must not bypass temporary finish.
+		::fast_io::operations::basic_output_operation_guard<output &&> guard{outstm};
+		decltype(auto) outref = guard.ref();
 		if constexpr (sizeof...(Args) == 0u)
 		{
-			// Fully static plans need no runtime normalization.
+			// Fully static plans need no runtime source normalization.
 			::fast_io::containers::tuple<> values;
 			print_output(outref, values);
 		}
 		else
 		{
+			// Dynamic plan positions normalize and bind the supplied runtime sources.
 			print_arguments(outref, ::std::make_index_sequence<sizeof...(Args)>{},
 							::std::forward<Args>(args)...);
 		}
+		guard.commit();
 	}
 
 	/// @brief Materializes descriptors and performs one high-level scatter-output dispatch through a stable output borrow.

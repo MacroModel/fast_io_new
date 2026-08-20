@@ -24,6 +24,7 @@
 #include "lockguard.h"
 #include "common.h"
 #include "seek.h"
+#include "output_operation_guard.h"
 #include "multiblock_iterator_view/impl.h"
 
 #include "writeimpl/impl.h"

@@ -7,6 +7,8 @@
  * tracks total progress through the extensible transmit-integer protocol, and
  * prefers provider whole-operation CPOs where available. Generic execution
  * composes normalized read/write primitives under one synchronization plan.
+ * Logical EOF completes an input transcoder's terminal drain naturally; after
+ * that success the output guard checked-finishes an eligible temporary owner.
  */
 
 namespace fast_io
@@ -15,13 +17,13 @@ namespace fast_io
 namespace details
 {
 
+/** @brief Transfers elements to logical EOF and accumulates generic progress. */
 template <typename optstmtype, typename instmtype, typename T>
 	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
 inline constexpr void transmit_until_eof_generic_main_impl(optstmtype &optstm, instmtype &instm, T &resultint)
 {
-	/*
-	A dummy placeholder implementation
-	*/
+	// Generic EOF transfer uses a fixed-size local element buffer while provider
+	// status CPOs remain free to supply a zero-copy implementation.
 	using input_char_type = typename instmtype::input_char_type;
 	using output_char_type = typename optstmtype::output_char_type;
 	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
@@ -31,13 +33,16 @@ inline constexpr void transmit_until_eof_generic_main_impl(optstmtype &optstm, i
 	for (input_char_type *iter;
 		 (iter = ::fast_io::operations::decay::read_some_decay(instm, buffer_start, buffer_end)) != buffer_start;)
 	{
+		// Forward each nonempty input block and accumulate its element count.
 		::std::size_t off{static_cast<::std::size_t>(iter - buffer_start)};
 		if constexpr (::std::same_as<output_char_type, input_char_type>)
 		{
+			// Matching character types write directly from the input buffer.
 			::fast_io::operations::decay::write_all_decay(optstm, buffer_start, iter);
 		}
 		else
 		{
+			// Equal-width distinct types use an alias-safe output view.
 			using output_char_type_may_alias_const_ptrtp
 #if __has_cpp_attribute(__gnu__::__may_alias__)
 				[[__gnu__::__may_alias__]]
@@ -51,6 +56,7 @@ inline constexpr void transmit_until_eof_generic_main_impl(optstmtype &optstm, i
 	}
 }
 
+/** @brief Transfers elements to EOF and returns the standard result type. */
 template <typename optstmtype, typename instmtype>
 inline constexpr ::fast_io::transmit_result transmit_until_eof_main_impl(optstmtype &optstm, instmtype &instm)
 {
@@ -68,6 +74,7 @@ namespace operations
 namespace decay
 {
 
+/** @brief Applies mutex recursion to generic-result element EOF transfer. */
 template <typename optstmtype, typename instmtype, typename T>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype> &&
 			 ::fast_io::details::transmit_integer_wrapper<::std::remove_cvref_t<T>>)
@@ -91,6 +98,7 @@ inline constexpr decltype(auto) transmit_until_eof_generic_decay(optstmtype &&op
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
 					  output_observer_type>)
 	{
+		// Lock output across the complete EOF-driven transfer.
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
 		decltype(auto) unlocked_output{
@@ -100,6 +108,7 @@ inline constexpr decltype(auto) transmit_until_eof_generic_decay(optstmtype &&op
 	else if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<
 						   input_observer_type>)
 	{
+		// Lock input only after output has reached an unlocked observer.
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
@@ -107,10 +116,12 @@ inline constexpr decltype(auto) transmit_until_eof_generic_decay(optstmtype &&op
 	}
 	else
 	{
+		// Run the generic-result EOF loop on unlocked observers.
 		return ::fast_io::details::transmit_until_eof_generic_main_impl(optstm, instm, resultint);
 	}
 }
 
+/** @brief Applies mutex recursion to standard-result element EOF transfer. */
 template <typename optstmtype, typename instmtype>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
 inline constexpr decltype(auto) transmit_until_eof_decay(optstmtype &&optstm, instmtype &&instm)
@@ -131,6 +142,7 @@ inline constexpr decltype(auto) transmit_until_eof_decay(optstmtype &&optstm, in
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
 					  output_observer_type>)
 	{
+		// Hold the output lock through the complete logical input stream.
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
 		decltype(auto) unlocked_output{
@@ -140,6 +152,7 @@ inline constexpr decltype(auto) transmit_until_eof_decay(optstmtype &&optstm, in
 	else if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<
 						   input_observer_type>)
 	{
+		// Hold the input lock after output mutex recursion is resolved.
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
@@ -147,27 +160,34 @@ inline constexpr decltype(auto) transmit_until_eof_decay(optstmtype &&optstm, in
 	}
 	else
 	{
+		// Execute standard-result EOF transfer on the unlocked observers.
 		return ::fast_io::details::transmit_until_eof_main_impl(optstm, instm);
 	}
 }
 
 } // namespace decay
 
+/** @brief Transfers elements to EOF with a caller-selected progress accumulator. */
 template <typename optstmtype, typename instmtype, typename T>
 inline constexpr decltype(auto) transmit_until_eof_generic(optstmtype &&optstm, instmtype &&instm, T resultint)
 {
-	decltype(auto) output_observer{::fast_io::operations::output_stream_ref(optstm)};
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
-	// The result wrapper is explicitly copied once by this public API; recursive dispatch only borrows that owner.
-	return ::fast_io::operations::decay::transmit_until_eof_generic_decay(output_observer, input_observer, resultint);
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
+		return ::fast_io::operations::decay::transmit_until_eof_generic_decay(
+			output_observer, input_observer, resultint);
+	});
 }
 
+/** @brief Transfers elements to EOF and checked-finishes an eligible output. */
 template <typename optstmtype, typename instmtype>
 inline constexpr decltype(auto) transmit_until_eof(optstmtype &&optstm, instmtype &&instm)
 {
-	decltype(auto) output_observer{::fast_io::operations::output_stream_ref(optstm)};
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
-	return ::fast_io::operations::decay::transmit_until_eof_decay(output_observer, input_observer);
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
+		return ::fast_io::operations::decay::transmit_until_eof_decay(output_observer, input_observer);
+	});
 }
 
 } // namespace operations

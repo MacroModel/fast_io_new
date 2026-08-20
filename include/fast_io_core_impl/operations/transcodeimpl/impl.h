@@ -1,17 +1,19 @@
 ﻿#pragma once
 
-/*
- * Aggregation boundary for character transcoding protocols and operations.
+/**
+ * @file
+ * @brief Aggregates the bounded transform-engine protocol.
  *
- * The included files declare transcoder capability CPOs, normalized execution
- * helpers, and printable transcoder manipulators. Transcoding is a typed
- * transformation sublayer: higher IO operations decide why and where to emit,
- * while device primitives ultimately move the converted code units.
+ * Transcoders are stream-adapter engines. No printable or scannable value
+ * carrier is included here.
  */
 
-#include "defines.h"
+#include "types.h"
+#include "concepts.h"
+#include "binding.h"
 #include "ops.h"
-#include "transcoder.h"
+#include "adapter.h"
+#include "eol.h"
 
 namespace fast_io
 {
