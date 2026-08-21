@@ -161,7 +161,9 @@ inline int posix_create_anonymous_shared_memory_fd_fallback(ipc_mode mode)
 			temporary_name, flags, S_IRUSR | S_IWUSR)};
 		if (fd != -1)
 		{
+#ifdef __cpp_exceptions
 			try
+#endif
 			{
 				posix_ipc_set_close_on_exec(fd);
 				if (posix_shared_memory_shm_unlink_nothrow(temporary_name) == -1) [[unlikely]]
@@ -169,12 +171,14 @@ inline int posix_create_anonymous_shared_memory_fd_fallback(ipc_mode mode)
 					throw_posix_error();
 				}
 			}
+#ifdef __cpp_exceptions
 			catch (...)
 			{
 				::fast_io::details::sys_close(fd);
 				posix_shared_memory_shm_unlink_nothrow(temporary_name);
 				throw;
 			}
+#endif
 			return fd;
 		}
 		if (errno != EEXIST) [[unlikely]]
@@ -297,7 +301,9 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 			}
 		}
 		::fast_io::posix_file_factory file{fd};
+#ifdef __cpp_exceptions
 		try
+#endif
 		{
 			posix_ipc_set_close_on_exec(file.fd);
 			struct ::stat status{};
@@ -337,6 +343,7 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 			file.fd = -1;
 			return state;
 		}
+#ifdef __cpp_exceptions
 		catch (...)
 		{
 			if (created)
@@ -345,6 +352,7 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 			}
 			throw;
 		}
+#endif
 	}
 }
 
@@ -372,15 +380,19 @@ inline posix_shared_memory_state posix_duplicate_shared_memory_impl(
 	int fd, ::std::size_t bytes, ipc_mode mode)
 {
 	auto const duplicated_fd{posix_ipc_duplicate_close_on_exec(fd)};
+	#ifdef __cpp_exceptions
 	try
+	#endif
 	{
 		return posix_map_shared_memory_impl(duplicated_fd, bytes, mode);
 	}
+	#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(duplicated_fd);
 		throw;
 	}
+	#endif
 }
 
 inline posix_shared_memory_state posix_adopt_shared_memory_impl(
@@ -391,7 +403,9 @@ inline posix_shared_memory_state posix_adopt_shared_memory_impl(
 	{
 		throw_posix_error(EINVAL);
 	}
+	#ifdef __cpp_exceptions
 	try
+	#endif
 	{
 		posix_ipc_set_close_on_exec(fd);
 		auto const actual_bytes{posix_shared_memory_file_size(fd)};
@@ -402,11 +416,13 @@ inline posix_shared_memory_state posix_adopt_shared_memory_impl(
 		}
 		return posix_map_shared_memory_impl(fd, bytes, mode);
 	}
+	#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(fd);
 		throw;
 	}
+	#endif
 }
 
 inline void posix_unlink_shared_memory_impl(

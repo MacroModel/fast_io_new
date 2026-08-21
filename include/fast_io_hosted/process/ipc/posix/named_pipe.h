@@ -150,16 +150,20 @@ inline int posix_named_pipe_create_socket(int socket_type, bool nonblocking)
 	{
 		throw_posix_error();
 	}
+	#ifdef __cpp_exceptions
 	try
+	#endif
 	{
 		posix_named_pipe_set_descriptor_flags(fd, nonblocking);
 		posix_named_pipe_set_socket_options(fd);
 	}
+	#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(fd);
 		throw;
 	}
+	#endif
 	return fd;
 }
 
@@ -460,17 +464,21 @@ inline int posix_named_pipe_accept_impl(int listener_fd, ipc_mode mode)
 		throw_posix_error();
 	}
 #endif
+#ifdef __cpp_exceptions
 	try
+	#endif
 	{
 		posix_named_pipe_set_descriptor_flags(accepted_fd, nonblocking);
 		posix_named_pipe_set_socket_options(accepted_fd);
 		posix_named_pipe_apply_direction(accepted_fd, mode);
 	}
+	#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(accepted_fd);
 		throw;
 	}
+	#endif
 	return accepted_fd;
 }
 

@@ -279,15 +279,19 @@ inline int posix_ipc_duplicate_close_on_exec(int old_fd)
 	}
 #endif
 	fd = ::fast_io::details::sys_dup(old_fd);
+#ifdef __cpp_exceptions
 	try
+#endif
 	{
 		posix_ipc_set_close_on_exec(fd);
 	}
+#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(fd);
 		throw;
 	}
+#endif
 	return fd;
 }
 
@@ -345,7 +349,9 @@ public:
 		{
 			throw_posix_error();
 		}
+#ifdef __cpp_exceptions
 		try
+#endif
 		{
 			posix_ipc_set_close_on_exec(fd);
 			struct ::stat status{};
@@ -365,12 +371,14 @@ public:
 			}
 			lock(nonblocking);
 		}
+#ifdef __cpp_exceptions
 		catch (...)
 		{
 			::fast_io::details::sys_close(fd);
 			fd = -1;
 			throw;
 		}
+#endif
 	}
 
 	posix_ipc_file_lock(posix_ipc_file_lock const &) = delete;

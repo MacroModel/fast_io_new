@@ -91,7 +91,9 @@ inline int posix_eventfd_create_impl(::std::uint64_t initial_value, ipc_mode mod
 		throw_posix_error();
 	}
 #endif
+#ifdef __cpp_exceptions
 	try
+	#endif
 	{
 		posix_ipc_set_close_on_exec(fd);
 #if defined(F_GETFL) && defined(F_SETFL) && defined(O_NONBLOCK)
@@ -102,11 +104,13 @@ inline int posix_eventfd_create_impl(::std::uint64_t initial_value, ipc_mode mod
 		}
 #endif
 	}
+	#ifdef __cpp_exceptions
 	catch (...)
 	{
 		::fast_io::details::sys_close(fd);
 		throw;
 	}
+	#endif
 	return fd;
 }
 
