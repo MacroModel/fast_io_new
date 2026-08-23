@@ -91,11 +91,9 @@ inline int posix_eventfd_create_impl(::std::uint64_t initial_value, ipc_mode mod
 		throw_posix_error();
 	}
 #endif
-#ifdef __cpp_exceptions
-	try
-	#endif
+	::fast_io::posix_file file{fd};
 	{
-		posix_ipc_set_close_on_exec(fd);
+		posix_ipc_set_close_on_exec(file.native_handle());
 #if defined(F_GETFL) && defined(F_SETFL) && defined(O_NONBLOCK)
 		if ((mode & ipc_mode::no_block) != ipc_mode::none)
 		{
@@ -104,14 +102,7 @@ inline int posix_eventfd_create_impl(::std::uint64_t initial_value, ipc_mode mod
 		}
 #endif
 	}
-	#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(fd);
-		throw;
-	}
-	#endif
-	return fd;
+	return file.release();
 }
 
 inline ::std::uint64_t posix_eventfd_read_impl(int fd)

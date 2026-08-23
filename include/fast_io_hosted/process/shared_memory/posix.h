@@ -96,6 +96,19 @@ inline ::std::size_t posix_shared_memory_file_size(int fd)
 	return static_cast<::std::size_t>(file_status.size);
 }
 
+struct posix_shared_memory_unlink_guard
+{
+	char8_t const *name{};
+	bool armed{};
+	~posix_shared_memory_unlink_guard()
+	{
+		if (armed)
+		{
+			posix_shared_memory_shm_unlink_nothrow(name);
+		}
+	}
+};
+
 inline posix_shared_memory_state posix_map_shared_memory_impl(
 	int fd, ::std::size_t bytes, ipc_mode mode)
 {
@@ -117,23 +130,15 @@ inline int posix_create_anonymous_shared_memory_fd_fallback(ipc_mode mode)
 	}
 
 #if defined(__FreeBSD__) && defined(SHM_ANON)
-	int fd{::fast_io::noexcept_call(
+	::fast_io::posix_file file{::fast_io::noexcept_call(
 		::shm_open, SHM_ANON, O_RDWR | O_CREAT,
 		static_cast<::mode_t>(S_IRUSR | S_IWUSR))};
-	if (fd == -1) [[unlikely]]
+	if (!file) [[unlikely]]
 	{
 		throw_posix_error();
 	}
-	try
-	{
-		posix_ipc_set_close_on_exec(fd);
-	}
-	catch (...)
-	{
-		::fast_io::details::sys_close(fd);
-		throw;
-	}
-	return fd;
+	posix_ipc_set_close_on_exec(file.native_handle());
+	return file.release();
 #else
 	static ::std::atomic_size_t sequence{};
 	for (;;)
@@ -157,29 +162,18 @@ inline int posix_create_anonymous_shared_memory_fd_fallback(ipc_mode mode)
 																   0x616e6f6e5f73686dULL));
 		*name_iter = u8'\0';
 		int flags{O_RDWR | O_CREAT | O_EXCL};
-		int fd{posix_shared_memory_shm_open_nothrow(
+		::fast_io::posix_file file{posix_shared_memory_shm_open_nothrow(
 			temporary_name, flags, S_IRUSR | S_IWUSR)};
-		if (fd != -1)
+		if (file)
 		{
-#ifdef __cpp_exceptions
-			try
-#endif
+			posix_shared_memory_unlink_guard unlink_guard{temporary_name, true};
+			posix_ipc_set_close_on_exec(file.native_handle());
+			if (posix_shared_memory_shm_unlink_nothrow(temporary_name) == -1) [[unlikely]]
 			{
-				posix_ipc_set_close_on_exec(fd);
-				if (posix_shared_memory_shm_unlink_nothrow(temporary_name) == -1) [[unlikely]]
-				{
-					throw_posix_error();
-				}
+				throw_posix_error();
 			}
-#ifdef __cpp_exceptions
-			catch (...)
-			{
-				::fast_io::details::sys_close(fd);
-				posix_shared_memory_shm_unlink_nothrow(temporary_name);
-				throw;
-			}
-#endif
-			return fd;
+			unlink_guard.armed = false;
+			return file.release();
 		}
 		if (errno != EEXIST) [[unlikely]]
 		{
@@ -220,10 +214,10 @@ inline posix_shared_memory_state posix_create_shared_memory_impl(
 	{
 		throw_posix_error(EINVAL);
 	}
-	::fast_io::posix_file_factory file{posix_create_anonymous_shared_memory_fd(mode)};
-	::fast_io::truncate(::fast_io::basic_posix_io_observer<char>{file.fd}, bytes);
-	auto state{posix_map_shared_memory_impl(file.fd, bytes, mode)};
-	file.fd = -1;
+	::fast_io::posix_file file{posix_create_anonymous_shared_memory_fd(mode)};
+	::fast_io::truncate(::fast_io::basic_posix_io_observer<char>{file.native_handle()}, bytes);
+	auto state{posix_map_shared_memory_impl(file.native_handle(), bytes, mode)};
+	file.release();
 	return state;
 }
 
@@ -300,14 +294,11 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 				throw_posix_error();
 			}
 		}
-		::fast_io::posix_file_factory file{fd};
-#ifdef __cpp_exceptions
-		try
-#endif
-		{
-			posix_ipc_set_close_on_exec(file.fd);
+		::fast_io::posix_file file{fd};
+		posix_shared_memory_unlink_guard unlink_guard{shared_name.object_name, created};
+			posix_ipc_set_close_on_exec(file.native_handle());
 			struct ::stat status{};
-			if (::fast_io::noexcept_call(::fstat, file.fd,
+			if (::fast_io::noexcept_call(::fstat, file.native_handle(),
 										 __builtin_addressof(status)) == -1) [[unlikely]]
 			{
 				throw_posix_error();
@@ -331,28 +322,18 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 			}
 			if (created)
 			{
-				if (::fast_io::noexcept_call(::fchmod, file.fd,
+				if (::fast_io::noexcept_call(::fchmod, file.native_handle(),
 											 static_cast<::mode_t>(S_IRUSR | S_IWUSR)) == -1) [[unlikely]]
 				{
 					throw_posix_error();
 				}
-				::fast_io::truncate(::fast_io::basic_posix_io_observer<char>{file.fd}, bytes);
+				::fast_io::truncate(::fast_io::basic_posix_io_observer<char>{file.native_handle()}, bytes);
 			}
-			auto const actual_bytes{posix_shared_memory_file_size(file.fd)};
-			auto state{posix_map_shared_memory_impl(file.fd, actual_bytes, mode)};
-			file.fd = -1;
+			auto const actual_bytes{posix_shared_memory_file_size(file.native_handle())};
+			auto state{posix_map_shared_memory_impl(file.native_handle(), actual_bytes, mode)};
+			file.release();
+			unlink_guard.armed = false;
 			return state;
-		}
-#ifdef __cpp_exceptions
-		catch (...)
-		{
-			if (created)
-			{
-				posix_shared_memory_shm_unlink_nothrow(shared_name.object_name);
-			}
-			throw;
-		}
-#endif
 	}
 }
 
@@ -379,20 +360,10 @@ inline posix_shared_memory_state posix_create_named_shared_memory_impl(
 inline posix_shared_memory_state posix_duplicate_shared_memory_impl(
 	int fd, ::std::size_t bytes, ipc_mode mode)
 {
-	auto const duplicated_fd{posix_ipc_duplicate_close_on_exec(fd)};
-	#ifdef __cpp_exceptions
-	try
-	#endif
-	{
-		return posix_map_shared_memory_impl(duplicated_fd, bytes, mode);
-	}
-	#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(duplicated_fd);
-		throw;
-	}
-	#endif
+	::fast_io::posix_file duplicated_file{posix_ipc_duplicate_close_on_exec(fd)};
+	auto state{posix_map_shared_memory_impl(duplicated_file.native_handle(), bytes, mode)};
+	duplicated_file.release();
+	return state;
 }
 
 inline posix_shared_memory_state posix_adopt_shared_memory_impl(
@@ -403,26 +374,17 @@ inline posix_shared_memory_state posix_adopt_shared_memory_impl(
 	{
 		throw_posix_error(EINVAL);
 	}
-	#ifdef __cpp_exceptions
-	try
-	#endif
+	::fast_io::posix_file file{fd};
+	posix_ipc_set_close_on_exec(file.native_handle());
+	auto const actual_bytes{posix_shared_memory_file_size(file.native_handle())};
+	auto const bytes{requested_bytes == 0 ? actual_bytes : requested_bytes};
+	if (bytes > actual_bytes) [[unlikely]]
 	{
-		posix_ipc_set_close_on_exec(fd);
-		auto const actual_bytes{posix_shared_memory_file_size(fd)};
-		auto const bytes{requested_bytes == 0 ? actual_bytes : requested_bytes};
-		if (bytes > actual_bytes) [[unlikely]]
-		{
-			throw_posix_error(EINVAL);
-		}
-		return posix_map_shared_memory_impl(fd, bytes, mode);
+		throw_posix_error(EINVAL);
 	}
-	#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(fd);
-		throw;
-	}
-	#endif
+	auto state{posix_map_shared_memory_impl(file.native_handle(), bytes, mode)};
+	file.release();
+	return state;
 }
 
 inline void posix_unlink_shared_memory_impl(

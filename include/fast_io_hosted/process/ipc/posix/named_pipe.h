@@ -150,21 +150,10 @@ inline int posix_named_pipe_create_socket(int socket_type, bool nonblocking)
 	{
 		throw_posix_error();
 	}
-	#ifdef __cpp_exceptions
-	try
-	#endif
-	{
-		posix_named_pipe_set_descriptor_flags(fd, nonblocking);
-		posix_named_pipe_set_socket_options(fd);
-	}
-	#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(fd);
-		throw;
-	}
-	#endif
-	return fd;
+	::fast_io::posix_file file{fd};
+	posix_named_pipe_set_descriptor_flags(file.native_handle(), nonblocking);
+	posix_named_pipe_set_socket_options(file.native_handle());
+	return file.release();
 }
 
 inline void posix_named_pipe_apply_direction(int fd, ipc_mode mode)
@@ -312,17 +301,17 @@ inline posix_named_pipe_handle_state posix_create_named_pipe_ipc_server_impl(
 	posix_ipc_file_lock pathname_lock{socket_address.lock_path, true};
 	posix_named_pipe_remove_stale_path(socket_address);
 	auto const socket_type{posix_named_pipe_socket_type(mode)};
-	::fast_io::posix_file_factory listener{
+	::fast_io::posix_file listener{
 		posix_named_pipe_create_socket(socket_type, (mode & ipc_mode::no_block) != ipc_mode::none)};
 #if defined(__FreeBSD__)
-	if (::fast_io::noexcept_call(::fchmod, listener.fd,
+	if (::fast_io::noexcept_call(::fchmod, listener.native_handle(),
 								 static_cast<::mode_t>(S_IRUSR | S_IWUSR)) == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}
 #endif
 	auto bind_result{::fast_io::noexcept_call(
-		::bind, listener.fd, reinterpret_cast<::sockaddr const *>(__builtin_addressof(socket_address.address)), socket_address.length)};
+		::bind, listener.native_handle(), reinterpret_cast<::sockaddr const *>(__builtin_addressof(socket_address.address)), socket_address.length)};
 	if (bind_result == -1) [[unlikely]]
 	{
 		throw_posix_error();
@@ -334,20 +323,18 @@ inline posix_named_pipe_handle_state posix_create_named_pipe_ipc_server_impl(
 	{
 		throw_posix_error();
 	}
-	if (::fast_io::noexcept_call(::listen, listener.fd, SOMAXCONN) == -1) [[unlikely]]
+	if (::fast_io::noexcept_call(::listen, listener.native_handle(), SOMAXCONN) == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}
-	::fast_io::posix_file_factory server_descriptor{
-		posix_ipc_duplicate_close_on_exec(listener.fd)};
+	::fast_io::posix_file server_descriptor{
+		posix_ipc_duplicate_close_on_exec(listener.native_handle())};
 	auto const lifetime{posix_named_pipe_allocate_lifetime(
-		socket_address, listener.fd, pathname_lock.fd)};
-	listener.fd = -1;
+		socket_address, listener.native_handle(), pathname_lock.fd)};
+	listener.release();
 	pathname_lock.fd = -1;
 	path_guard.armed = false;
-	auto const fd{server_descriptor.fd};
-	server_descriptor.fd = -1;
-	return {fd, lifetime};
+	return {server_descriptor.release(), lifetime};
 }
 
 struct posix_create_named_pipe_ipc_server_parameter
@@ -374,18 +361,16 @@ inline int posix_create_named_pipe_ipc_client_impl(
 {
 	posix_named_pipe_validate_mode(mode);
 	auto const socket_address{posix_named_pipe_make_address(name, name_size)};
-	::fast_io::posix_file_factory connection{posix_named_pipe_create_socket(
+	::fast_io::posix_file connection{posix_named_pipe_create_socket(
 		posix_named_pipe_socket_type(mode), (mode & ipc_mode::no_block) != ipc_mode::none)};
 	auto const result{::fast_io::noexcept_call(
-		::connect, connection.fd, reinterpret_cast<::sockaddr const *>(__builtin_addressof(socket_address.address)), socket_address.length)};
+		::connect, connection.native_handle(), reinterpret_cast<::sockaddr const *>(__builtin_addressof(socket_address.address)), socket_address.length)};
 	if (result == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}
-	posix_named_pipe_apply_direction(connection.fd, mode);
-	auto const fd{connection.fd};
-	connection.fd = -1;
-	return fd;
+	posix_named_pipe_apply_direction(connection.native_handle(), mode);
+	return connection.release();
 }
 
 struct posix_create_named_pipe_ipc_client_parameter
@@ -464,22 +449,11 @@ inline int posix_named_pipe_accept_impl(int listener_fd, ipc_mode mode)
 		throw_posix_error();
 	}
 #endif
-#ifdef __cpp_exceptions
-	try
-	#endif
-	{
-		posix_named_pipe_set_descriptor_flags(accepted_fd, nonblocking);
-		posix_named_pipe_set_socket_options(accepted_fd);
-		posix_named_pipe_apply_direction(accepted_fd, mode);
-	}
-	#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(accepted_fd);
-		throw;
-	}
-	#endif
-	return accepted_fd;
+	::fast_io::posix_file accepted{accepted_fd};
+	posix_named_pipe_set_descriptor_flags(accepted.native_handle(), nonblocking);
+	posix_named_pipe_set_socket_options(accepted.native_handle());
+	posix_named_pipe_apply_direction(accepted.native_handle(), mode);
+	return accepted.release();
 }
 
 inline void posix_unlink_named_pipe_ipc_impl(

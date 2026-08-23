@@ -220,10 +220,10 @@ inline char8_t *posix_ipc_user_directory(
 	{
 		throw_posix_error();
 	}
-	::fast_io::posix_file_factory directory{directory_fd};
-	posix_ipc_set_close_on_exec(directory.fd);
+	::fast_io::posix_file directory{directory_fd};
+	posix_ipc_set_close_on_exec(directory.native_handle());
 	struct ::stat status{};
-	if (::fast_io::noexcept_call(::fstat, directory.fd,
+	if (::fast_io::noexcept_call(::fstat, directory.native_handle(),
 								 __builtin_addressof(status)) == -1) [[unlikely]]
 	{
 		throw_posix_error();
@@ -234,7 +234,7 @@ inline char8_t *posix_ipc_user_directory(
 	}
 	if ((status.st_mode & static_cast<::mode_t>(S_IRWXU | S_IRWXG | S_IRWXO)) !=
 			static_cast<::mode_t>(S_IRWXU) &&
-		::fast_io::noexcept_call(::fchmod, directory.fd,
+		::fast_io::noexcept_call(::fchmod, directory.native_handle(),
 								 static_cast<::mode_t>(S_IRWXU)) == -1) [[unlikely]]
 	{
 		throw_posix_error();
@@ -278,21 +278,9 @@ inline int posix_ipc_duplicate_close_on_exec(int old_fd)
 		throw_posix_error();
 	}
 #endif
-	fd = ::fast_io::details::sys_dup(old_fd);
-#ifdef __cpp_exceptions
-	try
-#endif
-	{
-		posix_ipc_set_close_on_exec(fd);
-	}
-#ifdef __cpp_exceptions
-	catch (...)
-	{
-		::fast_io::details::sys_close(fd);
-		throw;
-	}
-#endif
-	return fd;
+	::fast_io::posix_file duplicated{::fast_io::details::sys_dup(old_fd)};
+	posix_ipc_set_close_on_exec(duplicated.native_handle());
+	return duplicated.release();
 }
 
 inline int posix_ipc_close_nothrow(int fd) noexcept
@@ -349,13 +337,12 @@ public:
 		{
 			throw_posix_error();
 		}
-#ifdef __cpp_exceptions
-		try
-#endif
+		::fast_io::posix_file file{fd};
+		fd = -1;
 		{
-			posix_ipc_set_close_on_exec(fd);
+			posix_ipc_set_close_on_exec(file.native_handle());
 			struct ::stat status{};
-			if (::fast_io::noexcept_call(::fstat, fd,
+			if (::fast_io::noexcept_call(::fstat, file.native_handle(),
 										 __builtin_addressof(status)) == -1) [[unlikely]]
 			{
 				throw_posix_error();
@@ -364,21 +351,14 @@ public:
 			{
 				throw_posix_error(EACCES);
 			}
-			if (::fast_io::noexcept_call(::fchmod, fd,
+			if (::fast_io::noexcept_call(::fchmod, file.native_handle(),
 										 static_cast<::mode_t>(S_IRUSR | S_IWUSR)) == -1) [[unlikely]]
 			{
 				throw_posix_error();
 			}
 			lock(nonblocking);
 		}
-#ifdef __cpp_exceptions
-		catch (...)
-		{
-			::fast_io::details::sys_close(fd);
-			fd = -1;
-			throw;
-		}
-#endif
+		fd = file.release();
 	}
 
 	posix_ipc_file_lock(posix_ipc_file_lock const &) = delete;
