@@ -636,8 +636,12 @@ inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
 		// proving that the token ended inside the supplied chunk.
 		throw_parse_code(parse_code::invalid);
 	}
-	if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
-			in, current_pointer, first, last, it)) [[unlikely]]
+	if constexpr (::fast_io::current_chunk_context_scanner_result_in_range<char_type, T>)
+	{
+		::fast_io::details::scan_commit_bounded_iterator(in, current_pointer, first, it);
+	}
+	else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
+				 in, current_pointer, first, last, it)) [[unlikely]]
 	{
 		throw_parse_code(parse_code::invalid);
 	}
@@ -671,6 +675,25 @@ inline constexpr bool scan_context_current_chunk_dispatch_available_impl() noexc
 template <typename input, typename T>
 inline constexpr bool scan_context_current_chunk_dispatch_available{
 	scan_context_current_chunk_dispatch_available_impl<input, T>()};
+
+// A current-chunk accelerator misses only when a token reaches a chunk boundary (or before the first refill). Keep the
+// complete context state machine out of the scalar fast-path frame: inlining it forces every successful scan to carry
+// its state storage, saved registers, and stack-protector epilogue even though none of that work is used. The separate
+// cold owner preserves the transactional fallback semantics while leaving the ordinary in-chunk path small enough for
+// both GCC and Clang to optimize as an independent strategy.
+template <typename stack_policy, typename input, typename T>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline bool scan_context_current_chunk_fallback(input &in, T &arg)
+{
+	return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+}
 
 template <bool>
 inline constexpr bool type_not_scannable = false;
@@ -805,8 +828,9 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				{
 					return true;
 				}
+				return ::fast_io::details::scan_context_current_chunk_fallback<stack_policy>(in, arg);
 			}
-			// Context-only scanners and transactional misses preserve the original stateful path exactly.
+			// Context-only scanners preserve the ordinary stateful path exactly.
 			return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 		}
 		else if constexpr (contiguous_scannable<char_type, T>)

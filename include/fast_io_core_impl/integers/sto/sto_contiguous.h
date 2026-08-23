@@ -4932,6 +4932,35 @@ inline constexpr ::std::size_t scan_context_current_chunk_minimum_size(
 
 template <::std::integral char_type, manipulators::scalar_flags flags,
 		  details::my_integral T>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr parse_result<char_type const *>
+scan_context_current_chunk_integer_fallback(
+	char_type const *begin, char_type const *end,
+	::fast_io::manipulators::scalar_manip_t<flags, T &> target) noexcept
+{
+	// Keep the generic transactional temporary out of the bounded-decimal hot frame. This fallback still owns the
+	// target publication rule for long tokens, unusual formatting policies, and chunk-boundary misses.
+	T value{};
+	auto result{details::scan_int_contiguous_define_impl<
+		flags.base, flags.noskipws, flags.showbase, flags.full,
+		flags.modern_octal, flags.allow_leading_plus>(begin, end, value)};
+	if (result.iter == end)
+	{
+		return {begin, parse_code::partial};
+	}
+	if (result.code == parse_code::ok)
+	{
+		target.reference = value;
+	}
+	return result;
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
 inline constexpr parse_result<char_type const *>
 scan_context_current_chunk_define(
 	io_reserve_type_t<
@@ -4940,34 +4969,87 @@ scan_context_current_chunk_define(
 	char_type const *begin, char_type const *end,
 	::fast_io::manipulators::scalar_manip_t<flags, T &> target) noexcept
 {
-	constexpr ::std::size_t context_capacity{
-		scan_context_current_chunk_minimum_size(
-			io_reserve_type<
-				char_type,
-				::fast_io::manipulators::scalar_manip_t<flags, T &>>) -
-		1u};
-	// Small fragments are the context state machine's intended workload. Avoid a speculative parse when the chunk is
-	// not even large enough to contain the scanner's complete bounded payload plus an in-chunk terminator.
-	if (static_cast<::std::size_t>(end - begin) <= context_capacity) [[unlikely]]
+#if (defined(__GNUC__) || defined(__clang__)) &&                      \
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+	// A buffered input's `end` is the physical chunk end, not the token end. Detect the overwhelmingly common bounded
+	// unsigned decimal before that large span selects the long-range parser; seeing the delimiter proves both completion
+	// and the returned iterator range, while nine leading digits fall through without publishing target state.
+	if constexpr (flags.base == 10u && !flags.noskipws && !flags.showbase &&
+				  !flags.full && !flags.allow_leading_plus &&
+				  ::fast_io::details::my_unsigned_integral<T> &&
+				  sizeof(T) == sizeof(::std::uint_least64_t) &&
+				  sizeof(char_type) == sizeof(char8_t) &&
+				  ::fast_io::details::is_ascii<char_type>)
 	{
-		return {begin, parse_code::partial};
+		auto first{::fast_io::details::find_space_common_impl<false, true>(begin, end)};
+		if (first != end)
+		{
+			using unsigned_char_type = ::std::make_unsigned_t<char_type>;
+			auto digit{static_cast<unsigned_char_type>(*first)};
+			if (!::fast_io::details::char_digit_to_literal<10u, char_type>(digit))
+			{
+				if (digit == 0u)
+				{
+					auto const iter{first + 1u};
+					if (iter != end)
+					{
+						auto next_digit{static_cast<unsigned_char_type>(*iter)};
+						if (::fast_io::details::char_digit_to_literal<10u, char_type>(next_digit)) [[likely]]
+						{
+							target.reference = 0u;
+							return {iter, parse_code::ok};
+						}
+					}
+					return ::fast_io::scan_context_current_chunk_integer_fallback(begin, end, target);
+				}
+				if (static_cast<::std::size_t>(end - first) >= 4u)
+				{
+					::std::uint_least64_t four_digit_value;
+					if (::fast_io::details::scan_int_contiguous_x86_parse_four_digits<10u>(
+							first, four_digit_value)) [[likely]]
+					{
+						auto value{static_cast<T>(four_digit_value)};
+						auto iter{first + 4u};
+						for (unsigned digits{4u}; digits != 9u && iter != end; ++digits, ++iter)
+						{
+							digit = static_cast<unsigned_char_type>(*iter);
+							if (::fast_io::details::char_digit_to_literal<10u, char_type>(digit)) [[likely]]
+							{
+								target.reference = value;
+								return {iter, parse_code::ok};
+							}
+							value = static_cast<T>(value * 10u + digit);
+						}
+					}
+				}
+				auto value{static_cast<T>(digit)};
+				auto iter{first + 1u};
+				for (unsigned digits{1u}; digits != 9u && iter != end; ++digits, ++iter)
+				{
+					digit = static_cast<unsigned_char_type>(*iter);
+					if (::fast_io::details::char_digit_to_literal<10u, char_type>(digit)) [[likely]]
+					{
+						target.reference = value;
+						return {iter, parse_code::ok};
+					}
+					value = static_cast<T>(value * 10u + digit);
+				}
+			}
+		}
 	}
-	T value{};
-	auto result{details::scan_int_contiguous_define_impl<
-		flags.base, flags.noskipws, flags.showbase, flags.full,
-		flags.modern_octal, flags.allow_leading_plus>(
-		begin, end, value)};
-	if (result.iter == end)
-	{
-		// The terminal scanner may have accepted the final prefix and written `value`; neither is observable on a
-		// chunk-boundary miss. The real target and stream cursor remain untouched for context retry.
-		return {begin, parse_code::partial};
-	}
-	if (result.code == parse_code::ok)
-	{
-		target.reference = value;
-	}
-	return result;
+#endif
+	return ::fast_io::scan_context_current_chunk_integer_fallback(begin, end, target);
+}
+
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  details::my_integral T>
+inline constexpr ::std::true_type scan_context_current_chunk_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
 }
 
 template <::std::integral char_type, manipulators::scalar_flags flags,

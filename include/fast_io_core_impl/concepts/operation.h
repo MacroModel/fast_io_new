@@ -363,6 +363,18 @@ concept current_chunk_context_scannable =
 		} -> ::std::same_as<parse_result<char_type const *>>;
 	};
 
+/// @brief Allows a current-chunk accelerator to remove generic cursor validation from its hot path.
+/// @details The provider promises that every decisive result from `scan_context_current_chunk_define` belongs to the
+///          supplied half-open range. Partial misses remain governed by the stronger transactional contract above.
+template <typename char_type, typename T>
+concept current_chunk_context_scanner_result_in_range =
+	current_chunk_context_scannable<char_type, T> && requires {
+		{
+			scan_context_current_chunk_result_in_range(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Opts a hybrid scanner into terminal contiguous dispatch.
 /// @details Merely providing both contiguous and context CPOs proves two syntactic capabilities, not that selecting
 ///          either one is observationally interchangeable. This marker is the scanner author's proof that, when the
