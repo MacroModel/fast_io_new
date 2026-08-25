@@ -2030,12 +2030,49 @@ print_reserve_size(io_reserve_type_t<char_type, manipulators::scalar_manip_t<fla
 	}
 }
 
+namespace details::decay
+{
+
+/// The narrow ASCII shortest formatter intentionally uses fixed-width stores inside its advertised reserve bound.
+/// A fixed external view therefore stages this exact source category before publishing the logical cursor, while
+/// ordinary buffered destinations retain the faster in-place reserve writer.
+template <::std::integral char_type, manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point flt>
+struct print_fixed_external_overstore_traits<
+	char_type, manipulators::scalar_manip_t<flags, flt>>
+{
+	using trait = ::fast_io::details::iec559_traits<::std::remove_cvref_t<flt>>;
+	inline static constexpr bool available{
+		::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type> &&
+		::fast_io::details::print_floating_scalar_supported<flags, flt> &&
+		flags.floating != manipulators::floating_format::fixed &&
+		(flags.rounding == manipulators::floating_rounding::nearest_to_even ||
+		 flags.rounding == manipulators::floating_rounding::current_environment) &&
+		(::fast_io::details::print_floating_decimal_via_float<flt> ||
+		 (trait::mbits <= 23u && trait::ebits <= 8u) ||
+		 (trait::mbits == 52u && trait::ebits == 11u))};
+};
+
+} // namespace details::decay
+
+/// Floating scalar spellings are composed of sign characters, digits, radix/exponent punctuation, and the fixed
+/// alphabetic special values (`inf`/`nan` plus an optional payload).  None of those grammars emits C whitespace.  This
+/// source-side proof is intentionally attached to the exact supported scalar formatter, so custom floating wrappers or
+/// unrelated text providers cannot select the token-direct `inplace_to` path by merely being reserve-printable.
+template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
+	requires ::fast_io::details::print_floating_scalar_supported<flags, flt>
+inline constexpr ::std::true_type print_fragment_c_space_free(
+	io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, manipulators::scalar_flags flags, details::my_floating_point flt>
 	requires(::fast_io::details::print_floating_scalar_supported<flags, flt> &&
 			 !::fast_io::details::print_floating_decimal_requires_integer_transport<flt>)
 inline constexpr char_type *print_reserve_define(io_reserve_type_t<char_type, manipulators::scalar_manip_t<flags, flt>>,
-												 char_type *iter,
-												 ::fast_io::details::floating_value_or_field_parameter_t<
+											 char_type *iter,
+											 ::fast_io::details::floating_value_or_field_parameter_t<
 													 manipulators::scalar_manip_t<flags, flt>, flt>
 													 f) noexcept
 {

@@ -91,15 +91,101 @@ inline constexpr ::std::size_t calculate_concat_scatter_reserve_size_or_unavaila
 ///          materialized builder and active-record selector on Clang 21--23. Deleting only this edge makes a successful
 ///          constant root reach the native precision formatter again. Unknown condition arms never enter this helper,
 ///          and the complete candidate fails while growing text on Clang 16--20, so no earlier Clang inherits it.
+template <typename T>
+struct concat_float_scalar_traits
+{
+	inline static constexpr bool available{};
+};
+
+template <::fast_io::manipulators::scalar_flags flags, typename T>
+struct concat_float_scalar_traits<::fast_io::manipulators::scalar_manip_t<flags, T>>
+{
+	inline static constexpr bool available{::fast_io::details::my_floating_point<T>};
+};
+
+/// Keep the runtime floating reserve formatter's call boundary private to concat. The ordinary print CPO remains
+/// cost-model controlled; this small wrapper prevents GCC from cloning the large formatter into each mixed concat
+/// chain, while the constant-valued specialization below retains its separate fold-friendly policy.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename T>
+#if defined(__GNUC__) && !defined(__clang__)
+[[gnu::noinline]]
+#endif
+inline constexpr char_type *concat_float_reserve_emit(
+	char_type *out, ::fast_io::manipulators::scalar_manip_t<flags, T> &value) noexcept
+{
+	return print_reserve_define(
+		::fast_io::io_reserve_type<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T>>, out, value);
+}
+
+/// A caller-visible constant floating scalar needs the stronger flattening boundary for GCC to fold the complete
+/// spelling. Runtime scalars retain the smaller wrapper above: flattening their complete DA formatter enlarges the
+/// hot loop and was slower in isolated float-only concat records.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename T>
+	FAST_IO_GNU_ALWAYS_INLINE
+#if defined(__GNUC__) && !defined(__clang__)
+[[gnu::flatten]]
+#endif
+inline constexpr char_type *concat_constant_float_reserve_emit(
+	char_type *out, ::fast_io::manipulators::scalar_manip_t<flags, T> &value) noexcept
+{
+	return print_reserve_define(
+		::fast_io::io_reserve_type<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T>>, out, value);
+}
+
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 #if defined(__clang__) && 21 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#elif defined(__GNUC__) && !defined(__clang__)
+// GCC does not infer the recursive reserve chain's inline boundary after the
+// arguments were changed to references (the old by-value chain was fully
+// folded).  Keep this force-inline contract local to concat; the generic print
+// reserve CPO remains cost-model controlled for all other destinations.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr char_type *print_reserve_define_chain_impl(char_type *p, T &t, Args &...args)
 {
+	// The default integer scalar carrier has a stronger local spelling proof than
+	// arbitrary reserve providers. Keep its force-inlined decimal leaf confined to
+	// concat; the global integer reserve CPO retains its normal cost model.
+	auto emit_one = [](char_type *out, auto &value) constexpr {
+		using value_type = ::std::remove_cvref_t<decltype(value)>;
+		if constexpr (
+#if defined(__GNUC__) && !defined(__clang__)
+			::fast_io::details::decay::print_fixed_hot_scalar_traits<value_type>::available
+#else
+			false
+#endif
+		)
+		{
+			return ::fast_io::details::decay::print_fixed_static_reserve_emit_one<char_type>(out, value);
+		}
+		else if constexpr (
+#if defined(__GNUC__) && !defined(__clang__)
+			::fast_io::details::decay::concat_float_scalar_traits<value_type>::available
+#else
+			false
+#endif
+		)
+		{
+			FAST_IO_IF_NOT_CONSTEVAL
+			{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+				if (__builtin_constant_p(value.reference))
+				{
+					return ::fast_io::details::decay::concat_constant_float_reserve_emit<char_type>(out, value);
+				}
+#endif
+			}
+			return ::fast_io::details::decay::concat_float_reserve_emit<char_type>(out, value);
+		}
+		else
+		{
+			return print_reserve_define(io_reserve_type<char_type, value_type>, out, value);
+		}
+	};
 	if constexpr (sizeof...(Args) == 0)
 	{
-		p = print_reserve_define(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, p, t);
+		p = emit_one(p, t);
 		if constexpr (line)
 		{
 			*p = char_literal_v<u8'\n', char_type>;
@@ -110,7 +196,7 @@ inline constexpr char_type *print_reserve_define_chain_impl(char_type *p, T &t, 
 	else
 	{
 		return print_reserve_define_chain_impl<line>(
-			print_reserve_define(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, p, t), args...);
+			emit_one(p, t), args...);
 	}
 }
 
@@ -367,6 +453,99 @@ inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed(T &str, A
 	}
 }
 
+/// @brief Emits a small mixed reserve/scatter run without the general-purpose planning cache.
+/// @details The generic mixed planner handles arbitrary pack lengths and stateful dynamic producers. Literal/string
+/// records are more common and can use one bounded descriptor array instead: each retained scatter is queried once,
+/// static reserve leaves use their compile-time extent, and the exact aggregate is then emitted in source order.
+#if defined(__clang__)
+template <::std::integral ch_type, typename T>
+inline constexpr bool concat_small_mixed_explicit_scatter_v =
+	::std::same_as<::std::remove_cvref_t<T>, ::fast_io::basic_io_scatter_t<ch_type>> ||
+	::std::same_as<::std::remove_cvref_t<T>, ::fast_io::basic_prfch_cacheable_io_scatter_t<ch_type>> ||
+	::fast_io::details::decay::print_static_scatter_traits<ch_type, ::std::remove_cvref_t<T>>::available;
+
+template <::std::integral ch_type, typename T>
+inline constexpr bool concat_small_mixed_reserve_leaf_v =
+	!concat_small_mixed_explicit_scatter_v<ch_type, T> &&
+	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> &&
+	requires(::std::remove_cvref_t<T> &value, ch_type *ptr) {
+		{
+			print_reserve_define(
+				::fast_io::io_reserve_type<ch_type, ::std::remove_cvref_t<T>>, ptr, value)
+		} -> ::std::same_as<ch_type *>;
+	};
+
+template <::std::integral ch_type, typename T>
+inline constexpr bool concat_small_mixed_leaf_v =
+	concat_small_mixed_reserve_leaf_v<ch_type, T> ||
+	concat_small_mixed_explicit_scatter_v<ch_type, T>;
+
+template <::std::integral ch_type, typename T>
+inline constexpr bool concat_small_mixed_scatter_leaf_v =
+	concat_small_mixed_explicit_scatter_v<ch_type, T> &&
+	::fast_io::details::decay::retained_scatter_printable_v<ch_type, T>;
+
+template <::std::integral ch_type, typename... Args>
+inline constexpr bool concat_small_mixed_run_v =
+	(sizeof...(Args) > 1u && sizeof...(Args) <= 8u) &&
+	(concat_small_mixed_leaf_v<ch_type, Args> && ...) &&
+	(concat_small_mixed_scatter_leaf_v<ch_type, Args> || ...);
+
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+basic_general_concat_decay_ref_impl_small_mixed(T &str, Args &...args)
+{
+	basic_io_scatter_t<ch_type> scatters[sizeof...(Args)]{};
+	::std::size_t scatter_index{};
+	::std::size_t total_size{static_cast<::std::size_t>(line)};
+	auto measure_one = [&scatters, &scatter_index, &total_size](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		::std::size_t extent{};
+		if constexpr (concat_small_mixed_reserve_leaf_v<ch_type, arg_type>)
+			extent = print_reserve_size(::fast_io::io_reserve_type<ch_type, arg_type>);
+		else
+		{
+			scatters[scatter_index] = print_scatter_define(
+				::fast_io::io_reserve_type<ch_type, arg_type>, arg);
+			extent = scatters[scatter_index].len;
+		}
+		++scatter_index;
+		total_size = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(
+			total_size, extent);
+		if (total_size == SIZE_MAX) [[unlikely]]
+			::fast_io::fast_terminate();
+	};
+	(measure_one(args), ...);
+	if constexpr (sso_buffer_strlike<ch_type, T>)
+	{
+		constexpr ::std::size_t local_cap{strlike_sso_size(io_strlike_type<ch_type, T>)};
+		if (local_cap < total_size)
+			strlike_reserve(io_strlike_type<ch_type, T>, str, total_size);
+	}
+	else
+		strlike_reserve(io_strlike_type<ch_type, T>, str, total_size);
+	auto current{strlike_begin(io_strlike_type<ch_type, T>, str)};
+	scatter_index = 0u;
+	auto emit_one = [&current, &scatters, &scatter_index](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		if constexpr (concat_small_mixed_reserve_leaf_v<ch_type, arg_type>)
+			current = print_reserve_define(
+				::fast_io::io_reserve_type<ch_type, arg_type>, current, arg);
+		else
+		{
+			auto const &scatter{scatters[scatter_index]};
+			if (scatter.len != 0u)
+				current = ::fast_io::details::decay::small_scatter_copy_n(scatter.base, scatter.len, current);
+		}
+		++scatter_index;
+	};
+	(emit_one(args), ...);
+	if constexpr (line)
+		*current++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
+	strlike_set_curr(io_strlike_type<ch_type, T>, str, current);
+}
+#endif
+
 template <::std::integral ch_type, typename T>
 inline constexpr basic_io_scatter_t<ch_type> print_scatter_define_extract_one(T &t)
 {
@@ -582,6 +761,37 @@ template <::std::integral ch_type, typename T>
 inline constexpr bool concat_retained_scatter_printable_v =
 	::fast_io::scatter_printable_for<ch_type, T &> &&
 	::fast_io::borrowed_scatter_source<ch_type, T>;
+
+#if defined(__GNUC__) && !defined(__clang__)
+/// GCC's cost model can leave a cached mixed concat leaf out of its caller
+/// when a translation unit also contains several large formatting records.
+/// Restrict the flatten escape hatch to a small normalized reserve/scatter
+/// pack with at least one retained scatter; generic dynamic producers and
+/// unbounded packs retain the ordinary call boundary.
+template <::std::integral ch_type, typename T>
+inline constexpr bool concat_gcc_hot_mixed_leaf_v =
+	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> ||
+	concat_retained_scatter_printable_v<ch_type, T>;
+
+template <::std::integral ch_type, typename... Args>
+inline constexpr bool concat_gcc_hot_mixed_run_v =
+	(sizeof...(Args) >= 2u && sizeof...(Args) <= 8u) &&
+	(concat_gcc_hot_mixed_leaf_v<ch_type, Args> && ...) &&
+	(concat_retained_scatter_printable_v<ch_type, Args> || ...) &&
+	!(::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<Args>> && ...);
+
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires(concat_gcc_hot_mixed_run_v<char_type, Args...>)
+FAST_IO_GNU_ALWAYS_INLINE
+[[gnu::flatten]]
+inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed_gcc_hot(T &str, Args &...args)
+{
+	basic_general_concat_decay_ref_impl_cached_mixed<line, char_type>(str, args...);
+}
+#endif
 
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline constexpr void basic_general_concat_decay_ref_impl_all_scatter_direct(T &str, Args &...args)
@@ -2140,6 +2350,27 @@ inline constexpr void basic_general_concat_decay_ref_impl(T &str, Args &...args)
 		::fast_io::details::decay::basic_general_concat_decay_ref_impl_all_reserve_scatters<line, ch_type>(
 			str, args...);
 	}
+	else if constexpr ((concat_retained_scatter_printable_v<ch_type, Args> && ...))
+	{
+		// Exact retained descriptors outrank every reserve representation, including compiler-local mixed shortcuts.
+		// A dual-protocol leaf may intentionally expose different reserve and scatter spellings; selecting the scatter
+		// path here preserves the established all-retained protocol priority before either shortcut classifies leaves.
+		basic_general_concat_decay_ref_impl_all_scatter<line, ch_type>(str, args...);
+	}
+#if defined(__GNUC__) && !defined(__clang__)
+	else if constexpr (::fast_io::details::decay::concat_gcc_hot_mixed_run_v<ch_type, Args...>)
+	{
+		::fast_io::details::decay::basic_general_concat_decay_ref_impl_cached_mixed_gcc_hot<line, ch_type>(
+			str, args...);
+	}
+#endif
+#if defined(__clang__)
+	else if constexpr (::fast_io::details::decay::concat_small_mixed_run_v<ch_type, Args...>)
+	{
+		::fast_io::details::decay::basic_general_concat_decay_ref_impl_small_mixed<line, ch_type>(
+			str, args...);
+	}
+#endif
 	else if constexpr (((reserve_printable<ch_type, Args> ||
 						 concat_retained_scatter_printable_v<ch_type, Args> ||
 						 dynamic_reserve_printable<ch_type, Args>) &&

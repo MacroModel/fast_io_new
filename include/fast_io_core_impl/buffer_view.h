@@ -381,6 +381,16 @@ struct basic_obuffer_view_ref
 	native_handle_type ptr{};
 };
 
+/// The fixed external buffer owns a stable writable range, so print may fold a complete scatter copy into one cursor
+/// publication without invoking the generic write CPO. Growing/string-like wrappers intentionally do not advertise this
+/// stronger destination proof.
+template <::std::integral ch_type>
+inline constexpr ::std::true_type print_direct_obuffer_copy_safe(
+	::fast_io::io_reserve_type_t<ch_type, basic_obuffer_view_ref<ch_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type>
 inline constexpr ::std::true_type print_deferred_obuffer_commit_safe(
 	io_reserve_type_t<char_type, basic_obuffer_view_ref<char_type>>) noexcept

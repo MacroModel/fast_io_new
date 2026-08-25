@@ -150,8 +150,10 @@ concept c_space_free_print_fragment =
 ///          Therefore exposing padding changes only the implementation's legal load width, never the abstract parse.
 ///          These are semantic requirements; the concept can structurally prove only the exact call and result type.
 ///
-///          The dispatcher invokes this CPO only for a terminal input and a positive padding value. Implementations
-///          must fall back internally to the ordinary contiguous scanner when their specialized tail leaf is not
+///          The dispatcher invokes this CPO only for a terminal input. A scanner which also provides the ordinary
+///          contiguous CPO reaches this operation only when the available padding is positive; a padding-only scanner
+///          may receive zero so its historical five-argument protocol remains usable without inventing a four-argument
+///          fallback. Implementations must preserve ordinary terminal semantics when their specialized tail leaf is not
 ///          applicable; eligibility failure may not modify the target.
 /// @fn       scan_contiguous_padding_define
 /// @param    ::fast_io::io_reserve_type_t<char_type, T>    tag-invoke
@@ -161,8 +163,8 @@ concept c_space_free_print_fragment =
 /// @param    T                                             the object to be scanned, can be any passing style
 /// @return   ::fast_io::parse_result<char_type const*>     next semantic cursor and parse status
 template <typename char_type, typename T>
-concept terminal_contiguous_padding_scannable =
-	contiguous_scannable<char_type, T> &&
+concept contiguous_padding_scannable_define =
+	::std::integral<char_type> &&
 	requires(char_type const *begin, char_type const *end, ::std::size_t padding, T &t) {
 		{
 			scan_contiguous_padding_define(
@@ -170,9 +172,71 @@ concept terminal_contiguous_padding_scannable =
 		} -> ::std::same_as<parse_result<char_type const *>>;
 	};
 
+namespace details
+{
+
+/*
+Recognize the historical padding position without accepting an unrelated
+five-argument overload merely because size_t converts to its mode type. The
+probe has the one intended conversion. Its hidden deleted bool peer makes a
+bool/int/etc. provider ambiguous, while an exact size_t provider wins by the
+better trailing standard-conversion sequence. This also admits an exact
+size_t overload when an unrelated mode overload coexists with it.
+*/
+template <::std::integral char_type, typename target_type>
+struct scan_contiguous_padding_size_probe
+{
+	inline constexpr operator ::std::size_t() const noexcept
+	{
+		return {};
+	}
+
+	friend parse_result<char_type const *> scan_contiguous_define(
+		io_reserve_type_t<char_type, ::std::remove_cvref_t<target_type>>,
+		char_type const *, char_type const *, bool, target_type &) = delete;
+};
+
+} // namespace details
+
+template <typename char_type, typename T>
+concept contiguous_padding_scannable_legacy =
+	::std::integral<char_type> &&
+	requires(char_type const *begin, char_type const *end, ::std::size_t padding,
+			 ::fast_io::details::scan_contiguous_padding_size_probe<
+				 char_type, ::std::remove_reference_t<T>> exact_padding,
+			 T &t) {
+		{
+			// Preserve the historical overload spelling.  It is recognized for
+			// source compatibility, while new providers should use the distinct
+			// padding CPO above so ordinary scanner lookup remains unchanged.
+			scan_contiguous_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end, padding, t)
+		} -> ::std::same_as<parse_result<char_type const *>>;
+		{
+			// The second call is unevaluated and filters implicit size_t-to-mode
+			// conversions which would otherwise silently opt an unrelated overload in.
+			scan_contiguous_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, begin, end,
+				exact_padding, t)
+		} -> ::std::same_as<parse_result<char_type const *>>;
+	};
+
+template <typename char_type, typename T>
+concept contiguous_padding_scannable_protocol =
+	contiguous_padding_scannable_define<char_type, T> ||
+	contiguous_padding_scannable_legacy<char_type, T>;
+
+template <typename char_type, typename T>
+concept terminal_contiguous_padding_scannable =
+	contiguous_padding_scannable_protocol<char_type, T>;
+
+/// A padding protocol can be declared independently of the ordinary
+/// contiguous scanner.  This recognition-only refinement is useful to
+/// capability tests and legacy providers; terminal dispatch may use this
+/// protocol even when no four-argument ordinary scanner is provided.
 template <typename char_type, typename T>
 concept contiguous_scannable_with_padding =
-	terminal_contiguous_padding_scannable<char_type, T>;
+	contiguous_padding_scannable_protocol<char_type, T>;
 
 namespace details
 {
@@ -2255,6 +2319,18 @@ template <typename char_type, typename output>
 concept deferred_obuffer_commit_safe = ::std::integral<char_type> && requires {
 	{
 		print_deferred_obuffer_commit_safe(
+			io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/// @brief Proves that a destination permits raw ordered scatter copies into its current put area.
+/// @details This is stronger than deferred cursor publication: the destination must have stable externally-owned
+/// storage and no growth, flush, lock, or status side effect hidden behind the copy. Only fixed buffer views should
+/// advertise it.
+template <typename char_type, typename output>
+concept direct_obuffer_copy_safe = ::std::integral<char_type> && requires {
+	{
+		print_direct_obuffer_copy_safe(
 			io_reserve_type<char_type, ::std::remove_cvref_t<output>>)
 	} -> ::std::same_as<::std::true_type>;
 };

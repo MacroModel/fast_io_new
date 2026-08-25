@@ -198,9 +198,19 @@ inline constexpr void print(T &&t, Args &&...args)
 		// Emit to the explicit device under one success-only output guard.
 		::fast_io::operations::basic_output_operation_guard<T &&> guard{t};
 		decltype(auto) outref = guard.ref();
-		::fast_io::operations::decay::
-			print_freestanding_compiler_constant_pre_normalization<false>(
-				outref, args...);
+		using normalized_output = ::std::remove_cvref_t<decltype(outref)>;
+		using char_type = typename normalized_output::output_char_type;
+		if constexpr (::fast_io::details::decay::print_fixed_public_run_available<
+						 normalized_output, char_type, decltype(args)...>())
+		{
+			::fast_io::details::decay::print_fixed_public_run<false, normalized_output, char_type>(outref, args...);
+		}
+		else
+		{
+			::fast_io::operations::decay::
+				print_freestanding_compiler_constant_pre_normalization<false>(
+					outref, args...);
+		}
 		guard.commit();
 	}
 	else
@@ -282,9 +292,19 @@ inline constexpr void println(T &&t, Args &&...args)
 		// Emit the explicit line record under one success-only output guard.
 		::fast_io::operations::basic_output_operation_guard<T &&> guard{t};
 		decltype(auto) outref = guard.ref();
-		::fast_io::operations::decay::
-			print_freestanding_compiler_constant_pre_normalization<true>(
-				outref, args...);
+		using normalized_output = ::std::remove_cvref_t<decltype(outref)>;
+		using char_type = typename normalized_output::output_char_type;
+		if constexpr (::fast_io::details::decay::print_fixed_public_run_available<
+						 normalized_output, char_type, decltype(args)...>())
+		{
+			::fast_io::details::decay::print_fixed_public_run<true, normalized_output, char_type>(outref, args...);
+		}
+		else
+		{
+			::fast_io::operations::decay::
+				print_freestanding_compiler_constant_pre_normalization<true>(
+					outref, args...);
+		}
 		guard.commit();
 	}
 	else
@@ -813,6 +833,43 @@ template <typename... Args>
 inline constexpr void debug_perrln(Args &&...args)
 {
 	::fast_io::io::perrln(::std::forward<Args>(args)...);
+}
+#endif
+
+#if defined(__clang__) && __clang_major__ == 23 && defined(__SSE4_1__) && \
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) &&        \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+/*
+Clang 23 assigns the native uint64 decimal scalar controller a cost above its
+ordinary caller-inline threshold after the SSE parser is instantiated.  Keep
+only the library-owned terminal view spelling at the public scalar boundary:
+the named proxy still enters scan_single_impl, so cursor validation, report
+mode, and parse errors have one implementation.  Signed targets (including
+the historical terminal '-' rule), padded views, custom sources, status CPOs,
+mutex streams, and multi-target packs remain on the general dispatcher.
+*/
+template <bool report = false, ::std::integral char_type,
+		  ::fast_io::details::my_unsigned_integral T>
+	requires(sizeof(char_type) == sizeof(char8_t) &&
+			 ::fast_io::details::is_ascii<char_type> &&
+			 sizeof(T) == sizeof(::std::uint_least64_t))
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+inline constexpr ::std::conditional_t<report, bool, void>
+scan(::fast_io::basic_ibuffer_view<char_type> &in, T &value)
+{
+	auto inref{::fast_io::operations::input_stream_ref(in)};
+	auto arg{::fast_io::io_scan_forward<char_type>(
+		::fast_io::io_scan_alias(value))};
+	if constexpr (report)
+	{
+		return ::fast_io::details::scan_single_impl<>(inref, arg);
+	}
+	else if (!::fast_io::details::scan_single_impl<>(inref, arg))
+	{
+		::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
+	}
 }
 #endif
 

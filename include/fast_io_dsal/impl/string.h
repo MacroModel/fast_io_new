@@ -1925,11 +1925,113 @@ inline constexpr ::fast_io::parse_code scan_context_eof_define(
 }
 
 template <::std::integral char_type, typename allocator_type>
-inline constexpr ::fast_io::manipulators::scalar_manip_t<details::fast_io_string_default_scalar_flags<false, false>,
-														 basic_string<char_type, allocator_type> &>
+inline constexpr ::fast_io::manipulators::scalar_manip_t<
+	details::fast_io_string_default_scalar_flags<false, false>,
+	basic_string<char_type, allocator_type> &>
 scan_alias_define(io_alias_t, basic_string<char_type, allocator_type> &t) noexcept
 {
 	return {t};
+}
+
+namespace details
+{
+
+template <::std::integral char_type>
+inline constexpr bool inplace_to_direct_ranges_overlap(
+	char_type const *target_begin, char_type const *target_end,
+	char_type const *source_begin, ::std::size_t source_size) noexcept
+{
+	if (source_size == 0u || source_begin == nullptr || target_begin == nullptr || target_end == nullptr)
+		return false;
+	// Pointer ordering across unrelated allocations is not a portable C++ operation. Compare byte addresses instead and
+	// conservatively reject arithmetic wraparound; a false negative would make clear() invalidate a borrowed source.
+	auto const tb{reinterpret_cast<::std::uintptr_t>(target_begin)};
+	auto const te{reinterpret_cast<::std::uintptr_t>(target_end)};
+	auto const sb{reinterpret_cast<::std::uintptr_t>(source_begin)};
+	if (te < tb || te > UINTPTR_MAX - sizeof(char_type) ||
+		source_size > (UINTPTR_MAX - sb) / sizeof(char_type))
+		return true;
+	auto const se{sb + source_size * sizeof(char_type)};
+	return sb < te + sizeof(char_type) && tb < se;
+}
+
+template <::std::integral char_type, typename allocator_type, typename T>
+inline constexpr bool inplace_to_direct_source_overlaps(
+	basic_string<char_type, allocator_type> const &target, T const &value) noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	char_type const *source_begin{};
+	::std::size_t source_size{};
+	if constexpr (::std::same_as<value_type, ::fast_io::basic_io_scatter_t<char_type>> ||
+				  ::std::same_as<value_type, ::fast_io::basic_prfch_cacheable_io_scatter_t<char_type>>)
+	{
+		source_begin = value.base;
+		source_size = value.len;
+	}
+	else if constexpr (::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available)
+	{
+		auto const scatter{
+			::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::define(value)};
+		source_begin = scatter.base;
+		source_size = scatter.len;
+	}
+	else
+	{
+		return false;
+	}
+	return inplace_to_direct_ranges_overlap(
+		target.imp.begin_ptr, target.imp.end_ptr, source_begin, source_size);
+}
+
+template <::std::integral char_type, typename allocator_type, typename... Args>
+inline constexpr bool inplace_to_direct_source_safe_impl(
+	basic_string<char_type, allocator_type> const &target, Args const &...args) noexcept
+{
+	return (!inplace_to_direct_source_overlaps<char_type>(target, args) && ...);
+}
+
+} // namespace details
+
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename allocator_type,
+		  typename... Args>
+	requires((::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			  ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>) &&
+			 (!flags.noskipws && !flags.line))
+inline constexpr bool inplace_to_direct_print_source_safe(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, basic_string<char_type, allocator_type> &>>,
+	::fast_io::manipulators::scalar_manip_t<flags, basic_string<char_type, allocator_type> &> const &target,
+	Args const &...args) noexcept
+{
+	return details::inplace_to_direct_source_safe_impl<char_type>(target.reference, args...);
+}
+
+/// @brief Appends a proven whitespace-free `inplace_to` record in one string-output pass.
+/// @details The ordinary token scanner must search every fragment for a C-space delimiter and may therefore stop
+/// midway through a record.  `to.h` admits this customization only after the source graph has proved that every
+/// normalized leaf is either an integer spelling or a retained static scatter, and after its runtime bytes have been
+/// checked for whitespace.  Restricting the destination to the two native allocators keeps clear/append and pointer
+/// publication under the audited `basic_string` implementation; custom allocators and user target wrappers retain the
+/// established scanner path.
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename allocator_type,
+		  typename... Args>
+	requires((::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			  ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>) &&
+			 (!flags.noskipws && !flags.line))
+inline constexpr void inplace_to_direct_print_define(
+	::fast_io::io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, basic_string<char_type, allocator_type> &>>,
+	::fast_io::manipulators::scalar_manip_t<flags, basic_string<char_type, allocator_type> &> &target,
+	Args &...args)
+{
+	// `target.reference` is the exact object mutated by the normal string token scanner. The direct path has already
+	// proved a complete nonempty token and ruled out source overlap, so let concat's string-owned planner reserve and
+	// publish that one record without re-entering the generic output-stream controller.
+	target.reference.clear();
+	::fast_io::details::decay::basic_general_concat_decay_ref_impl<false, char_type>(
+		target.reference, args...);
 }
 
 template <::std::integral char_type, typename allocator_type>

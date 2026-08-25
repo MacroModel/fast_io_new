@@ -71,7 +71,8 @@ namespace details
 template <typename input, typename char_type, typename T>
 concept input_contiguous_scannable =
 	::std::integral<char_type> &&
-	::fast_io::contiguous_scannable<char_type, T>;
+	(::fast_io::contiguous_scannable<char_type, T> ||
+	 ::fast_io::contiguous_padding_scannable_protocol<char_type, T>);
 
 /// @brief Invokes the strongest contiguous scanning protocol jointly supported by the input and scanner.
 /// @details Let S=[first,last), and, when available, P=`contiguous_range_padding_size(in)`.  The padded branch receives
@@ -100,12 +101,23 @@ inline constexpr ::fast_io::parse_result<char_type const *> scan_contiguous_invo
 		to mask all semantics to the true end.  Query P exactly once so a custom
 		provider cannot make one scan observe inconsistent physical limits.
 		*/
-		auto const padding{contiguous_range_padding_size(in)};
+		using input_type = ::std::remove_cvref_t<input>;
+		auto const padding{contiguous_range_padding_size(
+			static_cast<input_type const &>(in))};
 		if (padding != 0u) [[likely]]
 		{
-			return scan_contiguous_padding_define(
-				io_reserve_type<char_type, scanner_type>, first, last,
-				padding, arg);
+			if constexpr (::fast_io::contiguous_padding_scannable_define<char_type, T>)
+			{
+				return scan_contiguous_padding_define(
+					io_reserve_type<char_type, scanner_type>, first, last,
+					padding, arg);
+			}
+			else
+			{
+				return scan_contiguous_define(
+					io_reserve_type<char_type, scanner_type>, first, last,
+					padding, arg);
+			}
 		}
 	}
 	/*
@@ -113,8 +125,29 @@ inline constexpr ::fast_io::parse_result<char_type const *> scan_contiguous_invo
 	scanner without the accelerator, or an explicitly padded view carrying P==0
 	all reach the original CPO with its original ABI.
 	*/
-	return scan_contiguous_define(
-		io_reserve_type<char_type, scanner_type>, first, last, arg);
+	if constexpr (::fast_io::contiguous_scannable<char_type, T>)
+	{
+		return scan_contiguous_define(
+			io_reserve_type<char_type, scanner_type>, first, last, arg);
+	}
+	else
+	{
+		// A padding-only scanner has no ordinary four-argument fallback.  A
+		// zero-padding query still invokes its exact protocol, preserving the
+		// provider's terminal semantics without forming a different CPO shape.
+		if constexpr (::fast_io::contiguous_padding_scannable_define<char_type, T>)
+		{
+			return scan_contiguous_padding_define(
+				io_reserve_type<char_type, scanner_type>, first, last,
+				::std::size_t{}, arg);
+		}
+		else
+		{
+			return scan_contiguous_define(
+				io_reserve_type<char_type, scanner_type>, first, last,
+				::std::size_t{}, arg);
+		}
+	}
 }
 
 /// @brief Commits a scanner iterator only after proving membership in the current chunk.
@@ -833,6 +866,22 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			// Context-only scanners preserve the ordinary stateful path exactly.
 			return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
 		}
+		else if constexpr (::fast_io::contiguous_padding_scannable_protocol<char_type, T> &&
+					   !::fast_io::contiguous_scannable<char_type, T>)
+		{
+			// A padding-only scanner is terminal by construction: there is no
+			// refill-safe ordinary CPO to use on a live chunk.  Require the same
+			// terminal ibuffer proof as the ordinary contiguous-only branch and let
+			// the shared status helper select the new or legacy padding spelling.
+			static_assert(
+				::fast_io::operations::decay::defines::has_ibuffer_underflow_never_define<input>,
+				"a padding-only scanner requires a terminal ibuffer");
+			if (!ibuffer_underflow_never(in)) [[unlikely]]
+			{
+				throw_parse_code(parse_code::invalid);
+			}
+			return ::fast_io::details::scan_contiguous_status_impl(in, arg);
+		}
 		else if constexpr (contiguous_scannable<char_type, T>)
 		{
 			static_assert(
@@ -1049,9 +1098,9 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					{
 						auto curr{ibuffer_curr(in)};
 						auto end{ibuffer_end(in)};
-						auto [it, ec] = scan_contiguous_define(
-							io_reserve_type<char_type, scanner_type>,
-							curr, end, arg);
+						auto [it, ec] = ::fast_io::details::scan_contiguous_invoke(
+							in, static_cast<char_type const *>(curr),
+							static_cast<char_type const *>(end), arg);
 						if (!::fast_io::details::
 								scan_commit_iterator_if_in_current_chunk(
 									in, curr,
@@ -1083,6 +1132,22 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				}
 			}
 			return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+		}
+		else if constexpr (::fast_io::contiguous_padding_scannable_protocol<char_type, T> &&
+					   !::fast_io::contiguous_scannable<char_type, T>)
+		{
+			// Padding-only scanners are terminal by construction.  This overload
+			// is selected when the input exposes a padding range, so route it
+			// through the shared bounded-cursor helper instead of falling into the
+			// ordinary scanner diagnostic below.
+			static_assert(
+				::fast_io::operations::decay::defines::has_ibuffer_underflow_never_define<input>,
+				"a padding-only scanner requires a terminal ibuffer");
+			if (!ibuffer_underflow_never(in)) [[unlikely]]
+			{
+				throw_parse_code(parse_code::invalid);
+			}
+			return ::fast_io::details::scan_contiguous_status_impl(in, arg);
 		}
 		else if constexpr (contiguous_scannable<char_type, T>)
 		{
@@ -1917,6 +1982,14 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_ibuffer_basic_operations<input>)
 	{
+		if constexpr (sizeof...(Args) == 1u)
+		{
+			// A scalar ibuffer record has no aggregate transport or batching decision. Entering the variadic controller
+			// here made Clang outline `scan_freestanding_decay_impl` even though that function immediately selected the
+			// same leaf. Keep this one-target shape isolated at the dispatch boundary; larger packs and status/mutex
+			// protocols retain their existing owners.
+			return (::fast_io::details::scan_single_impl<stack_policy>(instm, args) && ...);
+		}
 		if constexpr (
 			::fast_io::operations::decay::scan_owned_proxy_pack_eligible<input, Args...>)
 		{

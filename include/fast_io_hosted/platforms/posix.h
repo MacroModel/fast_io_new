@@ -579,41 +579,25 @@ inline constexpr ::std::size_t scatter_fallback_full_output_threshold(
 	// POSIX has native writev. Keep the previously measured scatter-fallback policy disabled.
 	return 0u;
 }
-#endif
 
 template <::fast_io::posix_family family, ::std::integral char_type>
 inline constexpr ::std::size_t scatter_direct_full_output_coalesce_threshold(
 	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
 {
-	// This compares memcpy plus write with one native writev, independently of the disabled POSIX fallback policy.
-#if defined(__APPLE__) && defined(__MACH__)
-	// Darwin regular-file measurements cross between 768 B and 1.5 KiB for three scatters.
-	constexpr ::std::size_t default_value{1024u / sizeof(char_type)};
-#elif defined(__linux__)
-	// Linux measurements remain profitable through 4 KiB and cross near 6 KiB for three scatters.
-	constexpr ::std::size_t default_value{4096u / sizeof(char_type)};
-#else
-	// Other POSIX kernels retain native scatter output until they are measured independently.
-	constexpr ::std::size_t default_value{};
-#endif
-	// Platform defaults never exceed the active stack capacity; this keeps native-scatter coalescing stack-bounded.
-	constexpr ::std::size_t stack_value{
-		::fast_io::details::dynamic_reserve_default_static_stack_size<char_type>()};
-	return (::std::min)(default_value, stack_value);
+	// The unbuffered observer is the native scatter boundary. Preserve short producer sequences so writev remains
+	// selectable; buffered owners have independent put-area policies.
+	return 0u;
 }
 
 template <::fast_io::posix_family family, ::std::integral char_type>
 inline constexpr ::std::size_t full_output_coalesce_threshold(
 	::fast_io::io_reserve_type_t<char_type, ::fast_io::basic_posix_family_io_observer<family, char_type>>) noexcept
 {
-	// Compact whole-output runs are copied into one contiguous buffer before a single write. This improves real
-	// file/log output patterns on measured POSIX kernels; syscall-shell sinks such as /dev/null-like streams should
-	// opt out with a zero threshold in their own stream policy.
-	constexpr ::std::size_t default_value{2048u};
-	constexpr ::std::size_t stack_value{
-		::fast_io::details::dynamic_reserve_default_static_stack_size<char_type>()};
-	return (::std::min)(default_value, stack_value);
+	// Do not memcpy short records merely to replace writev with write. The observer has no put area, so sequence
+	// preservation is the only zero-copy path.
+	return 0u;
 }
+#endif
 
 template <::fast_io::posix_family family, ::std::integral char_type>
 inline constexpr ::std::size_t full_output_dynamic_coalesce_threshold(

@@ -440,6 +440,25 @@ struct whole_get_t
 
 } // namespace manipulators
 
+namespace details::decay
+{
+
+/// The default scalar carrier is normalized before the print dispatcher sees it.  This proof keeps the fixed-view hot
+/// leaf limited to decimal, unpadded integral policy; alternate bases and width/sign manipulators retain the generic
+/// reserve CPO and therefore cannot inherit the specialized code-generation choice.
+template <manipulators::scalar_flags flags, typename T>
+struct print_fixed_hot_scalar_traits<manipulators::scalar_manip_t<flags, T>>
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	inline static constexpr bool available{
+		::std::is_integral_v<value_type> && !::std::same_as<value_type, bool> && flags.base == 10u && !flags.alphabet &&
+		!flags.showbase && !flags.showpos && !flags.uppercase_showbase && !flags.modern_octal && !flags.uppercase &&
+		!flags.comma && !flags.full && flags.placement == manipulators::scalar_placement::none &&
+		flags.percentage == manipulators::percentage_flag::none};
+};
+
+} // namespace details::decay
+
 namespace details
 {
 template <::std::size_t bs, bool upper, bool shbase, bool fll, bool showpos = false, bool comma = false, bool oct_c2y = false,
@@ -4565,6 +4584,24 @@ inline constexpr char_type *print_reserve_integral_define(char_type *first, int_
 	}
 }
 
+/// @brief Fixed-view decimal emitter with an isolated inlining contract.
+/// @details The ordinary integer reserve CPO remains cost-model controlled for owners, concat, and dynamic buffers.
+///          Only the stronger fixed external-view destination asks for this force-inlined leaf; keeping the wrapper
+///          separate prevents that code-generation choice from propagating through every integer formatting caller.
+template <::std::integral char_type, ::fast_io::details::my_unsigned_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#if defined(__GNUC__) && !defined(__clang__) && __has_cpp_attribute(__gnu__::__flatten__)
+[[__gnu__::__flatten__]]
+#endif
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_fixed_decimal_integral_define(char_type *first, T value) noexcept
+{
+	return print_reserve_integral_define<10u, false, false, false, false, false, false>(first, value);
+}
+
 /// Selects one explicitly converted execution character without assuming that
 /// the lowercase and uppercase alphabets are arithmetically related.
 template <bool uppercase, char8_t lowercase_character,
@@ -5364,6 +5401,26 @@ inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, T
 		return ::fast_io::details::cal_max_int_size<
 			::std::remove_cvref_t<T>, 10u>();
 	}
+}
+
+/// @brief Supplies the one-byte decimal reserve protocol for an unmanipulated Boolean.
+/// @details `bool` is intentionally excluded from `non_character_integral`: unlike the other integral types its
+/// standard unsigned counterpart is incomplete (`std::make_unsigned<bool>` is ill-formed).  The public print fallback
+/// nevertheless accepts a raw Boolean, so it needs a direct reserve leaf instead of instantiating the generic integer
+/// width calculator.  Explicit `boolalpha`/scalar carriers continue through their existing policy-aware overloads.
+template <::std::integral char_type>
+inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, bool>) noexcept
+{
+	return 1u;
+}
+
+template <::std::integral char_type>
+inline constexpr char_type *print_reserve_define(
+	io_reserve_type_t<char_type, bool>, char_type *iter, bool value) noexcept
+{
+	*iter++ = value ? ::fast_io::char_literal_v<u8'1', char_type>
+				   : ::fast_io::char_literal_v<u8'0', char_type>;
+	return iter;
 }
 
 template <::std::integral char_type, typename T>

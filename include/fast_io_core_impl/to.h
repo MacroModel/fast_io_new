@@ -55,6 +55,183 @@ inline constexpr bool to_two_pass_fragment_available_v =
 	::fast_io::reserve_printable<char_type, T> ||
 	::fast_io::dynamic_reserve_printable<char_type, T>;
 
+/// @brief Recognizes normalized source shapes whose token spelling can be checked before direct string emission.
+/// @details `inplace_to`'s default string scanner stops at C-space.  A direct append is therefore valid only for a
+///          source whose actual spelling is known to contain no C-space.  Integer leaves carry a type-level proof;
+///          static literal leaves are checked from their retained scatter at the operation boundary.  Unknown/custom
+///          producers deliberately remain on the context scanner, even when they happen to expose a reserve CPO.
+template <typename char_type, typename T>
+struct to_c_space_free_chvw_shape : ::std::false_type
+{
+};
+
+template <typename char_type, typename value_type>
+struct to_c_space_free_chvw_shape<
+	char_type, ::fast_io::manipulators::chvw_t<value_type>>
+	: ::std::bool_constant<::std::integral<::std::remove_cvref_t<value_type>>>
+{
+};
+
+template <typename char_type, typename T>
+struct to_c_space_free_scatter_shape : ::std::false_type
+{
+};
+
+template <typename char_type>
+struct to_c_space_free_scatter_shape<
+	char_type, ::fast_io::basic_io_scatter_t<char_type>> : ::std::true_type
+{
+};
+
+template <typename char_type>
+struct to_c_space_free_scatter_shape<
+	char_type, ::fast_io::basic_prfch_cacheable_io_scatter_t<char_type>> : ::std::true_type
+{
+};
+
+template <typename T>
+struct to_c_space_free_builtin_scalar_shape : ::std::false_type
+{
+};
+
+template <::fast_io::manipulators::scalar_flags flags, typename T>
+struct to_c_space_free_builtin_scalar_shape<
+	::fast_io::manipulators::scalar_manip_t<flags, T>>
+	: ::std::bool_constant<
+		  ::fast_io::details::my_integral<::std::remove_cvref_t<T>> ||
+		  ::fast_io::details::my_floating_point<::std::remove_cvref_t<T>>>
+{
+};
+
+template <typename char_type, typename T>
+inline constexpr bool to_c_space_free_source_shape_v =
+	::std::integral<char_type> &&
+	((to_c_space_free_builtin_scalar_shape<::std::remove_cvref_t<T>>::value &&
+	  ::fast_io::c_space_free_print_fragment<char_type, T>) ||
+	::fast_io::details::decay::print_static_scatter_traits<
+		char_type, ::std::remove_cvref_t<T>>::available ||
+	to_c_space_free_chvw_shape<char_type, ::std::remove_cvref_t<T>>::value ||
+	to_c_space_free_scatter_shape<char_type, ::std::remove_cvref_t<T>>::value);
+
+template <typename char_type, typename T>
+inline constexpr bool to_c_space_free_source_value(T &value) noexcept
+{
+	static_assert(::std::integral<char_type>);
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (
+		to_c_space_free_builtin_scalar_shape<value_type>::value &&
+		::fast_io::c_space_free_print_fragment<char_type, value_type>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available)
+	{
+		auto const scatter{
+			::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::define(value)};
+		// The canonical empty scatter is {nullptr, 0}; do not form null pointer arithmetic while checking it.
+		for (::std::size_t index{}; index != scatter.len; ++index)
+		{
+			if (::fast_io::char_category::is_c_space(scatter.base[index]))
+				return false;
+		}
+		return true;
+	}
+	else if constexpr (to_c_space_free_chvw_shape<char_type, value_type>::value)
+	{
+		using output_unsigned_type = ::std::make_unsigned_t<::std::remove_cv_t<char_type>>;
+		char_type const emitted{static_cast<char_type>(
+			static_cast<output_unsigned_type>(value.reference))};
+		return !::fast_io::char_category::is_c_space(emitted);
+	}
+	else if constexpr (to_c_space_free_scatter_shape<char_type, value_type>::value)
+	{
+		for (::std::size_t index{}; index != value.len; ++index)
+		{
+			if (::fast_io::char_category::is_c_space(value.base[index]))
+				return false;
+		}
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+template <typename char_type, typename... Args>
+inline constexpr bool to_c_space_free_source_values(Args &...args) noexcept
+{
+	return (to_c_space_free_source_value<char_type>(args) && ...);
+}
+
+template <typename char_type, typename T>
+inline constexpr bool to_source_has_emitted_character(T &value) noexcept
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (to_c_space_free_chvw_shape<char_type, value_type>::value)
+	{
+		return true;
+	}
+	else if constexpr (to_c_space_free_scatter_shape<char_type, value_type>::value)
+	{
+		return value.len != 0u;
+	}
+	else if constexpr (::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available)
+	{
+		return ::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::define(value).len != 0u;
+	}
+	else
+	{
+		// Library-owned scalar carriers admitted by the source-shape marker always have a non-empty lexical spelling.
+		return true;
+	}
+}
+
+template <typename char_type, typename... Args>
+inline constexpr bool to_source_values_have_emitted_character(Args &...args) noexcept
+{
+	return (to_source_has_emitted_character<char_type>(args) || ...);
+}
+
+/// @brief A destination-specific direct append operation for proven whitespace-free `inplace_to` records.
+/// @details The operation itself is an ADL customization so only a destination that audited clear/append semantics can
+///          opt in.  It is intentionally separate from the ordinary output-buffer marker: a put area alone says
+///          nothing about the scanner's token grammar or whether the target must be reset before emission.
+template <typename char_type, typename T, typename... Args>
+concept inplace_to_direct_printable =
+	::std::integral<char_type> && (sizeof...(Args) != 0u) &&
+	(to_c_space_free_source_shape_v<char_type, Args> && ...) &&
+	requires(T &target, Args &...args) {
+		inplace_to_direct_print_define(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+			target, args...);
+	};
+
+template <typename char_type, typename T, typename... Args>
+concept inplace_to_direct_source_safety_query =
+	::std::integral<char_type> &&
+	requires(T &target, Args &...args) {
+		{
+			inplace_to_direct_print_source_safe(
+				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+				target, args...)
+		} -> ::std::same_as<bool>;
+	};
+
+template <typename char_type, typename T, typename... Args>
+inline constexpr bool inplace_to_direct_source_values_safe(T &target, Args &...args) noexcept
+{
+	if constexpr (inplace_to_direct_source_safety_query<char_type, T, Args...>)
+	{
+		return inplace_to_direct_print_source_safe(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, target, args...);
+	}
+	else
+	{
+		return true;
+	}
+}
+
 /// @brief Feeds one materialized print fragment to a context scanner.
 /// @return `true` exactly when the scanner reports completion; `false` when the fragment is exhausted while partial.
 /// @details A parse code and an iterator answer independent questions. `ok` may be returned at the fragment end, while
@@ -754,6 +931,21 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 	// Instantiate execution only after the exact direct-or-dynamic strategy has been proved for the normalized pack.
 	if constexpr (available)
 	{
+		// Native string-like destinations may opt into one complete append when every actual source spelling is
+		// whitespace-free.  Check literal bytes before clearing the target; a rejected record therefore retains the
+		// established scanner semantics and has no observable partial mutation.
+		if constexpr (::fast_io::details::inplace_to_direct_printable<char_type, T, Args...>)
+		{
+			if (::fast_io::details::to_c_space_free_source_values<char_type>(args...) &&
+				::fast_io::details::to_source_values_have_emitted_character<char_type>(args...) &&
+				::fast_io::details::inplace_to_direct_source_values_safe<char_type>(t, args...))
+			{
+				inplace_to_direct_print_define(
+					::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
+					t, args...);
+				return;
+			}
+		}
 		constexpr bool direct_fragment_strategy{
 			::fast_io::details::inplace_to_direct_fragment_strategy_available<
 				char_type, T, Args...>()};
