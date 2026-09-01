@@ -18,59 +18,68 @@ namespace fast_io
 namespace details
 {
 
-/** @brief Reports source and destination cursors after representation copying. */
-template <typename FromIter, typename ToIter>
-struct bytes_copy_punning_result
-{
-	FromIter fromiter;
-	ToIter toiter;
-};
-
-/** @brief Copies trivially representable iterator values into bounded output units. */
+/**
+ * @brief Copies complete iterator-value representations into a bounded output buffer.
+ *
+ * @details `fromfirst` and `fromlast` synchronously borrow the iterator state owned by range dispatch.  Progress is
+ * committed directly to that unique iterator object, while the returned cursor describes only initialized output
+ * units.  Each iteration first proves that one complete value representation fits; therefore neither padding bytes
+ * nor a partial source object can cross the buffer boundary.  Exact lvalue references are copied from the referred
+ * object, whereas proxy references are materialized as `iter_value_t` before their representation is observed.
+ */
 template <typename FromItbg, typename FromIted, typename ToIter>
-inline constexpr bytes_copy_punning_result<FromItbg, ToIter>
-bytes_copy_punning_impl(FromItbg fromfirst, FromIted fromlast, ToIter tofirst, ToIter tolast)
+inline constexpr ToIter
+bytes_copy_punning_impl(FromItbg &fromfirst, FromIted &fromlast, ToIter tofirst, ToIter tolast)
 {
 	using fromvaluetype = ::std::iter_value_t<FromItbg>;
 	using tovaluetype = ::std::iter_value_t<ToIter>;
-	while (fromfirst != fromlast && tofirst != tolast)
+	constexpr ::std::size_t units_per_value{sizeof(fromvaluetype) / sizeof(tovaluetype)};
+	static_assert(sizeof(fromvaluetype) % sizeof(tovaluetype) == 0u,
+				  "a range value representation must contain an integral number of output units");
+	while (fromfirst != fromlast && static_cast<::std::size_t>(tolast - tofirst) >= units_per_value)
 	{
-		// Convert one complete source object per bounded destination step.
-		if constexpr (sizeof(fromvaluetype) == sizeof(tovaluetype))
-		{
-			// Equal-size values use bit_cast to preserve object-representation semantics.
-			*tofirst = ::std::bit_cast<tovaluetype>(*fromfirst);
-			++tofirst;
-		}
-		else
-		{
-			// Wider source values expand into an integral number of output units.
-			constexpr ::std::size_t quoti{sizeof(fromvaluetype) / sizeof(tovaluetype)};
+		// Representation copying is synchronous: a materialized proxy remains alive until every output unit is stored.
+		auto copy_value_representation = [&](fromvaluetype const &source) constexpr {
 			if (__builtin_is_constant_evaluated())
 			{
-				// Constant evaluation uses bit_cast to an addressable unit array.
-				auto arr{::std::bit_cast<::fast_io::freestanding::array<fromvaluetype, quoti>>(*fromfirst)};
+				// Constant evaluation uses a same-size array of output units; no pointer reinterpretation is required.
+				auto arr{
+					::std::bit_cast<::fast_io::freestanding::array<tovaluetype, units_per_value>>(source)};
 				::fast_io::details::non_overlapped_copy(arr.data(), arr.data() + arr.size(), tofirst);
 			}
 			else
 			{
-				// Runtime copying uses the optimized non-overlapping byte primitive.
-				::fast_io::freestanding::bytes_copy_n(reinterpret_cast<::std::byte const *>(fromfirst),
-													  sizeof(fromvaluetype), reinterpret_cast<::std::byte *>(tofirst));
+				// Runtime copying observes the source element object, never the iterator object's representation.
+				::fast_io::freestanding::bytes_copy_n(
+					reinterpret_cast<::std::byte const *>(::std::addressof(source)),
+					sizeof(fromvaluetype), reinterpret_cast<::std::byte *>(tofirst));
 			}
-			tofirst += quoti;
+		};
+		using fromreferencetype = ::std::iter_reference_t<FromItbg>;
+		if constexpr (::std::is_lvalue_reference_v<fromreferencetype> &&
+					  ::std::same_as<::std::remove_cvref_t<fromreferencetype>, fromvaluetype>)
+		{
+			copy_value_representation(*fromfirst);
 		}
+		else
+		{
+			static_assert(::std::constructible_from<fromvaluetype, fromreferencetype>,
+						  "a non-addressable iterator proxy must materialize its declared value_type");
+			fromvaluetype materialized(*fromfirst);
+			copy_value_representation(materialized);
+		}
+		tofirst += units_per_value;
 		++fromfirst;
 	}
-	return {fromfirst, tofirst};
+	return tofirst;
 }
 
 /** @brief Emits a multiblock iterator range through bounded scatter batches. */
 template <::std::size_t blocksize, typename outstmtype, typename T1, typename T>
 inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype &outsm, T1 **controller_first,
-															   T const *firstblock_curr, T const *firstblock_end,
-															   T1 **controller_last, T const *lastblock_first,
-															   T const *lastblock_curr)
+																	  T const *firstblock_curr, T const *firstblock_end,
+																	  T1 **controller_last, T const *lastblock_first,
+																	  T const *lastblock_curr)
 {
 	using output_char_type = typename outstmtype::output_char_type;
 	using nocref = ::std::remove_cvref_t<T>;
@@ -156,9 +165,17 @@ inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype
 	}
 }
 
-/** @brief Writes a non-contiguous iterator range under one synchronization scope. */
+/**
+ * @brief Synchronously writes a borrowed non-contiguous iterator range under one synchronization scope.
+ *
+ * @details `first` and `last` denote the unique iterator/sentinel objects owned by the value-transport wrapper
+ * below.  This implementation never lets either reference escape, so recursive mutex unwrapping preserves the
+ * lifetime and exact expression category selected by the unlocked-stream CPO without reacquiring iterator
+ * ownership.  In particular, mutex depth contributes O(1) iterator construction instead of one copy per layer,
+ * and move-only input iterators remain valid protocol participants.
+ */
 template <typename outstmtype, typename Iter, typename Iterlast>
-inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter first, Iterlast last)
+inline constexpr void write_all_iterator_decay_borrowed_impl(outstmtype &outsm, Iter &first, Iterlast &last)
 {
 	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outstmtype>)
 	{
@@ -170,8 +187,10 @@ inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter firs
 			// those writes form one synchronized operation instead of one independently locked operation per block.
 			::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 				::fast_io::operations::decay::output_stream_mutex_ref_decay(outsm)};
+			// `decltype(auto)` retains either an observer reference or an observer value exactly as returned by the CPO.
+			// A value result is a named automatic object whose lifetime encloses the complete synchronous borrowed call.
 			decltype(auto) unlocked = ::fast_io::operations::decay::output_stream_unlocked_ref_decay(outsm);
-			return ::fast_io::details::write_all_iterator_decay_impl(unlocked, first, last);
+			return ::fast_io::details::write_all_iterator_decay_borrowed_impl(unlocked, first, last);
 		}
 		else
 		{
@@ -186,6 +205,11 @@ inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter firs
 		// Select a direct multiblock or bounded scalar-copy strategy.
 		using output_char_type = typename outstmtype::output_char_type;
 		using itvt = ::std::iter_value_t<Iter>;
+		constexpr bool use_typed_operations{
+			::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<outstmtype> &&
+			(sizeof(itvt) % sizeof(output_char_type) == 0u)};
+		using operation_unit_type =
+			::std::conditional_t<use_typed_operations, output_char_type, ::std::byte>;
 		if constexpr (::fast_io::multiblock_view_iterator<Iter>) // Optimize for ::std::deque
 		{
 			// Preserve container block structure and lower it to scatter batches.
@@ -197,60 +221,96 @@ inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter firs
 		}
 		else
 		{
-			// Generic iterators use a bounded stack buffer or one-value writes.
+			// Generic iterators use the typed domain only when its capability and representation divisibility are proven.
+			// Otherwise the exact same object representation is transported through the byte-operation domain.
 			constexpr ::std::size_t bfsz{(::std::numeric_limits<::std::size_t>::digits <= 16u ? 64u : 512u) /
-										 sizeof(output_char_type)};
-			if constexpr (sizeof(output_char_type) * bfsz < sizeof(itvt))
+										 sizeof(operation_unit_type)};
+			if constexpr (sizeof(operation_unit_type) < sizeof(itvt) &&
+						  sizeof(itvt) <= sizeof(operation_unit_type) * bfsz)
 			{
-				// Large iterator values are representation-split into bounded batches.
-				output_char_type buffer[bfsz];
+				// Batch only complete representations that provably fit in the bounded buffer.
+				operation_unit_type buffer[bfsz];
 				for (; first != last;)
 				{
-					// Fill and emit bounded representation batches until iteration ends.
-					auto [fromiter, toiter] =
-						::fast_io::details::bytes_copy_punning_impl(first, last, buffer, buffer + bfsz);
-					::fast_io::operations::decay::write_all_decay(outsm, buffer, toiter);
-					first = fromiter;
+					// The helper advances the unique borrowed iterator and returns only initialized output progress.
+					auto toiter{
+						::fast_io::details::bytes_copy_punning_impl(first, last, buffer, buffer + bfsz)};
+					if constexpr (use_typed_operations)
+					{
+						::fast_io::operations::decay::write_all_decay(outsm, buffer, toiter);
+					}
+					else
+					{
+						::fast_io::operations::decay::write_all_bytes_decay(outsm, buffer, toiter);
+					}
 				}
 			}
 			else
 			{
-				// Small values are emitted individually without oversized stack storage.
+				// Single-unit and oversized values bypass staging; the latter cannot overflow the bounded buffer.
 				for (; first != last; ++first)
 				{
-					// Emit one representation-compatible iterator value per iteration.
-					decltype(::std::addressof(*first)) firstaddr;
-					if constexpr (::std::contiguous_iterator<Iter>)
-					{
-						// Obtain the address through contiguous-iterator semantics.
-						firstaddr = ::std::to_address(first);
-					}
-					else
-					{
-						// Borrow the proxy/reference address for a non-contiguous iterator.
-						firstaddr = ::std::addressof(*first);
-					}
-					if constexpr (::std::same_as<output_char_type, itvt>)
-					{
-						// Matching values use a one-element typed write directly.
-						::fast_io::operations::decay::write_all_decay(outsm, firstaddr, firstaddr + 1);
-					}
-					else
-					{
-						// Representation-compatible values use an alias-safe output view.
-						using type_const_ptr
+					// The consumer is synchronous, so an optional proxy materialization remains alive through the write CPO.
+					auto write_one_representation = [&](itvt const &source) constexpr {
+						if constexpr (use_typed_operations && ::std::same_as<output_char_type, itvt>)
+						{
+							// Matching values use a one-element typed write directly.
+							auto firstaddr{::std::addressof(source)};
+							::fast_io::operations::decay::write_all_decay(outsm, firstaddr, firstaddr + 1);
+						}
+						else
+						{
+							// Representation-compatible values use an alias-safe output view.
+							using type_const_ptr
 #if __has_cpp_attribute(__gnu__::__may_alias__)
-							[[__gnu__::__may_alias__]]
+								[[__gnu__::__may_alias__]]
 #endif
-							= output_char_type const *;
-						::fast_io::operations::decay::write_all_decay(outsm,
-																	  reinterpret_cast<type_const_ptr>(firstaddr),
-																	  reinterpret_cast<type_const_ptr>(firstaddr + 1));
+								= operation_unit_type const *;
+							auto firstaddr{::std::addressof(source)};
+							auto operation_first{reinterpret_cast<type_const_ptr>(firstaddr)};
+							auto operation_last{reinterpret_cast<type_const_ptr>(firstaddr + 1)};
+							if constexpr (use_typed_operations)
+							{
+								::fast_io::operations::decay::write_all_decay(outsm, operation_first,
+																			  operation_last);
+							}
+							else
+							{
+								::fast_io::operations::decay::write_all_bytes_decay(outsm, operation_first,
+																					operation_last);
+							}
+						}
+					};
+					using iter_reference_type = ::std::iter_reference_t<Iter>;
+					if constexpr (::std::is_lvalue_reference_v<iter_reference_type> &&
+								  ::std::same_as<::std::remove_cvref_t<iter_reference_type>, itvt>)
+					{
+						write_one_representation(*first);
+					}
+					else
+					{
+						static_assert(::std::constructible_from<itvt, iter_reference_type>,
+									  "a non-addressable iterator proxy must materialize its declared value_type");
+						itvt materialized(*first);
+						write_one_representation(materialized);
 					}
 				}
 			}
 		}
 	}
+}
+
+/**
+ * @brief Owns normalized iterator state once, then delegates to the synchronous borrowed implementation.
+ *
+ * @details Keeping this boundary by value preserves register-friendly ABI transport for ordinary iterators and
+ * sentinels.  The borrowed implementation is the sole recursive path; consequently it cannot duplicate ownership
+ * when a mutex observer is replaced by its unlocked observer.
+ */
+template <typename outstmtype, typename Iter, typename Iterlast>
+inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter first, Iterlast last)
+{
+	::fast_io::details::write_all_iterator_decay_borrowed_impl(outsm, first, last);
 }
 
 } // namespace details
@@ -261,11 +321,12 @@ namespace operations::decay
 /** @brief Writes a normalized range through contiguous or iterator dispatch. */
 template <typename outstmtype, ::std::ranges::input_range rg>
 	requires((::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<
-				 ::std::remove_cvref_t<outstmtype>> ||
+				  ::std::remove_cvref_t<outstmtype>> ||
 			  (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
 				   ::std::remove_cvref_t<outstmtype>> &&
 			   (sizeof(::std::ranges::range_value_t<rg>) %
-					sizeof(typename ::std::remove_cvref_t<outstmtype>::output_char_type) == 0))) &&
+					sizeof(typename ::std::remove_cvref_t<outstmtype>::output_char_type) ==
+				0))) &&
 			 ::fast_io::freestanding::is_trivially_copyable_or_relocatable_v<::std::ranges::range_value_t<rg>>)
 inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 {
@@ -278,7 +339,7 @@ inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 		auto firstptr{::std::ranges::cdata(r)};
 		auto lastptr{::std::to_address(::std::ranges::cend(r))};
 		if constexpr (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
-					  normalized_outstmtype> &&
+						  normalized_outstmtype> &&
 					  (sizeof(rgvlt) % sizeof(output_char_type) == 0))
 		{
 			// Prefer typed output when the representation divides into output units.

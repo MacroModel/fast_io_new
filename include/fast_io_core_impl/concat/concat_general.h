@@ -121,12 +121,12 @@ inline constexpr char_type *concat_float_reserve_emit(
 /// spelling. Runtime scalars retain the smaller wrapper above: flattening their complete DA formatter enlarges the
 /// hot loop and was slower in isolated float-only concat records.
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags, typename T>
-	FAST_IO_GNU_ALWAYS_INLINE
+FAST_IO_GNU_ALWAYS_INLINE
 #if defined(__GNUC__) && !defined(__clang__)
-[[gnu::flatten]]
+	[[gnu::flatten]]
 #endif
-inline constexpr char_type *concat_constant_float_reserve_emit(
-	char_type *out, ::fast_io::manipulators::scalar_manip_t<flags, T> &value) noexcept
+	inline constexpr char_type *concat_constant_float_reserve_emit(
+		char_type *out, ::fast_io::manipulators::scalar_manip_t<flags, T> &value) noexcept
 {
 	return print_reserve_define(
 		::fast_io::io_reserve_type<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T>>, out, value);
@@ -142,7 +142,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 // reserve CPO remains cost-model controlled for all other destinations.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr char_type *print_reserve_define_chain_impl(char_type *p, T &t, Args &...args)
+	inline constexpr char_type *print_reserve_define_chain_impl(char_type *p, T &t, Args &...args)
 {
 	// The default integer scalar carrier has a stronger local spelling proof than
 	// arbitrary reserve providers. Keep its force-inlined decimal leaf confined to
@@ -500,9 +500,22 @@ basic_general_concat_decay_ref_impl_small_mixed(T &str, Args &...args)
 	::std::size_t total_size{static_cast<::std::size_t>(line)};
 	auto measure_one = [&scatters, &scatter_index, &total_size](auto &arg) constexpr {
 		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		using static_scatter_traits =
+			::fast_io::details::decay::print_static_scatter_traits<ch_type, arg_type>;
 		::std::size_t extent{};
 		if constexpr (concat_small_mixed_reserve_leaf_v<ch_type, arg_type>)
+		{
 			extent = print_reserve_size(::fast_io::io_reserve_type<ch_type, arg_type>);
+		}
+		else if constexpr (static_scatter_traits::available)
+		{
+			// Admission and execution must use the same protocol witness.  Formally, a static-trait leaf enters
+			// this plan because `static_scatter_traits::available`; its descriptor is therefore exactly
+			// `static_scatter_traits::define(arg)`.  Such a leaf intentionally need not expose the dynamic
+			// `print_scatter_define` CPO, so substituting that CPO here would make a proven leaf ill-formed.
+			scatters[scatter_index] = static_scatter_traits::define(arg);
+			extent = scatters[scatter_index].len;
+		}
 		else
 		{
 			scatters[scatter_index] = print_scatter_define(
@@ -513,35 +526,47 @@ basic_general_concat_decay_ref_impl_small_mixed(T &str, Args &...args)
 		total_size = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(
 			total_size, extent);
 		if (total_size == SIZE_MAX) [[unlikely]]
+		{
 			::fast_io::fast_terminate();
+		}
 	};
 	(measure_one(args), ...);
 	if constexpr (sso_buffer_strlike<ch_type, T>)
 	{
 		constexpr ::std::size_t local_cap{strlike_sso_size(io_strlike_type<ch_type, T>)};
 		if (local_cap < total_size)
+		{
 			strlike_reserve(io_strlike_type<ch_type, T>, str, total_size);
+		}
 	}
 	else
+	{
 		strlike_reserve(io_strlike_type<ch_type, T>, str, total_size);
+	}
 	auto current{strlike_begin(io_strlike_type<ch_type, T>, str)};
 	scatter_index = 0u;
 	auto emit_one = [&current, &scatters, &scatter_index](auto &arg) constexpr {
 		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
 		if constexpr (concat_small_mixed_reserve_leaf_v<ch_type, arg_type>)
+		{
 			current = print_reserve_define(
 				::fast_io::io_reserve_type<ch_type, arg_type>, current, arg);
+		}
 		else
 		{
 			auto const &scatter{scatters[scatter_index]};
 			if (scatter.len != 0u)
+			{
 				current = ::fast_io::details::decay::small_scatter_copy_n(scatter.base, scatter.len, current);
+			}
 		}
 		++scatter_index;
 	};
 	(emit_one(args), ...);
 	if constexpr (line)
+	{
 		*current++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
+	}
 	strlike_set_curr(io_strlike_type<ch_type, T>, str, current);
 }
 #endif
@@ -786,8 +811,8 @@ inline constexpr bool concat_gcc_hot_mixed_run_v =
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires(concat_gcc_hot_mixed_run_v<char_type, Args...>)
 FAST_IO_GNU_ALWAYS_INLINE
-[[gnu::flatten]]
-inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed_gcc_hot(T &str, Args &...args)
+	[[gnu::flatten]]
+	inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed_gcc_hot(T &str, Args &...args)
 {
 	basic_general_concat_decay_ref_impl_cached_mixed<line, char_type>(str, args...);
 }
@@ -1177,7 +1202,7 @@ template <::std::integral char_type, typename Arg>
 inline constexpr bool basic_general_concat_precise_resize_with_borrowed_scatter_component_v =
 	::fast_io::precise_reserve_printable<char_type, Arg> ||
 	::std::same_as<::std::remove_cvref_t<Arg>,
-		::fast_io::basic_io_scatter_t<char_type>>;
+				   ::fast_io::basic_io_scatter_t<char_type>>;
 
 /// @brief Selects the bounded all-precise strategy for an already-normalized ordinary leaf run.
 /// @details This predicate proves only source shape and cost. Destination exact-resize capability is deliberately a
@@ -1215,8 +1240,9 @@ inline constexpr bool basic_general_concat_precise_resize_with_borrowed_scatter_
 	else
 	{
 		return (::fast_io::details::decay::
-			basic_general_concat_precise_resize_with_borrowed_scatter_component_v<
-				char_type, Args> && ...);
+					basic_general_concat_precise_resize_with_borrowed_scatter_component_v<
+						char_type, Args> &&
+				...);
 	}
 }();
 
@@ -1231,13 +1257,14 @@ template <::std::integral char_type, typename T, typename... Args>
 inline constexpr bool basic_general_concat_precise_resize_destination_run_v = []() consteval {
 	if constexpr (!::fast_io::details::decay::
 					  basic_general_concat_precise_resize_with_borrowed_scatter_run_v<
-					  char_type, Args...>)
+						  char_type, Args...>)
 	{
 		return false;
 	}
 	else if constexpr (
 		((::std::same_as<::std::remove_cvref_t<Args>,
-			  ::fast_io::basic_io_scatter_t<char_type>>) || ...) &&
+						 ::fast_io::basic_io_scatter_t<char_type>>) ||
+		 ...) &&
 		!::fast_io::concat_borrowed_scatter_precise_resize_safe_strlike<char_type, T>)
 	{
 		// A raw descriptor proves its length, not that an arbitrary destination resize is source-independent.
@@ -1263,8 +1290,9 @@ template <::std::integral char_type, typename T, typename... Args>
 inline constexpr bool basic_general_concat_fresh_precise_resize_preferred_run_v = []() consteval {
 	// Reject multi-leaf and unmarked runs before probing any destination-specific exact-storage protocol.
 	if constexpr (sizeof...(Args) != 1u ||
-			  !(::fast_io::concat_fresh_precise_resize_printable_preferred<
-				  char_type, Args> && ...))
+				  !(::fast_io::concat_fresh_precise_resize_printable_preferred<
+						char_type, Args> &&
+					...))
 	{
 		return false;
 	}
@@ -1382,7 +1410,7 @@ inline constexpr bool basic_general_concat_exact_overwrite_run_v = []() constexp
 		return false;
 	}
 	else if constexpr (!::fast_io::details::decay::basic_general_concat_exact_overwrite_source<
-					  char_type, Arg>)
+						   char_type, Arg>)
 	{
 		return false;
 	}
@@ -1440,9 +1468,9 @@ basic_general_concat_precise_resize_measure_one(
 	::std::size_t &component_index, Arg &arg)
 {
 	using arg_type = ::std::remove_cvref_t<Arg>;
-	::std::size_t const component_size{[] (Arg &value) constexpr {
+	::std::size_t const component_size{[](Arg &value) constexpr {
 		if constexpr (::std::same_as<arg_type,
-					  ::fast_io::basic_io_scatter_t<char_type>>)
+									 ::fast_io::basic_io_scatter_t<char_type>>)
 		{
 			return value.len;
 		}
@@ -1471,7 +1499,7 @@ basic_general_concat_precise_resize_emit_one(
 		expected_end += component_size;
 	}
 	if constexpr (::std::same_as<arg_type,
-					  ::fast_io::basic_io_scatter_t<char_type>>)
+								 ::fast_io::basic_io_scatter_t<char_type>>)
 	{
 		// Zero-length scatters may legally carry a null base. For non-empty scatters the newly constructed result owns
 		// disjoint storage, so the faster non-overlap primitive is valid without strengthening raw scatter's CPOs.
@@ -1634,13 +1662,14 @@ basic_general_concat_fresh_precise_resize_preferred_run(Args &...args)
 	// Non-buffer results use callback-owned storage only when the concrete operation satisfies its exact CPO.
 	else if constexpr (
 		(::fast_io::details::decay::basic_general_concat_fresh_precise_exact_overwrite_run_v<
-			line, char_type, T, Args> && ...))
+			 line, char_type, T, Args> &&
+		 ...))
 	{
 		// The source has a cheap cached size, and the destination can expose uninitialized callback-owned storage.
 		// This avoids std::string::resize value-initializing the complete document immediately before it is overwritten.
 		return (::fast_io::details::decay::basic_general_concat_exact_overwrite_construct<
-			line, char_type, T>(args),
-			...);
+					line, char_type, T>(args),
+				...);
 	}
 	else
 	{
@@ -1716,8 +1745,7 @@ inline constexpr bool basic_general_concat_direct_destination_ok = []() constexp
 	// Probe an associated result adapter only when its ADL customization is actually well formed.
 	if constexpr (requires(T &str) { io_strlike_ref(::fast_io::io_alias, str); })
 	{
-		using destination_reference = decltype(
-			io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()));
+		using destination_reference = decltype(io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()));
 		using destination_type = ::std::remove_reference_t<destination_reference>;
 		using destination_object_type = ::std::remove_cv_t<destination_type>;
 		// An explicit character domain is required before the adapter may receive this normalized print run.
@@ -1778,8 +1806,7 @@ inline constexpr bool basic_general_concat_one_pass_direct_destination_ok = []()
 	// A source cost preference cannot manufacture a destination adapter, so admit only a valid associated CPO.
 	if constexpr (requires(T &str) { io_strlike_ref(::fast_io::io_alias, str); })
 	{
-		using destination_reference = decltype(
-			io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()));
+		using destination_reference = decltype(io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()));
 		using destination_type = ::std::remove_reference_t<destination_reference>;
 		using destination_object_type = ::std::remove_cv_t<destination_type>;
 		// Keep the one-pass producer in the requested character domain before invoking the full print protocol.
@@ -1832,8 +1859,7 @@ inline constexpr bool basic_general_concat_generic_buffer_destination_ok = []() 
 	if constexpr (::fast_io::buffer_strlike<ch_type, T>)
 	{
 		using destination_type = ::fast_io::io_strlike_reference_wrapper<ch_type, T>;
-		using destination_reference = decltype(
-			::fast_io::operations::output_stream_ref(::std::declval<destination_type>()));
+		using destination_reference = decltype(::fast_io::operations::output_stream_ref(::std::declval<destination_type>()));
 		return ::fast_io::operations::decay::defines::print_freestanding_okay_for_line<
 			line, destination_reference, Args...>;
 	}
@@ -1863,9 +1889,8 @@ inline constexpr bool basic_general_concat_initialization_sensitive_staging_requ
 	}
 	else
 	{
-		return
-			(::fast_io::precise_resize_initialization_sensitive_printable<ch_type, Args> || ...) &&
-			!::fast_io::precise_resize_without_initialization_strlike<ch_type, T>;
+		return (::fast_io::precise_resize_initialization_sensitive_printable<ch_type, Args> || ...) &&
+			   !::fast_io::precise_resize_without_initialization_strlike<ch_type, T>;
 	}
 }();
 
@@ -1960,16 +1985,121 @@ inline consteval ::std::size_t basic_general_concat_single_pass_bounded_run_stac
 	}
 }
 
-/// @brief Proves that one component can participate without tentatively consuming a stateful object query.
-/// @details An explicitly marked source promises a repeatable cheap dynamic bound. Every other admitted component has a
-///          compile-time reserve extent or is the final normalized scatter descriptor itself. In particular, borrowed
-///          scatter producers and unrelated dynamic-reserve CPOs are not admitted merely because another leaf is marked:
-///          a rejected stack attempt must never replay their object-dependent observation in the fallback strategy.
+/// @brief Recognizes an exact leaf which may be measured speculatively for fresh bounded construction.
+/// @details The cached-size proof makes repeated observation of the unchanged object stable, constant-time, and
+///          non-throwing. The fresh-concat marker supplies the independent cost preference, while eager safety permits a
+///          failed bounded attempt to continue through the ordinary strategy without making the first observation
+///          visible. Emission must use the paired precise writer; its exact size is not capacity for an ordinary reserve
+///          writer, which may use any part of its larger conservative bound.
 template <::std::integral ch_type, typename T>
-inline constexpr bool basic_general_concat_single_pass_bounded_component_v =
+inline constexpr bool basic_general_concat_single_pass_exact_component_v =
+	::fast_io::cached_precise_reserve_printable<ch_type, T> &&
+	::fast_io::concat_fresh_precise_resize_printable_preferred<ch_type, T> &&
+	::fast_io::eager_materialization_safe_printable<ch_type, T>;
+
+/// @brief Recognizes a replayable scatter leaf whose descriptor is its complete print semantics.
+/// @details Bounded preflight and emission observe the projection separately. Borrowed provenance proves identical
+///          bytes and length for both observations; the remaining markers exclude destination-state dependence, hidden
+///          direct-print semantics, normalization-owned storage, and observable failed preflight. Requiring the named
+///          projection to be non-throwing also prevents the optional preflight from moving an exception ahead of the
+///          fresh-result construction strategy it may ultimately decline.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_scatter_component_v =
+	::fast_io::scatter_printable_for<ch_type, T &> &&
+	::fast_io::borrowed_scatter_source<ch_type, T> &&
+	::fast_io::scatter_output_state_independent<ch_type, T> &&
+	::fast_io::scatter_direct_print_equivalent<ch_type, T> &&
+	::fast_io::copy_stable_borrowed_print_source<ch_type, T> &&
+	::fast_io::eager_materialization_safe_printable<ch_type, T> &&
+	requires(T &value) {
+		{
+			print_scatter_define(
+				::fast_io::io_reserve_type<ch_type, ::std::remove_cvref_t<T>>,
+				value)
+		} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<ch_type>>;
+	};
+
+/// @brief Preserves the component relation used by the original bounded-source strategy.
+/// @details This spelling is intentionally separate from the extended relation below. It keeps existing bounded-source
+///          dispatch stable, including raw descriptors and ordinary static-reserve companions, while preventing a new
+///          exact/scatter proof from retroactively strengthening any of those historical components.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_bounded_historical_component_v =
 	::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T> ||
 	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> ||
 	::std::same_as<::std::remove_cvref_t<T>, ::fast_io::basic_io_scatter_t<ch_type>>;
+
+/// @brief Proves that one component has a writer understood by the extended bounded constructor.
+/// @details A bounded source publishes its non-consuming upper bound, an exact-preferred source publishes the paired
+///          exact protocol above, and a fully proved scatter publishes a replayable descriptor. Every other admitted
+///          component has a compile-time reserve extent. Unmarked dynamic, precise, and scatter producers remain on the
+///          ordinary path: one marked neighbor can never grant permission to observe or replay their state.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_bounded_component_v =
+	::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T> ||
+	::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, T> ||
+	::fast_io::details::decay::basic_general_concat_single_pass_scatter_component_v<ch_type, T> ||
+	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> ||
+	::std::same_as<::std::remove_cvref_t<T>, ::fast_io::basic_io_scatter_t<ch_type>>;
+
+/// @brief Requires every writer newly moved ahead of result allocation to be observationally eager-safe.
+/// @details Exact/scatter admission changes staging only when this complete fold holds. In particular, a precise leaf's
+///          purity cannot authorize an arbitrary static-reserve companion: if allocation later fails, pre-allocation
+///          formatting must still be observationally equivalent to not having formatted any source.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_bounded_extended_component_v =
+	::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<ch_type, T> &&
+	::fast_io::eager_materialization_safe_printable<ch_type, T>;
+
+/// @brief Restricts the extended cost model to compiler families with measured code-generation support.
+/// @details The gate is future-open within each verified frontend/platform family. Earlier compilers retain the exact
+///          pre-extension dispatcher, so accepting the semantic CPOs does not by itself perturb their inliner budget or
+///          binary layout. Apple Clang is versioned separately because its backend and C++ runtime differ from Linux.
+inline consteval bool basic_general_concat_single_pass_bounded_extended_codegen_supported() noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__)
+	return __GNUC__ >= 16;
+#elif defined(__clang__) && defined(__APPLE__)
+	return __clang_major__ >= 23;
+#elif defined(__clang__)
+	return __clang_major__ >= 22;
+#else
+	return false;
+#endif
+}
+
+/// @brief Identifies a static-reserve companion whose capacity may substantially exceed its emitted extent.
+/// @details Exact, bounded, and proved-scatter components publish object-specific extents during preflight. The remaining
+///          static reserve family can publish only a type-level capacity, so a long mixed run may need the full concat
+///          frame even when its final bytes are compact.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_single_pass_conservative_static_component_v =
+	::fast_io::reserve_printable<ch_type, ::std::remove_cvref_t<T>> &&
+	!::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T> &&
+	!::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, T> &&
+	!::fast_io::details::decay::basic_general_concat_single_pass_scatter_component_v<ch_type, T>;
+
+/// @brief Chooses the bounded frame after the extended component protocol is known.
+/// @details The historical multi-leaf path keeps its 512-byte frame. A long extended run containing a conservative
+///          static-reserve companion may otherwise complete every safe object query and reject a compact result solely
+///          because type-level capacity exceeds 512 bytes. Reusing the existing one-KiB concat ceiling for that precise
+///          shape avoids the redundant fallback without penalizing all-exact runs with a larger frame. Short runs retain
+///          512 bytes, and an over-ceiling source still returns the rejection sentinel before any emission.
+template <::std::integral ch_type, typename... Args>
+inline consteval ::std::size_t basic_general_concat_single_pass_bounded_effective_stack_size() noexcept
+{
+	if constexpr (
+		8u < sizeof...(Args) &&
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_codegen_supported() &&
+		(::fast_io::details::decay::basic_general_concat_single_pass_conservative_static_component_v<ch_type, Args> || ...))
+	{
+		return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_stack_size<ch_type>();
+	}
+	else
+	{
+		return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<ch_type, Args...>();
+	}
+}
 
 /// @brief Selects the narrow one-pass bounded construction strategy after concat normalization.
 /// @details The 32-leaf ceiling bounds template expansion and covers the measured 21-leaf formatted mixed record. At
@@ -1981,7 +2111,7 @@ inline consteval bool basic_general_concat_single_pass_bounded_run() noexcept
 {
 	if constexpr (
 		sizeof...(Args) == 0u || 32u < sizeof...(Args) ||
-		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_effective_stack_size<
 			ch_type, Args...>() == 0u ||
 		!::fast_io::details::decay::basic_general_concat_single_pass_bounded_destination<ch_type, T>)
 	{
@@ -1989,9 +2119,23 @@ inline consteval bool basic_general_concat_single_pass_bounded_run() noexcept
 	}
 	else
 	{
-		return
+		constexpr bool historical_run{
 			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, Args> || ...) &&
-			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<ch_type, Args> && ...);
+			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_historical_component_v<ch_type, Args> && ...)};
+		constexpr bool has_extended_component{
+			((::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, Args> ||
+			  ::fast_io::details::decay::basic_general_concat_single_pass_scatter_component_v<ch_type, Args>) ||
+			 ...)};
+		// Scatter purity is eligibility, not profitability: a homogeneous scatter run already has a retained-descriptor
+		// strategy. Only a bounded or exact-preferred source may justify staging the complete extended run.
+		constexpr bool has_extended_reason{
+			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, Args> || ...) ||
+			(::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, Args> || ...)};
+		constexpr bool extended_run{
+			::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_codegen_supported() &&
+			has_extended_component && has_extended_reason &&
+			(::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_component_v<ch_type, Args> && ...)};
+		return historical_run || extended_run;
 	}
 }
 
@@ -2014,12 +2158,27 @@ inline constexpr ::std::size_t basic_general_concat_single_pass_bounded_componen
 		return ::fast_io::single_pass_bounded_materialization_size_invoke<ch_type>(
 			value, maximum_size);
 	}
+	else if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, T>)
+	{
+		return print_reserve_precise_size(
+			::fast_io::io_reserve_type<ch_type, value_type>, value);
+	}
+	else if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_scatter_component_v<ch_type, T>)
+	{
+		return print_scatter_define(
+				   ::fast_io::io_reserve_type<ch_type, value_type>, value)
+			.len;
+	}
 	else if constexpr (::fast_io::reserve_printable<ch_type, value_type>)
 	{
 		return print_reserve_size(::fast_io::io_reserve_type<ch_type, value_type>);
 	}
 	else
 	{
+		// The historical component relation admits a raw scatter descriptor directly. Its extent is intrinsic to the
+		// descriptor and therefore needs neither an object-dependent CPO observation nor a conservative reserve bound.
 		return value.len;
 	}
 }
@@ -2055,17 +2214,225 @@ inline constexpr void basic_general_concat_single_pass_bounded_add_component(
 template <bool line, ::std::integral ch_type, typename... Args>
 	requires(
 		::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<
-			ch_type, Args> && ...)
+			ch_type, Args> &&
+		...)
 inline constexpr ::std::size_t basic_general_concat_single_pass_bounded_total_size(Args &...args)
 {
 	constexpr ::std::size_t maximum_size{
-		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_effective_stack_size<
 			ch_type, Args...>()};
 	::std::size_t total{line ? 1u : 0u};
 	(::fast_io::details::decay::basic_general_concat_single_pass_bounded_add_component<ch_type>(
-		total, maximum_size, args),
+		 total, maximum_size, args),
 	 ...);
 	return total;
+}
+
+/// @brief Emits one component with the same protocol that supplied its bounded-preflight extent.
+/// @details Exact and scatter components are intentionally handled before the generic bounded semantic emitter. The
+///          exact branch repeats only a cached stable size query and validates a pointer-reporting writer against that
+///          endpoint. The scatter branch repeats the borrowed projection and copies exactly its proved descriptor.
+///          Remaining components were sized from a reserve bound and therefore use the ordinary bounded semantic leaf
+///          path. This protocol pairing is the local invariant which prevents a precise extent from being mistaken for
+///          an ordinary reserve writer's capacity.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<
+		ch_type, T>
+inline constexpr ch_type *basic_general_concat_single_pass_bounded_emit_component(
+	ch_type *iter, T &value)
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_source<ch_type, T>)
+	{
+		// Preserve the same bounded-source priority used by the preflight size selector above.
+		return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<
+			ch_type, true>(iter, value);
+	}
+	else if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, T>)
+	{
+		::std::size_t const exact_size{print_reserve_precise_size(
+			::fast_io::io_reserve_type<ch_type, value_type>, value)};
+		ch_type *const expected_end{exact_size == 0u ? iter : iter + exact_size};
+		using define_result = decltype(print_reserve_precise_define(
+			::fast_io::io_reserve_type<ch_type, value_type>, iter, exact_size,
+			value));
+		if constexpr (::std::same_as<define_result, ch_type *>)
+		{
+			ch_type *const actual_end{print_reserve_precise_define(
+				::fast_io::io_reserve_type<ch_type, value_type>, iter,
+				exact_size, value)};
+			if (actual_end != expected_end) [[unlikely]]
+			{
+				::fast_io::fast_terminate();
+			}
+		}
+		else
+		{
+			print_reserve_precise_define(
+				::fast_io::io_reserve_type<ch_type, value_type>, iter,
+				exact_size, value);
+		}
+		return expected_end;
+	}
+	else if constexpr (
+		::fast_io::details::decay::basic_general_concat_single_pass_scatter_component_v<ch_type, T>)
+	{
+		auto const scatter{print_scatter_define(
+			::fast_io::io_reserve_type<ch_type, value_type>, value)};
+		return scatter.len == 0u
+				   ? iter
+				   : ::fast_io::details::non_overlapped_copy_n(
+						 scatter.base, scatter.len, iter);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::print_semantic_emit_unchecked_arg<
+			ch_type, true>(iter, value);
+	}
+}
+
+/// @brief Provides one shared leaf body for long extended runs whose repeated inline spellings dominate text size.
+/// @details This is a cost boundary only; it delegates to the same protocol-paired emitter and therefore preserves every
+///          exact endpoint, scatter-lifetime, and bounded-writer invariant. It is selected only for compiler-gated runs
+///          longer than eight leaves, where amortizing one call per leaf can be evaluated against the eliminated copies.
+///          For the Linux Clang 22 32-leaf mixed record, outlining the repeated conservative-static and exact bodies
+///          reduced text by 21,184 bytes and runtime by 34.46%; all seven paired samples won. GCC retains ordinary
+///          inlining because its independently measured construct boundary has the opposite cost response.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_component_v<ch_type, T>
+#if defined(__clang__) &&                                                                          \
+	((defined(__APPLE__) && __clang_major__ >= 23) || (!defined(__APPLE__) && __clang_major__ >= 22)) && \
+	__has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr ch_type *basic_general_concat_single_pass_bounded_emit_component_compact(
+	ch_type *iter, T &value)
+{
+	return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_emit_component<ch_type>(
+		iter, value);
+}
+
+/// @brief Selects a complete cached-exact run for direct construction in an audited runtime put area.
+/// @details Every source separately proves a cached stable size, a non-throwing pointer-reporting writer, eager
+///          observation safety, and independence from destination relocation. The destination separately proves that a
+///          fresh default result owns an empty runtime put area and permits one final cursor publication. Requiring a
+///          portable precise-resize fallback keeps constant evaluation valid without exposing runtime spare capacity.
+///          The two-to-32 leaf range avoids perturbing the established singleton policy and bounds template expansion.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_fresh_runtime_exact_direct_run_v =
+	1u < sizeof...(Args) && sizeof...(Args) <= 32u &&
+	::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_codegen_supported() &&
+	::fast_io::concat_fresh_runtime_exact_direct_strlike<ch_type, T> &&
+	::fast_io::precise_resize_writable_strlike<ch_type, T> &&
+	(::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, Args> && ...) &&
+	(::fast_io::output_growth_independent_precise_reserve_printable<ch_type, Args> && ...) &&
+	requires(T &result, ch_type *cursor) {
+		{ strlike_runtime_curr(::fast_io::io_strlike_type<ch_type, T>, result) } noexcept -> ::std::same_as<ch_type *>;
+		{ strlike_runtime_end(::fast_io::io_strlike_type<ch_type, T>, result) } noexcept -> ::std::same_as<ch_type *>;
+		{ strlike_runtime_set_curr(::fast_io::io_strlike_type<ch_type, T>, result, cursor) } noexcept -> ::std::same_as<void>;
+	};
+
+/// @brief Emits the measured all-exact run and proves its aggregate endpoint before cursor publication.
+/// @details The per-leaf helper repeats only a cached stable size observation, pairs it with the precise writer, and
+///          checks that writer's endpoint. The final comparison then proves by induction that the complete fold consumed
+///          exactly the allocation extent, including the optional line terminator.
+template <bool line, ::std::integral ch_type, typename... Args>
+	requires(
+		::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, Args> && ...)
+#if defined(__clang__) &&                                                                     \
+	((defined(__APPLE__) && __clang_major__ >= 23) || (!defined(__APPLE__) && __clang_major__ >= 22))
+// Apple Clang 23 already inlines the eight-leaf form naturally. At 32 leaves the marker removed 1,016 bytes of Mach-O
+// __text with neutral paired runtime. Linux Clang 22 instead added 1,177 text bytes but improved the direct exact record
+// by 5.42%; the separate platform gates preserve both measured cost decisions for their future compiler families.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr ch_type *basic_general_concat_fresh_runtime_exact_emit(
+	ch_type *first, ::std::size_t total_size, Args &...args)
+{
+	ch_type *current{first};
+	auto emit_one = [&current](auto &arg) constexpr {
+		if constexpr (
+			8u < sizeof...(Args) &&
+			::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_codegen_supported())
+		{
+			// Reuse the protocol-identical shared leaf at the independently measured long-pack boundary. Apple Clang 23
+			// reduced the pp/N32 Mach-O __text from 21,272 to 6,000 bytes; seven paired samples were runtime-neutral
+			// (131.15 ns versus 130.88 ns), so the 15,272-byte reduction is not purchased with a material hot-path cost.
+			current = ::fast_io::details::decay::
+				basic_general_concat_single_pass_bounded_emit_component_compact<ch_type>(current, arg);
+		}
+		else
+		{
+			current = ::fast_io::details::decay::basic_general_concat_single_pass_bounded_emit_component<ch_type>(
+				current, arg);
+		}
+	};
+	(emit_one(args), ...);
+	if constexpr (line)
+	{
+		*current++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
+	}
+	ch_type *const expected_end{total_size == 0u ? first : first + total_size};
+	if (current != expected_end) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	return current;
+}
+
+/// @brief Constructs one all-exact result with one allocation and one runtime cursor commit.
+/// @details Sizing is left-to-right and checked before reserve. Runtime reserve occurs before every writer, so allocation
+///          failure cannot expose a formatting side effect; every admitted writer is non-throwing thereafter. The
+///          cached-size and output-growth proofs make the second per-leaf size observation identical after relocation.
+///          Each pointer-returning writer is checked by the paired leaf emitter, and the final aggregate endpoint is
+///          checked independently before publication. Constant evaluation instead establishes a live exact range with
+///          the portable resize CPO and performs the same checked emission into that range.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires ::fast_io::details::decay::basic_general_concat_fresh_runtime_exact_direct_run_v<
+		line, ch_type, T, Args...>
+inline constexpr T basic_general_concat_fresh_runtime_exact_direct_run(Args &...args)
+{
+	T result;
+	::std::size_t total_size{line ? 1u : 0u};
+	auto measure_one = [&total_size](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		::std::size_t const component_size{print_reserve_precise_size(
+			::fast_io::io_reserve_type<ch_type, arg_type>, arg)};
+		total_size = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(
+			total_size, component_size);
+		if (total_size == SIZE_MAX) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+	};
+	(measure_one(args), ...);
+
+	FAST_IO_IF_NOT_CONSTEVAL
+	{
+		strlike_runtime_reserve(::fast_io::io_strlike_type<ch_type, T>, result, total_size);
+		ch_type *const first{strlike_runtime_curr(::fast_io::io_strlike_type<ch_type, T>, result)};
+		ch_type *const last{strlike_runtime_end(::fast_io::io_strlike_type<ch_type, T>, result)};
+		::std::ptrdiff_t const available{
+			first == nullptr || last == nullptr ? (first == last && total_size == 0u ? 0 : -1) : last - first};
+		if (available < 0 || total_size > static_cast<::std::size_t>(available)) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		ch_type *const actual_end{
+			::fast_io::details::decay::basic_general_concat_fresh_runtime_exact_emit<line, ch_type>(
+				first, total_size, args...)};
+		strlike_runtime_set_curr(::fast_io::io_strlike_type<ch_type, T>, result, actual_end);
+	}
+	else
+	{
+		ch_type *const first{strlike_precise_resize_and_get_begin(
+			::fast_io::io_strlike_type<ch_type, T>, result, total_size)};
+		(void)::fast_io::details::decay::basic_general_concat_fresh_runtime_exact_emit<line, ch_type>(
+			first, total_size, args...);
+	}
+	return result;
 }
 
 /// @brief Emits one already-bounded normalized run once, then constructs the final result from its actual prefix.
@@ -2079,27 +2446,50 @@ inline constexpr ::std::size_t basic_general_concat_single_pass_bounded_total_si
 ///          run-time-width scalar by 3.53%; GCC 13 paid 3,264 extra text bytes for the forced boundary, while GCC 14 was
 ///          568 bytes smaller with it. The same A/B matrix measured GCC 11 and 12 directly: their retained controls were
 ///          neutral, with no stable benefit or regression, so the pre-15 policy deliberately remains continuous rather
-///          than inventing an untested family boundary. Clang 23 produced byte-identical binaries with or without the
-///          marker, and GCC 15 had no consistent benefit. On GCC 16 the marker instead regressed the fixed-scalar probe
-///          by 25.6% and added 64 text bytes, so newer GNU frontends deliberately retain ordinary inlining policy.
+///          than inventing an untested family boundary. Clang 23 produced byte-identical historical scalar binaries;
+///          its extended multi-leaf specialization is evaluated independently below. On Linux Clang 22, forcing that
+///          boundary regressed the eight-leaf mixed record by 6.48% but improved the 32-leaf record by 4.46%. The same
+///          32-leaf change regressed GCC 16 by 8.35%, so the future-open extension is Clang-only and requires more than
+///          eight leaves. GCC 15 had no consistent
+///          benefit. On GCC 16 the historical marker also regressed the fixed-scalar probe by 25.6% and added 64 text
+///          bytes, so newer GNU frontends deliberately retain ordinary inlining policy.
 template <bool line, ::std::integral ch_type, typename T, typename... Args>
 	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<
 		ch_type, T, Args...>
-#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 15
 FAST_IO_GNU_ALWAYS_INLINE
-#endif
-inline constexpr T basic_general_concat_single_pass_bounded_construct(
-	::std::size_t bounded_size, Args &...args)
+inline constexpr T basic_general_concat_single_pass_bounded_construct_implementation(
+		::std::size_t bounded_size, Args &...args)
 {
 	constexpr ::std::size_t stack_size{
-		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_effective_stack_size<
 			ch_type, Args...>()};
 	ch_type buffer[stack_size];
 	ch_type *const first{buffer};
 	ch_type *const last{first + bounded_size};
-	ch_type *const actual_end{
-		::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, ch_type, true>(
-			first, args...)};
+	ch_type *actual_end{first};
+	auto emit_one = [&actual_end](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		if constexpr (
+			8u < sizeof...(Args) &&
+			::fast_io::details::decay::basic_general_concat_single_pass_bounded_extended_codegen_supported() &&
+			(::fast_io::details::decay::basic_general_concat_single_pass_conservative_static_component_v<ch_type, arg_type> ||
+			 ::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<ch_type, arg_type>))
+		{
+			actual_end = ::fast_io::details::decay::
+				basic_general_concat_single_pass_bounded_emit_component_compact<ch_type>(
+					actual_end, arg);
+		}
+		else
+		{
+			actual_end = ::fast_io::details::decay::
+				basic_general_concat_single_pass_bounded_emit_component<ch_type>(actual_end, arg);
+		}
+	};
+	(emit_one(args), ...);
+	if constexpr (line)
+	{
+		*actual_end++ = ::fast_io::char_literal_v<u8'\n', ch_type>;
+	}
 	if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
 			first, last, actual_end)) [[unlikely]]
 	{
@@ -2107,6 +2497,47 @@ inline constexpr T basic_general_concat_single_pass_bounded_construct(
 	}
 	return strlike_construct_define(
 		::fast_io::io_strlike_type<ch_type, T>, first, actual_end);
+}
+
+/// @brief Selects the measured outer inlining boundary without changing the construction body.
+/// @details The implementation is always fused into one of the wrappers below, so this predicate controls exactly the
+///          boundary measured against the phase-one dispatcher. GNU frontends before 15 retain their historical policy.
+///          Verified Clang families force only long extended runs; compact runs retain the frontend's ordinary decision
+///          because Linux Clang 22 consistently favored that choice at eight leaves.
+template <typename... Args>
+inline constexpr bool basic_general_concat_single_pass_bounded_force_outer_inline_v =
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 15
+	true;
+#elif defined(__clang__) && defined(__APPLE__) && __clang_major__ >= 23
+	8u < sizeof...(Args);
+#elif defined(__clang__) && !defined(__APPLE__) && __clang_major__ >= 22
+	8u < sizeof...(Args);
+#else
+	false;
+#endif
+
+/// @brief Retains the compiler's ordinary phase-one inlining decision for this bounded construction.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires ::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<
+		ch_type, T, Args...>
+inline constexpr T basic_general_concat_single_pass_bounded_construct(
+	::std::size_t bounded_size, Args &...args)
+{
+	return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct_implementation<
+		line, ch_type, T>(bounded_size, args...);
+}
+
+/// @brief Forces only the independently measured profitable outer boundary.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires(
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<ch_type, T, Args...> &&
+		::fast_io::details::decay::basic_general_concat_single_pass_bounded_force_outer_inline_v<Args...>)
+FAST_IO_GNU_ALWAYS_INLINE
+inline constexpr T basic_general_concat_single_pass_bounded_construct_forced(
+	::std::size_t bounded_size, Args &...args)
+{
+	return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct_implementation<
+		line, ch_type, T>(bounded_size, args...);
 }
 
 template <typename T>
@@ -2524,19 +2955,36 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 	else
 	{
 		if constexpr (
+			::fast_io::details::decay::basic_general_concat_fresh_runtime_exact_direct_run_v<
+				line, ch_type, T, Args...>)
+		{
+			return ::fast_io::details::decay::basic_general_concat_fresh_runtime_exact_direct_run<
+				line, ch_type, T>(args...);
+		}
+		else if constexpr (
 			::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_v<
 				ch_type, T, Args...>)
 		{
 			constexpr ::std::size_t stack_size{
-				::fast_io::details::decay::basic_general_concat_single_pass_bounded_run_stack_size<
+				::fast_io::details::decay::basic_general_concat_single_pass_bounded_effective_stack_size<
 					ch_type, Args...>()};
 			::std::size_t const bounded_size{
 				::fast_io::details::decay::basic_general_concat_single_pass_bounded_total_size<
 					line, ch_type>(args...)};
 			if (bounded_size <= stack_size) [[likely]]
 			{
-				return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct<
-					line, ch_type, T>(bounded_size, args...);
+				if constexpr (
+					::fast_io::details::decay::basic_general_concat_single_pass_bounded_force_outer_inline_v<
+						Args...>)
+				{
+					return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct_forced<
+						line, ch_type, T>(bounded_size, args...);
+				}
+				else
+				{
+					return ::fast_io::details::decay::basic_general_concat_single_pass_bounded_construct<
+						line, ch_type, T>(bounded_size, args...);
+				}
 			}
 		}
 		if constexpr (basic_general_concat_has_top_level_condition_v<Args...>)
@@ -2831,18 +3279,17 @@ basic_general_concat_compiler_constant_status_safe_for_types() noexcept
 
 	// Check an associated result adapter only when the destination actually supplies one.
 	if constexpr (requires(T &result) {
-		io_strlike_ref(::fast_io::io_alias, result);
-	})
+					  io_strlike_ref(::fast_io::io_alias, result);
+				  })
 	{
-		using associated_output = ::std::remove_reference_t<decltype(
-			io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()))>;
+		using associated_output = ::std::remove_reference_t<decltype(io_strlike_ref(::fast_io::io_alias, ::std::declval<T &>()))>;
 		// A named character domain is needed before comparing the adapter with the requested concat domain.
 		if constexpr (requires { typename associated_output::output_char_type; })
 		{
 			// Reject only a same-domain adapter whose whole-run status protocol would be bypassed by direct construction.
 			if constexpr (
 				::std::same_as<ch_type,
-					typename associated_output::output_char_type> &&
+							   typename associated_output::output_char_type> &&
 				!output_safe.template operator()<associated_output>())
 			{
 				return false;
@@ -2863,9 +3310,8 @@ basic_general_concat_compiler_constant_status_safe_for_types() noexcept
 	else
 	{
 		using staging_type = ::fast_io::details::basic_concat_buffer<ch_type>;
-		using staging_output = ::std::remove_reference_t<decltype(
-			io_strlike_ref(::fast_io::io_alias,
-				::std::declval<staging_type &>()))>;
+		using staging_output = ::std::remove_reference_t<decltype(io_strlike_ref(::fast_io::io_alias,
+																				 ::std::declval<staging_type &>()))>;
 		// Construct-only destinations are safe only when their concrete staging stream has no intercepted status run.
 		if constexpr (!output_safe.template operator()<staging_output>())
 		{
@@ -2893,15 +3339,16 @@ basic_general_concat_compiler_constant_replacement_codegen_supported() noexcept
 	if constexpr (
 		sizeof...(ReplacementArgs) == 1u &&
 		(::fast_io::compiler_constant_flat_integer_replacement<
-			ch_type, ::std::remove_cvref_t<ReplacementArgs>> && ...))
+			 ch_type, ::std::remove_cvref_t<ReplacementArgs>> &&
+		 ...))
 	{
 		return true;
 	}
 	else
 	{
 		return !(false || ... ||
-			::fast_io::compiler_constant_precise_compact_preferred<
-				ch_type, ::std::remove_cvref_t<ReplacementArgs>>);
+				 ::fast_io::compiler_constant_precise_compact_preferred<
+					 ch_type, ::std::remove_cvref_t<ReplacementArgs>>);
 	}
 #else
 	return true;
@@ -2924,8 +3371,8 @@ basic_general_concat_compiler_constant_source_codegen_supported() noexcept
 			 ch_type, Args>))
 	{
 		return __GNUC__ != 11 &&
-			!::fast_io::details::decay::
-				basic_general_concat_single_pass_bounded_destination<ch_type, T>;
+			   !::fast_io::details::decay::
+				   basic_general_concat_single_pass_bounded_destination<ch_type, T>;
 	}
 #endif
 	return true;
@@ -2936,14 +3383,15 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 inline consteval bool basic_general_concat_compiler_constant_materialization_available() noexcept
 {
 	if constexpr (!::fast_io::details::decay::
-		basic_general_concat_compiler_constant_source_codegen_supported<
-			ch_type, T, Args...>())
+					  basic_general_concat_compiler_constant_source_codegen_supported<
+						  ch_type, T, Args...>())
 	{
 		return false;
 	}
 	else if constexpr (
 		!(::fast_io::compiler_constant_materialization_graph_proven_source_shape<
-			ch_type, Args> && ...))
+			  ch_type, Args> &&
+		  ...))
 	{
 		// A semantically complete but unclassified provider has no consumer deletion proof. Keep concat's value query,
 		// replacement type, and proxy writer structurally absent until the provider supplies the permanent graph proof.
@@ -2954,10 +3402,10 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 		return false;
 	}
 	else if constexpr (!::fast_io::details::decay::
-		basic_general_concat_compiler_constant_replacement_codegen_supported<
-			ch_type,
-			::fast_io::details::compiler_constant_materialized_t<
-				ch_type, Args>...>())
+						   basic_general_concat_compiler_constant_replacement_codegen_supported<
+							   ch_type,
+							   ::fast_io::details::compiler_constant_materialized_t<
+								   ch_type, Args>...>())
 	{
 		// A rejected code-generation proof must be decided before the value query; a true query may never fall back.
 		return false;
@@ -2975,8 +3423,8 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 						ch_type, Args>...>;
 		// Direct replacement is unavailable when either spelling would invoke a whole-run destination status owner.
 		if constexpr (!::fast_io::details::decay::
-			basic_general_concat_compiler_constant_status_safe_for_types<
-				line, ch_type, T, source_types, replacement_types>())
+						  basic_general_concat_compiler_constant_status_safe_for_types<
+							  line, ch_type, T, source_types, replacement_types>())
 		{
 			return false;
 		}
@@ -2997,28 +3445,28 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 		constexpr ::std::size_t retained_reserve_size{[]() consteval {
 			constexpr ::std::size_t maximum{
 				::fast_io::details::compiler_constant_materialization_max_bytes /
-					sizeof(ch_type)};
+				sizeof(ch_type)};
 			::std::size_t total{};
 			// The enclosing immediate proof owns evaluation.  A constexpr leaf
 			// also accepts its evolving accumulator on pre-DR20 Clang 13--15.
 			((total = [](::std::size_t current) constexpr {
-				using source_type = ::std::remove_cvref_t<Args>;
-				using replacement_type =
-					::fast_io::details::compiler_constant_materialized_t<
-						ch_type, Args>;
-				if constexpr (::std::same_as<source_type, replacement_type>)
-				{
-					constexpr ::std::size_t extent{print_reserve_size(
-						::fast_io::io_reserve_type<ch_type, replacement_type>)};
-					return current > maximum || extent > maximum - current
-						? SIZE_MAX
-						: current + extent;
-				}
-				else
-				{
-					return current;
-				}
-			}(total)),
+				 using source_type = ::std::remove_cvref_t<Args>;
+				 using replacement_type =
+					 ::fast_io::details::compiler_constant_materialized_t<
+						 ch_type, Args>;
+				 if constexpr (::std::same_as<source_type, replacement_type>)
+				 {
+					 constexpr ::std::size_t extent{print_reserve_size(
+						 ::fast_io::io_reserve_type<ch_type, replacement_type>)};
+					 return current > maximum || extent > maximum - current
+								? SIZE_MAX
+								: current + extent;
+				 }
+				 else
+				 {
+					 return current;
+				 }
+			 }(total)),
 			 ...);
 			return total;
 		}()};
@@ -3034,9 +3482,9 @@ inline consteval bool basic_general_concat_compiler_constant_materialization_ava
 			   (compact_reserve_plan ||
 				(exact_destination_plan && retained_reserve_size != SIZE_MAX)) &&
 			   (false || ... ||
-			!::std::same_as<
-				::std::remove_cvref_t<Args>,
-				::fast_io::details::compiler_constant_materialized_t<ch_type, Args>>);
+				!::std::same_as<
+					::std::remove_cvref_t<Args>,
+					::fast_io::details::compiler_constant_materialized_t<ch_type, Args>>);
 	}
 }
 
@@ -3055,9 +3503,9 @@ template <bool line, ::std::integral ch_type, typename T, typename Arg>
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void
-basic_general_concat_compiler_constant_decay_ref_impl_precise(
-	T &result, Arg &arg)
+	inline constexpr void
+	basic_general_concat_compiler_constant_decay_ref_impl_precise(
+		T &result, Arg &arg)
 {
 	using arg_type = ::std::remove_cvref_t<Arg>;
 	::std::size_t const payload_size{print_reserve_precise_size(
@@ -3124,8 +3572,8 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 // the complete candidate and grow text, so they deliberately remain unforced.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_compiler_constant_materialized(Args... args)
+	inline constexpr T
+	basic_general_concat_compiler_constant_materialized(Args... args)
 {
 	constexpr ::std::size_t reserve_size{
 		::fast_io::details::decay::
@@ -3143,7 +3591,8 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 	constexpr bool precise_compact_preferred{
 		sizeof...(Args) == 1u &&
 		(::fast_io::compiler_constant_precise_compact_preferred<
-			ch_type, Args> && ...)};
+			 ch_type, Args> &&
+		 ...)};
 	if constexpr (
 		precise_compact_preferred &&
 		::fast_io::buffer_strlike<ch_type, T>)
@@ -3153,7 +3602,7 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 		T result;
 		(::fast_io::details::decay::
 			 basic_general_concat_compiler_constant_decay_ref_impl_precise<
-			 line, ch_type, T>(result, args),
+				 line, ch_type, T>(result, args),
 		 ...);
 		return result;
 	}
@@ -3178,14 +3627,14 @@ basic_general_concat_compiler_constant_materialized(Args... args)
 		::fast_io::details::basic_concat_buffer<ch_type> buffer;
 		(::fast_io::details::decay::
 			 basic_general_concat_compiler_constant_decay_ref_impl_precise<
-			 line, ch_type>(buffer, args),
+				 line, ch_type>(buffer, args),
 		 ...);
 		return strlike_construct_define(
 			::fast_io::io_strlike_type<ch_type, T>, buffer.buffer_begin,
 			buffer.buffer_curr);
 	}
 	else if constexpr (compact_reserve_plan &&
-					 ::fast_io::buffer_strlike<ch_type, T>)
+					   ::fast_io::buffer_strlike<ch_type, T>)
 	{
 		// Keep the selected proxy run contiguous.  Re-entering the complete phase-1 dispatcher here is both unnecessary
 		// (the gate has already proved an all-reserve run) and can make a large caller outline the value-sensitive writer.
@@ -3292,8 +3741,8 @@ basic_general_concat_active_source_codegen_supported() noexcept
 	else
 	{
 		return !(false || ... ||
-			::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
-				ch_type, Args>);
+				 ::fast_io::compiler_constant_dynamic_precision_floating_source_shape<
+					 ch_type, Args>);
 	}
 #else
 	else
@@ -3322,14 +3771,15 @@ inline consteval bool
 basic_general_concat_normalized_compiler_constant_codegen_supported() noexcept
 {
 	if constexpr (!::fast_io::details::decay::
-					   basic_general_concat_active_source_codegen_supported<
-						   ch_type, Args...>())
+					  basic_general_concat_active_source_codegen_supported<
+						  ch_type, Args...>())
 	{
 		return false;
 	}
 	else if constexpr (
 		!(::fast_io::compiler_constant_materialization_graph_proven_source_shape<
-			ch_type, Args> && ...))
+			  ch_type, Args> &&
+		  ...))
 	{
 		// This normalized consumer may not infer deletion merely from semantic printability. Reject the whole active
 		// record before a replacement type or optimizer query is formed.
@@ -3337,7 +3787,8 @@ basic_general_concat_normalized_compiler_constant_codegen_supported() noexcept
 	}
 #if defined(__GNUC__) && !defined(__clang__) && __GNUC__ == 11
 	else if constexpr (!(::fast_io::compiler_constant_printable<
-		ch_type, Args> && ...))
+							 ch_type, Args> &&
+						 ...))
 	{
 		return true;
 	}
@@ -3346,10 +3797,10 @@ basic_general_concat_normalized_compiler_constant_codegen_supported() noexcept
 		// GCC 11 proves the flat public source gate below but perturbs the historical unknown continuation if the same
 		// query is repeated after decay. Keep this later consumer closed for that exact replacement.
 		return !(false || ... ||
-			::fast_io::compiler_constant_flat_integer_replacement<
-				ch_type,
-				::fast_io::details::compiler_constant_materialized_t<
-					ch_type, Args>>);
+				 ::fast_io::compiler_constant_flat_integer_replacement<
+					 ch_type,
+					 ::fast_io::details::compiler_constant_materialized_t<
+						 ch_type, Args>>);
 	}
 #elif defined(__GNUC__) && !defined(__clang__) && 12 <= __GNUC__ && __GNUC__ <= 13
 	else if constexpr (!(::fast_io::compiler_constant_printable<ch_type, Args> && ...))
@@ -3359,10 +3810,10 @@ basic_general_concat_normalized_compiler_constant_codegen_supported() noexcept
 	else
 	{
 		return !(false || ... ||
-			::fast_io::compiler_constant_precise_compact_preferred<
-				ch_type,
-				::fast_io::details::compiler_constant_materialized_t<
-					ch_type, Args>>);
+				 ::fast_io::compiler_constant_precise_compact_preferred<
+					 ch_type,
+					 ::fast_io::details::compiler_constant_materialized_t<
+						 ch_type, Args>>);
 	}
 #else
 	else
@@ -3384,8 +3835,8 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 // the original phase-1 concat body below.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_compiler_constant_dispatch(Args &...args)
+	inline constexpr T
+	basic_general_concat_compiler_constant_dispatch(Args &...args)
 {
 	if constexpr (
 		::fast_io::details::decay::
@@ -3401,9 +3852,10 @@ basic_general_concat_compiler_constant_dispatch(Args &...args)
 			return ::fast_io::details::decay::
 				basic_general_concat_compiler_constant_materialized<
 					line, ch_type, T>(
-						print_compiler_constant_materialize_gate_proven(
-							::fast_io::io_reserve_type<ch_type,
-								::std::remove_cvref_t<Args>>, args)...);
+					print_compiler_constant_materialize_gate_proven(
+						::fast_io::io_reserve_type<ch_type,
+												   ::std::remove_cvref_t<Args>>,
+						args)...);
 		}
 	}
 	return ::fast_io::details::decay::
@@ -3431,23 +3883,21 @@ using basic_general_concat_compiler_constant_source_replacement_t =
 		print_compiler_constant_pre_normalization_replacement_t<ch_type, T>;
 
 template <::std::integral ch_type, typename T>
-using basic_general_concat_compiler_constant_source_alias_t = decltype(
-	::fast_io::io_print_alias(::std::declval<
-		::fast_io::details::decay::
-			basic_general_concat_compiler_constant_source_replacement_t<
-				ch_type, T>>()));
+using basic_general_concat_compiler_constant_source_alias_t = decltype(::fast_io::io_print_alias(::std::declval<
+																								 ::fast_io::details::decay::
+																									 basic_general_concat_compiler_constant_source_replacement_t<
+																										 ch_type, T>>()));
 
 template <::std::integral ch_type, typename T>
-using basic_general_concat_compiler_constant_source_forward_t = decltype(
-	::fast_io::io_print_forward<ch_type>(::std::declval<
-		::fast_io::details::decay::
-			basic_general_concat_compiler_constant_source_alias_t<
-				ch_type, T>>()));
+using basic_general_concat_compiler_constant_source_forward_t = decltype(::fast_io::io_print_forward<ch_type>(::std::declval<
+																											  ::fast_io::details::decay::
+																												  basic_general_concat_compiler_constant_source_alias_t<
+																													  ch_type, T>>()));
 
 template <::std::integral ch_type, typename T>
 using basic_general_concat_compiler_constant_source_normalized_t =
 	::std::remove_cvref_t<::fast_io::details::decay::
-		basic_general_concat_compiler_constant_source_forward_t<ch_type, T>>;
+							  basic_general_concat_compiler_constant_source_forward_t<ch_type, T>>;
 
 /// @brief Models the normalized type seen by concat's historical public-source arm.
 /// @details Unlike print's named-lvalue bridge, concat preserves each public argument's forwarding category through
@@ -3455,15 +3905,14 @@ using basic_general_concat_compiler_constant_source_normalized_t =
 ///          named lvalue here could miss an rvalue-qualified whole-run status customization and let replacement change
 ///          observable output.
 template <::std::integral ch_type, typename T>
-using basic_general_concat_compiler_constant_historical_alias_t = decltype(
-	::fast_io::io_print_alias(::std::declval<T>()));
+using basic_general_concat_compiler_constant_historical_alias_t = decltype(::fast_io::io_print_alias(::std::declval<T>()));
 
 template <::std::integral ch_type, typename T>
 using basic_general_concat_compiler_constant_historical_normalized_t =
 	::std::remove_cvref_t<decltype(::fast_io::io_print_forward<ch_type>(
 		::std::declval<::fast_io::details::decay::
-			basic_general_concat_compiler_constant_historical_alias_t<
-				ch_type, T>>()))>;
+						   basic_general_concat_compiler_constant_historical_alias_t<
+							   ch_type, T>>()))>;
 
 /// @brief Rejects a compiler-constant replacement which could bypass a whole-run status owner selected by concat.
 /// @details Compiler-constant concat constructs its result directly, so it cannot preserve a destination-specific
@@ -3527,28 +3976,29 @@ basic_general_concat_compiler_constant_source_available_after_codegen_supported(
 	}
 	// Preserve any whole-run status customization before admitting the compiler-constant source replacement.
 	else if constexpr (!::fast_io::details::decay::
-		basic_general_concat_compiler_constant_source_status_safe<
-			line, ch_type, T, Args...>())
+						   basic_general_concat_compiler_constant_source_status_safe<
+							   line, ch_type, T, Args...>())
 	{
 		return false;
 	}
 	// A compiler-specific rejection belongs before the source query for the same reason as the normalized gate: after a
 	// true query, concat may not recover by invoking the native formatter.
 	else if constexpr (!::fast_io::details::decay::
-		basic_general_concat_compiler_constant_replacement_codegen_supported<
-			ch_type,
-			::fast_io::details::decay::
-				basic_general_concat_compiler_constant_source_normalized_t<
-					ch_type, Args>...>())
+						   basic_general_concat_compiler_constant_replacement_codegen_supported<
+							   ch_type,
+							   ::fast_io::details::decay::
+								   basic_general_concat_compiler_constant_source_normalized_t<
+									   ch_type, Args>...>())
 	{
 		return false;
 	}
 	// Every normalized replacement must expose one contiguous reserve spelling before direct construction is legal.
 	else if constexpr (!(::fast_io::reserve_printable<
-		ch_type,
-		::fast_io::details::decay::
-			basic_general_concat_compiler_constant_source_normalized_t<
-				ch_type, Args>> && ...))
+							 ch_type,
+							 ::fast_io::details::decay::
+								 basic_general_concat_compiler_constant_source_normalized_t<
+									 ch_type, Args>> &&
+						 ...))
 	{
 		return false;
 	}
@@ -3561,12 +4011,12 @@ basic_general_concat_compiler_constant_source_available_after_codegen_supported(
 				::fast_io::details::compiler_constant_materialization_max_bytes};
 			::std::size_t total{};
 			((total = total > maximum || sizeof(::fast_io::details::decay::
-						basic_general_concat_compiler_constant_source_normalized_t<
-							ch_type, Args>) > maximum - total
-					  ? SIZE_MAX
-					  : total + sizeof(::fast_io::details::decay::
-						basic_general_concat_compiler_constant_source_normalized_t<
-							ch_type, Args>)),
+													basic_general_concat_compiler_constant_source_normalized_t<
+														ch_type, Args>) > maximum - total
+						  ? SIZE_MAX
+						  : total + sizeof(::fast_io::details::decay::
+											   basic_general_concat_compiler_constant_source_normalized_t<
+												   ch_type, Args>)),
 			 ...);
 			return total;
 		}()};
@@ -3587,30 +4037,30 @@ basic_general_concat_compiler_constant_source_available_after_codegen_supported(
 		constexpr ::std::size_t retained_reserve_size{[]() consteval {
 			constexpr ::std::size_t maximum{
 				::fast_io::details::compiler_constant_materialization_max_bytes /
-					sizeof(ch_type)};
+				sizeof(ch_type)};
 			::std::size_t total{};
 			// The enclosing immediate proof owns evaluation.  A constexpr leaf
 			// also accepts its evolving accumulator on pre-DR20 Clang 13--15.
 			((total = [](::std::size_t current) constexpr {
-				if constexpr (!::fast_io::operations::decay::
-					print_compiler_constant_pre_normalization_candidate_v<
-						ch_type, Args>)
-				{
-					using normalized_type =
-						::fast_io::details::decay::
-							basic_general_concat_compiler_constant_source_normalized_t<
-								ch_type, Args>;
-					constexpr ::std::size_t extent{print_reserve_size(
-						::fast_io::io_reserve_type<ch_type, normalized_type>)};
-					return current > maximum || extent > maximum - current
-						? SIZE_MAX
-						: current + extent;
-				}
-				else
-				{
-					return current;
-				}
-			}(total)),
+				 if constexpr (!::fast_io::operations::decay::
+								   print_compiler_constant_pre_normalization_candidate_v<
+									   ch_type, Args>)
+				 {
+					 using normalized_type =
+						 ::fast_io::details::decay::
+							 basic_general_concat_compiler_constant_source_normalized_t<
+								 ch_type, Args>;
+					 constexpr ::std::size_t extent{print_reserve_size(
+						 ::fast_io::io_reserve_type<ch_type, normalized_type>)};
+					 return current > maximum || extent > maximum - current
+								? SIZE_MAX
+								: current + extent;
+				 }
+				 else
+				 {
+					 return current;
+				 }
+			 }(total)),
 			 ...);
 			return total;
 		}()};
@@ -3622,8 +4072,8 @@ basic_general_concat_compiler_constant_source_available_after_codegen_supported(
 						basic_general_concat_compiler_constant_source_normalized_t<
 							ch_type, Args>...>};
 		return proxy_bytes != SIZE_MAX && proxy_bytes <= maximum_bytes &&
-			(compact_reserve_plan ||
-			 (exact_destination_plan && retained_reserve_size != SIZE_MAX));
+			   (compact_reserve_plan ||
+				(exact_destination_plan && retained_reserve_size != SIZE_MAX));
 	}
 }
 
@@ -3636,8 +4086,8 @@ inline consteval bool
 basic_general_concat_compiler_constant_source_available() noexcept
 {
 	if constexpr (!::fast_io::details::decay::
-		basic_general_concat_compiler_constant_source_codegen_supported<
-			ch_type, T, Args...>())
+					  basic_general_concat_compiler_constant_source_codegen_supported<
+						  ch_type, T, Args...>())
 	{
 		return false;
 	}
@@ -3685,9 +4135,9 @@ template <bool line, ::std::integral ch_type, typename T,
 #if defined(__clang__) && 21 <= __clang_major__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_compiler_constant_compact_source_run(
-	NormalizedArgs... args)
+	inline constexpr T
+	basic_general_concat_compiler_constant_compact_source_run(
+		NormalizedArgs... args)
 {
 	constexpr ::std::size_t reserve_size{
 		::fast_io::details::decay::
@@ -3747,8 +4197,7 @@ basic_general_concat_compiler_constant_compact_source_run(
 		compact_reserve_plan &&
 		::fast_io::range_constructible_strlike<ch_type, T>)
 	{
-		ch_type buffer[
-			reserve_size_with_line == 0u ? 1u : reserve_size_with_line];
+		ch_type buffer[reserve_size_with_line == 0u ? 1u : reserve_size_with_line];
 		ch_type *end{buffer};
 		((end = print_reserve_define(
 			  io_reserve_type<ch_type, NormalizedArgs>, end, args)),
@@ -3781,8 +4230,8 @@ template <bool line, ::std::integral ch_type, typename T, typename... Args>
 // query is evaluated before it is called.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_compiler_constant_source_materialized(Args &&...args)
+	inline constexpr T
+	basic_general_concat_compiler_constant_source_materialized(Args &&...args)
 {
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 	return ::fast_io::details::decay::
@@ -3819,11 +4268,11 @@ struct basic_general_concat_normalized_phase1_continuation
 {
 	/// @brief Sizes and materializes the normalized leaf sequence.
 	template <typename... Args>
-	#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
-		(defined(__clang__) && 13 <= __clang_major__)
+#if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
+	(defined(__clang__) && 13 <= __clang_major__)
 	FAST_IO_GNU_ALWAYS_INLINE
-	#endif
-	inline constexpr T operator()(Args &&...args) const
+#endif
+		inline constexpr T operator()(Args &&...args) const
 	{
 		// Every argument is now a named object owned by an enclosing normalization/selection frame. The complete phase-1
 		// call is nested synchronously inside that frame, so borrowing preserves lifetime while avoiding a second copy.
@@ -3859,9 +4308,8 @@ template <bool line, ::std::integral ch_type, typename T, typename Branch>
 inline consteval bool
 basic_general_concat_single_condition_active_branch_available() noexcept
 {
-	using active_result = decltype(
-		::fast_io::details::decay::print_semantic_input_forward<ch_type>(
-			::std::declval<Branch>()));
+	using active_result = decltype(::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+		::std::declval<Branch>()));
 	using active_type = ::std::remove_cvref_t<active_result>;
 	if constexpr (
 		::fast_io::details::decay::
@@ -3871,40 +4319,40 @@ basic_general_concat_single_condition_active_branch_available() noexcept
 		return false;
 	}
 	else if constexpr (!::fast_io::details::decay::
-						basic_general_concat_active_source_codegen_supported<
-							ch_type, active_type>())
+						   basic_general_concat_active_source_codegen_supported<
+							   ch_type, active_type>())
 	{
 		return false;
 	}
 	else if constexpr (!::fast_io::operations::decay::
-							print_compiler_constant_pre_normalization_candidate_v<
-								ch_type, active_result>)
+						   print_compiler_constant_pre_normalization_candidate_v<
+							   ch_type, active_result>)
 	{
 		return false;
 	}
 	else
 	{
-			using replacement_type =
-				::fast_io::details::compiler_constant_materialized_t<
-					ch_type, active_type>;
-			constexpr bool codegen_supported{
-				::fast_io::details::decay::
-					basic_general_concat_compiler_constant_replacement_codegen_supported<
-						ch_type, replacement_type>()};
-			if constexpr (!codegen_supported)
-			{
-				// A rejected replacement still benefits from this one-leaf condition selector. It enters only the historical
-				// phase-1 continuation below, so no query, proxy, or replacement-status proof is required or evaluated.
-				return true;
-			}
-			else
-			{
-				return ::fast_io::compiler_constant_query_inline_safe<
-						   ch_type, active_type> &&
-					   ::fast_io::details::decay::
-						   basic_general_concat_compiler_constant_materialization_available<
-							   line, ch_type, T, active_type>();
-			}
+		using replacement_type =
+			::fast_io::details::compiler_constant_materialized_t<
+				ch_type, active_type>;
+		constexpr bool codegen_supported{
+			::fast_io::details::decay::
+				basic_general_concat_compiler_constant_replacement_codegen_supported<
+					ch_type, replacement_type>()};
+		if constexpr (!codegen_supported)
+		{
+			// A rejected replacement still benefits from this one-leaf condition selector. It enters only the historical
+			// phase-1 continuation below, so no query, proxy, or replacement-status proof is required or evaluated.
+			return true;
+		}
+		else
+		{
+			return ::fast_io::compiler_constant_query_inline_safe<
+					   ch_type, active_type> &&
+				   ::fast_io::details::decay::
+					   basic_general_concat_compiler_constant_materialization_available<
+						   line, ch_type, T, active_type>();
+		}
 	}
 }
 
@@ -3923,27 +4371,23 @@ basic_general_concat_single_condition_active_record_available_one() noexcept
 	}
 	else
 	{
-		using normalized_result = decltype(
-			::fast_io::details::decay::print_semantic_input_forward<ch_type>(
-				::std::declval<Source>()));
+		using normalized_result = decltype(::fast_io::details::decay::print_semantic_input_forward<ch_type>(
+			::std::declval<Source>()));
 		using normalized_expression = ::std::add_lvalue_reference_t<
 			::std::remove_reference_t<normalized_result>>;
 		if constexpr (!::fast_io::details::decay::
-					   print_semantic_top_level_condition_v<normalized_expression>)
+						  print_semantic_top_level_condition_v<normalized_expression>)
 		{
 			return false;
 		}
 		else
 		{
-			using node_reference = decltype(
-				::fast_io::details::decay::print_semantic_node_ref(
-					::std::declval<normalized_expression>()));
+			using node_reference = decltype(::fast_io::details::decay::print_semantic_node_ref(
+				::std::declval<normalized_expression>()));
 			using named_node_reference = ::std::add_lvalue_reference_t<
 				::std::remove_reference_t<node_reference>>;
-			using first_arm_reference = decltype(
-				(::std::declval<named_node_reference>().t1));
-			using second_arm_reference = decltype(
-				(::std::declval<named_node_reference>().t2));
+			using first_arm_reference = decltype((::std::declval<named_node_reference>().t1));
+			using second_arm_reference = decltype((::std::declval<named_node_reference>().t2));
 			return ::fast_io::details::decay::
 					   basic_general_concat_single_condition_active_branch_available<
 						   line, ch_type, T, first_arm_reference>() &&
@@ -3982,8 +4426,8 @@ template <bool line, ::std::integral ch_type, typename T, typename Branch>
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_single_condition_active_branch(Branch &&branch)
+	inline constexpr T
+	basic_general_concat_single_condition_active_branch(Branch &&branch)
 {
 	decltype(auto) active{
 		::fast_io::details::decay::print_semantic_input_forward<ch_type>(
@@ -4002,9 +4446,9 @@ basic_general_concat_single_condition_active_branch(Branch &&branch)
 			return ::fast_io::details::decay::
 				basic_general_concat_compiler_constant_materialized<
 					line, ch_type, T>(
-						::fast_io::operations::decay::
-							print_compiler_constant_active_record_materialize_one<
-								ch_type>(active));
+					::fast_io::operations::decay::
+						print_compiler_constant_active_record_materialize_one<
+							ch_type>(active));
 		}
 	}
 	return ::fast_io::details::decay::
@@ -4022,8 +4466,8 @@ template <bool line, ::std::integral ch_type, typename T, typename Source>
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_single_condition_active_record(Source &&source)
+	inline constexpr T
+	basic_general_concat_single_condition_active_record(Source &&source)
 {
 	static_assert(
 		::fast_io::details::decay::
@@ -4060,11 +4504,11 @@ template <bool line, ::std::integral char_type, typename T, typename... Args>
 		strlike<char_type, T> &&
 		::fast_io::details::decay::
 			basic_general_concat_single_condition_active_record_available<
-				line, char_type, T, Args &&...>())
+				line, char_type, T, Args && ...>())
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T basic_general_concat(Args &&...args)
+	inline constexpr T basic_general_concat(Args &&...args)
 {
 	return (::fast_io::details::decay::
 				basic_general_concat_single_condition_active_record<
@@ -4077,7 +4521,7 @@ template <bool line, ::std::integral char_type, typename T, typename... Args>
 		strlike<char_type, T> &&
 		!::fast_io::details::decay::
 			basic_general_concat_single_condition_active_record_available<
-				line, char_type, T, Args &&...>())
+				line, char_type, T, Args && ...>())
 inline constexpr T basic_general_concat(Args &&...args)
 {
 	// Normalization order is part of the allocation proof: alias/forward first, expand packs and remove nulls, select
@@ -4215,8 +4659,8 @@ template <bool line, ::std::integral char_type, typename T, typename... Args>
 	(defined(__clang__) && 13 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T
-basic_general_concat_compiler_constant_checked_entry(Args &&...args)
+	inline constexpr T
+	basic_general_concat_compiler_constant_checked_entry(Args &&...args)
 {
 	if constexpr (
 		::fast_io::basic_general_concat_checked_available<
@@ -4252,10 +4696,11 @@ basic_general_concat_compiler_constant_checked_entry(Args &&...args)
 			if constexpr (
 				sizeof...(Args) == 1u &&
 				(::fast_io::compiler_constant_flat_integer_replacement<
-					char_type,
-					::fast_io::details::decay::
-						basic_general_concat_compiler_constant_source_normalized_t<
-							char_type, Args &&>> && ...))
+					 char_type,
+					 ::fast_io::details::decay::
+						 basic_general_concat_compiler_constant_source_normalized_t<
+							 char_type, Args &&>> &&
+				 ...))
 			{
 				// GCC 11 otherwise schedules the unknown continuation through a spill after admitting this new
 				// exact-integer arm. Paired `%u` roots prove the cold edge restores its historical instructions while

@@ -695,12 +695,12 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 			             shortest(n) = shortest(high) || fixed_width_8(low)
 
 			The second precondition proves high >= 10; the quotient/remainder
-			identity proves the character sequence and boundary.  On Apple M4,
+			identity proves the character sequence and boundary. On Apple M4,
 			Clang 23 is the first verified frontend where marking the isolated
 			nine-digit arm unlikely keeps the 10--20-digit fallthrough as the layout
 			priority: the emitted converter contracts from 304 to 275 instructions,
 			paired nine-digit timing remains neutral, and every measured 10--20-digit
-			width is neutral or faster.  Later Clang versions inherit that narrowly
+			width is neutral or faster. Later Clang versions inherit that narrowly
 			targeted layout contract; non-Apple AArch64, earlier Clang, and other
 			frontends retain the unannotated branch because no Cortex/Neoverse
 			performance claim is inferred from the M4 result.

@@ -21,21 +21,24 @@ namespace details
 template <typename optstmtype, typename instmtype, typename T>
 inline constexpr void transmit_bytes_until_eof_generic_main_impl(optstmtype &optstm, instmtype &instm, T &resultint)
 {
-	// Generic EOF transfer uses ordinary byte writes so the payload remains
-	// opaque even when the input stream has a wider character type.
-	using input_char_type = typename instmtype::input_char_type;
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
-		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>);
-	input_char_type *buffer_start{newptr.ptr};
-	input_char_type *buffer_end{newptr.ptr + newptr.size};
-	for (input_char_type *iter;
-		 (iter = ::fast_io::operations::decay::read_some_decay(instm, buffer_start, buffer_end)) != buffer_start;)
+	/*
+	A byte transmit operation is closed over the byte CPO domain on both sides.
+	Using input_char_type here would silently require a typed read, reject valid
+	byte-only observers, and round progress to sizeof(input_char_type).  A byte
+	buffer plus read_some_bytes/write_all_bytes instead proves that every returned
+	cursor denotes the exact opaque byte interval [buffer_start, iter), including
+	odd lengths for wide-character observers.
+	*/
+	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+		::fast_io::details::transmit_buffer_size_cache<1>);
+	::std::byte *buffer_start{newptr.ptr};
+	::std::byte *buffer_end{newptr.ptr + newptr.size};
+	for (::std::byte *iter;
+		 (iter = ::fast_io::operations::decay::read_some_bytes_decay(instm, buffer_start, buffer_end)) != buffer_start;)
 	{
-		// Forward each nonempty input block and accumulate its byte extent.
-		auto bufferstartpbyte{reinterpret_cast<::std::byte const *>(buffer_start)};
-		auto iterpbyte{reinterpret_cast<::std::byte const *>(iter)};
-		::std::size_t off{static_cast<::std::size_t>(iterpbyte - bufferstartpbyte)};
-		::fast_io::operations::decay::write_all_bytes_decay(optstm, bufferstartpbyte, iterpbyte);
+		// Pointer subtraction is now already expressed in the operation's byte unit.
+		::std::size_t off{static_cast<::std::size_t>(iter - buffer_start)};
+		::fast_io::operations::decay::write_all_bytes_decay(optstm, buffer_start, iter);
 		transmit_integer_add_define(resultint, off);
 	}
 }

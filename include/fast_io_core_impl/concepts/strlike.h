@@ -346,6 +346,23 @@ concept runtime_deferred_obuffer_commit_safe_strlike =
 		} -> ::std::same_as<::std::true_type>;
 	};
 
+/// @brief Certifies a fresh result for one exact reserve followed by one runtime cursor publication.
+/// @details Runtime put-area shape and deferred-commit safety do not prove that a default result is logically empty or
+///          that writing its complete requested range is equivalent to fresh concat construction. This explicit marker
+///          supplies those destination semantics: default construction establishes `begin == curr`, reserving the exact
+///          final extent preserves that empty prefix and exposes a writable range of at least that extent, and one final
+///          runtime cursor publication makes exactly the written prefix observable. Source relocation, exception, and
+///          exact-writer proofs remain independent requirements of the consuming concat strategy.
+/// @fn      strlike_concat_fresh_runtime_exact_direct_safe
+/// @return  std::true_type
+template <typename char_type, typename T>
+concept concat_fresh_runtime_exact_direct_strlike =
+	runtime_deferred_obuffer_commit_safe_strlike<char_type, T> && requires {
+		{
+			strlike_concat_fresh_runtime_exact_direct_safe(io_strlike_type<char_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Proves that exact resize creates writable characters without first initializing the overwritten range.
 /// @details `precise_resize_writable_strlike` is a lifetime/capability contract and intentionally permits portable
 ///          `std::basic_string::resize`, which value-initializes every new character. This refinement is only a cost

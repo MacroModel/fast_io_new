@@ -709,6 +709,23 @@ template <::std::integral char_type, typename traits_type, typename allocator_ty
 	return {};
 }
 
+/// @brief Certifies direct exact construction in the audited default standard-string runtime put area.
+/// @details A default standard string is empty; `reserve(n)` preserves that empty logical value while the implementation-
+///          specific adapter exposes at least `n` writable spare characters. Publishing one cursor then establishes the
+///          complete result and its terminator without an intermediate value-initialization pass. Default traits and the
+///          default allocator exclude user-associated hooks and allocation models; the surrounding availability guard
+///          keeps this semantic promise locked to the standard-library layouts already audited by the string hack.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr ::std::true_type strlike_concat_fresh_runtime_exact_direct_safe(
+	io_strlike_type_t<char_type,
+		::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 inline constexpr void
 strlike_append(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,

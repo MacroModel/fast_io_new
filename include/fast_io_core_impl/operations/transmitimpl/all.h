@@ -23,17 +23,43 @@ template <typename optstmtype, typename instmtype>
 inline constexpr void transmit_all_main_impl(optstmtype &optstm, instmtype &instm,
 											 ::fast_io::uintfpos_t totransmit)
 {
-	// Generic transfer intentionally stages through a fixed-size local buffer;
+	if (totransmit == 0u)
+	{
+		/*
+		Zero payload is the identity element of exact transfer.  This terminal
+		shortcut deliberately follows observer normalization, mutex recursion,
+		and the public output guard: those outer protocols still execute, while
+		the zero-count postcondition proves that no staging allocation or primitive
+		read/write is observable here.
+		*/
+		return;
+	}
+	// Generic transfer intentionally stages through a bounded local buffer;
 	// provider-specific zero-copy strategies belong to status transmit CPOs.
 	using input_char_type = typename instmtype::input_char_type;
 	using output_char_type = typename optstmtype::output_char_type;
-	constexpr ::std::size_t bfsz{::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(bfsz);
+	constexpr ::std::size_t default_buffer_elements{
+		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
+	::std::size_t buffer_elements{default_buffer_elements};
+	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
+	{
+		/*
+		Both operands denote elements. sizeof(input_char_type) participates only
+		in translating the byte-budget policy to an element capacity; it never
+		scales the caller's element count. The comparison occurs in uintfpos_t,
+		and this branch proves the request is below a size_t constant before the
+		narrowing conversion. Consequently the allocation is exactly
+		min(default_buffer_elements, remaining_request) elements.
+		*/
+		buffer_elements = static_cast<::std::size_t>(totransmit);
+	}
+	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
+		buffer_elements);
 	input_char_type *buffer_start{newptr.ptr};
 	while (totransmit)
 	{
 		// Move one bounded block while preserving the exact remaining count.
-		::std::size_t this_round{bfsz};
+		::std::size_t this_round{buffer_elements};
 		if (totransmit < this_round)
 		{
 			// Limit the final iteration to the exact remaining element count.

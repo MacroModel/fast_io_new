@@ -20,17 +20,40 @@ namespace details
 /** @brief Copies an exact byte count through a bounded temporary buffer. */
 template <typename optstmtype, typename instmtype>
 inline constexpr void transmit_bytes_all_main_impl(optstmtype &optstm, instmtype &instm,
-												   ::fast_io::uintfpos_t totransmit)
+													   ::fast_io::uintfpos_t totransmit)
 {
-	// Generic byte transfer intentionally stages through a fixed-size local
+	if (totransmit == 0u)
+	{
+		/*
+		Zero bytes form the identity element of exact byte transfer.  The shortcut
+		is terminal rather than public so observer normalization, mutex recursion,
+		and output finalization retain their contracts; only the otherwise
+		unobservable staging allocation and primitive I/O are eliminated.
+		*/
+		return;
+	}
+	// Generic byte transfer intentionally stages through a bounded local
 	// buffer; provider-specific zero-copy belongs to status transmit CPOs.
-	constexpr ::std::size_t bfsz{::fast_io::details::transmit_buffer_size_cache<1>};
-	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(bfsz);
+	constexpr ::std::size_t default_buffer_bytes{
+		::fast_io::details::transmit_buffer_size_cache<1>};
+	::std::size_t buffer_bytes{default_buffer_bytes};
+	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
+	{
+		/*
+		Both values are byte counts: this operation never derives capacity from
+		the advertised stream character type. The uintfpos_t comparison precedes
+		the narrowing conversion and proves it safe, making the allocation exactly
+		min(default_buffer_bytes, remaining_request) bytes.
+		*/
+		buffer_bytes = static_cast<::std::size_t>(totransmit);
+	}
+	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+		buffer_bytes);
 	::std::byte *buffer_start{newptr.ptr};
 	while (totransmit)
 	{
 		// Move one bounded byte block while preserving the exact remaining count.
-		::std::size_t this_round{bfsz};
+		::std::size_t this_round{buffer_bytes};
 		if (totransmit < this_round)
 		{
 			// Limit the final iteration to the exact remaining byte count.

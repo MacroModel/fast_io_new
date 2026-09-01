@@ -111,11 +111,11 @@ namespace details
 {
 
 /// @brief Sends default-output source expressions through the shared pre-normalization constant gate.
-/// @details `print_after_io_print_forward` is the compatibility boundary for callers which already own normalized
-///          values. The public default-output front door still has the original source expressions and must not erase
-///          compiler-constant evidence before core print has made its optional strategy decision. Materialization CPOs
-///          admitted here are pure by the stronger source marker; a C stdout mutex is still acquired by the historical
-///          dispatcher after that local value transformation, and an unlocked status-print owner disables the strategy.
+/// @details `print_after_io_print_forward` is the sole owner for values already normalized by its caller. The public
+///          default-output front door still has the original source expressions and must not erase compiler-constant
+///          evidence before core print has made its optional strategy decision. Materialization CPOs admitted here are
+///          pure by the stronger source marker; a C stdout mutex is still acquired by the historical dispatcher after
+///          that local value transformation, and an unlocked status-print owner disables the strategy.
 template <bool line, typename... Args>
 // Tested GCC 13-16 do not inline this bridge at -O3 even when the public facade is
 // inlined. Keeping it outlined loses __builtin_constant_p evidence and turns
@@ -144,10 +144,14 @@ template <bool line, typename... Args>
 inline constexpr void print_after_io_print_forward(Args... args)
 {
 #if __has_include(<stdio.h>)
-	::fast_io::operations::decay::print_freestanding_decay<line>(c_stdout(), args...);
+	auto output{c_stdout()};
 #else
-	::fast_io::operations::decay::print_freestanding_decay<line>(out(), args...);
+	auto output{out()};
 #endif
+	// `args...` are the normalized values owned by this compatibility frame. Re-entering the by-value decay shim would
+	// copy the complete pack and reject a valid move-only proxy. Naming the equally owned sink and borrowing both sides
+	// is exactly the core print invariant: every object outlives this synchronous stable-reference dispatch.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(output, args...);
 }
 
 template <bool line, typename... Args>
@@ -157,10 +161,13 @@ template <bool line, typename... Args>
 inline constexpr void perr_after_io_print_forward(Args... args)
 {
 #if defined(__AVR__)
-	::fast_io::operations::decay::print_freestanding_decay<line>(c_stderr(), args...);
+	auto output{c_stderr()};
 #else
-	::fast_io::operations::decay::print_freestanding_decay<line>(err(), args...);
+	auto output{err()};
 #endif
+	// This cold frame owns the normalized diagnostic pack. A second owning boundary has no lifetime role and would add
+	// one whole-pack copy, so the named native-error observer and its arguments enter the reference dispatcher directly.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(output, args...);
 }
 
 /// @brief Sends native-error source expressions through the constant gate while retaining the cold unknown path.
@@ -305,10 +312,13 @@ template <bool line, typename... Args>
 inline constexpr void debug_print_after_io_print_forward(Args... args)
 {
 #if defined(__AVR__)
-	::fast_io::operations::decay::print_freestanding_decay<line>(c_stdout(), args...);
+	auto output{c_stdout()};
 #else
-	::fast_io::operations::decay::print_freestanding_decay<line>(out(), args...);
+	auto output{out()};
 #endif
+	// Debug normalization has already produced and transferred ownership of every proxy into this cold frame. Borrowing
+	// the named sink and pack preserves that ownership through the complete call without reopening a copy boundary.
+	::fast_io::operations::decay::print_freestanding_decay_impl<line>(output, args...);
 }
 
 /// @brief Attempts only a cold-level-proved compiler-constant arm for the native debug sink.

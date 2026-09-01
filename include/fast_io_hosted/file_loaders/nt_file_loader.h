@@ -107,7 +107,15 @@ inline ::std::size_t nt_file_loader_get_page_size()
 	return 4096u;
 }
 
+// The NT current-process pseudo-handle is a runtime bit-pattern, not a pre-C++23 constant expression: converting its
+// signed sentinel to a pointer is rejected while defining a constexpr function under the older constexpr rules.
+// P2448R2 deliberately relaxes that definition rule, advertised by __cpp_constexpr >= 202207L, so retain constexpr
+// exactly where the language permits it without weakening the C++20 Windows build.
+#if defined(__cpp_constexpr) && __cpp_constexpr >= 202207L
 inline constexpr void *nt_file_loader_current_process() noexcept
+#else
+inline void *nt_file_loader_current_process() noexcept
+#endif
 {
 	return reinterpret_cast<void *>(static_cast<::std::ptrdiff_t>(-1));
 }

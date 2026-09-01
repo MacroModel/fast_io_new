@@ -124,7 +124,10 @@ inline constexpr ::std::size_t compute_default_buffer_size() noexcept
 	{
 		constexpr ::std::size_t buffersize{
 #ifdef FAST_IO_BUFFER_SIZE
-			(FAST_IO_BUFFER_SIZE < sizeof(char_type)) ? FAST_IO_BUFFER_SIZE : sizeof(char_type)
+			// `FAST_IO_BUFFER_SIZE` is a byte budget, not an already-converted element count.  Preserve the complete
+			// budget here and divide exactly once below; taking its minimum with `sizeof(char_type)` collapsed every
+			// ordinary configured buffer to one element and could otherwise make a too-small budget produce zero.
+			FAST_IO_BUFFER_SIZE
 #elif SIZE_MAX <= UINT_LEAST16_MAX
 			128
 #elif SIZE_MAX <= UINT_LEAST32_MAX
@@ -133,6 +136,7 @@ inline constexpr ::std::size_t compute_default_buffer_size() noexcept
 			131072
 #endif
 		};
+		static_assert(sizeof(char_type) <= buffersize);
 		return buffersize / sizeof(char_type);
 	}
 }

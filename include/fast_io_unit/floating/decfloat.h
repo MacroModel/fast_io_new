@@ -5467,6 +5467,66 @@ scan_context_eof_rewind_size(io_reserve_type_t<char_type,
 	return 0u;
 }
 
+/*
+Range theorem for the ordinary decimal context transition. Let [B,E] be the
+closed cursor range supplied to scan_context_define and let S be any
+protocol-valid state. In the normal numeric path, whitespace and digit scans
+return a cursor in [B,E], every direct increment is guarded by cursor != E,
+and recursive phase transitions receive that cursor unchanged. Consequently,
+normal success, invalid, overflow, and partial results return either the
+current cursor or E.
+
+The special-prefix helper returns B, but its partial result is internal and
+processing continues; only allocation failure publishes B, with overflow.
+scan_floating_context_append likewise returns only B or E. The decimal
+contiguous sub-parser's lexical range theorem places its iterator in the
+special buffer's closed range with that buffer's provenance. Consequently,
+scan_floating_context_map_iter may subtract it from the buffer base and is the
+sole conversion back to the caller's chunk: it clamps an iterator in the old
+buffered prefix to B, an offset beyond this chunk to E, and otherwise returns B
+plus an offset no larger than E-B. Thus Inf/NaN success, invalid payloads,
+truncation, and allocation failure also preserve the theorem.
+
+A partial normal transition reaches E; a partial special transition returns E
+(including the empty span, where B == E). Therefore this certificate neither
+hides a nonempty no-progress transition nor weakens the dispatcher's separate
+partial/no-progress checks. EOF does not return an iterator. Dynamic precision
+changes only final numeric assignment and shares the same lexical state
+machine, so the proof applies identically to the precision CPO. Formally, for
+both overloads below and every parse code, the returned iterator R has B's
+array provenance and satisfies 0 <= R-B <= E-B.
+
+This ADL proof is intentionally restricted to these decimal scalar protocols.
+It establishes nothing for hexadecimal, custom, transcoding, or string
+scanners, even when those scanners happen to use a related representation.
+*/
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating !=
+			 ::fast_io::manipulators::floating_format::hexfloat)
+inline constexpr ::std::true_type scan_context_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral char_type,
+		  ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating !=
+			 ::fast_io::manipulators::floating_format::hexfloat)
+inline constexpr ::std::true_type scan_context_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::
+			scalar_manip_precision_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type,
 		  ::fast_io::manipulators::scalar_flags flags,
 		  details::scan_decfloat_supported_floating_point T>

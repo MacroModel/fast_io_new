@@ -19,18 +19,41 @@ namespace details
 /** @brief Copies up to a requested byte count and reports actual progress. */
 template <typename optstmtype, typename instmtype>
 inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype &optstm, instmtype &instm,
-																	 ::fast_io::uintfpos_t needtransmit)
+																		 ::fast_io::uintfpos_t needtransmit)
 {
+	if (needtransmit == 0u)
+	{
+		/*
+		The closed interval [0, 0] has the unique progress result zero.  Placing
+		this proof at the terminal layer retains outer reference, lock, and finish
+		protocols while removing the default 128 KiB staging allocation and all
+		primitive byte I/O from the identity case.
+		*/
+		return 0u;
+	}
 	// Generic partial transfer stages through one bounded local byte buffer and
 	// reports only bytes that have also been committed to the output.
-	constexpr ::std::size_t bfsz{::fast_io::details::transmit_buffer_size_cache<1>};
-	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(bfsz);
+	constexpr ::std::size_t default_buffer_bytes{
+		::fast_io::details::transmit_buffer_size_cache<1>};
+	::std::size_t buffer_bytes{default_buffer_bytes};
+	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
+	{
+		/*
+		The partial bound and the staging capacity are both bytes, independent
+		of input_char_type. The comparison is performed before narrowing, and its
+		true branch proves the request fits size_t. The resulting allocation is
+		therefore min(default_buffer_bytes, remaining_request) bytes.
+		*/
+		buffer_bytes = static_cast<::std::size_t>(needtransmit);
+	}
+	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+		buffer_bytes);
 	::std::byte *buffer_start{newptr.ptr};
 	::fast_io::uintfpos_t totransmit{needtransmit};
 	while (totransmit)
 	{
 		// Attempt one bounded byte block and stop on the first short EOF result.
-		::std::size_t this_round{bfsz};
+		::std::size_t this_round{buffer_bytes};
 		if (totransmit < this_round)
 		{
 			// Bound the current read by the caller's remaining byte request.

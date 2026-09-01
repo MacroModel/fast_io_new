@@ -55,11 +55,17 @@ concept transmit_integer_wrapper = requires(T t, ::std::size_t off, ::fast_io::u
 	transmit_integer_assign_from_uintfpos_define(t, uoff);
 };
 
+/// @brief Converts transmit's configured byte budget into a nonzero endpoint-element count.
+/// @details `sz` is the size of one typed endpoint element (or one for byte transmit).  The configured budget must hold
+///          at least one complete element; the former reversed comparison rejected every ordinary budget larger than
+///          `sz` and admitted configurations whose integer division produced zero elements.  This relation matches the
+///          generic buffer and transcoder policies: validate bytes first, then perform exactly one unit conversion.
 template <::std::size_t sz>
 inline constexpr ::std::size_t calculate_transmit_buffer_size() noexcept
 {
+	static_assert(sz != 0u);
 #ifdef FAST_IO_BUFFER_SIZE
-	static_assert(sz >= FAST_IO_BUFFER_SIZE);
+	static_assert(sz <= FAST_IO_BUFFER_SIZE);
 	static_assert(FAST_IO_BUFFER_SIZE < SIZE_MAX);
 	return FAST_IO_BUFFER_SIZE / sz;
 #else

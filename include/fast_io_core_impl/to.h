@@ -298,6 +298,15 @@ inline constexpr void inplace_to_decay_context_finish(state &s, T &t)
 		code == ::fast_io::parse_code::partial ? ::fast_io::parse_code::invalid : code);
 }
 
+/// @brief Borrows the normalized source pack throughout every recursive `to` strategy.
+/// @details The inplace wrapper or value-returning `basic_to_decay` is the sole ownership boundary for a given call;
+///          its by-value pack keeps prvalue aliases alive for the complete conversion. A recursive suffix walker
+///          therefore has neither ownership nor forwarding work
+///          left to perform.  Passing the named proxies by value copied a suffix again at every recursion depth,
+///          producing theta(N^2) constructions and rejecting a valid move-only alias after admission.  References
+///          preserve the original left-to-right CPO observations, make the execution expression match the concepts'
+///          named-lvalue model, and reduce the recursive work to theta(N) without extending any lifetime.
+
 template <::std::integral char_type, typename state, typename T, typename Arg1, typename... Args>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
@@ -315,7 +324,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 ///          least output required by the context protocol; it reuses one dynamic buffer and stops immediately on `ok`.
 inline constexpr void
 inplace_to_decay_context_impl(basic_dynamic_output_buffer_ref<basic_dynamic_output_buffer<char_type>> buffer, state &s,
-							  T &t, Arg1 arg, Args... args)
+							  T &t, Arg1 &arg, Args &...args)
 {
 	// Keep this call single-argument. Combining `arg, args...` would erase the context scanner's early-completion and
 	// bounded-fragment properties even though it can look faster as an isolated print operation.
@@ -347,7 +356,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void inplace_to_decay_buffer_scatter_context_impl(state &s, T &t, Arg1 arg, Args... args)
+inline constexpr void inplace_to_decay_buffer_scatter_context_impl(state &s, T &t, Arg1 &arg, Args &...args)
 {
 	basic_io_scatter_t<char_type> scatter{print_scatter_define(io_reserve_type<char_type, Arg1>, arg)};
 	char_type const *buffer_begin{scatter.base};
@@ -373,7 +382,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void inplace_to_decay_buffer_context_impl(char_type *buffer, state &s, T &t, Arg1 arg, Args... args)
+inline constexpr void inplace_to_decay_buffer_context_impl(char_type *buffer, state &s, T &t, Arg1 &arg, Args &...args)
 {
 	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg1> &&
 				  ((::fast_io::details::to_named_scatter_printable_v<char_type, Args> && ...)))
@@ -425,26 +434,143 @@ inline consteval ::std::size_t to_small_stack_capacity() noexcept
 	return configured_size < preferred_size ? configured_size : preferred_size;
 }
 
+/// @brief Proves that one bounded-context fragment can consume the operation-local stack scratch.
+/// @details A retained scatter never writes into scratch. A static reserve writer counts only when its exact type-level
+///          bound fits the nonzero operation cap; otherwise a mixed pack must not acquire an array which that writer and
+///          every unhinted dynamic suffix are unable to use. A dynamic writer needs either the non-fatal bounded protocol
+///          or a nonzero producer-authored stack preference. This predicate controls storage existence only; the
+///          per-object size test below remains the capacity proof.
+template <::std::integral char_type, typename T>
+inline constexpr bool to_bounded_fragment_stack_scratch_candidate_v = []() consteval {
+	constexpr ::std::size_t operation_capacity{
+		::fast_io::details::to_small_stack_capacity<char_type>()};
+	if constexpr (operation_capacity == 0u)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::reserve_printable<char_type, T>)
+	{
+		return print_reserve_size(::fast_io::io_reserve_type<
+			char_type, ::std::remove_cvref_t<T>>) <= operation_capacity;
+	}
+	else if constexpr (::fast_io::single_pass_bounded_materialization_source<char_type, T>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, T>)
+	{
+		return print_reserve_static_stack_size(
+				   ::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>) != 0u;
+	}
+	else
+	{
+		return false;
+	}
+}();
+
+/// @brief Replaces insufficient reusable staging while preserving single ownership.
+/// @pre `required_capacity` is in `[1,SIZE_MAX/sizeof(char_type)]`; the current owner is canonical--null, or non-null
+///      with capacity in that same interval--and is empty or too small for the request.
+/// @details The first allocation is at least `initial_capacity`; every later growth is
+///          `max(required_capacity,2*C)`, with saturation at the largest character count representable by the allocator.
+///          The replacement is acquired before ownership fields are exchanged, so its destructor releases the old block
+///          only after the new block is owned. No bytes are copied: the context scanner has synchronously consumed the
+///          preceding fragment before growth is permitted. This cold leaf is kept out of line because the pack walker
+///          has one hot capacity check per reached source; cloning allocation, saturation, and ownership exchange at
+///          every depth increases text without accelerating reuse.
+template <::std::size_t initial_capacity, ::std::integral char_type>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr char_type *inplace_to_reusable_heap_buffer_grow(
+	::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	::std::size_t required_capacity) noexcept
+{
+	constexpr ::std::size_t maximum_capacity{SIZE_MAX / sizeof(char_type)};
+	static_assert(initial_capacity <= maximum_capacity);
+	::std::size_t replacement_capacity;
+	if (heap_buffer.ptr == nullptr)
+	{
+		constexpr ::std::size_t initial_nonzero_capacity{initial_capacity == 0u ? 1u : initial_capacity};
+		replacement_capacity = required_capacity < initial_nonzero_capacity
+			? initial_nonzero_capacity
+			: required_capacity;
+	}
+	else
+	{
+		// Canonical ownership gives `C <= M`, so `M-C` is defined. If `C > M-C`, mathematical `2*C` exceeds
+		// `M` and must saturate; otherwise `C+C <= M`, proving that the addition cannot wrap.
+		::std::size_t const doubled_capacity{heap_buffer.size > maximum_capacity - heap_buffer.size
+			? maximum_capacity
+			: heap_buffer.size + heap_buffer.size};
+		replacement_capacity = required_capacity < doubled_capacity ? doubled_capacity : required_capacity;
+	}
+
+	::fast_io::details::local_operator_new_array_ptr<char_type> replacement(replacement_capacity);
+	char_type *const previous_ptr{heap_buffer.ptr};
+	::std::size_t const previous_size{heap_buffer.size};
+	heap_buffer.ptr = replacement.ptr;
+	heap_buffer.size = replacement.size;
+	replacement.ptr = previous_ptr;
+	replacement.size = previous_size;
+	return heap_buffer.ptr;
+}
+
+/// @brief Returns reusable heap staging whose capacity covers the current fragment bound.
+/// @pre The owner is canonical: `(ptr == nullptr && size == 0) || (ptr != nullptr && size >= 1)`.
+/// @details Let `C` be `heap_buffer.size` and `R` the requested character count. Normalization gives
+///          `required_capacity = max(R,1) >= 1`; therefore `required_capacity <= C` implies `C >= 1`, and canonical
+///          ownership formally excludes a null pointer without a second run-time test. On return, the owner is non-null
+///          and has `C >= max(R,1)`. A miss enters the isolated growth transaction above. This function observes no
+///          source object and therefore cannot make a suffix eager.
+template <::std::size_t initial_capacity, ::std::integral char_type>
+inline constexpr char_type *inplace_to_reusable_heap_buffer_ensure(
+	::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	::std::size_t requested_capacity) noexcept
+{
+	constexpr ::std::size_t maximum_capacity{SIZE_MAX / sizeof(char_type)};
+	if (requested_capacity > maximum_capacity) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	::std::size_t const required_capacity{requested_capacity == 0u ? 1u : requested_capacity};
+	if (required_capacity <= heap_buffer.size) [[likely]]
+	{
+		return heap_buffer.ptr;
+	}
+	return ::fast_io::details::inplace_to_reusable_heap_buffer_grow<initial_capacity>(
+		heap_buffer, required_capacity);
+}
+
 /// @brief Scans one current reserve/scatter fragment using bounded stack scratch when its own policy permits it.
 /// @details Run-time reserve sizing is intentionally performed only for `arg`. A scanner which completes here prevents
 ///          every suffix size query and formatter call, preserving the historical lazy suffix semantics. Dynamic
 ///          producers with the non-fatal bounded-size protocol may use this operation's 256-byte cap directly; other
 ///          dynamic producers require the existing static-stack hint and must fit both limits. Larger current fragments
-///          receive an isolated dynamic allocation which is released before the next fragment is considered.
-template <::std::size_t scratch_capacity, ::std::integral char_type, typename state, typename T, typename Arg1,
-		  typename... Args>
+///          use one conversion-owned dynamic allocation, growing geometrically only when a later reached fragment has a
+///          larger bound. Reuse changes storage cost only: every size query, writer, scanner transition, and early stop
+///          remains in its original left-to-right position.
+template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
+		  typename state, typename T, typename Arg>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
-	char_type *scratch, state &s, T &t, Arg1 arg, Args... args)
+inline constexpr bool inplace_to_decay_bounded_buffer_context_one(
+	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	state &s, T &t, Arg &arg)
 {
 	bool completed{};
-	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg1>)
+	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg>)
 	{
-		auto const scatter{print_scatter_define(io_reserve_type<char_type, Arg1>, arg)};
+		auto const scatter{print_scatter_define(io_reserve_type<char_type, Arg>, arg)};
 		auto const first{scatter.base};
 		auto const last{::fast_io::details::scan_scatter_end(first, scatter.len)};
 		completed = ::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, first, last);
@@ -453,16 +579,16 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 	{
 		::std::size_t reserve_size;
 		bool use_stack{};
-		if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg1>)
+		if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg>)
 		{
 			if constexpr (scratch_capacity != 0u &&
-						  ::fast_io::single_pass_bounded_materialization_source<char_type, Arg1>)
+						  ::fast_io::single_pass_bounded_materialization_source<char_type, Arg>)
 			{
 				::std::size_t maximum_size{scratch_capacity};
-				if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg1>)
+				if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg>)
 				{
 					constexpr ::std::size_t producer_capacity{
-						print_reserve_static_stack_size(io_reserve_type<char_type, Arg1>)};
+						print_reserve_static_stack_size(io_reserve_type<char_type, Arg>)};
 					if (producer_capacity < maximum_size)
 					{
 						maximum_size = producer_capacity;
@@ -477,19 +603,19 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 			}
 			if (!use_stack)
 			{
-				reserve_size = print_reserve_size(io_reserve_type<char_type, Arg1>, arg);
+				reserve_size = print_reserve_size(io_reserve_type<char_type, Arg>, arg);
 				if constexpr (scratch_capacity != 0u &&
-							  ::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg1>)
+							  ::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, Arg>)
 				{
 					constexpr ::std::size_t producer_capacity{
-						print_reserve_static_stack_size(io_reserve_type<char_type, Arg1>)};
+						print_reserve_static_stack_size(io_reserve_type<char_type, Arg>)};
 					use_stack = reserve_size <= scratch_capacity && reserve_size <= producer_capacity;
 				}
 			}
 		}
 		else
 		{
-			reserve_size = print_reserve_size(io_reserve_type<char_type, Arg1>);
+			reserve_size = print_reserve_size(io_reserve_type<char_type, Arg>);
 			if constexpr (scratch_capacity != 0u)
 			{
 				use_stack = reserve_size <= scratch_capacity;
@@ -498,7 +624,7 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 
 		if (use_stack)
 		{
-			auto const last{print_reserve_define(io_reserve_type<char_type, Arg1>, scratch, arg)};
+			auto const last{print_reserve_define(io_reserve_type<char_type, Arg>, scratch, arg)};
 			auto const scratch_end{reserve_size == 0u ? scratch : scratch + reserve_size};
 			if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
 					scratch, scratch_end, last)) [[unlikely]]
@@ -509,9 +635,10 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 		}
 		else
 		{
-			::fast_io::details::local_operator_new_array_ptr<char_type> buffer(reserve_size);
-			auto const first{buffer.ptr};
-			auto const last{print_reserve_define(io_reserve_type<char_type, Arg1>, first, arg)};
+			auto const first{
+				::fast_io::details::inplace_to_reusable_heap_buffer_ensure<heap_initial_capacity>(
+					heap_buffer, reserve_size)};
+			auto const last{print_reserve_define(io_reserve_type<char_type, Arg>, first, arg)};
 			auto const buffer_end{reserve_size == 0u ? first : first + reserve_size};
 			if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
 					first, buffer_end, last)) [[unlikely]]
@@ -521,17 +648,27 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 			completed = ::fast_io::details::inplace_to_decay_context_consume<char_type>(s, t, first, last);
 		}
 	}
+	return completed;
+}
 
-	if (completed)
-	{
-		return;
-	}
-	if constexpr (sizeof...(Args) != 0u)
-	{
-		::fast_io::details::inplace_to_decay_bounded_buffer_context_impl<scratch_capacity, char_type>(
-			scratch, s, t, args...);
-	}
-	else
+/// @brief Walks bounded fragments left-to-right and stops before observing the first unneeded suffix.
+/// @details Built-in `||` is sequenced and short-circuiting. Consequently the fold invokes the one-fragment operation
+///          for source `i+1` exactly when every reached source through `i` returned partial. A successful transition
+///          suppresses all later size and writer CPOs; if every transition is partial, the single post-fold edge invokes
+///          EOF exactly once. Unlike suffix recursion, this control form also shares its terminal cleanup edge without
+///          changing the owned source pack or any fragment representation.
+template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
+		  typename state, typename T, typename Arg1, typename... Args>
+inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
+	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	state &s, T &t, Arg1 &arg, Args &...args)
+{
+	bool const completed{
+		::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
+			scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg) ||
+		(... || ::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
+			scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, args))};
+	if (!completed)
 	{
 		::fast_io::details::inplace_to_decay_context_finish<char_type>(s, t);
 	}
@@ -573,7 +710,7 @@ inline constexpr ::std::size_t calculate_print_normal_maxium_size() noexcept
 
 template <::std::integral char_type, bool ln, typename T, typename... Args>
 inline constexpr ::std::size_t
-calculate_print_normal_dynamic_maxium_main(::std::size_t mx_value, T t, Args... args)
+calculate_print_normal_dynamic_maxium_main(::std::size_t mx_value, T &t, Args &...args)
 {
 	::std::size_t size{};
 	if constexpr (dynamic_reserve_printable<char_type, T>)
@@ -637,7 +774,7 @@ inline constexpr void deal_with_single_to(char_type const *buffer_begin, char_ty
 }
 
 template <::std::integral char_type, typename T, typename Arg>
-inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg arg)
+inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg &arg)
 {
 	basic_io_scatter_t<char_type> scatter{print_scatter_define(io_reserve_type<char_type, Arg>, arg)};
 	if (scatter.len == 0u)
@@ -657,7 +794,7 @@ inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg arg)
 }
 
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr char_type *to_impl_with_reserve_recursive(char_type *p, T t, Args... args)
+inline constexpr char_type *to_impl_with_reserve_recursive(char_type *p, T &t, Args &...args)
 {
 	if constexpr (::fast_io::details::to_repeatable_named_scatter_v<char_type, T>)
 	{
@@ -674,6 +811,27 @@ inline constexpr char_type *to_impl_with_reserve_recursive(char_type *p, T t, Ar
 	else
 	{
 		return to_impl_with_reserve_recursive<char_type>(p, args...);
+	}
+}
+
+/// @brief Emits an all-static-reserve pack using the same representation that proved its aggregate capacity.
+/// @details The dedicated path is a representation-coupling invariant, not merely an optimization.  A source may
+///          independently expose both a static reserve writer and a repeatable scatter.  This branch computes storage
+///          exclusively from the former, so allowing the generic scatter-first emitter to override that choice could
+///          write beyond the proved range when the two protocols have different physical bounds.  Every recursive step
+///          therefore uses `print_reserve_define`; the general run-time-sized branch below retains scatter-first policy
+///          because its measurement function uses that exact same priority.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr char_type *to_impl_with_static_reserve_recursive(char_type *p, T &t, Args &...args)
+{
+	p = print_reserve_define(io_reserve_type<char_type, T>, p, t);
+	if constexpr (sizeof...(Args) == 0u)
+	{
+		return p;
+	}
+	else
+	{
+		return to_impl_with_static_reserve_recursive<char_type>(p, args...);
 	}
 }
 
@@ -765,6 +923,11 @@ inline constexpr char_type *to_terminal_stack_emit_one(
 
 /// @brief Coalesces a complete eager-safe source pack into the fixed local buffer and scans it contiguously once.
 /// @return `false` only when a source bound does not fit; scanner errors retain their ordinary exception behavior.
+/// @details The public owner pack retains its by-value ABI; `Sources&...` only walks those stable owned objects and adds
+///          no calling-convention requirement. This leaf deliberately remains ordinarily inline: unconditional cloning
+///          can help selected small Clang shapes, but measured GCC fixed-P32 and stable-scatter shapes regress when the
+///          complete measure/emit graph is forced into every caller. Placement is therefore an optimizer decision, while
+///          ownership, representation coupling, and the single contiguous scan remain invariant.
 template <::std::size_t capacity, ::std::integral char_type, typename Target, typename... Sources>
 	requires ::fast_io::details::to_terminal_stack_candidate<char_type, Target, Sources...>
 inline constexpr bool try_to_terminal_stack_contiguous(
@@ -803,7 +966,8 @@ inline constexpr bool try_to_terminal_stack_contiguous(
 }
 
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr ::std::size_t calculate_scatter_dynamic_reserve_size_with_scatter([[maybe_unused]] T t, Args... args)
+inline constexpr ::std::size_t calculate_scatter_dynamic_reserve_size_with_scatter(
+	[[maybe_unused]] T &t, Args &...args)
 {
 	::std::size_t res{};
 	if constexpr (::fast_io::details::to_repeatable_named_scatter_v<char_type, T>)
@@ -919,13 +1083,14 @@ concept inplace_to_decay_detect =
 
 } // namespace details
 
-/// @brief Converts printable fragments into an already-normalized scan target without materializing its alias.
-/// @details `io_scan_alias` is permitted to return either a proxy value or a noncopyable proxy reference. A forwarding
-///          parameter extends the value's lifetime through this call and retains an lvalue's identity; every lower
-///          strategy consequently borrows the same named object. Taking this parameter by value would silently make
-///          concept detection and execution disagree for otherwise valid reference aliases.
+/// @brief Executes conversion by borrowing a target expression and an already-owned normalized source pack.
+/// @details The caller owns every source for this complete call, while the forwarding target retains the category of a
+///          possibly temporary scan alias.  This is the unique algorithm body used by both ownership front doors:
+///          `basic_inplace_to_decay` owns public normalized prvalues, whereas value-returning `to` already owns them in
+///          `basic_to_decay`.  Keeping the body reference-only prevents either front door from reconstructing an admitted
+///          move-only proxy and makes all strategy CPO expressions the same named lvalues used by availability proofs.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
+inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 {
 	constexpr bool available{::fast_io::details::inplace_to_decay_detect<char_type, T, Args...>};
 	// Instantiate execution only after the exact direct-or-dynamic strategy has been proved for the normalized pack.
@@ -967,8 +1132,17 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 					::fast_io::details::to_terminal_stack_candidate<char_type, T, Args...>};
 				constexpr ::std::size_t small_stack_capacity{
 					::fast_io::details::to_small_stack_capacity<char_type>()};
+				constexpr bool bounded_fragment_stack_scratch_candidate{
+					(::fast_io::details::to_bounded_fragment_stack_scratch_candidate_v<char_type, Args> || ...)};
+				constexpr ::std::size_t bounded_fragment_stack_capacity{
+					bounded_fragment_stack_scratch_candidate ? small_stack_capacity : 0u};
+				// The terminal coalescer needs the complete operation-local array. The lazy bounded walker needs it only
+				// when at least one source protocol can prove a write no larger than that array. If neither proof exists,
+				// retain a one-element placeholder solely to keep the pointer expression well-formed; its zero template
+				// capacity makes every materialization select the reusable heap owner, so the placeholder is never written.
 				constexpr ::std::size_t stack_scratch_extent{
-					(terminal_stack_candidate || !no_need_dynamic_reserve) && small_stack_capacity != 0u
+					(terminal_stack_candidate || bounded_fragment_stack_scratch_candidate) &&
+						small_stack_capacity != 0u
 						? small_stack_capacity
 						: 1u};
 				char_type stack_scratch[stack_scratch_extent];
@@ -1011,8 +1185,14 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 						}
 						else
 						{
+								// This owner outlives every fragment transition but not the conversion. Each reached source is
+							// measured exactly once; an early `ok` therefore still prevents all suffix observations. The initial
+							// heap floor matches the operation-local stack cap, amortizing small unhinted dynamic fragments without
+							// reserving that cap in the caller's frame.
+							::fast_io::details::local_operator_new_array_ptr<char_type> heap_scratch;
 							::fast_io::details::inplace_to_decay_bounded_buffer_context_impl<
-								small_stack_capacity, char_type>(stack_scratch, state, t, args...);
+								bounded_fragment_stack_capacity, small_stack_capacity, char_type>(
+								stack_scratch, heap_scratch, state, t, args...);
 						}
 					});
 				}
@@ -1030,8 +1210,10 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 					if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<
 							total_size, char_type>)
 					{
-						char_type buffer[total_size];
-						auto const ret{::fast_io::details::to_impl_with_reserve_recursive(buffer, args...)};
+						// A zero bound still needs one addressable object for the valid empty half-open scanner range.
+						char_type buffer[total_size == 0u ? 1u : total_size];
+						auto const ret{
+							::fast_io::details::to_impl_with_static_reserve_recursive(buffer, args...)};
 						::fast_io::details::deal_with_single_to<char_type>(buffer, ret, t);
 					}
 					else
@@ -1039,8 +1221,8 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 						// Summing several individually valid reserve bounds can still create an unbounded automatic
 						// object. Dynamic storage keeps one materialization without coupling capacity to frame size.
 						::fast_io::details::local_operator_new_array_ptr<char_type> buffer(total_size);
-						auto const ret{
-							::fast_io::details::to_impl_with_reserve_recursive(buffer.ptr, args...)};
+						auto const ret{::fast_io::details::to_impl_with_static_reserve_recursive(
+							buffer.ptr, args...)};
 						::fast_io::details::deal_with_single_to<char_type>(buffer.ptr, ret, t);
 					}
 				}
@@ -1072,7 +1254,10 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 			}
 			else if constexpr (contiguous_scannable<char_type, T>)
 			{
-				::fast_io::operations::decay::print_freestanding_decay<false>(ref, args...);
+				// The caller already owns every normalized source proxy. Continue through the stable-reference implementation
+				// rather than the public by-value ownership shim: admission models these exact named lvalues,
+				// and copying them here would both reject a move-only alias and add one complete O(N) construction layer.
+				::fast_io::operations::decay::print_freestanding_decay_impl<false>(ref, args...);
 				// The dynamic output object may have grown from its inline array, so use its active pointers rather than
 				// naming the embedded storage. Both pointers are updated together by every growth operation.
 				::fast_io::details::deal_with_single_to<char_type>(buffer.begin_ptr, buffer.curr_ptr, t);
@@ -1088,6 +1273,17 @@ inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
 	{
 		static_assert(available, "either some arguments are not printable or the target is not scannable");
 	}
+}
+
+/// @brief Owns normalized proxy prvalues supplied by the public inplace conversion boundary.
+/// @details Guaranteed parameter lifetime contains the borrowed algorithm call.  The separate wrapper is necessary:
+///          value-returning `to` already has an owned pack and enters the borrowed body directly, avoiding both a full
+///          extra O(N) copy layer and an otherwise ill-formed copy of a move-only normalization proxy.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
+{
+	::fast_io::basic_inplace_to_decay_borrowed<char_type, T, Args...>(
+		::std::forward<T>(t), args...);
 }
 
 namespace details
@@ -1550,14 +1746,17 @@ inline constexpr void scan_contiguous_materialized_to(
 /// @details The type-level reserve sum bounds the local range; every provider's fragment or exact protocol promises
 ///          byte-for-byte equivalence with its ordinary spelling. Forced placement is confined to this true-only
 ///          formatter. The scanner remains a separate operation, and an endpoint mismatch terminates rather than
-///          re-entering a run-time formatter after a successful builtin query.
+///          re-entering a run-time formatter after a successful builtin query. Forwarding references are a lifetime-
+///          neutral borrow here: inplace conversion passes replacement prvalues whose full expression contains this
+///          call, while value-returning conversion passes objects already owned by its source-materialization frame.
+///          A by-value pack would unnecessarily copy the latter and impose an unstated copyability requirement.
 template <::std::integral char_type, typename T, typename... Args>
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void inplace_to_compiler_constant_direct_materialized(
-	T &&target, Args... args)
+	T &&target, Args &&...args)
 {
 	constexpr ::std::size_t capacity{
 		::fast_io::details::inplace_to_compiler_constant_reserve_capacity<
@@ -1798,15 +1997,15 @@ inline constexpr T basic_to_decay(Args... args)
 			else if constexpr (::std::is_scalar_v<T>)
 			{
 				T v{};
-				basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
-												  args...);
+				basic_inplace_to_decay_borrowed<char_type>(
+					::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)), args...);
 				return v;
 			}
 			else
 			{
 				T v;
-				basic_inplace_to_decay<char_type>(::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)),
-												  args...);
+				basic_inplace_to_decay_borrowed<char_type>(
+					::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(v)), args...);
 				return v;
 			}
 		}

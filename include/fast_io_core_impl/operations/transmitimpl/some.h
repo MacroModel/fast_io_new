@@ -21,20 +21,44 @@ namespace details
 template <typename optstmtype, typename instmtype>
 	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
 inline constexpr ::fast_io::uintfpos_t transmit_some_main_impl(optstmtype &optstm, instmtype &instm,
-															   ::fast_io::uintfpos_t needtransmit)
+																   ::fast_io::uintfpos_t needtransmit)
 {
+	if (needtransmit == 0u)
+	{
+		/*
+		A zero upper bound admits exactly one result: zero transferred elements.
+		Keeping the identity shortcut in the terminal implementation preserves all
+		outer normalization, locking, and checked-finish semantics while proving
+		that allocation and primitive I/O cannot contribute to the result.
+		*/
+		return 0u;
+	}
 	// Generic partial transfer stages through one bounded local element buffer
 	// and reports only units that have also reached the output.
 	using input_char_type = typename instmtype::input_char_type;
 	using output_char_type = typename optstmtype::output_char_type;
-	constexpr ::std::size_t bfsz{::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(bfsz);
+	constexpr ::std::size_t default_buffer_elements{
+		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
+	::std::size_t buffer_elements{default_buffer_elements};
+	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
+	{
+		/*
+		The request and capacity are element counts. The character width is used
+		only to derive how many elements fit the default byte budget. Comparing in
+		uintfpos_t before narrowing proves needtransmit fits size_t in this branch,
+		so the allocation is min(default_buffer_elements, remaining_request)
+		elements without confusing bytes and elements.
+		*/
+		buffer_elements = static_cast<::std::size_t>(needtransmit);
+	}
+	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
+		buffer_elements);
 	input_char_type *buffer_start{newptr.ptr};
 	::fast_io::uintfpos_t totransmit{needtransmit};
 	while (totransmit)
 	{
 		// Attempt one bounded element block and stop on the first short EOF result.
-		::std::size_t this_round{bfsz};
+		::std::size_t this_round{buffer_elements};
 		if (totransmit < this_round)
 		{
 			// Bound the current read by the caller's remaining element request.
