@@ -306,6 +306,35 @@ inline constexpr ::std::true_type strlike_buffered_print_preferred(
 	return {};
 }
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__ &&                     \
+	defined(_LIBCPP_VERSION) && 230000 <= _LIBCPP_VERSION &&           \
+	defined(_LIBCPP_ABI_VERSION) && _LIBCPP_ABI_VERSION == 1 &&        \
+	defined(_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT)
+/// @brief Prefers direct fresh-result concat for one default decimal scalar on the measured standard-string target.
+/// @details For the default traits and allocator, a newly constructed standard string has no externally observable
+///          prefix and its maintained output adapter grows reusable SSO or heap storage.  On Apple M4 with Clang 23 and
+///          libc++ 23's ABI-v1 alternate string layout, emitting one `char` scalar through that adapter avoids a
+///          separate stack record and range construction while preserving the same final character sequence and
+///          exception boundary.  The default adapter has no independent status, mutex, or externally visible commit
+///          side effect, so its complete dispatcher is observationally equivalent to constructing from the staged
+///          range.  Later Clang and libc++ versions inherit this narrowly ABI-locked policy; other standard libraries,
+///          libc++ layouts, character domains, targets, traits, and allocators remain unmarked until their costs and
+///          extensible hooks are independently audited.  Concat still proves the exact source shape, dispatcher
+///          callability, and adapter-before-result lifetime.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 ::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+inline constexpr ::std::true_type
+strlike_concat_fresh_fixed_scalar_direct_preferred(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+#endif
+
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
 			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)

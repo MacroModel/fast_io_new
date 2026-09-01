@@ -258,6 +258,26 @@ concept buffered_print_preferred_strlike = strlike<char_type, T> && requires {
 	} -> ::std::same_as<::std::true_type>;
 };
 
+/// @brief Selects direct construction for one fixed decimal scalar on an audited fresh result.
+/// @details String-like syntax proves neither that incremental append is cheaper than stack staging plus range
+///          construction nor that a default result's adapter preserves the complete print protocol.  This exact-
+///          `true_type` destination marker is therefore both a cost and semantic opt-in.  For a fresh `T` and the
+///          admitted single scalar, the provider promises that running the complete associated-adapter dispatcher---
+///          including line, status, mutex, exception, and destructor-based commit behavior---is observationally
+///          equivalent to reserve materialization followed by range construction, while normally being cheaper.
+///          Concat separately proves the exact source shape, adapter callability, and adapter-before-result lifetime.
+///          The marker grants no access to spare capacity and does not apply to an existing destination object.
+/// @fn      strlike_concat_fresh_fixed_scalar_direct_preferred
+/// @return  std::true_type
+template <typename char_type, typename T>
+concept concat_fresh_fixed_scalar_direct_preferred_strlike =
+	strlike<char_type, T> && requires {
+		{
+			strlike_concat_fresh_fixed_scalar_direct_preferred(
+				io_strlike_type<char_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
 /// @brief Marks an underlying buffer-string protocol whose put-area cursor publications may be folded.
 /// @details Structural buffer conformance proves only that cursor and reserve expressions exist. It cannot prove that
 ///          the area stays put between raw writes, that `strlike_set_curr` has no effect beyond publishing the cursor,

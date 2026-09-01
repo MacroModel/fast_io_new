@@ -443,6 +443,25 @@ struct whole_get_t
 namespace details::decay
 {
 
+/// @brief Matches every non-radix field of the ordinary plain integral scalar factory record.
+/// @details Keeping the complete field schema in one predicate prevents the independently measured decimal-concat and
+///          non-decimal fixed-view entries from drifting when `scalar_flags` evolves.  Each consumer supplies its own
+///          exact radix condition; every other active field must retain the factory default shown here.
+template <manipulators::scalar_flags flags>
+inline constexpr bool print_plain_integral_scalar_flags_exact_default_v{
+	!flags.alphabet && !flags.showbase && !flags.showpos && !flags.noskipws &&
+	!flags.uppercase_showbase && !flags.modern_octal && !flags.uppercase &&
+	!flags.uppercase_e && !flags.comma && !flags.full && !flags.json_float &&
+	flags.placement == manipulators::scalar_placement::none &&
+	flags.floating == manipulators::floating_format::fixed &&
+	flags.time_flag == manipulators::lc_time_flag::none && !flags.line &&
+	flags.percentage == manipulators::percentage_flag::none &&
+	flags.nan_show_sign && !flags.nan_show_type && flags.nan_parse_sign &&
+	flags.nan_payload_scan == manipulators::floating_nan_payload_scan::consume &&
+	flags.rounding == manipulators::floating_rounding::nearest_to_even &&
+	flags.precision == manipulators::floating_precision::significant &&
+	!flags.allow_leading_plus};
+
 /// The default scalar carrier is normalized before the print dispatcher sees it.  This proof keeps the fixed-view hot
 /// leaf limited to decimal, unpadded integral policy; alternate bases and width/sign manipulators retain the generic
 /// reserve CPO and therefore cannot inherit the specialized code-generation choice.
@@ -455,6 +474,69 @@ struct print_fixed_hot_scalar_traits<manipulators::scalar_manip_t<flags, T>>
 		!flags.showbase && !flags.showpos && !flags.uppercase_showbase && !flags.modern_octal && !flags.uppercase &&
 		!flags.comma && !flags.full && flags.placement == manipulators::scalar_placement::none &&
 		flags.percentage == manipulators::percentage_flag::none};
+};
+
+/// @brief Proves the exact default-decimal owning scalar measured for direct fresh standard-string construction.
+/// @details This is intentionally independent of `print_fixed_hot_scalar_traits`: a reference carrier or a currently
+///          output-irrelevant policy bit may be valid for buffered emission but cannot inherit this narrower allocation
+///          strategy.  Staged rejection keeps incomplete reference payloads substitution-safe.
+template <manipulators::scalar_flags flags, typename T>
+struct print_concat_fresh_fixed_decimal_scalar_traits<
+	manipulators::scalar_manip_t<flags, T>>
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	inline static constexpr bool available{[]() consteval {
+		if constexpr (!::std::same_as<T, value_type>)
+		{
+			return false;
+		}
+		else if constexpr (
+			!::fast_io::details::my_integral<value_type> ||
+			::std::same_as<value_type, bool>)
+		{
+			return false;
+		}
+		else
+		{
+			return sizeof(value_type) <= 8u && flags.base == 10u &&
+				   print_plain_integral_scalar_flags_exact_default_v<flags>;
+		}
+	}()};
+};
+
+/// @brief Proves that a public scalar manipulator owns one valid integral reserve record.
+/// @details The payload is an unqualified value of at most 64 bits, not a reference transport, so reading and copying it
+///          cannot reach user code or a volatile object.  The flag comparisons describe exactly the ordinary
+///          `mnp::base<B>` factory record for 2 <= B <= 36, B != 10; presentation variants such as prefix, uppercase,
+///          full width, punctuation, or derived ratios remain independent cost domains.  This trait is only the source
+///          half of the optimization; the public entry separately proves exact alias/forward closure and a fixed
+///          no-status destination.
+template <manipulators::scalar_flags flags, typename T>
+struct print_fixed_public_integral_manip_source_traits<
+	manipulators::scalar_manip_t<flags, T>>
+{
+	using value_type = ::std::remove_cvref_t<T>;
+	inline static constexpr bool available{[]() consteval {
+		// Stage the schema proof before any size query. A scalar carrier may legally transport a reference to an
+		// incomplete or function type; those sources must make this cost predicate false without instantiating
+		// `sizeof(value_type)` and turning an overload constraint into a hard diagnostic.
+		if constexpr (!::std::same_as<T, value_type>)
+		{
+			return false;
+		}
+		else if constexpr (
+			!::fast_io::details::my_integral<value_type> ||
+			::std::same_as<value_type, bool>)
+		{
+			return false;
+		}
+		else
+		{
+			return sizeof(value_type) <= 8u &&
+				   2u <= flags.base && flags.base <= 36u && flags.base != 10u &&
+				   print_plain_integral_scalar_flags_exact_default_v<flags>;
+		}
+	}()};
 };
 
 } // namespace details::decay

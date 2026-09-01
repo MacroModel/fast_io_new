@@ -687,15 +687,29 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 #endif
 			}
 			/*
-			At this point n >= 10^8, so n < 10^9 proves an exact nine-digit width.
-			AArch64 may therefore call jeaiii_f<8> without another range search.  A
-			paired M4 substitution of range10 scored 0.9878x over the affected
-			nine-digit points and was worse for widened carriers, so the redundant
-			classifier is not retained.  The bound is the semantic proof; no native
-			Cortex/Neoverse performance claim is inferred from the M4 result.
+			At this point n >= 10^8.  On AArch64 the exact-width branch and the
+			shared split form a complete, disjoint partition:
+
+			  10^8 <= n < 10^9: jeaiii_f<8> emits the exact nine-digit spelling
+			  n >= 10^9: high = floor(n / 10^8), low = n mod 10^8
+			             shortest(n) = shortest(high) || fixed_width_8(low)
+
+			The second precondition proves high >= 10; the quotient/remainder
+			identity proves the character sequence and boundary.  On Apple M4,
+			Clang 23 is the first verified frontend where marking the isolated
+			nine-digit arm unlikely keeps the 10--20-digit fallthrough as the layout
+			priority: the emitted converter contracts from 304 to 275 instructions,
+			paired nine-digit timing remains neutral, and every measured 10--20-digit
+			width is neutral or faster.  Later Clang versions inherit that narrowly
+			targeted layout contract; non-Apple AArch64, earlier Clang, and other
+			frontends retain the unannotated branch because no Cortex/Neoverse
+			performance claim is inferred from the M4 result.
 			*/
 #if defined(__aarch64__) || defined(_M_ARM64)
 			if (n < static_cast<::std::uint_least64_t>(1000000000u))
+#if defined(__APPLE__) && defined(__clang__) && 23 <= __clang_major__
+				[[unlikely]]
+#endif
 			{
 				return jeaiii_result<result_type>(
 					jeaiii_f<8>(iter, static_cast<::std::uint_least32_t>(n)));

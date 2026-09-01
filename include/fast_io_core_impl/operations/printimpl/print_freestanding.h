@@ -5342,6 +5342,16 @@ struct print_fixed_hot_scalar_traits
 	inline static constexpr bool available{};
 };
 
+/// @brief Classifies the exact owned default-decimal scalar admitted by fresh-result concat.
+/// @details The primary template is fail-closed because the older buffered hot-leaf classifier intentionally accepts
+///          output-equivalent reference and policy records.  Fresh-result construction has a narrower measured cost
+///          domain and therefore receives an independent specialization from the scalar implementation.
+template <typename T>
+struct print_concat_fresh_fixed_decimal_scalar_traits
+{
+	inline static constexpr bool available{};
+};
+
 /// @brief Propagates the fixed-external overstore audit through semantic transport nodes.
 /// @details A semantic width can keep a reserve leaf hidden after condition selection, while a pack or condition can
 ///          introduce another forwarding boundary before the leaf is emitted.  Model those exact named-member
@@ -5489,6 +5499,18 @@ inline consteval bool print_buffered_hot_decimal_scalar_run_available() noexcept
 	return sizeof...(value_types) == 1u &&
 		   (print_buffered_hot_decimal_scalar_available<output, char_type, value_types>() && ...);
 }
+
+/// @brief Classifies a library-owned integral scalar manipulator at the public source boundary.
+/// @details The primary template is deliberately fail-closed because reserve printability alone cannot prove that
+///          alias/status normalization is library-owned or that reading the source has no external side effect.  The
+///          scalar implementation specializes this trait only for an owned fundamental integral payload and a valid
+///          integer flag record.  Admission still independently proves exact normalization closure, a non-throwing
+///          reserve writer, and a fixed destination below.
+template <typename source_type>
+struct print_fixed_public_integral_manip_source_traits
+{
+	inline static constexpr bool available{};
+};
 
 /// @brief Emits one decimal scalar directly through a proven buffered put area.
 /// @details This is a destination-specialized entry, intentionally separate from
@@ -8439,6 +8461,77 @@ inline constexpr bool print_semantic_input_argument_v =
 		::std::remove_cvref_t<::fast_io::details::decay::print_semantic_input_alias_t<char_type, T>>> ||
 	::fast_io::details::decay::print_semantic_execution_node_v<
 		::fast_io::details::decay::print_semantic_input_forward_t<char_type, T>>;
+
+/// @brief Proves one public source is already a closed library integral-scalar record.
+/// @details Let S be the cvref-stripped public source and N its ordinary `io_print_alias` followed by
+///          `io_print_forward` result.  Volatile access is rejected, the source trait proves that S owns a fundamental
+///          integral value with no user-associated namespace, and `same_as<S,N>` proves normalization neither replaces
+///          the operation type nor introduces a status-bearing proxy.  The final requirements prove the same static
+///          reserve extent and non-throwing writer consumed by the fixed-view emitter.  Thus the shortcut skips only
+///          dispatcher scaffolding; it does not skip or duplicate source normalization.
+template <::std::integral char_type, typename source_type>
+inline consteval bool
+print_fixed_public_integral_manip_source_available() noexcept
+{
+	using source_reference = ::std::remove_reference_t<source_type>;
+	using source_value = ::std::remove_cvref_t<source_type>;
+	if constexpr (
+		::std::is_volatile_v<source_reference> ||
+		!print_fixed_public_integral_manip_source_traits<source_value>::available)
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::details::decay::print_semantic_input_argument_v<
+			char_type, source_reference &>)
+	{
+		return false;
+	}
+	else if constexpr (requires(source_reference &source) {
+		{
+			::fast_io::io_print_alias(source)
+		} noexcept;
+		{
+			::fast_io::io_print_forward<char_type>(
+				::fast_io::io_print_alias(source))
+		} noexcept -> ::std::same_as<source_value>;
+	})
+	{
+		return ::fast_io::reserve_printable<char_type, source_value> &&
+			   requires(char_type *ptr, source_value &value) {
+				   {
+					   print_reserve_define(
+						   ::fast_io::io_reserve_type<char_type, source_value>,
+						   ptr, value)
+				   } noexcept -> ::std::same_as<char_type *>;
+			   };
+	}
+	else
+	{
+		return false;
+	}
+}
+
+/// @brief Admits a complete integral-manipulator run to the fixed external-buffer emitter.
+/// @details The destination marker proves stable externally owned storage with no hidden growth, flush, lock, or status
+///          operation.  Every source independently satisfies the closed-normalization proof above.  A single static
+///          capacity check may therefore replace the general CPO graph, after which reserve writers execute exactly once
+///          in left-to-right order and the destination publishes exactly the same final cursor.  Line mode contributes
+///          its one trailing newline inside that same checked extent.
+template <bool line, typename output, ::std::integral char_type,
+		  typename... Args>
+inline consteval bool
+print_fixed_public_integral_manip_run_available() noexcept
+{
+	return sizeof...(Args) != 0u && sizeof...(Args) <= 32u &&
+		   print_direct_obuffer_reserve_destination<output> &&
+		   !::fast_io::operations::decay::defines::
+			   has_output_or_io_stream_mutex_ref_define<output> &&
+		   !::fast_io::operations::decay::defines::has_status_print_define<
+			   line, output, ::std::remove_cvref_t<Args>...> &&
+		   (print_fixed_public_integral_manip_source_available<
+				char_type, Args>() && ...);
+}
 
 /// @brief Derives semantic input forwarding's exception specification from the CPO branch it invokes.
 template <::std::integral char_type, typename T>
@@ -23843,7 +23936,56 @@ concept print_freestanding_okay_for_line =
 		line,
 		::fast_io::operations::defines::print_freestanding_named_output_t<output>>;
 
+/// @brief Selects the measured public fixed-view integral-manipulator entry.
+/// @details This is a code-generation policy layered on the target-independent semantic proof.  On Apple AArch64,
+///          Clang 23 otherwise outlines the full pre-normalization continuation for a run which is already a closed
+///          library scalar record.  The cost proof is deliberately limited to `char`, an owned at-most-64-bit value,
+///          the exact plain non-decimal `base<B>` policy, and packs of at most 32 records; presentation variants remain
+///          on the general dispatcher.  Paired M4 medians reduced base-36 pack1 from 3.09 ns to 1.81 ns, pack9 from
+///          12.65 ns to 8.62 ns, and base-2 pack32 from 51.91 ns to 46.70 ns while also shrinking text.  Clang 23 is the
+///          first verified endpoint, so later Clang versions inherit the narrow policy; other targets retain the
+///          ordinary dispatcher until independently measured.
+template <bool line, typename output, typename... Args>
+inline consteval bool
+print_freestanding_fixed_integral_manip_entry_available() noexcept
+{
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+	using normalized_output =
+		::fast_io::operations::defines::print_freestanding_named_output_t<output>;
+	using char_type = typename normalized_output::output_char_type;
+	return ::std::same_as<char_type, char> &&
+		   ::fast_io::details::decay::
+		print_fixed_public_integral_manip_run_available<
+			line, normalized_output, char_type, Args...>();
+#else
+	return false;
+#endif
+}
+
 } // namespace defines
+
+/// @brief Emits a proved integral-manipulator run through the compact fixed-view public entry.
+/// @details Output normalization and the success-only operation guard remain identical to the general entry.  Source
+///          alias/forward normalization occurs exactly once inside `print_fixed_public_run`; the static reserve emitter
+///          retains ordered writes, physical-overstore staging, line-feed placement, capacity failure, and one final
+///          cursor publication.  The forced boundary applies only after the semantic and target cost proofs above.
+template <bool line, typename output, typename... Args>
+	requires(
+		::fast_io::operations::defines::
+			print_freestanding_fixed_integral_manip_entry_available<
+				line, output, Args...>())
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+print_freestanding(output &&outstm, Args &&...args)
+{
+	::fast_io::operations::basic_output_operation_guard<output &&> guard{outstm};
+	decltype(auto) outref = guard.ref();
+	using normalized_output = ::std::remove_cvref_t<decltype(outref)>;
+	using char_type = typename normalized_output::output_char_type;
+	::fast_io::details::decay::print_fixed_public_run<
+		line, normalized_output, char_type>(outref, args...);
+	guard.commit();
+}
 
 /// @brief    Public freestanding print entry point.
 /// @details  The wrapper obtains the stream reference, forwards semantic input arguments when present, and then
@@ -23858,6 +24000,9 @@ concept print_freestanding_okay_for_line =
 /// @param    outstm the output stream object
 /// @param    args   the arguments to emit
 template <bool line, typename output, typename... Args>
+	requires(!::fast_io::operations::defines::
+				 print_freestanding_fixed_integral_manip_entry_available<
+					 line, output, Args...>())
 inline constexpr void print_freestanding(output &&outstm, Args &&...args)
 {
 	// Keep the normalized observer alive for the complete print and finish an

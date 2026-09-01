@@ -5264,6 +5264,33 @@ scan_contiguous_define(io_reserve_type_t<char_type, ::fast_io::manipulators::sca
 	return ::fast_io::details::scan_decfloat_contiguous_define<char_type, flags>(begin, end, value.reference);
 }
 
+/*
+Let B and E be the original semantic endpoints. Whitespace, sign,
+significand, radix-point, and exponent handling advance only by guarded
+pointer iteration over [B,E]; malformed optional exponents rewind only to a
+saved cursor from that same span. The speculative short and special-value
+classifiers publish an iterator only when handled or matched, so their null
+miss sentinels are unobservable. Numeric conversion returns only a parse_code
+and therefore cannot replace the fixed lexical cursor. Hence every public
+result has the form B+k, 0 <= k <= E-B, with B's array provenance,
+independently of success, partial input, EOF, invalid syntax, Inf/NaN,
+overflow, underflow, or rounding policy.
+
+This proof belongs only to the ordinary decimal scalar CPO. Precision,
+padding, context-state, and hexadecimal scanners have independent protocols
+and cannot inherit it from a shared floating representation.
+*/
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat)
+inline constexpr ::std::true_type scan_contiguous_result_in_range(
+	io_reserve_type_t<
+		char_type,
+		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
 /// @brief Scans a decimal floating value with a provider-proved readable tail.
 /// @details The dispatcher supplies the true semantic `[begin,end)` and P readable elements after `end`.  Decimal
 ///          SIMD code may use P only to complete a 16- or 32-byte unmasked load after the exact significand limit; it

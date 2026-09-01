@@ -1740,6 +1740,34 @@ inline constexpr bool basic_general_concat_direct_destination_ok = []() constexp
 	}
 }();
 
+/// @brief Selects direct fresh-result emission for exactly one normalized fixed decimal scalar.
+/// @details Let `S` be the normalized scalar leaf and `D` the default-constructed result.  The source trait proves that
+///          `S` emits one nonempty built-in decimal spelling with no width, sign-display, radix, punctuation, or other
+///          semantic policy.  The destination marker independently promises both the cost preference and observable
+///          equivalence between the fresh adapter's complete dispatcher and reserve staging followed by range
+///          construction; `basic_general_concat_direct_destination_ok` then proves that exact line-aware dispatcher is
+///          callable on `D`'s actual adapter.  The implementation additionally ends the adapter lifetime before moving
+///          `D`, so destructor-based publication is complete.  The one-leaf test is performed before either ADL
+///          destination probe so unrelated packs do not instantiate or inherit this narrow construction policy.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_fresh_fixed_scalar_direct_run_v = []() constexpr {
+	if constexpr (
+		sizeof...(Args) != 1u ||
+		!(::fast_io::details::decay::print_concat_fresh_fixed_decimal_scalar_traits<
+			  ::std::remove_cvref_t<Args>>::available &&
+		  ...))
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::concat_fresh_fixed_scalar_direct_preferred_strlike<
+				   ch_type, T> &&
+			   ::fast_io::details::decay::basic_general_concat_direct_destination_ok<
+				   line, ch_type, T, Args...>;
+	}
+}();
+
 /// @brief Proves the complete print protocol for a source-preferred one-pass run against the fresh result's adapter.
 /// @details The one-pass source marker is a cost proof, not permission to skip destination semantics.  In particular,
 ///          an associated string adapter may own a status customization or mutex protocol which must remain outside
@@ -2524,11 +2552,15 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 				line, ch_type, T, Args...>)
 		{
 			// The source cost proof intentionally wins before any precise/dynamic size query.  The fresh result owns all
-			// append growth, and destruction contains a throwing formatter's unpublished partial value.
+			// append growth, and destruction contains a throwing formatter's unpublished partial value.  The adapter's
+			// shorter lifetime also completes a possible destructor-based cursor publication before result movement.
 			T str;
-			decltype(auto) destination{io_strlike_ref(::fast_io::io_alias, str)};
-			::fast_io::details::decay::basic_general_concat_one_pass_direct_emit<line, ch_type>(
-				destination, args...);
+			{
+				decltype(auto) destination{
+					io_strlike_ref(::fast_io::io_alias, str)};
+				::fast_io::details::decay::basic_general_concat_one_pass_direct_emit<line, ch_type>(
+					destination, args...);
+			}
 			return str;
 		}
 		else if constexpr (basic_general_concat_semantic_precise_ok<ch_type, Args...>)
@@ -2658,6 +2690,30 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 		}
 		else if constexpr ((reserve_printable<ch_type, Args> && ...))
 		{
+			FAST_IO_IF_NOT_CONSTEVAL
+			{
+				if constexpr (
+					::fast_io::details::decay::
+						basic_general_concat_fresh_fixed_scalar_direct_run_v<
+							line, ch_type, T, Args...>)
+				{
+					// The result is fresh, and the complete dispatcher retains the adapter's line, status,
+					// locking, growth, and cursor-publication semantics. Constant evaluation deliberately
+					// continues through the portable staging path below because a standard string cannot
+					// expose writable spare capacity there.
+					T str;
+					{
+						// A third-party associated adapter may publish its final cursor or size from its destructor.
+						// End that lifetime before `str` is moved into the return object; otherwise return-value
+						// construction could observe the destination before its deferred commit becomes visible.
+						decltype(auto) destination{
+							io_strlike_ref(::fast_io::io_alias, str)};
+						::fast_io::operations::decay::print_freestanding_decay_impl<
+							line>(destination, args...);
+					}
+					return str;
+				}
+			}
 			constexpr ::std::size_t reserve_size{
 				calculate_concat_scatter_reserve_size_or_unavailable<ch_type, Args...>()};
 			constexpr ::std::size_t reserve_size_with_line{
@@ -2732,8 +2788,12 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 				// adapter itself: `basic_general_concat_decay_ref_impl` assumes that its `T` exposes writable strlike cursors
 				// on reserve/scatter paths, which is exactly what this non-buffer branch does not promise.
 				T str;
-				auto destination{io_strlike_ref(::fast_io::io_alias, str)};
-				::fast_io::operations::decay::print_freestanding_decay_impl<line>(destination, args...);
+				{
+					// Preserve a reference-returning adapter exactly and complete any RAII commit before the result is moved.
+					decltype(auto) destination{
+						io_strlike_ref(::fast_io::io_alias, str)};
+					::fast_io::operations::decay::print_freestanding_decay_impl<line>(destination, args...);
+				}
 				return str;
 			}
 			else

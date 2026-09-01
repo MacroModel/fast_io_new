@@ -437,7 +437,23 @@ namespace details
 #if __has_cpp_attribute(__gnu__::__pure__)
 [[__gnu__::__pure__]]
 #endif
-#if (defined(__APPLE__) || defined(__DARWIN_C_LEVEL)) && defined(TARGET_OS_VISION) && TARGET_OS_VISION
+#if (defined(__APPLE__) || defined(__DARWIN_C_LEVEL)) &&        \
+	(!defined(__cpp_constexpr) || __cpp_constexpr < 202207L) && \
+	(FAST_IO_HAS_BUILTIN(__builtin_available) ||                \
+	 (defined(TARGET_OS_VISION) && TARGET_OS_VISION))
+/*
+The Darwin branch below contains a run-time availability predicate.  Its
+mapping invariant is unchanged: each `posix_clock_id` still selects exactly the
+same native clock or error path.  Before C++23, a non-template constexpr
+function had to admit at least one constant-evaluated execution, while
+`__builtin_available` is a run-time-only operation.  P2448R2 removed that
+diagnostic requirement and is first represented by
+`__cpp_constexpr >= 202207L`; the final C++23 working draft raises the
+cumulative value further to `202211L`.  Therefore only Darwin
+configurations below the P2448R2 feature level which form the availability (or
+visionOS error) branch drop constexpr; implementations at or above that level
+retain it, as do targets whose switch is entirely constant-expression-capable.
+*/
 inline auto
 #else
 inline constexpr auto
