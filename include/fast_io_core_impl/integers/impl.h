@@ -4476,7 +4476,12 @@ inline constexpr char_type *print_reserve_integral_withfull_main_impl(char_type 
 				}
 				else
 				{
-					return ::fast_io::details::jeaiii::jeaiii_main(first, u);
+					// GCC 11 cannot apply the leading default non-type template arguments
+					// when the following constrained character type is deduced here.
+					// State the default policy/result arguments and character type explicitly;
+					// newer compilers produce the same specialization and code shape.
+					return ::fast_io::details::jeaiii::jeaiii_main<
+						false, false, char_type, char_type *, false>(first, u);
 				}
 			}
 			else

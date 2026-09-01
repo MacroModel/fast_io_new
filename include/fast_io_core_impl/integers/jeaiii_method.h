@@ -599,7 +599,8 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 	{
 		if (static_cast<::std::uint_least64_t>(n >> 64u) == 0)
 		{
-			return jeaiii_result<result_type>(jeaiii_main(iter, static_cast<::std::uint_least64_t>(n)));
+			return jeaiii_result<result_type>(jeaiii_main<false, false, char_type, char_type *, false>(
+				iter, static_cast<::std::uint_least64_t>(n)));
 		}
 		constexpr ::std::uint_least64_t divisor{static_cast<::std::uint_least64_t>(10000000000) *
 												static_cast<::std::uint_least64_t>(1000000000)};
@@ -608,7 +609,8 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 		::std::uint_least64_t alow{static_cast<::std::uint_least64_t>(a)};
 		if constexpr (ryu_mode)
 		{
-			iter = jeaiii_main(iter, static_cast<::std::uint_least64_t>(alow));
+			iter = jeaiii_main<false, false, char_type, char_type *, false>(
+				iter, static_cast<::std::uint_least64_t>(alow));
 		}
 		else
 		{
@@ -619,15 +621,18 @@ inline constexpr result_type jeaiii_main(char_type *iter, U n) noexcept
 				jeaiii_c<0>(iter, v);
 				++iter;
 				alow = m;
-				iter = jeaiii_main<false, true, char_type>(iter, static_cast<::std::uint_least64_t>(alow));
+				iter = jeaiii_main<false, true, char_type, char_type *, false>(
+					iter, static_cast<::std::uint_least64_t>(alow));
 			}
 			else
 			{
-				iter = jeaiii_main(iter, static_cast<::std::uint_least64_t>(alow));
+				iter = jeaiii_main<false, false, char_type, char_type *, false>(
+					iter, static_cast<::std::uint_least64_t>(alow));
 			}
 		}
 		return jeaiii_result<result_type>(
-			jeaiii_main<false, true, char_type>(iter, static_cast<::std::uint_least64_t>(u)));
+			jeaiii_main<false, true, char_type, char_type *, false>(
+				iter, static_cast<::std::uint_least64_t>(u)));
 	}
 	else if constexpr (sizeof(U) == sizeof(::std::uint_least64_t))
 	{

@@ -2045,7 +2045,6 @@ struct print_fixed_external_overstore_traits<
 	inline static constexpr bool available{
 		::std::same_as<char_type, char> && ::fast_io::details::is_ascii<char_type> &&
 		::fast_io::details::print_floating_scalar_supported<flags, flt> &&
-		flags.floating != manipulators::floating_format::fixed &&
 		(flags.rounding == manipulators::floating_rounding::nearest_to_even ||
 		 flags.rounding == manipulators::floating_rounding::current_environment) &&
 		(::fast_io::details::print_floating_decimal_via_float<flt> ||

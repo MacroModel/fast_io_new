@@ -4109,8 +4109,10 @@ scan_int_contiguous_signed_decimal_define_impl(
 			++first;
 			if (first == last) [[unlikely]]
 			{
-				t = {};
-				return {first, parse_code::ok};
+				// Preserve the general integer grammar: a sign without a digit is
+				// invalid and must not publish a value. This also keeps the optimized
+				// GCC >= 14 / Clang >= 18 overload identical to older compilers.
+				return {first, parse_code::invalid};
 			}
 		}
 		::std::uint_least64_t value{};

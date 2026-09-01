@@ -55,13 +55,6 @@ struct bounded_cstr_scatter_t;
 
 namespace details
 {
-namespace jeaiii
-{
-template <bool ryu_mode, bool recursive, ::std::integral char_type, typename result_type, bool single_digit_checked,
-		  ::fast_io::details::my_unsigned_integral U>
-inline constexpr result_type jeaiii_main(char_type *, U) noexcept;
-}
-
 template <::std::integral char_type, ::fast_io::details::my_unsigned_integral T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
@@ -2713,7 +2706,7 @@ inline constexpr void print_scatter_write_all_preserving_static_fragments(
 			::fast_io::details::decay::print_scatter_direct_full_output_coalesce_threshold<char_type, outputstmtype>()};
 		if constexpr (threshold != 0u)
 		{
-			::fast_io::details::decay::print_scatter_write_all_maybe_coalesce(outstm, scatters, n);
+			::fast_io::details::decay::print_scatter_write_all_dispatch(outstm, scatters, n);
 			return;
 		}
 	}
