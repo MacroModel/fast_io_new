@@ -388,7 +388,6 @@ private:
 			else
 			{
 				typed_allocator_type::deallocate(ptr, 1);
-				ptr = nullptr;
 			}
 		}
 	};
