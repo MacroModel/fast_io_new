@@ -657,6 +657,82 @@ inline constexpr bool inplace_to_decay_bounded_buffer_context_one(
 ///          suppresses all later size and writer CPOs; if every transition is partial, the single post-fold edge invokes
 ///          EOF exactly once. Unlike suffix recursion, this control form also shares its terminal cleanup edge without
 ///          changing the owned source pack or any fragment representation.
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) && \
+	!defined(__CUDACC__) && defined(__OPTIMIZE__) && !defined(__OPTIMIZE_SIZE__) && \
+	(__GNUC__ == 12 || __GNUC__ == 13 || __GNUC__ >= 15) && defined(__AVX__) && \
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) && \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+
+/// @brief Selects the GCC large-pack code-generation exception without changing the protocol graph.
+/// @details Let `N` be the number of already-decayed source objects. Native x86-64 measurements found that GCC 12 and
+///          GCC 15 onward clone and alias-version each inlined reserve writer at `N >= 8`; GCC 13 crosses the same
+///          profitability boundary at `N >= 16`. GCC 11 regressed and GCC 14 was neutral-to-slower, so they are excluded
+///          rather than being hidden behind an imprecise version range. The highest tested policy is inherited by later
+///          GCC releases, while AVX-disabled, size-optimized, non-x86, and non-GCC builds retain the ordinary optimizer.
+template <::std::size_t source_count>
+inline constexpr bool gcc_inplace_to_large_pack_no_loop_vectorize{
+	source_count >= (__GNUC__ == 13 ? 16u : 8u)};
+
+/// @brief Implements the common large/small pack state machine inside the selected GCC optimization domain.
+/// @pre `scratch`, `heap_buffer`, `s`, `t`, and every source reference satisfy the preconditions of
+///      `inplace_to_decay_bounded_buffer_context_one`; their lifetimes cover this call.
+/// @post For the least reached index `j` whose scanner completes, sources `[0,j]` are observed exactly once and sources
+///       `(j,N)` are not observed. If no such `j` exists, every source is observed once and EOF is invoked exactly once.
+/// @details The forced inline is local to the two wrappers below. Consequently their only difference is GCC's loop
+///          vectorization policy: no CPO is duplicated, reordered, or made eager. All arguments remain references to the
+///          decay-owned objects created by the public front door; this helper introduces neither another decay nor an
+///          ABI-visible reference layer. Keeping the fold in one body also makes the formal transition graph identical
+///          for the ordinary and exceptional instantiations.
+template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
+		  typename state, typename T, typename Arg1, typename... Args>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#endif
+inline constexpr void inplace_to_decay_bounded_buffer_context_walk(
+	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	state &s, T &t, Arg1 &arg, Args &...args)
+{
+	bool const completed{
+		::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
+			scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg) ||
+		(... || ::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
+			scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, args))};
+	if (!completed)
+	{
+		::fast_io::details::inplace_to_decay_context_finish<char_type>(s, t);
+	}
+}
+
+template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
+		  typename state, typename T, typename Arg1, typename... Args>
+	requires(!gcc_inplace_to_large_pack_no_loop_vectorize<sizeof...(Args) + 1u>)
+inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
+	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	state &s, T &t, Arg1 &arg, Args &...args)
+{
+	::fast_io::details::inplace_to_decay_bounded_buffer_context_walk<
+		scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg, args...);
+}
+
+/// @brief Applies the measured GCC policy only after the large-pack threshold is proven at instantiation time.
+/// @details Disabling loop vectorization prevents GCC from cloning a main vector loop, scalar epilogues, and run-time
+///          alias checks at every reserve-producing pack position. SLP and explicit SIMD remain enabled. The attribute
+///          can inhibit caller inlining, which is why the constrained overload is never viable below the measured
+///          threshold; large packs amortize that single boundary and reduce both dynamic branches and generated text.
+template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
+		  typename state, typename T, typename Arg1, typename... Args>
+	requires(gcc_inplace_to_large_pack_no_loop_vectorize<sizeof...(Args) + 1u>)
+[[gnu::optimize("no-tree-loop-vectorize")]]
+inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
+	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
+	state &s, T &t, Arg1 &arg, Args &...args)
+{
+	::fast_io::details::inplace_to_decay_bounded_buffer_context_walk<
+		scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg, args...);
+}
+
+#else
+
 template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, ::std::integral char_type,
 		  typename state, typename T, typename Arg1, typename... Args>
 inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
@@ -673,6 +749,8 @@ inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 		::fast_io::details::inplace_to_decay_context_finish<char_type>(s, t);
 	}
 }
+
+#endif
 
 template <::std::integral char_type, bool ln, typename T, typename... Args>
 inline constexpr ::std::size_t calculate_print_normal_maxium_size_main(::std::size_t mx_value) noexcept

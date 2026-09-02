@@ -4912,6 +4912,160 @@ inline constexpr void print_control_single(output &outstm, T &t)
 	}
 }
 
+/// @brief Default policy for keeping one ordinary dynamic-reserve control behind a compiler boundary.
+/// @details The primary template is deliberately false. A destination implementation may specialize this internal
+///          trait only for an exact adapter/compiler combination whose inliner has been measured to duplicate the
+///          complete cursor state machine. Source admission remains separate below, so an output cost workaround cannot
+///          change formatter precedence merely because an argument also exposes a dynamic-reserve fallback.
+template <typename output>
+struct print_control_single_out_of_line_traits
+{
+	inline static constexpr bool value{};
+};
+
+/// @brief Admits only the plain dynamic-reserve representation to the destination's out-of-line cost policy.
+/// @details Every stronger representation is rejected explicitly. The helper still calls `print_control_single` with
+///          the original named decay object and exact output reference, preserving CPO lookup, ABI parameter passing,
+///          cursor publication, exceptions, and the final-line rule; only the compiler's interprocedural placement may
+///          differ.
+template <typename output, typename T>
+inline constexpr bool print_control_single_out_of_line_eligible = []() constexpr {
+	using output_type = ::std::remove_cvref_t<output>;
+	using char_type = typename output_type::output_char_type;
+	using value_type = ::std::remove_cvref_t<T>;
+	return ::fast_io::details::decay::print_control_single_out_of_line_traits<
+			   output_type>::value &&
+		   ::fast_io::dynamic_reserve_printable<char_type, value_type> &&
+		   !::fast_io::reserve_printable<char_type, value_type> &&
+		   !::fast_io::precise_reserve_printable<char_type, value_type> &&
+		   !::fast_io::dynamic_reserve_with_possible_static_stack_size<
+			   char_type, value_type> &&
+		   !::fast_io::single_pass_bounded_materialization_source<
+			   char_type, value_type> &&
+		   !::fast_io::single_pass_staging_printable<char_type, value_type> &&
+		   !::fast_io::scatter_printable_for<char_type, value_type &> &&
+		   !::fast_io::reserve_scatters_printable<char_type, value_type> &&
+		   !::fast_io::dynamic_reserve_scatters_printable<char_type, value_type> &&
+		   !::fast_io::context_printable<char_type, value_type> &&
+		   !::fast_io::details::direct_printable_to<char_type, output_type, value_type>;
+}();
+
+/// @brief Preserves ordinary inlining while containing GCC's audited std::string provenance diagnostic.
+/// @details GCC 13--16 can retain the enclosing string object's 32-byte bound after inlining a valid dynamic writer
+///          into its private put area. The destination/source predicate above is the only caller of this wrapper, so the
+///          lexical suppression cannot affect other outputs or stronger formatter representations. Independent
+///          `-Warray-bounds` diagnostics and sanitizer instrumentation remain active for a writer which exceeds its own
+///          published bound. `always_inline` makes this a diagnostic boundary only, with no ABI or run-time call.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+template <bool line, typename output, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+print_control_single_diagnostic_boundary(output &outstm, T &t)
+{
+	::fast_io::details::decay::print_control_single<line>(outstm, t);
+}
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+#pragma GCC diagnostic pop
+#endif
+
+/// @brief Emits four admitted controls behind one compiler boundary.
+/// @details Four controls amortize the call/return cost while bounding duplicated cursor code. The exact source
+///          references are retained, and only the last member receives `line`, so chunking is observationally identical
+///          to the ordinary left-to-right recursion. `noinline` changes placement only: the mature put-area dispatcher
+///          remains the body and no append materialization, extra size observation, ownership, or output CPO is added.
+template <bool line, typename output, typename T0, typename T1, typename T2, typename T3>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+[[gnu::noinline]]
+#endif
+inline constexpr void print_control_chunk_out_of_line(
+	output &outstm, T0 &t0, T1 &t1, T2 &t2, T3 &t3)
+{
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t0);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t1);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t2);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<line>(outstm, t3);
+}
+
+/// @brief Emits a final five-control chunk without returning the last control to the enclosing inliner.
+/// @details A non-multiple large run terminates in one complete no-inline state machine. This preserves the cursor
+///          provenance boundary through the final logical control instead of exposing a one-control tail to GCC.
+template <bool line, typename output, typename T0, typename T1, typename T2, typename T3, typename T4>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+[[gnu::noinline]]
+#endif
+inline constexpr void print_control_final_chunk_out_of_line(
+	output &outstm, T0 &t0, T1 &t1, T2 &t2, T3 &t3, T4 &t4)
+{
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t0);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t1);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t2);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t3);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<line>(outstm, t4);
+}
+
+/// @brief Emits a final six-control chunk under the same exact-output placement proof.
+template <bool line, typename output, typename T0, typename T1, typename T2, typename T3, typename T4, typename T5>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+[[gnu::noinline]]
+#endif
+inline constexpr void print_control_final_chunk_out_of_line(
+	output &outstm, T0 &t0, T1 &t1, T2 &t2, T3 &t3, T4 &t4, T5 &t5)
+{
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t0);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t1);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t2);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t3);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t4);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<line>(outstm, t5);
+}
+
+/// @brief Emits a final seven-control chunk under the same exact-output placement proof.
+template <bool line, typename output, typename T0, typename T1, typename T2, typename T3, typename T4, typename T5,
+		  typename T6>
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13
+[[gnu::noinline]]
+#endif
+inline constexpr void print_control_final_chunk_out_of_line(
+	output &outstm, T0 &t0, T1 &t1, T2 &t2, T3 &t3, T4 &t4, T5 &t5, T6 &t6)
+{
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t0);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t1);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t2);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t3);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t4);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<false>(outstm, t5);
+	::fast_io::details::decay::print_control_single_diagnostic_boundary<line>(outstm, t6);
+}
+
+/// @brief Partitions an admitted large run into shared four-control compiler chunks.
+/// @details The caller proves at least 32 controls. Recursion emits complete chunks and selects one exact five-, six-,
+///          or seven-control terminal helper when the cardinality is not divisible by four. Repeated type patterns
+///          consequently reuse the same bounded helper instead of generating one full state machine per leaf; smaller
+///          runs retain full inlining because their measured code budget is bounded.
+template <bool line, typename output, typename T0, typename T1, typename T2,
+		  typename T3, typename... Args>
+inline constexpr void print_controls_out_of_line_chunks(
+	output &outstm, T0 &t0, T1 &t1, T2 &t2, T3 &t3, Args &...args)
+{
+	if constexpr (sizeof...(Args) == 0u)
+	{
+		::fast_io::details::decay::print_control_chunk_out_of_line<line>(outstm, t0, t1, t2, t3);
+	}
+	else if constexpr (sizeof...(Args) <= 3u)
+	{
+		// Overload resolution selects the exact five-, six-, or seven-control terminal chunk.
+		::fast_io::details::decay::print_control_final_chunk_out_of_line<line>(outstm, t0, t1, t2, t3, args...);
+	}
+	else
+	{
+		::fast_io::details::decay::print_control_chunk_out_of_line<false>(outstm, t0, t1, t2, t3);
+		::fast_io::details::decay::print_controls_out_of_line_chunks<line>(
+			outstm, args...);
+	}
+}
+
 /// @brief    Describes a contiguous run that can share a context-capture buffer.
 /// @details  The scan tracks context producers, dynamic reserve producers with bounded stack hints, and static
 ///           reserve bursts so the caller can size one reusable capture buffer for the run.
@@ -7939,6 +8093,29 @@ inline constexpr void print_controls_dynamic_scatters_reserve_fast_entry(
 /// @param    t             the current argument
 /// @param    args          the remaining arguments
 template <bool line, typename outputstmtype, ::std::size_t skippings = 0, typename T, typename... Args>
+/*
+GCC 16 classifies the type-changing continuation after an unretained scatter as
+an unlikely size-growth edge.  In a heterogeneous run that edge is instead the
+only ordered continuation and may be reached repeatedly; leaving each suffix
+out of line retains overlapping template clones and one call per boundary.
+
+The attribute changes only this internal layout decision.  For every
+instantiation, the function still emits the same maximal prefix and invokes the
+unique suffix specialization exactly once iff that prefix does not consume the
+record.  It neither changes the already-decayed `T&` objects nor adds a
+forwarding/reference layer.  Native P1 output is byte-identical and P2 has the
+same text size; large heterogeneous raw-output runs remove the redundant call
+chain.  GCC 11--15 did not reproduce the improvement, so they deliberately keep
+their ordinary inliner.  Size-optimized, AVX-disabled, non-x86, and non-GCC
+builds likewise retain the original policy.
+*/
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER) &&       \
+	!defined(__CUDACC__) && defined(__OPTIMIZE__) && !defined(__OPTIMIZE_SIZE__) && \
+	__GNUC__ >= 16 && defined(__AVX__) &&                                           \
+	(defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64)) &&                \
+	!(defined(__arm64ec__) || defined(_M_ARM64EC))
+[[__gnu__::__always_inline__]]
+#endif
 inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...args)
 {
 	using char_type = typename outputstmtype::output_char_type;
@@ -8260,6 +8437,13 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 		{
 			print_control_single_buffered_hot<line>(optstm, t);
 		}
+		else if constexpr (
+			::fast_io::details::decay::print_control_single_out_of_line_eligible<
+				outputstmtype, T>)
+		{
+			::fast_io::details::decay::print_control_single_diagnostic_boundary<line>(
+				optstm, t);
+		}
 		else
 		{
 			print_control_single<line>(optstm, t);
@@ -8274,6 +8458,21 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 		if constexpr (print_fixed_static_reserve_run_available<outputstmtype, char_type, T, Args...>())
 		{
 			print_fixed_static_reserve_run<line, outputstmtype, char_type>(optstm, t, args...);
+			return;
+		}
+		else if constexpr (
+			(n == 32u || n >= 52u) &&
+			::fast_io::details::decay::print_control_single_out_of_line_eligible<
+				outputstmtype, T> &&
+			(::fast_io::details::decay::print_control_single_out_of_line_eligible<
+				 outputstmtype, Args> &&
+			 ...))
+		{
+			// GCC's isolated 32-control cliff benefits from chunks. Counts 33--51 retain inlining because their measured
+			// aggregate cost still benefits from local cursor propagation. From 52 onward the shared chunks bound compile
+			// resources, text size, and nonempty latency; this deliberately forgoes cross-leaf optimization of the rare
+			// all-empty pack rather than pre-observing size CPOs and changing their required evaluation order.
+			::fast_io::details::decay::print_controls_out_of_line_chunks<line>(optstm, t, args...);
 			return;
 		}
 		constexpr bool fixed_external_overstore_component_run{
@@ -8461,7 +8660,18 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 				else
 				{
 					// No useful prefix was found, so emit the current argument and continue with the tail.
-					::fast_io::details::decay::print_control_single<line && sizeof...(args) == 0>(optstm, t);
+					if constexpr (
+						::fast_io::details::decay::print_control_single_out_of_line_eligible<
+							outputstmtype, T>)
+					{
+						::fast_io::details::decay::print_control_single_diagnostic_boundary<
+							line && sizeof...(args) == 0>(optstm, t);
+					}
+					else
+					{
+						::fast_io::details::decay::print_control_single<
+							line && sizeof...(args) == 0>(optstm, t);
+					}
 					if constexpr (sizeof...(args) != 0)
 					{
 						// The tail still owns the caller's final line policy.
