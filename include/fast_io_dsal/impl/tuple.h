@@ -105,22 +105,27 @@ struct pass_type_
 	using type = T;
 };
 
+template <typename IndexSequence, typename... Args>
+struct tuple_impl_;
+
+template <::std::size_t... Index, typename... Args>
+	requires(sizeof...(Args) == sizeof...(Index))
+struct tuple_impl_<::std::index_sequence<Index...>, Args...> : tuple_element_impl_<Index, Args>...
+{};
+
 template <typename... Args, ::std::size_t... Index>
 	requires(sizeof...(Args) == sizeof...(Index))
 [[nodiscard]]
 constexpr auto get_tuple_impl_(::std::index_sequence<Index...>) noexcept
 {
-	struct tuple_impl_ : tuple_element_impl_<Index, Args>...
-	{};
-
-	return ::fast_io::containers::details::pass_type_<tuple_impl_>();
+	return ::fast_io::containers::details::pass_type_<
+		::fast_io::containers::details::tuple_impl_<::std::index_sequence<Index...>, Args...>>();
 }
 
 } // namespace details
 
 template <typename... Args>
-struct tuple : ::std::remove_cvref_t<typename decltype(::fast_io::containers::details::get_tuple_impl_<Args...>(
-				   ::std::make_index_sequence<sizeof...(Args)>{}))::type>
+struct tuple : ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>
 {};
 
 template <>
@@ -134,35 +139,46 @@ tuple(Args &&...) -> tuple<Args...>;
 template <::std::size_t I, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> &self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> &self) noexcept
 {
-	return static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> &>(self).val_;
+	// Keep the first conversion on tuple's serialized direct base. Clang can lose a transitive base path when a
+	// specialization with module-owned element types crosses a BMI boundary, while the two direct conversions remain
+	// well-formed and preserve the identical object representation.
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto& impl{static_cast<tuple_impl_type&>(self)};
+	return static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> &>(impl).val_;
 }
 
 template <::std::size_t I, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> const &self) noexcept
 {
-	return static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> const &>(self).val_;
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto const& impl{static_cast<tuple_impl_type const&>(self)};
+	return static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> const &>(impl).val_;
 }
 
 template <::std::size_t I, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> &&self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> &&self) noexcept
 {
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto&& impl{static_cast<tuple_impl_type&&>(self)};
 	return ::std::move(
-		static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> &&>(self).val_);
+		static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> &&>(impl).val_);
 }
 
 template <::std::size_t I, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &&self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> const &&self) noexcept
 {
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto const&& impl{static_cast<tuple_impl_type const&&>(self)};
 	return ::std::move(
-		static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> const &&>(self).val_);
+		static_cast<::fast_io::containers::details::tuple_element_impl_<I, ::fast_io::containers::details::pack_indexing_t_<I, Args...>> const &&>(impl).val_);
 }
 
 namespace details
@@ -187,38 +203,46 @@ template <typename T, typename... Args>
 	requires((::std::same_as<T, Args> + ...) == 1)
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> const &self) noexcept
 {
-	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto const& impl{static_cast<tuple_impl_type const&>(self)};
+	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(impl).val_;
 }
 
 template <typename T, typename... Args>
 	requires((::std::same_as<T, Args> + ...) == 1)
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> const &&self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> const &&self) noexcept
 {
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto const&& impl{static_cast<tuple_impl_type const&&>(self)};
 	return ::std::move(
-		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
+		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(impl).val_);
 }
 
 template <typename T, typename... Args>
 	requires((::std::same_as<T, Args> + ...) == 1)
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> &self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> &self) noexcept
 {
-	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(self).val_;
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto& impl{static_cast<tuple_impl_type&>(self)};
+	return static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &>(impl).val_;
 }
 
 template <typename T, typename... Args>
 	requires((::std::same_as<T, Args> + ...) == 1)
 FAST_IO_GNU_ALWAYS_INLINE
 	[[nodiscard]]
-	constexpr auto&& get(::fast_io::containers::tuple<Args...> &&self) noexcept
+constexpr auto&& get(::fast_io::containers::tuple<Args...> &&self) noexcept
 {
+	using tuple_impl_type = ::fast_io::containers::details::tuple_impl_<::std::make_index_sequence<sizeof...(Args)>, Args...>;
+	auto&& impl{static_cast<tuple_impl_type&&>(self)};
 	return ::std::move(
-		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(self).val_);
+		static_cast<typename decltype(::fast_io::containers::details::get_tuple_element_by_type_<T, 0, Args...>())::type const &&>(impl).val_);
 }
 
 namespace details
