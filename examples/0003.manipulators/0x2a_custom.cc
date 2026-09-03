@@ -7,6 +7,9 @@ namespace fast_io::manipulators
 fast_io::manipulators allow user to add their custom manipulators
 */
 
+/// @brief Formats a value as lowercase prefixed hexadecimal centered in an eight-character field.
+/// @details The fill character is `'-'`; for example, integer `42` produces `--0x2a--` subject to the hexadecimal
+///          formatter's ordinary type and sign rules. Values whose representation exceeds the field are not truncated.
 template <typename T>
 inline constexpr auto hex_middle_8(T const &t)
 {

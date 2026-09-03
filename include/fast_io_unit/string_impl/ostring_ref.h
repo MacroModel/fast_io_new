@@ -726,6 +726,23 @@ template <::std::integral char_type, typename traits_type, typename allocator_ty
 	return {};
 }
 
+/// @brief Certifies bounded dynamic construction in the audited default standard-string run-time put area.
+/// @details `strlike_runtime_reserve` exposes writable spare capacity while the fresh result remains logically empty;
+///          one final `strlike_runtime_set_curr` publishes only the prefix returned by the component writers. Default
+///          traits and allocator exclude associated user hooks, and the implementation availability predicate excludes
+///          poisoned or unaudited layouts. This is a destination lifetime/cursor proof only; concat separately requires
+///          an explicit platform cost policy before choosing coalesced dynamic construction.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>> &&
+			 ::fast_io::details::string_hack::standard_string_runtime_put_area_available)
+[[nodiscard]] inline constexpr ::std::true_type strlike_concat_fresh_runtime_dynamic_direct_safe(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type, typename traits_type, typename allocator_type>
 inline constexpr void
 strlike_append(io_strlike_type_t<char_type, ::std::basic_string<char_type, traits_type, allocator_type>>,
@@ -742,6 +759,30 @@ strlike_push_back(io_strlike_type_t<char_type, ::std::basic_string<char_type, tr
 {
 	str.push_back(ch);
 }
+
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11 && defined(__linux__) && \
+	defined(__x86_64__) && defined(__GLIBCXX__) && defined(_GLIBCXX_USE_CXX11_ABI) &&   \
+	_GLIBCXX_USE_CXX11_ABI
+/// @brief Prefers one coalesced destination for a pure dynamic-reserve concat on the audited libstdc++ ABI.
+/// @details GCC 11 through 16 expand the default string's incremental print state machine once per leaf. For two or
+///          more object-dependent reserve producers this repeatedly carries allocation, SSO, overlap, and cursor
+///          branches through the hot concat entry. Coalescing instead measures each stable dynamic bound once and emits
+///          one checked contiguous prefix: the audited run-time put area receives it directly when available, otherwise
+///          concat's internal buffer feeds one ordinary range construction.
+///          Default traits, allocator, C++11 ABI, Linux, and x86-64 are all part of the measured cost proof; no custom
+///          allocation or associated formatter semantics inherit it. Newer GCC releases retain the highest-tested
+///          strategy on the same ABI until a contrary code-generation result is established.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 ::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+[[nodiscard]] inline constexpr ::std::true_type concat_dynamic_reserve_coalescing_preferred(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+#endif
 
 #if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 13 && defined(__linux__) && \
 	defined(__x86_64__) && defined(__GLIBCXX__) && defined(_GLIBCXX_USE_CXX11_ABI) &&   \

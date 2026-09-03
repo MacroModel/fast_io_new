@@ -11,7 +11,7 @@ namespace
 
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
 	(defined(__x86_64__) || defined(_M_X64)) &&                       \
-	!defined(__AVX512BF16__) &&                                      \
+	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 
 using precision = ::fast_io::manipulators::floating_precision;
@@ -37,6 +37,14 @@ template <typename proxy_type>
 	proxy_type const &proxy) noexcept
 {
 	return exact_proxy(proxy) && proxy.precision == 3u;
+}
+
+template <typename proxy_type>
+[[nodiscard]] consteval bool exact_precision_range_proxy(
+	proxy_type const &proxy) noexcept
+{
+	return exact_proxy(proxy) && proxy.minimum_precision == 2u &&
+		   proxy.maximum_precision == 5u;
 }
 
 [[nodiscard]] consteval bool constructor_matrix() noexcept
@@ -116,6 +124,12 @@ template <typename proxy_type>
 													rounding::nearest_away_from_zero, true>(signaling_nan, 3u));
 
 	result = result &&
+			 exact_proxy(exact_decimal(decimal(signaling_nan))) &&
+			 exact_proxy(json_float(exact_decimal(decimal(signaling_nan)))) &&
+			 exact_precision_range_proxy(
+				 precision_range(decimal(signaling_nan), 2u, 5u)) &&
+			 exact_precision_range_proxy(json_float(
+				 precision_range(decimal(signaling_nan), 2u, 5u))) &&
 			 exact_precision_proxy(::fast_io::mnp::rounding<rounding::nearest_to_even>(
 				 fixed(signaling_nan, 3u))) &&
 			 exact_precision_proxy(::fast_io::mnp::rounding<rounding::nearest_to_odd>(
@@ -160,6 +174,20 @@ template <::std::integral char_type, typename proxy_type>
 		   storage + size;
 }
 
+template <::std::integral char_type, typename proxy_type>
+[[nodiscard]] bool emits_ordinary(proxy_type proxy) noexcept
+{
+	using clean_type = ::std::remove_cvref_t<proxy_type>;
+	using tag = ::fast_io::io_reserve_type_t<char_type, clean_type>;
+	char_type storage[512u]{};
+	auto const size{print_reserve_size(tag{}, proxy)};
+	if (sizeof(storage) / sizeof(*storage) < size)
+	{
+		return false;
+	}
+	return print_reserve_define(tag{}, storage, proxy) <= storage + size;
+}
+
 #endif
 
 } // namespace
@@ -168,7 +196,7 @@ int main()
 {
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
 	(defined(__x86_64__) || defined(_M_X64)) &&                       \
-	!defined(__AVX512BF16__) &&                                      \
+	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 	auto const value{
 		::std::bit_cast<__bf16>(::std::uint_least16_t{0x3fc0u})};
@@ -180,9 +208,20 @@ int main()
 		::fast_io::mnp::comma_hexfloat0x<
 			true, precision::significant,
 			rounding::nearest_to_even>(value, 3u)};
+	auto const exact{::fast_io::mnp::exact_decimal(
+		::fast_io::mnp::comma_decimal(value))};
+	auto const range{::fast_io::mnp::precision_range(
+		::fast_io::mnp::comma_decimal(value), 2u, 5u)};
+	auto const current_range{
+		::fast_io::mnp::rounding<rounding::current_environment>(range)};
 	return !(emits<char>(decimal) && emits<wchar_t>(decimal) &&
 			 emits<char8_t>(decimal) && emits<char16_t>(hexadecimal) &&
-			 emits<char32_t>(hexadecimal));
+			 emits<char32_t>(hexadecimal) && emits<char>(exact) &&
+			 emits<wchar_t>(exact) && emits<char8_t>(exact) &&
+			 emits<char16_t>(exact) && emits<char32_t>(exact) &&
+			 emits<char>(range) && emits<wchar_t>(range) &&
+			 emits<char8_t>(range) && emits<char16_t>(range) &&
+			 emits<char32_t>(range) && emits_ordinary<char>(current_range));
 #else
 	return 0;
 #endif

@@ -1,0 +1,11 @@
+["scan_case.cc"] # Manual one-input/one-receiver old/new state-machine benchmark.
+ignore = true
+
+["to_case.cc"] # Manual one-front-door old/new conversion benchmark with untimed failure checks.
+ignore = true
+
+["transcoder_case.cc"] # Manual new-only adapter/staged equivalence benchmark.
+ignore = true
+
+["to_protocol_case.cc"] # Manual one-source-pack/one-front-door/one-target old/new protocol benchmark.
+ignore = true

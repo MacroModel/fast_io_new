@@ -1,0 +1,11 @@
+["numeric_matrix.cc"] # Manual short-duration old/new benchmark; one isolated policy tuple is compiled per executable.
+ignore = true
+
+["floating_scan_matrix.cc"] # Manual scalar scan/to benchmark; iteration count and corpus profile are command-line inputs.
+ignore = true
+
+["integer_codegen_probe.cc"] # Manual assembly, llvm-mca, symbol-size, and executable smoke-test probe.
+ignore = true
+
+["transmit_matrix.cc"] # Manual finite raw-transfer benchmark; operation family is selected per executable.
+ignore = true

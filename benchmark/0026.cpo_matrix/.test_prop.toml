@@ -1,0 +1,8 @@
+["print_case.cc"] # Manual one-policy old/new benchmark; the Makefile supplies its protocol and destination macros.
+ignore = true
+
+["concat_case.cc"] # Manual one-policy old/new benchmark; result type and pack shape are selected per executable.
+ignore = true
+
+["dispatch_probe.cc"] # Manual strategy proof and assembly root for the heterogeneous N=8 record.
+ignore = true

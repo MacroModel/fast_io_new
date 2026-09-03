@@ -453,6 +453,305 @@ inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed(T &str, A
 	}
 }
 
+/// @brief Classifies a concat leaf whose selected reserve protocol is exclusively object-dependent.
+/// @details The general planner gives type-level reserve precedence over dynamic reserve, and the dispatcher gives an
+///          all-retained-scatter run precedence over either representation. Requiring the absence of the static reserve
+///          protocol makes the compact plan below observationally identical even for a type that happens to expose
+///          several CPO families: every admitted leaf is measured through the same dynamic CPO that the mixed planner
+///          would select. A retained scatter on such a leaf remains irrelevant unless the complete run selected the
+///          earlier all-scatter strategy.
+template <::std::integral char_type, typename T>
+inline constexpr bool concat_exclusive_dynamic_reserve_leaf_v =
+	::fast_io::dynamic_reserve_printable<char_type, T> &&
+	!::fast_io::reserve_printable<char_type, T>;
+
+/// @brief Proves that a fresh destination exposes an audited run-time put area for bounded direct construction.
+/// @details The marker certifies that reserving capacity creates writable run-time storage without publishing logical
+///          characters, and that one final cursor commit establishes exactly the completed prefix. The three operation
+///          expressions are tested independently so the marker cannot manufacture a missing adapter capability.
+template <typename char_type, typename T>
+concept basic_general_concat_runtime_dynamic_direct_destination =
+	::std::integral<char_type> && requires(T &str, ::std::size_t size, char_type *cursor) {
+		{
+			strlike_concat_fresh_runtime_dynamic_direct_safe(
+				::fast_io::io_strlike_type<char_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+		strlike_runtime_reserve(::fast_io::io_strlike_type<char_type, T>, str, size);
+		{
+			strlike_runtime_begin(::fast_io::io_strlike_type<char_type, T>, str)
+		} -> ::std::same_as<char_type *>;
+		strlike_runtime_set_curr(::fast_io::io_strlike_type<char_type, T>, str, cursor);
+	};
+
+/// @brief Measures a pure dynamic-reserve pack exactly once into compact bound storage.
+/// @details The fold is sequenced left-to-right. Every component is first proved representable as one contiguous
+///          character extent, then participates in a saturating aggregate. Measurement continues after aggregate
+///          unavailability because the sequential fallback requires all one-shot bounds and must not replay a CPO.
+template <::std::integral char_type, typename First, typename... Rest>
+	requires(concat_exclusive_dynamic_reserve_leaf_v<char_type, First> &&
+			 (concat_exclusive_dynamic_reserve_leaf_v<char_type, Rest> && ...))
+inline constexpr ::std::size_t concat_measure_dynamic_components_once(
+	::std::size_t *bounds, First &first, Rest &...rest)
+{
+	::std::size_t total{};
+	::std::size_t index{};
+	auto measure_one = [bounds, &total, &index](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		::std::size_t const bound{print_reserve_size(
+			::fast_io::io_reserve_type<char_type, arg_type>, arg)};
+		bounds[index++] = bound;
+		if (::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+				0u, bound) == SIZE_MAX) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		total = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+			total, bound);
+	};
+	if constexpr (8u <= 1u + sizeof...(Rest) &&
+				  (::std::same_as<::std::remove_reference_t<First>,
+								  ::std::remove_reference_t<Rest>> &&
+				   ...))
+	{
+		// One loop body prevents GCC from cloning the same object-dependent query and overflow graph for every leaf.
+		// The pointer table preserves the original named-object order and never changes the decay transport ABI.
+		using expression_type = ::std::remove_reference_t<First>;
+		expression_type *arguments[]{__builtin_addressof(first), __builtin_addressof(rest)...};
+		for (auto *argument : arguments)
+		{
+			measure_one(*argument);
+		}
+	}
+	else
+	{
+		measure_one(first);
+		(measure_one(rest), ...);
+	}
+	return total;
+}
+
+/// @brief Emits a compact dynamic plan into one already-reserved contiguous range.
+/// @details A homogeneous expression pack shares one CPO/copy loop through an ordered pointer table; a heterogeneous
+///          pack retains compile-time dispatch through the fold. Both forms validate every returned endpoint against
+///          its own cached capacity before it becomes the next leaf's cursor. Thus the loop is a code-generation
+///          quotient over identical types, not a weakening of the per-component reserve contract.
+template <::std::integral char_type, typename First, typename... Rest>
+	requires(concat_exclusive_dynamic_reserve_leaf_v<char_type, First> &&
+			 (concat_exclusive_dynamic_reserve_leaf_v<char_type, Rest> && ...))
+inline constexpr char_type *concat_emit_dynamic_components_to_contiguous(
+	::std::size_t const *bounds, char_type *current, First &first, Rest &...rest)
+{
+	::std::size_t index{};
+	auto emit_one = [bounds, &current, &index](auto &arg) constexpr {
+		using arg_type = ::std::remove_cvref_t<decltype(arg)>;
+		::std::size_t const bound{bounds[index++]};
+		char_type *const component_last{bound == 0u ? current : current + bound};
+		char_type *const emitted_end{print_reserve_define(
+			::fast_io::io_reserve_type<char_type, arg_type>, current, arg)};
+		if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+				current, component_last, emitted_end)) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		current = emitted_end;
+	};
+	if constexpr (8u <= 1u + sizeof...(Rest) &&
+				  (::std::same_as<::std::remove_reference_t<First>,
+								  ::std::remove_reference_t<Rest>> &&
+				   ...))
+	{
+		using expression_type = ::std::remove_reference_t<First>;
+		expression_type *arguments[]{__builtin_addressof(first), __builtin_addressof(rest)...};
+		for (auto *argument : arguments)
+		{
+			emit_one(*argument);
+		}
+	}
+	else
+	{
+		emit_one(first);
+		(emit_one(rest), ...);
+	}
+	return current;
+}
+
+/// @brief Emits one cached dynamic-reserve component through the aggregate-overflow fallback.
+/// @details Keeping this leaf operation in a cold, non-inlined template lets identical normalized source types share
+///          one writer body. GCC otherwise outlines the generic lambda from the pack-level fallback as one large hot
+///          `.text` function containing every copy loop, even though aggregate overflow is exceptional. The helper
+///          retains the exact cached-bound cursor proof and appends only the producer's returned prefix.
+template <::std::integral char_type, typename T, typename Arg>
+#if defined(__GNUC__)
+[[gnu::cold, gnu::noinline]]
+#endif
+inline constexpr void basic_general_concat_cached_dynamic_overflow_emit_one(
+	::fast_io::io_strlike_reference_wrapper<char_type, T> &destination,
+	::std::size_t bound, char_type *scratch, Arg &arg)
+{
+	using arg_type = ::std::remove_cvref_t<Arg>;
+	char_type *const scratch_last{bound == 0u ? scratch : scratch + bound};
+	char_type *const result{print_reserve_define(
+		::fast_io::io_reserve_type<char_type, arg_type>, scratch, arg)};
+	if (!::fast_io::details::decay::print_reserve_scatters_cursor_in_closed_range(
+			scratch, scratch_last, result)) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	::fast_io::operations::decay::write_all_decay(destination, scratch, result);
+}
+
+/// @brief Completes a pure dynamic-reserve concat after its aggregate bound proved unavailable.
+/// @details Each entry in `bounds` is the result of the one and only size-CPO invocation for its corresponding named
+///          decay object. The fallback therefore cannot replay a stateful measurement. It reuses one scratch range of
+///          the maximum component capacity, validates every writer cursor against that component's cached bound, and
+///          appends only the returned prefix. This is the same formal protocol as the mixed fallback, separated so its
+///          allocation and adapter machinery does not consume GCC's inlining budget or instruction cache on the
+///          overwhelmingly common representable aggregate path.
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+#if defined(__GNUC__)
+[[gnu::cold, gnu::noinline]]
+#endif
+inline constexpr void basic_general_concat_decay_ref_impl_cached_dynamic_overflow(
+	::std::size_t const *bounds, T &str, Args &...args)
+{
+	::std::size_t maximum_bound{};
+	for (::std::size_t index{}; index != sizeof...(Args); ++index)
+	{
+		if (maximum_bound < bounds[index])
+		{
+			maximum_bound = bounds[index];
+		}
+	}
+
+	::fast_io::io_strlike_reference_wrapper<char_type, T> destination{__builtin_addressof(str)};
+	auto emit_all = [&](char_type *scratch) constexpr {
+		::std::size_t index{};
+		(::fast_io::details::decay::basic_general_concat_cached_dynamic_overflow_emit_one(
+			 destination, bounds[index++], scratch, args),
+		 ...);
+	};
+
+	if (maximum_bound == 0u)
+	{
+		char_type scratch{};
+		emit_all(__builtin_addressof(scratch));
+	}
+	else
+	{
+		constexpr ::std::size_t maximum_scratch_chars{
+			static_cast<::std::size_t>(PTRDIFF_MAX) / sizeof(char_type)};
+		if (maximum_scratch_chars < maximum_bound) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		FAST_IO_ASSUME(maximum_bound <= maximum_scratch_chars);
+		::fast_io::details::local_operator_new_array_ptr<char_type> scratch(maximum_bound);
+		emit_all(scratch.ptr);
+	}
+	if constexpr (line)
+	{
+		::fast_io::operations::decay::char_put_decay(
+			destination, ::fast_io::char_literal_v<u8'\n', char_type>);
+	}
+}
+
+/// @brief Coalesces a pure dynamic-reserve run using one machine-word bound per decay object.
+/// @details The mixed planner needs a two-word scatter descriptor because each type may select reserve or retained
+///          scatter. That representation is redundant when every selected leaf is dynamic reserve. This specialization
+///          retains the semantically necessary per-leaf bounds (one-shot size observation, overflow fallback, and
+///          returned-cursor proof) but removes unused bases and run-time component indexing from the hot measurement
+///          fold. `Args&` deliberately borrows the phase-1 decay objects: introducing another by-value layer here would
+///          both replay transport copies and replace ABI-selected value normalization with reference transport at the
+///          public boundary.
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires((sizeof...(Args) <= 64u) &&
+			 (concat_exclusive_dynamic_reserve_leaf_v<char_type, Args> && ...))
+inline constexpr void basic_general_concat_decay_ref_impl_cached_dynamic(T &str, Args &...args)
+{
+	static_assert(sizeof...(Args) != 0u);
+	::std::size_t bounds[sizeof...(Args)]{};
+	::std::size_t total{
+		::fast_io::details::decay::concat_measure_dynamic_components_once<char_type>(
+			bounds, args...)};
+	total = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+		total, static_cast<::std::size_t>(line));
+	if (total == SIZE_MAX) [[unlikely]]
+	{
+		::fast_io::details::decay::basic_general_concat_decay_ref_impl_cached_dynamic_overflow<line, char_type>(
+			bounds, str, args...);
+		return;
+	}
+
+	if constexpr (::fast_io::sso_buffer_strlike<char_type, T>)
+	{
+		constexpr ::std::size_t local_capacity{
+			strlike_sso_size(::fast_io::io_strlike_type<char_type, T>)};
+		if (local_capacity < total)
+		{
+			strlike_reserve(::fast_io::io_strlike_type<char_type, T>, str, total);
+		}
+	}
+	else
+	{
+		strlike_reserve(::fast_io::io_strlike_type<char_type, T>, str, total);
+	}
+
+	char_type *current{
+		::fast_io::details::decay::concat_emit_dynamic_components_to_contiguous<char_type>(
+			bounds, strlike_begin(::fast_io::io_strlike_type<char_type, T>, str), args...)};
+	if constexpr (line)
+	{
+		*current++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+	}
+	strlike_set_curr(::fast_io::io_strlike_type<char_type, T>, str, current);
+}
+
+/// @brief Constructs a fresh audited run-time destination directly from cached dynamic bounds.
+/// @details Sizing precedes destination allocation and each size CPO is invoked once. A representable aggregate is
+///          reserved in the destination's certified unpublished put area; writers advance through disjoint bounded
+///          slices, and the final cursor is committed only after the entire run succeeds. If the conservative sum is
+///          unavailable, the same cached bounds feed the sequential concat-buffer fallback, so no stateful size query
+///          is replayed. This function borrows the phase-1 decay objects and therefore does not alter their value-based
+///          public ABI normalization.
+template <bool line, ::std::integral char_type, typename T, typename... Args>
+	requires(
+		::fast_io::details::decay::basic_general_concat_runtime_dynamic_direct_destination<char_type, T> &&
+		(sizeof...(Args) <= 64u) &&
+		(concat_exclusive_dynamic_reserve_leaf_v<char_type, Args> && ...))
+inline constexpr T basic_general_concat_fresh_runtime_dynamic_direct(Args &...args)
+{
+	static_assert(sizeof...(Args) != 0u);
+	::std::size_t bounds[sizeof...(Args)]{};
+	::std::size_t total{
+		::fast_io::details::decay::concat_measure_dynamic_components_once<char_type>(
+			bounds, args...)};
+	total = ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+		total, static_cast<::std::size_t>(line));
+	if (total == SIZE_MAX) [[unlikely]]
+	{
+		::fast_io::details::basic_concat_buffer<char_type> buffer;
+		::fast_io::details::decay::basic_general_concat_decay_ref_impl_cached_dynamic_overflow<line, char_type>(
+			bounds, buffer, args...);
+		return strlike_construct_define(
+			::fast_io::io_strlike_type<char_type, T>, buffer.buffer_begin, buffer.buffer_curr);
+	}
+
+	T result;
+	strlike_runtime_reserve(::fast_io::io_strlike_type<char_type, T>, result, total);
+	char_type *current{
+		::fast_io::details::decay::concat_emit_dynamic_components_to_contiguous<char_type>(
+			bounds,
+			strlike_runtime_begin(::fast_io::io_strlike_type<char_type, T>, result),
+			args...)};
+	if constexpr (line)
+	{
+		*current++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+	}
+	strlike_runtime_set_curr(
+		::fast_io::io_strlike_type<char_type, T>, result, current);
+	return result;
+}
+
 /// @brief Emits a small mixed reserve/scatter run without the general-purpose planning cache.
 /// @details The generic mixed planner handles arbitrary pack lengths and stateful dynamic producers. Literal/string
 /// records are more common and can use one bounded descriptor array instead: each retained scatter is queried once,
@@ -1922,6 +2221,32 @@ concept basic_general_concat_context_staging_preferred_destination =
 		} -> ::std::same_as<::std::true_type>;
 	};
 
+/// @brief Recognizes a construct-only destination which prefers coalescing a pure dynamic-reserve run.
+/// @details This destination policy is deliberately independent from the dynamic-reserve concept. The source protocol
+///          proves only that an object-dependent upper bound and writer exist; it says nothing about whether a concrete
+///          append adapter should grow once per component or whether staging plus range construction is cheaper. Exact
+///          `true_type` matching gives an audited string integration that missing cost premise without changing custom
+///          traits, allocators, platforms, or unrelated concat shapes.
+template <typename ch_type, typename T>
+concept basic_general_concat_dynamic_coalescing_preferred_destination =
+	::std::integral<ch_type> && !::fast_io::buffer_strlike<ch_type, T> &&
+	::fast_io::range_constructible_strlike<ch_type, T> && requires {
+		{
+			concat_dynamic_reserve_coalescing_preferred(
+				::fast_io::io_strlike_type<ch_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Selects the narrow fresh-result dynamic coalescing cost policy.
+/// @details The two-leaf minimum leaves a singleton on its destination's direct SSO/append path. Every admitted leaf is
+///          exclusively dynamic reserve, so the compact planner invokes exactly the same CPO family as the ordinary
+///          mixed planner; an earlier all-retained-scatter branch remains authoritative for dual-protocol packs.
+template <typename ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_dynamic_coalescing_run_v =
+	2u <= sizeof...(Args) && sizeof...(Args) <= 64u &&
+	::fast_io::details::decay::basic_general_concat_dynamic_coalescing_preferred_destination<ch_type, T> &&
+	(::fast_io::details::decay::concat_exclusive_dynamic_reserve_leaf_v<ch_type, Args> && ...);
+
 /// @brief Recognizes an expensive leaf whose exact-size protocol would repeat substantial formatting work.
 /// @details This is an explicit source cost policy, not an inference from `dynamic_reserve_printable`: arbitrary dynamic
 ///          producers may be cheap, stateful, or deliberately optimized for exact sizing. A width semantic node is the
@@ -2816,6 +3141,17 @@ inline constexpr void basic_general_concat_decay_ref_impl(T &str, Args &...args)
 		// path here preserves the established all-retained protocol priority before either shortcut classifies leaves.
 		basic_general_concat_decay_ref_impl_all_scatter<line, ch_type>(str, args...);
 	}
+	else if constexpr (16u <= sizeof...(Args) && sizeof...(Args) <= 64u &&
+					   (::fast_io::details::decay::concat_exclusive_dynamic_reserve_leaf_v<
+							ch_type, Args> &&
+						...))
+	{
+		// Long pure dynamic-reserve runs need only one cached bound per normalized argument. Short runs keep the general
+		// planner because their metadata savings do not repay a second code path. The preceding branch preserves
+		// all-scatter priority.
+		::fast_io::details::decay::basic_general_concat_decay_ref_impl_cached_dynamic<line, ch_type>(
+			str, args...);
+	}
 #if defined(__GNUC__) && !defined(__clang__)
 	else if constexpr (::fast_io::details::decay::concat_gcc_hot_mixed_run_v<ch_type, Args...>)
 	{
@@ -3069,6 +3405,31 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 			basic_concat_buffer<ch_type> buffer;
 			auto destination{io_strlike_ref(::fast_io::io_alias, buffer)};
 			::fast_io::operations::decay::print_freestanding_decay_impl<line>(destination, args...);
+			return strlike_construct_define(
+				io_strlike_type<ch_type, T>, buffer.buffer_begin, buffer.buffer_curr);
+		}
+		else if constexpr (
+			::fast_io::details::decay::basic_general_concat_dynamic_coalescing_run_v<
+				ch_type, T, Args...>)
+		{
+			FAST_IO_IF_NOT_CONSTEVAL
+			{
+				if constexpr (
+					::fast_io::details::decay::basic_general_concat_runtime_dynamic_direct_destination<
+						ch_type, T>)
+				{
+					// The audited run-time put area removes both staging storage and the final range copy while retaining
+					// one reserve and one deferred logical-size publication.
+					return ::fast_io::details::decay::basic_general_concat_fresh_runtime_dynamic_direct<
+						line, ch_type, T>(args...);
+				}
+			}
+			// The destination explicitly prefers one contiguous dynamic run over per-leaf append growth. The compact
+			// planner is also the constant-evaluation fallback because a standard string cannot expose writable spare
+			// capacity there. Range construction sees only returned prefixes and never unused conservative capacity.
+			basic_concat_buffer<ch_type> buffer;
+			::fast_io::details::decay::basic_general_concat_decay_ref_impl_cached_dynamic<line, ch_type>(
+				buffer, args...);
 			return strlike_construct_define(
 				io_strlike_type<ch_type, T>, buffer.buffer_begin, buffer.buffer_curr);
 		}

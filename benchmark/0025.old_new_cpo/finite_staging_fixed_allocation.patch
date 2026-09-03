@@ -1,0 +1,121 @@
+--- a/include/fast_io_core_impl/operations/transmitimpl/all.h
++++ b/include/fast_io_core_impl/operations/transmitimpl/all.h
+@@ -40,26 +40,13 @@
+ 	using output_char_type = typename optstmtype::output_char_type;
+ 	constexpr ::std::size_t default_buffer_elements{
+ 		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
+-	::std::size_t buffer_elements{default_buffer_elements};
+-	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
+-	{
+-		/*
+-		Both operands denote elements. sizeof(input_char_type) participates only
+-		in translating the byte-budget policy to an element capacity; it never
+-		scales the caller's element count. The comparison occurs in uintfpos_t,
+-		and this branch proves the request is below a size_t constant before the
+-		narrowing conversion. Consequently the allocation is exactly
+-		min(default_buffer_elements, remaining_request) elements.
+-		*/
+-		buffer_elements = static_cast<::std::size_t>(totransmit);
+-	}
+ 	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
+-		buffer_elements);
++		default_buffer_elements);
+ 	input_char_type *buffer_start{newptr.ptr};
+ 	while (totransmit)
+ 	{
+ 		// Move one bounded block while preserving the exact remaining count.
+-		::std::size_t this_round{buffer_elements};
++		::std::size_t this_round{default_buffer_elements};
+ 		if (totransmit < this_round)
+ 		{
+ 			// Limit the final iteration to the exact remaining element count.
+--- a/include/fast_io_core_impl/operations/transmitimpl/some.h
++++ b/include/fast_io_core_impl/operations/transmitimpl/some.h
+@@ -39,26 +39,14 @@
+ 	using output_char_type = typename optstmtype::output_char_type;
+ 	constexpr ::std::size_t default_buffer_elements{
+ 		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
+-	::std::size_t buffer_elements{default_buffer_elements};
+-	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
+-	{
+-		/*
+-		The request and capacity are element counts. The character width is used
+-		only to derive how many elements fit the default byte budget. Comparing in
+-		uintfpos_t before narrowing proves needtransmit fits size_t in this branch,
+-		so the allocation is min(default_buffer_elements, remaining_request)
+-		elements without confusing bytes and elements.
+-		*/
+-		buffer_elements = static_cast<::std::size_t>(needtransmit);
+-	}
+ 	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
+-		buffer_elements);
++		default_buffer_elements);
+ 	input_char_type *buffer_start{newptr.ptr};
+ 	::fast_io::uintfpos_t totransmit{needtransmit};
+ 	while (totransmit)
+ 	{
+ 		// Attempt one bounded element block and stop on the first short EOF result.
+-		::std::size_t this_round{buffer_elements};
++		::std::size_t this_round{default_buffer_elements};
+ 		if (totransmit < this_round)
+ 		{
+ 			// Bound the current read by the caller's remaining element request.
+--- a/include/fast_io_core_impl/operations/transmitimpl/bytes_all.h
++++ b/include/fast_io_core_impl/operations/transmitimpl/bytes_all.h
+@@ -36,24 +36,13 @@
+ 	// buffer; provider-specific zero-copy belongs to status transmit CPOs.
+ 	constexpr ::std::size_t default_buffer_bytes{
+ 		::fast_io::details::transmit_buffer_size_cache<1>};
+-	::std::size_t buffer_bytes{default_buffer_bytes};
+-	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
+-	{
+-		/*
+-		Both values are byte counts: this operation never derives capacity from
+-		the advertised stream character type. The uintfpos_t comparison precedes
+-		the narrowing conversion and proves it safe, making the allocation exactly
+-		min(default_buffer_bytes, remaining_request) bytes.
+-		*/
+-		buffer_bytes = static_cast<::std::size_t>(totransmit);
+-	}
+ 	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+-		buffer_bytes);
++		default_buffer_bytes);
+ 	::std::byte *buffer_start{newptr.ptr};
+ 	while (totransmit)
+ 	{
+ 		// Move one bounded byte block while preserving the exact remaining count.
+-		::std::size_t this_round{buffer_bytes};
++		::std::size_t this_round{default_buffer_bytes};
+ 		if (totransmit < this_round)
+ 		{
+ 			// Limit the final iteration to the exact remaining byte count.
+--- a/include/fast_io_core_impl/operations/transmitimpl/bytes_some.h
++++ b/include/fast_io_core_impl/operations/transmitimpl/bytes_some.h
+@@ -35,25 +35,14 @@
+ 	// reports only bytes that have also been committed to the output.
+ 	constexpr ::std::size_t default_buffer_bytes{
+ 		::fast_io::details::transmit_buffer_size_cache<1>};
+-	::std::size_t buffer_bytes{default_buffer_bytes};
+-	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
+-	{
+-		/*
+-		The partial bound and the staging capacity are both bytes, independent
+-		of input_char_type. The comparison is performed before narrowing, and its
+-		true branch proves the request fits size_t. The resulting allocation is
+-		therefore min(default_buffer_bytes, remaining_request) bytes.
+-		*/
+-		buffer_bytes = static_cast<::std::size_t>(needtransmit);
+-	}
+ 	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+-		buffer_bytes);
++		default_buffer_bytes);
+ 	::std::byte *buffer_start{newptr.ptr};
+ 	::fast_io::uintfpos_t totransmit{needtransmit};
+ 	while (totransmit)
+ 	{
+ 		// Attempt one bounded byte block and stop on the first short EOF result.
+-		::std::size_t this_round{buffer_bytes};
++		::std::size_t this_round{default_buffer_bytes};
+ 		if (totransmit < this_round)
+ 		{
+ 			// Bound the current read by the caller's remaining byte request.
