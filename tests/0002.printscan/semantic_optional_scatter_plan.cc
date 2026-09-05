@@ -477,6 +477,82 @@ using explicit_barrier_transport =
 using explicit_source_status_barrier_transport =
 	::fast_io::parameter<source_status_barrier_leaf const &>;
 
+// Reference transition system for the former type-list scan. Keeping it in the test, rather than sharing the new
+// partition metadata, checks exact interval selection, empty boundaries, source rejection, and final-line ownership.
+template <typename... Args>
+using proof_list = ::fast_io::details::decay::print_semantic_active_record_type_list<Args...>;
+
+template <bool Line, typename Output, typename Prefix, typename Remaining>
+struct reference_barrier_scan;
+
+template <bool Line, typename Output, typename... Prefix>
+struct reference_barrier_scan<Line, Output, proof_list<Prefix...>, proof_list<>>
+	: ::fast_io::details::decay::print_semantic_optional_scatter_barrier_segment_proof<
+		  Line, char, Output, proof_list<Prefix...>>
+{};
+
+template <bool Line, typename Output, typename... Prefix, typename First, typename... Tail>
+struct reference_barrier_scan<Line, Output, proof_list<Prefix...>, proof_list<First, Tail...>>
+{
+	inline static constexpr bool value{[]() consteval {
+		if constexpr (::fast_io::details::decay::print_semantic_optional_scatter_boundary_argument_v<
+						  Output, char, First>)
+		{
+			return ::fast_io::details::decay::print_semantic_optional_scatter_barrier_segment_proof<
+					   false, char, Output, proof_list<Prefix...>>::value &&
+				   reference_barrier_scan<Line, Output, proof_list<>, proof_list<Tail...>>::value;
+		}
+		else if constexpr (
+			::fast_io::details::decay::print_semantic_optional_scatter_argument_v<char, First &> ||
+			::fast_io::details::decay::print_semantic_optional_scatter_plain_argument_v<char, First &>)
+		{
+			return reference_barrier_scan<Line, Output, proof_list<Prefix..., First>, proof_list<Tail...>>::value;
+		}
+		else
+		{
+			return false;
+		}
+	}()};
+};
+
+template <typename Output, typename... Args>
+consteval bool partition_preserves_output_proof()
+{
+	return []<bool... Line>(::std::integer_sequence<bool, Line...>) consteval {
+		return ((reference_barrier_scan<Line, Output, proof_list<>, proof_list<Args...>>::value ==
+				 ::fast_io::details::decay::print_semantic_optional_scatter_barrier_partition<
+					 Line, char, Output, Args...>::value) &&
+				...);
+	}(::std::integer_sequence<bool, false, true>{});
+}
+
+template <typename... Args>
+consteval bool partition_preserves_proof()
+{
+	return partition_preserves_output_proof<scatter_sink, Args...>() &&
+		   partition_preserves_output_proof<coalescing_sink, Args...>() &&
+		   partition_preserves_output_proof<whole_coalescing_sink, Args...>();
+}
+
+static_assert(partition_preserves_proof<>());
+static_assert(partition_preserves_proof<normalized_barrier>());
+static_assert(partition_preserves_proof<normalized_barrier, normalized_barrier>());
+static_assert(partition_preserves_proof<normalized_optional, normalized_barrier, normalized_optional>());
+static_assert(partition_preserves_proof<normalized_optional, normalized_unmarked_barrier, normalized_optional>());
+static_assert(partition_preserves_proof<normalized_optional, explicit_barrier_transport, normalized_optional>());
+static_assert(partition_preserves_proof<normalized_optional, normalized_barrier const, normalized_optional>());
+static_assert(partition_preserves_proof<normalized_optional, normalized_width, normalized_optional>());
+static_assert(partition_preserves_proof<normalized_optional, ::fast_io::io_null_t, normalized_barrier>());
+static_assert(partition_preserves_proof<normalized_barrier,
+										normalized_optional, normalized_optional, normalized_optional, normalized_optional,
+										normalized_separator, normalized_separator, normalized_barrier>());
+static_assert(partition_preserves_proof<normalized_barrier,
+										normalized_optional, normalized_optional, normalized_optional, normalized_optional,
+										normalized_separator, normalized_separator, normalized_separator, normalized_barrier>());
+static_assert(partition_preserves_proof<normalized_optional, normalized_optional, normalized_optional, normalized_optional,
+										normalized_separator, normalized_scalar, normalized_separator, normalized_width,
+										normalized_optional, normalized_barrier, normalized_optional>());
+
 static_assert(
 	::fast_io::details::decay::
 		print_semantic_optional_scatter_argument_v<

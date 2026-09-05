@@ -11066,53 +11066,78 @@ inline constexpr bool print_semantic_active_record_runs_okay{
 template <typename output, ::std::integral char_type, typename T>
 inline constexpr bool print_semantic_optional_scatter_barrier_argument_v =
 	[]() consteval {
-		using source_type = ::std::remove_cvref_t<T>;
-		using provider_type =
-			::fast_io::details::decay::
-				print_runtime_scatter_plan_unwrapped_t<T &>;
-		// parameter<T> is fast_io's transparent public transport, not a new formatter. Only provider discovery uses the
-		// referent. Every operation check below remains attached to the actual normalized source, and the enclosing plan
-		// independently rejects an exact whole-record status CPO for that wrapper and all of its associated namespaces.
-		constexpr bool common_negative_protocols{
-			!::fast_io::scatter_printable_for<char_type, source_type &> &&
-			!::fast_io::reserve_printable<char_type, source_type> &&
-			!::fast_io::dynamic_reserve_printable<char_type, source_type> &&
-			!::fast_io::reserve_scatters_printable<char_type, source_type> &&
-			!::fast_io::staged_printable<char_type, source_type> &&
-			!::fast_io::single_pass_staging_printable<char_type, source_type> &&
-			!::fast_io::compiler_constant_printable<char_type, source_type>};
-		constexpr bool direct_barrier{
-			::fast_io::semantic_optional_scatter_barrier_leaf<
-				char_type, provider_type> &&
-			::fast_io::details::direct_printable_to<
-				char_type, output, source_type> &&
-			!::fast_io::context_printable<char_type, source_type> &&
-			common_negative_protocols};
-		constexpr bool selected_preferred_direct{
-			::fast_io::details::direct_printable_to<
-				char_type, output, source_type> &&
-			((::fast_io::put_area_printable_preferred<
-				  char_type, source_type> &&
-			  ::fast_io::operations::decay::defines::
-				  has_obuffer_basic_operations<output>) ||
-			 (::fast_io::buffered_printable_preferred<
-				  char_type, source_type> &&
-			  (::fast_io::operations::decay::defines::
-				   has_obuffer_basic_operations<output> ||
-			   ::fast_io::buffered_printable_preferred_stream<
-				   char_type, output>)))};
-		constexpr bool context_barrier{
-			::fast_io::semantic_optional_scatter_context_barrier_leaf<
-				char_type, provider_type> &&
-			::fast_io::context_printable<char_type, source_type> &&
-			!selected_preferred_direct &&
-			!::fast_io::details::decay::
-				print_one_pass_direct_streaming_available_v<
-					char_type, output, source_type> &&
-			common_negative_protocols};
-		return !::fast_io::details::decay::
-				   print_semantic_execution_node_v<T> &&
-			   (direct_barrier || context_barrier);
+		if constexpr (::fast_io::details::decay::print_semantic_execution_node_v<T>)
+		{
+			// A semantic node is never a user control barrier. Discard its formatter graph before querying protocols
+			// which cannot change this result; an ordinary Boolean initializer would still instantiate those operands.
+			return false;
+		}
+		else
+		{
+			using source_type = ::std::remove_cvref_t<T>;
+			using provider_type =
+				::fast_io::details::decay::
+					print_runtime_scatter_plan_unwrapped_t<T &>;
+			constexpr bool direct_provider{
+				::fast_io::semantic_optional_scatter_barrier_leaf<char_type, provider_type>};
+			constexpr bool context_provider{
+				::fast_io::semantic_optional_scatter_context_barrier_leaf<char_type, provider_type>};
+			if constexpr (!direct_provider && !context_provider)
+			{
+				// Either provider promise is a necessary premise of the unchanged disjunction. Most literals and scalar
+				// leaves carry neither, so do not construct their direct/context/constant protocol graphs just to reject them.
+				return false;
+			}
+			else
+			{
+				// parameter<T> is fast_io's transparent public transport, not a new formatter. Only provider discovery uses the
+				// referent. Every operation check below remains attached to the actual normalized source, and the enclosing plan
+				// independently rejects an exact whole-record status CPO for that wrapper and all of its associated namespaces.
+				constexpr bool common_negative_protocols{
+					!::fast_io::scatter_printable_for<char_type, source_type &> &&
+					!::fast_io::reserve_printable<char_type, source_type> &&
+					!::fast_io::dynamic_reserve_printable<char_type, source_type> &&
+					!::fast_io::reserve_scatters_printable<char_type, source_type> &&
+					!::fast_io::staged_printable<char_type, source_type> &&
+					!::fast_io::single_pass_staging_printable<char_type, source_type> &&
+					!::fast_io::compiler_constant_printable<char_type, source_type>};
+				if constexpr (!common_negative_protocols)
+				{
+					return false;
+				}
+				else if constexpr (direct_provider &&
+								   ::fast_io::details::direct_printable_to<
+									   char_type, output, source_type> &&
+								   !::fast_io::context_printable<char_type, source_type>)
+				{
+					return true;
+				}
+				else if constexpr (context_provider && ::fast_io::context_printable<char_type, source_type>)
+				{
+					constexpr bool selected_preferred_direct{
+						::fast_io::details::direct_printable_to<
+							char_type, output, source_type> &&
+						((::fast_io::put_area_printable_preferred<
+							  char_type, source_type> &&
+						  ::fast_io::operations::decay::defines::
+							  has_obuffer_basic_operations<output>) ||
+						 (::fast_io::buffered_printable_preferred<
+							  char_type, source_type> &&
+						  (::fast_io::operations::decay::defines::
+							   has_obuffer_basic_operations<output> ||
+						   ::fast_io::buffered_printable_preferred_stream<
+							   char_type, output>)))};
+					return !selected_preferred_direct &&
+						   !::fast_io::details::decay::
+							   print_one_pass_direct_streaming_available_v<
+								   char_type, output, source_type>;
+				}
+				else
+				{
+					return false;
+				}
+			}
+		}
 	}();
 
 /// @brief Proves that one top-level width is already a mandatory flat-fallback boundary for this destination.
@@ -11297,6 +11322,107 @@ struct print_semantic_optional_scatter_barrier_segment_proof<
 	}()};
 };
 
+#if (__cplusplus > 202302L && __cpp_pack_indexing >= 202311L) || FAST_IO_HAS_BUILTIN(__type_pack_element)
+
+/// @brief Partitions a normalized source graph once, then applies the unchanged proof to each exact segment.
+/// @details Let B(i) be the existing boundary predicate and S(i) the existing segment-source predicate. The scan
+///          rejects exactly when !B(i) && !S(i), and records the maximal half-open intervals between B positions.
+///          Each non-final interval is proved with line=false; the final interval, including an empty suffix, owns
+///          the original line flag. These are precisely the transitions of the former prefix/suffix type-list walk.
+///          Only the representation of the proof changes: O(N) scalar metadata replaces O(N^2) repeated type-list
+///          entries. No runtime emitter, cardinality threshold, active-record status lookup, or CPO policy changes.
+template <bool line, ::std::integral char_type, typename output, typename... Args>
+struct print_semantic_optional_scatter_barrier_partition
+{
+	template <::std::size_t index>
+	using source_type =
+#if __cplusplus > 202302L && __cpp_pack_indexing >= 202311L
+		Args...[index];
+#else
+		// Some Clang releases advertise the feature macro in C++20 as an extension. Keep the source language valid
+		// under -Werror=c++26-extensions by requiring both the language version and the feature macro above.
+		__type_pack_element<index, Args...>;
+#endif
+
+	inline static constexpr auto partition{[]() consteval {
+		struct result_type
+		{
+			::std::size_t begins[sizeof...(Args) + 1u]{};
+			::std::size_t ends[sizeof...(Args) + 1u]{};
+			::std::size_t count{1u};
+			bool valid{true};
+		};
+		result_type result{};
+		constexpr bool boundaries[]{
+			::fast_io::details::decay::print_semantic_optional_scatter_boundary_argument_v<
+				output, char_type, Args>...,
+			false};
+		constexpr bool sources[]{
+			(::fast_io::details::decay::print_semantic_optional_scatter_argument_v<char_type, Args &> ||
+			 ::fast_io::details::decay::print_semantic_optional_scatter_plain_argument_v<char_type, Args &>)...,
+			false};
+		for (::std::size_t index{}; index != sizeof...(Args); ++index)
+		{
+			if (boundaries[index])
+			{
+				result.ends[result.count - 1u] = index;
+				result.begins[result.count++] = index + 1u;
+			}
+			else if (!sources[index])
+			{
+				result.valid = false;
+				return result;
+			}
+		}
+		result.ends[result.count - 1u] = sizeof...(Args);
+		return result;
+	}()};
+
+	template <::std::size_t segment, ::std::size_t... offset>
+	inline static consteval bool prove_segment(::std::index_sequence<offset...>) noexcept
+	{
+		// Index the enclosing pack directly: wrapping each lookup in tuple_element would repeat a complete pack in
+		// every substituted helper specialization. No source object is formed and original cv-qualification is retained.
+		constexpr bool segment_line{line && segment + 1u == partition.count};
+		return ::fast_io::details::decay::print_semantic_optional_scatter_barrier_segment_proof<
+			segment_line, char_type, output,
+			print_semantic_active_record_type_list<source_type<partition.begins[segment] + offset>...>>::value;
+	}
+
+	template <::std::size_t... segment>
+	inline static consteval bool prove_segments(::std::index_sequence<segment...>) noexcept
+	{
+		return (prove_segment<segment>(::std::make_index_sequence<
+									   partition.ends[segment] - partition.begins[segment]>{}) &&
+				...);
+	}
+
+	inline static constexpr bool value{[]() consteval {
+		if constexpr (!partition.valid)
+		{
+			return false;
+		}
+		else
+		{
+			return prove_segments(::std::make_index_sequence<partition.count>{});
+		}
+	}()};
+};
+
+/// @brief An empty source graph has exactly one final segment and no indexable source type.
+/// @details Reuse the original terminal proof directly. In particular, the empty-line case must not be replaced by
+///          unconditional success, and no dependent pack-index alias is declared for a pack with no valid index.
+template <bool line, ::std::integral char_type, typename output>
+struct print_semantic_optional_scatter_barrier_partition<line, char_type, output>
+	: print_semantic_optional_scatter_barrier_segment_proof<
+		  line, char_type, output, print_semantic_active_record_type_list<>>
+{};
+
+#else
+
+// Without language or compiler pack indexing, an overload-table lookup still considers O(N) candidates per source.
+// GCC 11 measurements rejected that emulation (higher time and memory than the original walk). Retain the original
+// proof representation on such frontends; this feature gate changes compiler work only, never runtime admission.
 /// @brief Scans one normalized source graph and proves every segment and barrier without forming their global product.
 template <bool line, ::std::integral char_type, typename output,
 		  typename segment_list, typename remaining_list>
@@ -11374,6 +11500,15 @@ struct print_semantic_optional_scatter_barrier_scan<
 	inline static constexpr bool value{typename result::type{}};
 };
 
+template <bool line, ::std::integral char_type, typename output, typename... Args>
+struct print_semantic_optional_scatter_barrier_partition
+	: print_semantic_optional_scatter_barrier_scan<
+		line, char_type, output, print_semantic_active_record_type_list<>,
+		print_semantic_active_record_type_list<Args...>>
+{};
+
+#endif
+
 /// @brief Proves that a normalized source graph may be split only at independently proved dispatch boundaries.
 /// @details The global source record must not own an exact status CPO. User barriers and the destination supply paired
 ///          ADL proofs; width boundaries instead satisfy the complete mechanical flat-fallback proof above. Four total
@@ -11413,10 +11548,8 @@ print_semantic_optional_scatter_barrier_plan_available() noexcept
 	{
 		using scan =
 			::fast_io::details::decay::
-				print_semantic_optional_scatter_barrier_scan<
-					line, char_type, output,
-					print_semantic_active_record_type_list<>,
-					print_semantic_active_record_type_list<Args...>>;
+				print_semantic_optional_scatter_barrier_partition<
+					line, char_type, output, Args...>;
 		if constexpr (!scan::value)
 		{
 			return false;
@@ -16929,6 +17062,16 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 			print_semantic_optional_scatter_barrier_plan_emit<
 				line, char_type>(optstm, args...);
 	}
+#if defined(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC)
+	else if constexpr (
+		diagnostic_top_level_condition_count >=
+		static_cast<::std::size_t>(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC))
+	{
+		// The assertion above already rejects this diagnostic-only translation unit. A failed assertion alone does
+		// not discard subsequent templates: explicitly stop recovery from instantiating the very Cartesian product
+		// being diagnosed. Accepted plans and every build without the diagnostic macro retain their original path.
+	}
+#endif
 	else if constexpr (
 		already_forwarded && !has_pack_or_null && !has_top_level_condition &&
 		bypass_condition_selection)
