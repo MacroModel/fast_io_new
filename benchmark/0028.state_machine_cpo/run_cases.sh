@@ -35,7 +35,9 @@ literal:literal:1:to:builtin
 literal:literal:2:inplace:builtin
 literal:literal:8:to:builtin
 literal:literal:32:inplace:builtin}"
-: "${OLD_SUPPORTS_FLOAT_SCAN:=0}"
+# The current official baseline exposes decimal floating scan CPOs. Keep an explicit zero override only for a
+# historical include snapshot whose missing capability was verified; compiler or revision versions are not probes.
+: "${OLD_SUPPORTS_FLOAT_SCAN:=1}"
 
 if [ ! -d "$NEW_ROOT/include" ] || [ ! -d "$OLD_ROOT/include" ]; then
 	printf '%s\n' "NEW_ROOT and OLD_ROOT must each contain include/" >&2

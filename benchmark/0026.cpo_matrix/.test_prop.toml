@@ -6,3 +6,18 @@ ignore = true
 
 ["dispatch_probe.cc"] # Manual strategy proof and assembly root for the heterogeneous N=8 record.
 ignore = true
+
+["seek_decay_abi_probe.cc"] # Manual address-taken AArch64/x86-64 ABI and seek dispatch proof.
+ignore = true
+
+["transmit_decay_abi_probe.cc"] # Manual address-taken mixed-direction transmit ABI proof.
+ignore = true
+
+["read_write_decay_abi_probe.cc"] # Manual address-taken read/write/range/finish ABI proof with no runtime entry point.
+ignore = true
+
+["to_decay_abi_probe.cc"] # Manual cross-target inplace-to ABI lowering probe with no standalone main function.
+ignore = true
+
+["concat_ordered_staging_case.cc"] # Macro-selected old/new runtime, compile-cost, and image-size regression case.
+ignore = true

@@ -171,6 +171,43 @@ struct nontrivial_copyable_io_proxy
 	}
 };
 
+// Primitive dispatch must be well-formed for a named move-only or immovable
+// observer. These CPOs touch only external state, so the test can distinguish a
+// valid borrowed invocation without granting either type value-copy admission.
+inline char *read_some_underflow_define(
+	move_only_io_proxy &input, char *first, char *last) noexcept
+{
+	if (first != last)
+	{
+		*first++ = 'm';
+		++*input.identity;
+	}
+	return first;
+}
+
+inline void write_all_overflow_define(
+	move_only_io_proxy &output, char const *, char const *) noexcept
+{
+	++*output.identity;
+}
+
+inline char *read_some_underflow_define(
+	immovable_io_proxy &input, char *first, char *last) noexcept
+{
+	if (first != last)
+	{
+		*first++ = 'i';
+		++*input.identity;
+	}
+	return first;
+}
+
+inline void write_all_overflow_define(
+	immovable_io_proxy &output, char const *, char const *) noexcept
+{
+	++*output.identity;
+}
+
 static_assert(::fast_io::operations::defines::storable_input_stream_ref_result<
 	copyable_io_proxy &>);
 static_assert(::fast_io::operations::defines::storable_output_stream_ref_result<
@@ -218,6 +255,109 @@ static_assert(!::fast_io::operations::defines::abi_value_io_stream_ref_result<
 	immovable_io_proxy>);
 static_assert(!::fast_io::operations::defines::abi_value_io_stream_ref_result<
 	nontrivial_copyable_io_proxy>);
+
+struct primitive_direct_input_cursor
+{
+	using input_char_type = char;
+	char const *current{};
+};
+
+struct primitive_direct_output_cursor
+{
+	using output_char_type = char;
+	char *current{};
+};
+
+// These compact cursors deliberately keep mutable position in the observer
+// object. They are trivial and register-sized, but copying either would publish
+// progress only into a discarded parameter. The missing semantic marker is the
+// formal reason primitive dispatch must retain their identity.
+static_assert(::std::is_trivially_copyable_v<primitive_direct_input_cursor>);
+static_assert(::std::is_trivially_copyable_v<primitive_direct_output_cursor>);
+static_assert(!::fast_io::operations::defines::abi_value_input_stream_ref_result<
+	primitive_direct_input_cursor &>);
+static_assert(!::fast_io::operations::defines::abi_value_output_stream_ref_result<
+	primitive_direct_output_cursor &>);
+
+inline char *read_some_underflow_define(
+	primitive_direct_input_cursor &input, char *first, char *last) noexcept
+{
+	for (char *iter{first}; iter != last; ++iter, ++input.current)
+		*iter = *input.current;
+	return last;
+}
+
+inline void write_all_overflow_define(
+	primitive_direct_output_cursor &output, char const *first,
+	char const *last) noexcept
+{
+	for (; first != last; ++first, ++output.current)
+		*output.current = *first;
+}
+
+struct primitive_shared_state
+{
+	char const *input_current{};
+	char *output_current{};
+	void const *observed_input_proxy{};
+	void const *observed_output_proxy{};
+};
+
+struct primitive_shared_input_proxy
+{
+	using input_char_type = char;
+	primitive_shared_state *state{};
+};
+
+struct primitive_shared_output_proxy
+{
+	using output_char_type = char;
+	primitive_shared_state *state{};
+};
+
+// Both proxies contain only a pointer to shared mutable control state. The ADL
+// declarations are explicit substitution proofs: copying the descriptor cannot
+// fork either cursor, so a target-supported primitive may restore value ABI.
+inline constexpr ::std::true_type stream_ref_value_transport_safe_define(
+	::fast_io::io_type_t<primitive_shared_input_proxy>) noexcept
+{
+	return {};
+}
+
+inline constexpr ::std::true_type stream_ref_value_transport_safe_define(
+	::fast_io::io_type_t<primitive_shared_output_proxy>) noexcept
+{
+	return {};
+}
+
+static_assert(
+	::fast_io::operations::defines::abi_value_input_stream_ref_result<
+		primitive_shared_input_proxy &> ==
+	::fast_io::details::abi_small_trivial_argument_object<
+		primitive_shared_input_proxy>());
+static_assert(
+	::fast_io::operations::defines::abi_value_output_stream_ref_result<
+		primitive_shared_output_proxy &> ==
+	::fast_io::details::abi_small_trivial_argument_object<
+		primitive_shared_output_proxy>());
+
+inline char *read_some_underflow_define(
+	primitive_shared_input_proxy &input, char *first, char *last) noexcept
+{
+	input.state->observed_input_proxy = __builtin_addressof(input);
+	for (char *iter{first}; iter != last; ++iter, ++input.state->input_current)
+		*iter = *input.state->input_current;
+	return last;
+}
+
+inline void write_all_overflow_define(
+	primitive_shared_output_proxy &output, char const *first,
+	char const *last) noexcept
+{
+	output.state->observed_output_proxy = __builtin_addressof(output);
+	for (; first != last; ++first, ++output.state->output_current)
+		*output.state->output_current = *first;
+}
 
 struct copyable_input_source
 {
@@ -630,6 +770,67 @@ inline void run_reference_and_prvalue_tests()
 	stored_mutex.lock();
 	stored_mutex.unlock();
 	assert(lock_count == 4);
+
+	char const input_text[]{'i', 'n'};
+	char input_result[2]{};
+	primitive_direct_input_cursor direct_input{input_text};
+	::fast_io::operations::decay::read_some_decay_dispatch(
+		direct_input, input_result, input_result + 2);
+	assert(direct_input.current == input_text + 2);
+	assert(input_result[0] == 'i' && input_result[1] == 'n');
+
+	char direct_output_storage[2]{};
+	char const output_text[]{'o', 'k'};
+	primitive_direct_output_cursor direct_output{direct_output_storage};
+	::fast_io::operations::decay::write_all_decay_dispatch(
+		direct_output, output_text, output_text + 2);
+	assert(direct_output.current == direct_output_storage + 2);
+	assert(direct_output_storage[0] == 'o' && direct_output_storage[1] == 'k');
+
+	char shared_input_result[2]{};
+	char shared_output_storage[2]{};
+	primitive_shared_state shared_state{
+		input_text, shared_output_storage, nullptr, nullptr};
+	primitive_shared_input_proxy shared_input{__builtin_addressof(shared_state)};
+	primitive_shared_output_proxy shared_output{__builtin_addressof(shared_state)};
+	::fast_io::operations::decay::read_some_decay_dispatch(
+		shared_input, shared_input_result, shared_input_result + 2);
+	::fast_io::operations::decay::write_all_decay_dispatch(
+		shared_output, output_text, output_text + 2);
+	assert(shared_state.input_current == input_text + 2);
+	assert(shared_state.output_current == shared_output_storage + 2);
+	assert(shared_input_result[0] == 'i' && shared_input_result[1] == 'n');
+	assert(shared_output_storage[0] == 'o' && shared_output_storage[1] == 'k');
+	if constexpr (::fast_io::operations::defines::abi_value_input_stream_ref_result<
+				  primitive_shared_input_proxy &>)
+		assert(shared_state.observed_input_proxy != __builtin_addressof(shared_input));
+	else
+		assert(shared_state.observed_input_proxy == __builtin_addressof(shared_input));
+	if constexpr (::fast_io::operations::defines::abi_value_output_stream_ref_result<
+				  primitive_shared_output_proxy &>)
+		assert(shared_state.observed_output_proxy != __builtin_addressof(shared_output));
+	else
+		assert(shared_state.observed_output_proxy == __builtin_addressof(shared_output));
+
+	int move_only_activity{};
+	move_only_io_proxy move_only_primitive{__builtin_addressof(move_only_activity)};
+	char move_only_character{};
+	::fast_io::operations::decay::read_some_decay_dispatch(
+		move_only_primitive, __builtin_addressof(move_only_character),
+		__builtin_addressof(move_only_character) + 1);
+	::fast_io::operations::decay::write_all_decay_dispatch(
+		move_only_primitive, output_text, output_text + 1);
+	assert(move_only_activity == 2 && move_only_character == 'm');
+
+	int immovable_activity{};
+	immovable_io_proxy immovable_primitive{__builtin_addressof(immovable_activity)};
+	char immovable_character{};
+	::fast_io::operations::decay::read_some_decay_dispatch(
+		immovable_primitive, __builtin_addressof(immovable_character),
+		__builtin_addressof(immovable_character) + 1);
+	::fast_io::operations::decay::write_all_decay_dispatch(
+		immovable_primitive, output_text, output_text + 1);
+	assert(immovable_activity == 2 && immovable_character == 'i');
 }
 
 } // namespace ref_result_substitution

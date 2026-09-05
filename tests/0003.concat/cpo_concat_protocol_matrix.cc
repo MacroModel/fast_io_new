@@ -25,7 +25,8 @@ enum class source_family : unsigned char
 	scatter,
 	alias,
 	borrowed_scatter,
-	mixed
+	mixed,
+	mixed_borrowed
 };
 
 enum class result_family : unsigned char
@@ -206,7 +207,7 @@ does not opt into borrowed/repeatable provenance.  Concat must therefore copy
 the descriptor exactly once into destination-owned storage and may neither
 retain nor replay it during a measure-then-emit strategy.
 */
-inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
 	::fast_io::io_reserve_type_t<char, scatter_source>,
 	scatter_source source) noexcept
 {
@@ -246,6 +247,262 @@ inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
 {
 	return {};
 }
+
+struct scratch_scatter_source
+{
+	char value{};
+	::std::size_t *defines{};
+};
+
+inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, scratch_scatter_source>,
+	scratch_scatter_source source) noexcept
+{
+	static char shared_scratch;
+	++*source.defines;
+	shared_scratch = source.value;
+	return {__builtin_addressof(shared_scratch), 1u};
+}
+
+static_assert(::fast_io::scatter_printable<char, scratch_scatter_source>);
+static_assert(!::fast_io::borrowed_scatter_source<char, scratch_scatter_source>);
+
+template <::std::size_t extent>
+struct sized_scratch_scatter_source
+{
+	char value{};
+	::std::size_t *defines{};
+};
+
+template <::std::size_t extent>
+inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, sized_scratch_scatter_source<extent>>,
+	sized_scratch_scatter_source<extent> source) noexcept
+{
+	static ::std::array<char, extent> shared_scratch{};
+	++*source.defines;
+	shared_scratch.fill(source.value);
+	return {shared_scratch.data(), shared_scratch.size()};
+}
+
+inline constexpr ::std::size_t promotion_scratch_extent{96u};
+using promotion_scratch_scatter_source =
+	sized_scratch_scatter_source<promotion_scratch_extent>;
+
+inline constexpr ::std::size_t oversized_scratch_extent{
+	::fast_io::details::basic_concat_buffer<char>::buffer_size + 257u};
+using oversized_scratch_scatter_source =
+	sized_scratch_scatter_source<oversized_scratch_extent>;
+
+static_assert(::fast_io::scatter_printable<char, promotion_scratch_scatter_source>);
+static_assert(!::fast_io::borrowed_scatter_source<char, promotion_scratch_scatter_source>);
+static_assert(::fast_io::scatter_printable<char, oversized_scratch_scatter_source>);
+static_assert(!::fast_io::borrowed_scatter_source<char, oversized_scratch_scatter_source>);
+
+struct ordered_staging_status_probe_source
+{
+};
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, ordered_staging_status_probe_source>,
+	ordered_staging_status_probe_source) noexcept
+{
+	static constexpr char value{'x'};
+	return {__builtin_addressof(value), 1u};
+}
+
+struct ordered_staging_status_probe_result
+{
+};
+
+[[maybe_unused]] [[nodiscard]] inline ordered_staging_status_probe_result strlike_construct_define(
+	::fast_io::io_strlike_type_t<char, ordered_staging_status_probe_result>,
+	char const *, char const *) noexcept
+{
+	return {};
+}
+
+[[maybe_unused]] [[nodiscard]] inline constexpr ::std::size_t concat_ordered_staging_minimum_leaf_count(
+	::fast_io::io_strlike_type_t<char, ordered_staging_status_probe_result>) noexcept
+{
+	return 1u;
+}
+
+template <bool line>
+	requires(!line)
+[[maybe_unused]] inline void status_print_define(
+	::fast_io::io_strlike_reference_wrapper<
+		char, ::fast_io::details::basic_concat_buffer<char>>,
+	ordered_staging_status_probe_source) noexcept
+{
+}
+
+struct ordered_original_status_probe_output
+{
+	using output_char_type = char;
+};
+
+struct ordered_original_status_probe_source
+{
+};
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, ordered_original_status_probe_source>,
+	ordered_original_status_probe_source) noexcept
+{
+	static constexpr char value{'y'};
+	return {__builtin_addressof(value), 1u};
+}
+
+struct ordered_original_status_probe_result
+{
+};
+
+[[maybe_unused]] [[nodiscard]] inline ordered_original_status_probe_result strlike_construct_define(
+	::fast_io::io_strlike_type_t<char, ordered_original_status_probe_result>,
+	char const *, char const *) noexcept
+{
+	return {};
+}
+
+[[maybe_unused]] [[nodiscard]] inline constexpr ::std::size_t concat_ordered_staging_minimum_leaf_count(
+	::fast_io::io_strlike_type_t<char, ordered_original_status_probe_result>) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] [[nodiscard]] inline ordered_original_status_probe_output io_strlike_ref(
+	::fast_io::io_alias_t, ordered_original_status_probe_result &) noexcept
+{
+	return {};
+}
+
+template <bool line>
+	requires line
+[[maybe_unused]] inline void status_print_define(
+	ordered_original_status_probe_output,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source) noexcept
+{
+}
+
+// These recognition-only sentinels make the cost/source candidate true on every target. The first exact status hook
+// belongs only to concat's fixed staging adapter; the second belongs only to the original result adapter and line mode.
+// Neither function is executed. Rejecting both final policies proves that ordered per-leaf dispatch cannot intercept a
+// provider operation or bypass a whole-record provider while the underlying candidate remains independently visible.
+static_assert(::fast_io::details::decay::basic_general_concat_ordered_staging_candidate_v<
+	char, ordered_staging_status_probe_result,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source>);
+static_assert(!::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+	false, char, ordered_staging_status_probe_result,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source,
+	ordered_staging_status_probe_source, ordered_staging_status_probe_source>);
+static_assert(::fast_io::details::decay::basic_general_concat_ordered_staging_candidate_v<
+	char, ordered_original_status_probe_result,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source>);
+static_assert(!::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+	true, char, ordered_original_status_probe_result,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source,
+	ordered_original_status_probe_source, ordered_original_status_probe_source>);
+
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+struct ordered_adaptive_status_probe_source
+{
+};
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, ordered_adaptive_status_probe_source>,
+	ordered_adaptive_status_probe_source) noexcept
+{
+	static constexpr char value{'z'};
+	return {__builtin_addressof(value), 1u};
+}
+
+template <bool line>
+	requires(!line)
+[[maybe_unused]] inline void status_print_define(
+	::fast_io::io_strlike_reference_wrapper<
+		char, ::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<
+			  char, ::fast_io::string>>,
+	ordered_adaptive_status_probe_source) noexcept
+{
+}
+
+// The adaptive staging adapter is a distinct ADL surface from the fixed two-KiB adapter above. This target-specific
+// sentinel proves the final gate asks about that exact cached-cursor output type before enabling the seven-leaf policy.
+static_assert(::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+	char, ::fast_io::string>);
+static_assert(::fast_io::details::decay::basic_general_concat_ordered_staging_candidate_v<
+	char, ::fast_io::string,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source>);
+static_assert(!::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+	false, char, ::fast_io::string,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source, ordered_adaptive_status_probe_source,
+	ordered_adaptive_status_probe_source>);
+
+struct ordered_adaptive_direct_probe_source
+{
+};
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char, ordered_adaptive_direct_probe_source>,
+	ordered_adaptive_direct_probe_source) noexcept
+{
+	static constexpr char value{'w'};
+	return {__builtin_addressof(value), 1u};
+}
+
+[[maybe_unused]] inline void print_define(
+	::fast_io::io_reserve_type_t<char, ordered_adaptive_direct_probe_source>,
+	::fast_io::io_strlike_reference_wrapper<
+		char, ::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<
+			  char, ::fast_io::string>>,
+	ordered_adaptive_direct_probe_source) noexcept
+{
+}
+
+using ordered_adaptive_probe_output = ::fast_io::io_strlike_reference_wrapper<
+	char, ::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<
+		  char, ::fast_io::string>>;
+
+// An output-specific direct CPO is invisible to the historical dummy-output `printable` probe, but it still disproves
+// the staging policy's destination-independent source model. The candidate is intentionally kept true so rejection can
+// be attributed to the completed-output ADL gate rather than to scatter shape, pack cost, or public printability.
+static_assert(!::fast_io::printable<char, ordered_adaptive_direct_probe_source>);
+static_assert(::fast_io::details::direct_printable_to<
+	char, ordered_adaptive_probe_output,
+	ordered_adaptive_direct_probe_source>);
+static_assert(::fast_io::details::decay::basic_general_concat_ordered_staging_candidate_v<
+	char, ::fast_io::string,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source>);
+static_assert(!::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+	false, char, ::fast_io::string,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source, ordered_adaptive_direct_probe_source,
+	ordered_adaptive_direct_probe_source>);
+#endif
 
 struct alias_proxy
 {
@@ -288,6 +545,93 @@ inline alias_proxy print_alias_define(
 	return {source.view};
 }
 
+struct ordered_reserve_dynamic_priority_probe
+{
+};
+
+[[maybe_unused]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_dynamic_priority_probe>) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_dynamic_priority_probe>,
+	ordered_reserve_dynamic_priority_probe) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] inline char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_dynamic_priority_probe>,
+	char *destination, ordered_reserve_dynamic_priority_probe) noexcept
+{
+	*destination = 'r';
+	return destination + 1u;
+}
+
+struct ordered_reserve_scatter_priority_probe
+{
+};
+
+[[maybe_unused]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_scatter_priority_probe>) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] inline char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_scatter_priority_probe>,
+	char *destination, ordered_reserve_scatter_priority_probe) noexcept
+{
+	*destination = 'r';
+	return destination + 1u;
+}
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char,
+		ordered_reserve_scatter_priority_probe>,
+	ordered_reserve_scatter_priority_probe) noexcept
+{
+	static constexpr char value{'s'};
+	return {__builtin_addressof(value), 1u};
+}
+
+struct ordered_dynamic_scatter_priority_probe
+{
+};
+
+[[maybe_unused]] inline constexpr ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char,
+		ordered_dynamic_scatter_priority_probe>,
+	ordered_dynamic_scatter_priority_probe) noexcept
+{
+	return 1u;
+}
+
+[[maybe_unused]] inline char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char,
+		ordered_dynamic_scatter_priority_probe>,
+	char *destination, ordered_dynamic_scatter_priority_probe) noexcept
+{
+	*destination = 'd';
+	return destination + 1u;
+}
+
+[[maybe_unused]] inline ::fast_io::basic_io_scatter_t<char> print_scatter_define(
+	::fast_io::io_reserve_type_t<char,
+		ordered_dynamic_scatter_priority_probe>,
+	ordered_dynamic_scatter_priority_probe) noexcept
+{
+	static constexpr char value{'s'};
+	return {__builtin_addressof(value), 1u};
+}
+
 static_assert(::fast_io::reserve_printable<char, fixed_source>);
 static_assert(::fast_io::dynamic_reserve_printable<char, dynamic_source>);
 static_assert(::fast_io::precise_reserve_printable<char, precise_source>);
@@ -297,6 +641,34 @@ static_assert(::fast_io::scatter_printable<char, borrowed_scatter_source>);
 static_assert(
 	::fast_io::borrowed_scatter_source<char, borrowed_scatter_source>);
 static_assert(::fast_io::alias_printable<alias_source>);
+
+// The specialized adaptive emitter duplicates only the destination-independent portion of ordinary leaf priority.
+// Static reserve therefore remains admissible when dynamic reserve is also present. Any overlap with scatter remains
+// on the generic dispatcher because static-scatter representation and destination retention can reverse that choice.
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, fixed_source>);
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, dynamic_source>);
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, precise_source>);
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, scatter_source>);
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, alias_proxy>);
+static_assert(
+	::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, ordered_reserve_dynamic_priority_probe>);
+static_assert(
+	!::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, ordered_reserve_scatter_priority_probe>);
+static_assert(
+	!::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+		char, ordered_dynamic_scatter_priority_probe>);
 
 template <::std::size_t count>
 struct fixture
@@ -391,9 +763,25 @@ struct source_type<source_family::borrowed_scatter>
 
 template <source_family family, ::std::size_t index>
 inline constexpr source_family effective_family{
-	family == source_family::mixed
-		? static_cast<source_family>(index % 5u)
-		: family};
+	[]() consteval {
+		if constexpr (family == source_family::mixed ||
+					  family == source_family::mixed_borrowed)
+		{
+			constexpr auto slot{index % 5u};
+			if constexpr (family == source_family::mixed_borrowed && slot == 3u)
+			{
+				return source_family::borrowed_scatter;
+			}
+			else
+			{
+				return static_cast<source_family>(slot);
+			}
+		}
+		else
+		{
+			return family;
+		}
+	}()};
 
 template <source_family family, ::std::size_t index>
 using source_for = typename source_type<effective_family<family, index>>::type;
@@ -446,6 +834,7 @@ inline void verify_counts(protocol_counts const &counts, source_family family)
 		matrix_require(counts.total_calls() == 2u);
 		break;
 	case source_family::mixed:
+	case source_family::mixed_borrowed:
 		matrix_require(false);
 	}
 }
@@ -504,9 +893,12 @@ void run_case()
 	for (::std::size_t index{}; index != count; ++index)
 	{
 		auto const family_for_argument{
-			family == source_family::mixed
-				? static_cast<source_family>(index % 5u)
-				: family};
+			family == source_family::mixed_borrowed && index % 5u == 3u
+				? source_family::borrowed_scatter
+				: (family == source_family::mixed ||
+						   family == source_family::mixed_borrowed
+					   ? static_cast<source_family>(index % 5u)
+					   : family)};
 		verify_counts(values.counters[index], family_for_argument);
 		matrix_require(values.alive[index]);
 		if (family_for_argument == source_family::scatter ||
@@ -691,6 +1083,186 @@ void verify_temporary_lifetimes()
 	}
 }
 
+template <result_family result>
+void verify_long_scratch_scatter_order()
+{
+	::std::size_t defines{};
+	auto output{[](::std::size_t &count) {
+		if constexpr (result == result_family::standard_string)
+		{
+			return ::fast_io::concat_std(
+				scratch_scatter_source{'A', __builtin_addressof(count)},
+				scratch_scatter_source{'B', __builtin_addressof(count)},
+				scratch_scatter_source{'C', __builtin_addressof(count)},
+				scratch_scatter_source{'D', __builtin_addressof(count)},
+				scratch_scatter_source{'E', __builtin_addressof(count)},
+				scratch_scatter_source{'F', __builtin_addressof(count)},
+				scratch_scatter_source{'G', __builtin_addressof(count)},
+				scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+		else
+		{
+			return ::fast_io::concat_fast_io(
+				scratch_scatter_source{'A', __builtin_addressof(count)},
+				scratch_scatter_source{'B', __builtin_addressof(count)},
+				scratch_scatter_source{'C', __builtin_addressof(count)},
+				scratch_scatter_source{'D', __builtin_addressof(count)},
+				scratch_scatter_source{'E', __builtin_addressof(count)},
+				scratch_scatter_source{'F', __builtin_addressof(count)},
+				scratch_scatter_source{'G', __builtin_addressof(count)},
+				scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+	}(defines)};
+
+	// The eight-leaf record reaches the measured ordered-staging threshold on supported targets. Every descriptor
+	// aliases the same byte, so `ABCDEFGH` proves each scatter was copied before the following CPO overwrote that byte;
+	// a descriptor-table plan would instead observe eight copies of `H`.
+	verify_bytes(output, "ABCDEFGH");
+	matrix_require(defines == 8u);
+}
+
+template <result_family result>
+void verify_promoted_scratch_scatter_order()
+{
+	::std::size_t defines{};
+	auto output{[](::std::size_t &count) {
+		if constexpr (result == result_family::standard_string)
+		{
+			return ::fast_io::concat_std(
+				promotion_scratch_scatter_source{'A', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'B', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'C', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'D', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'E', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'F', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'G', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+		else
+		{
+			return ::fast_io::concat_fast_io(
+				promotion_scratch_scatter_source{'A', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'B', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'C', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'D', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'E', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'F', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'G', __builtin_addressof(count)},
+				promotion_scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+	}(defines)};
+
+	// Eight 96-character descriptors cross the adaptive destination's 512-character boundary during `F`. Every CPO
+	// overwrites the one shared array, so exact A--H blocks prove `F` was consumed before the destination-only promotion
+	// and before `G` ran. A replay would increment the count; descriptor retention would expose later bytes.
+	matrix_require(output.size() == 8u * promotion_scratch_extent);
+	for (::std::size_t block{}; block != 8u; ++block)
+	{
+		for (::std::size_t index{}; index != promotion_scratch_extent; ++index)
+		{
+			matrix_require(output.data()[block * promotion_scratch_extent + index] ==
+						   static_cast<char>('A' + block));
+		}
+	}
+	matrix_require(defines == 8u);
+}
+
+template <result_family result>
+void verify_line_feed_after_exact_threshold()
+{
+	using exact_source = sized_scratch_scatter_source<64u>;
+	::std::size_t defines{};
+	auto output{[](::std::size_t &count) {
+		if constexpr (result == result_family::standard_string)
+		{
+			return ::fast_io::concatln_std(
+				exact_source{'A', __builtin_addressof(count)},
+				exact_source{'B', __builtin_addressof(count)},
+				exact_source{'C', __builtin_addressof(count)},
+				exact_source{'D', __builtin_addressof(count)},
+				exact_source{'E', __builtin_addressof(count)},
+				exact_source{'F', __builtin_addressof(count)},
+				exact_source{'G', __builtin_addressof(count)},
+				exact_source{'H', __builtin_addressof(count)});
+		}
+		else
+		{
+			return ::fast_io::concatln_fast_io(
+				exact_source{'A', __builtin_addressof(count)},
+				exact_source{'B', __builtin_addressof(count)},
+				exact_source{'C', __builtin_addressof(count)},
+				exact_source{'D', __builtin_addressof(count)},
+				exact_source{'E', __builtin_addressof(count)},
+				exact_source{'F', __builtin_addressof(count)},
+				exact_source{'G', __builtin_addressof(count)},
+				exact_source{'H', __builtin_addressof(count)});
+		}
+	}(defines)};
+
+	// The eight descriptors exactly fill the 512-character policy threshold. The separately sequenced line feed remains
+	// inside the larger physical safety window after the final pair, so its exact position proves that skipping a useless
+	// final promotion cannot drop, duplicate, or reorder the record suffix. Source counts remain unchanged because
+	// destination finalization never replays a producer.
+	matrix_require(output.size() == 513u);
+	for (::std::size_t block{}; block != 8u; ++block)
+	{
+		for (::std::size_t index{}; index != 64u; ++index)
+		{
+			matrix_require(output.data()[block * 64u + index] ==
+						   static_cast<char>('A' + block));
+		}
+	}
+	matrix_require(output.data()[512u] == '\n');
+	matrix_require(defines == 8u);
+}
+
+template <result_family result>
+void verify_oversized_leaf_promotes_in_place()
+{
+	::std::size_t defines{};
+	auto output{[](::std::size_t &count) {
+		if constexpr (result == result_family::standard_string)
+		{
+			return ::fast_io::concat_std(
+				oversized_scratch_scatter_source{'A', __builtin_addressof(count)},
+				scratch_scatter_source{'B', __builtin_addressof(count)},
+				scratch_scatter_source{'C', __builtin_addressof(count)},
+				scratch_scatter_source{'D', __builtin_addressof(count)},
+				scratch_scatter_source{'E', __builtin_addressof(count)},
+				scratch_scatter_source{'F', __builtin_addressof(count)},
+				scratch_scatter_source{'G', __builtin_addressof(count)},
+				scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+		else
+		{
+			return ::fast_io::concat_fast_io(
+				oversized_scratch_scatter_source{'A', __builtin_addressof(count)},
+				scratch_scatter_source{'B', __builtin_addressof(count)},
+				scratch_scatter_source{'C', __builtin_addressof(count)},
+				scratch_scatter_source{'D', __builtin_addressof(count)},
+				scratch_scatter_source{'E', __builtin_addressof(count)},
+				scratch_scatter_source{'F', __builtin_addressof(count)},
+				scratch_scatter_source{'G', __builtin_addressof(count)},
+				scratch_scatter_source{'H', __builtin_addressof(count)});
+		}
+	}(defines)};
+
+	// The first actual descriptor exceeds the complete physical staging area, so overflow must promote while that leaf
+	// is still active and then resume from reacquired cursors. Exact bytes and a single call per producer prove that the
+	// suffix was neither replayed nor retained when the following shared-scratch descriptors overwrote their own byte.
+	matrix_require(output.size() == oversized_scratch_extent + 7u);
+	for (::std::size_t index{}; index != oversized_scratch_extent; ++index)
+	{
+		matrix_require(output.data()[index] == 'A');
+	}
+	for (::std::size_t index{}; index != 7u; ++index)
+	{
+		matrix_require(output.data()[oversized_scratch_extent + index] ==
+					   static_cast<char>('B' + index));
+	}
+	matrix_require(defines == 8u);
+}
+
 template <result_family result, source_family family>
 void run_singleton_protocol()
 {
@@ -703,6 +1275,13 @@ void run_mixed_count()
 {
 	run_case<result, source_family::mixed, count, false>();
 	run_case<result, source_family::mixed, count, true>();
+}
+
+template <result_family result, ::std::size_t count>
+void run_mixed_borrowed_count()
+{
+	run_case<result, source_family::mixed_borrowed, count, false>();
+	run_case<result, source_family::mixed_borrowed, count, true>();
 }
 
 template <result_family result, ::std::size_t count>
@@ -731,6 +1310,12 @@ void run_result_matrix()
 	run_dynamic_count<result, 8u>();
 	run_dynamic_count<result, 32u>();
 	run_dynamic_count<result, 64u>();
+	/* Long homogeneous exact records exercise the ordered pointer-table quotient on audited destinations. Every
+	   original decay object must still receive exactly one coherent dynamic or precise query/writer pair. */
+	run_case<result, source_family::precise_reserve, 8u, false>();
+	run_case<result, source_family::precise_reserve, 8u, true>();
+	run_case<result, source_family::precise_reserve, 32u, false>();
+	run_case<result, source_family::precise_reserve, 32u, true>();
 	/* N=8 exercises retained planning at the optimization threshold; N=32
 	   verifies ordered ownership transfer across a larger descriptor run. */
 	run_case<result, source_family::borrowed_scatter, 8u, false>();
@@ -741,6 +1326,14 @@ void run_result_matrix()
 	run_mixed_count<result, 2u>();
 	run_mixed_count<result, 8u>();
 	run_mixed_count<result, 32u>();
+	/* Replacing the unmarked scatter in the mixed rotation with an independently borrowed descriptor proves that the
+	   complete-neutral destination policy neither repeats a CPO nor retains any source interval in the returned value. */
+	run_mixed_borrowed_count<result, 8u>();
+	run_mixed_borrowed_count<result, 32u>();
+	verify_long_scratch_scatter_order<result>();
+	verify_promoted_scratch_scatter_order<result>();
+	verify_line_feed_after_exact_threshold<result>();
+	verify_oversized_leaf_promotes_in_place<result>();
 	verify_temporary_lifetimes<result>();
 }
 

@@ -954,6 +954,13 @@ inline void test_alias_and_forward_categories()
 		::fast_io::inplace_to(target, "T");
 		assert(target.value == 'T');
 	}
+	{
+		::scan_concept_harness::reference_alias_target target;
+		// The target alias is an immovable lvalue proxy. `inplace_to` must select the dedicated borrowed-target entry;
+		// the value-decay entry remains reserved for prvalue proxies whose ABI transport must not become a reference.
+		::fast_io::inplace_to(target, "B");
+		assert(target.value == 'B');
+	}
 	#if __has_include(<stdio.h>)
 	{
 		default_stdin_zero_proxy proxy;

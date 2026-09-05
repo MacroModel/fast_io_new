@@ -18,6 +18,173 @@ static_assert(!writable_output_v<::fast_io::basic_obuffer_view_ref<char volatile
 static_assert(!writable_output_v<::fast_io::basic_omemory_map_ref<char const>>);
 static_assert(!writable_output_v<::fast_io::basic_omemory_map_ref<char volatile>>);
 
+struct counted_growable_output
+{
+	::std::array<char, 8u> storage{};
+	char *begin{storage.data()};
+	char *current{storage.data()};
+	char *end{storage.data() + 4u};
+	::std::size_t typed_overflows{};
+	::std::size_t byte_overflows{};
+
+	inline void reset(::std::size_t initial_capacity = 4u) noexcept
+	{
+		storage.fill('\0');
+		begin = current = storage.data();
+		end = storage.data() + initial_capacity;
+		typed_overflows = byte_overflows = 0u;
+	}
+
+	inline void reset_null() noexcept
+	{
+		storage.fill('\0');
+		begin = current = end = nullptr;
+		typed_overflows = byte_overflows = 0u;
+	}
+};
+
+struct counted_growable_output_ref
+{
+	using output_char_type = char;
+	counted_growable_output *state{};
+};
+
+[[nodiscard]] inline constexpr counted_growable_output_ref output_stream_ref_define(
+	counted_growable_output &output) noexcept
+{
+	return {__builtin_addressof(output)};
+}
+
+[[maybe_unused]] [[nodiscard]] inline constexpr char *obuffer_begin(
+	counted_growable_output_ref output) noexcept
+{
+	return output.state->begin;
+}
+
+[[nodiscard]] inline constexpr char *obuffer_curr(counted_growable_output_ref output) noexcept
+{
+	return output.state->current;
+}
+
+[[nodiscard]] inline constexpr char *obuffer_end(counted_growable_output_ref output) noexcept
+{
+	return output.state->end;
+}
+
+inline constexpr void obuffer_set_curr(
+	counted_growable_output_ref output, char *current) noexcept
+{
+	output.state->current = current;
+}
+
+inline void write_all_overflow_define(
+	counted_growable_output_ref output, char const *first, char const *last) noexcept
+{
+	++output.state->typed_overflows;
+	auto const count{static_cast<::std::size_t>(last - first)};
+	auto const used{static_cast<::std::size_t>(output.state->current - output.state->storage.data())};
+	assert(used + count <= output.state->storage.size());
+	output.state->begin = output.state->storage.data();
+	output.state->end = output.state->storage.data() + output.state->storage.size();
+	for (; first != last; ++first)
+	{
+		*output.state->current++ = *first;
+	}
+}
+
+inline void write_all_bytes_overflow_define(
+	counted_growable_output_ref output, ::std::byte const *first,
+	::std::byte const *last) noexcept
+{
+	++output.state->byte_overflows;
+	auto const count{static_cast<::std::size_t>(last - first)};
+	auto const used{static_cast<::std::size_t>(output.state->current - output.state->storage.data())};
+	assert(used + count <= output.state->storage.size());
+	output.state->begin = output.state->storage.data();
+	output.state->end = output.state->storage.data() + output.state->storage.size();
+	for (; first != last; ++first)
+	{
+		*output.state->current++ = static_cast<char>(::std::to_integer<unsigned char>(*first));
+	}
+}
+
+struct exact_remainder_output
+{
+	::std::array<char, 4u> tail{};
+	char prefix{};
+	char *current{tail.data()};
+	char *end{tail.data()};
+	::std::size_t typed_some_calls{};
+	::std::size_t byte_some_calls{};
+
+	inline void reset() noexcept
+	{
+		tail.fill('\0');
+		prefix = '\0';
+		current = end = tail.data();
+		typed_some_calls = byte_some_calls = 0u;
+	}
+};
+
+struct exact_remainder_output_ref
+{
+	using output_char_type = char;
+	exact_remainder_output *state{};
+};
+
+[[nodiscard]] inline constexpr exact_remainder_output_ref output_stream_ref_define(
+	exact_remainder_output &output) noexcept
+{
+	return {__builtin_addressof(output)};
+}
+
+[[maybe_unused]] [[nodiscard]] inline constexpr char *obuffer_begin(
+	exact_remainder_output_ref output) noexcept
+{
+	return output.state->tail.data();
+}
+
+[[nodiscard]] inline constexpr char *obuffer_curr(exact_remainder_output_ref output) noexcept
+{
+	return output.state->current;
+}
+
+[[nodiscard]] inline constexpr char *obuffer_end(exact_remainder_output_ref output) noexcept
+{
+	return output.state->end;
+}
+
+inline constexpr void obuffer_set_curr(
+	exact_remainder_output_ref output, char *current) noexcept
+{
+	output.state->current = current;
+}
+
+[[nodiscard]] inline char const *write_some_overflow_define(
+	exact_remainder_output_ref output, char const *first, char const *last) noexcept
+{
+	++output.state->typed_some_calls;
+	assert(first != last);
+	assert(output.state->typed_some_calls == 1u);
+	output.state->prefix = *first++;
+	output.state->current = output.state->tail.data();
+	output.state->end = output.state->tail.data() + output.state->tail.size();
+	return first;
+}
+
+[[nodiscard]] inline ::std::byte const *write_some_bytes_overflow_define(
+	exact_remainder_output_ref output, ::std::byte const *first,
+	::std::byte const *last) noexcept
+{
+	++output.state->byte_some_calls;
+	assert(first != last);
+	assert(output.state->byte_some_calls == 1u);
+	output.state->prefix = static_cast<char>(::std::to_integer<unsigned char>(*first++));
+	output.state->current = output.state->tail.data();
+	output.state->end = output.state->tail.data() + output.state->tail.size();
+	return first;
+}
+
 consteval bool fixed_output_completion_consteval_contract()
 {
 	// Empty fixed-capacity outputs use typed null sentinels. A zero-length completion must not form pointer arithmetic
@@ -206,10 +373,94 @@ inline void test_scatter_exact_fit()
 	}
 }
 
+inline void test_scalar_exact_fit_dispatch()
+{
+	char const payload[]{'a', 'b', 'c', 'd', 'e'};
+	auto const *const bytes{reinterpret_cast<::std::byte const *>(payload)};
+	counted_growable_output output;
+
+	// Typed and byte `some`/`all` operations may publish the one-past put-area cursor. None may invoke an overflow
+	// provider merely because the source exactly consumes all four writable elements.
+	output.reset();
+	auto const *typed_some_end{
+		::fast_io::operations::write_some(output, payload, payload + 4u)};
+	assert(typed_some_end == payload + 4u);
+	assert(output.current == output.end);
+	assert(output.typed_overflows == 0u);
+
+	output.reset();
+	::fast_io::operations::write_all(output, payload, payload + 4u);
+	assert(output.current == output.end);
+	assert(output.typed_overflows == 0u);
+
+	output.reset();
+	auto const *byte_some_end{
+		::fast_io::operations::write_some_bytes(output, bytes, bytes + 4u)};
+	assert(byte_some_end == bytes + 4u);
+	assert(output.current == output.end);
+	assert(output.byte_overflows == 0u);
+
+	output.reset();
+	::fast_io::operations::write_all_bytes(output, bytes, bytes + 4u);
+	assert(output.current == output.end);
+	assert(output.byte_overflows == 0u);
+
+	// A real miss must still dispatch exactly once and preserve both the already selected protocol and complete prefix.
+	output.reset();
+	::fast_io::operations::write_all(output, payload, payload + 5u);
+	assert(output.typed_overflows == 1u);
+	assert(output.byte_overflows == 0u);
+	assert(::std::string_view(output.storage.data(), 5u) == "abcde");
+
+	output.reset();
+	::fast_io::operations::write_all_bytes(output, bytes, bytes + 5u);
+	assert(output.typed_overflows == 0u);
+	assert(output.byte_overflows == 1u);
+	assert(::std::string_view(output.storage.data(), 5u) == "abcde");
+
+	// The canonical null empty range is complete before put-area inspection, locking, or overflow-provider dispatch.
+	output.reset_null();
+	auto const *const null_chars{static_cast<char const *>(nullptr)};
+	auto const *const null_bytes{static_cast<::std::byte const *>(nullptr)};
+	assert(::fast_io::operations::write_some(output, null_chars, null_chars) == null_chars);
+	::fast_io::operations::write_all(output, null_chars, null_chars);
+	assert(::fast_io::operations::write_some_bytes(output, null_bytes, null_bytes) == null_bytes);
+	::fast_io::operations::write_all_bytes(output, null_bytes, null_bytes);
+	assert(output.typed_overflows == 0u);
+	assert(output.byte_overflows == 0u);
+}
+
+inline void test_cold_retry_exact_remainder()
+{
+	char const payload[]{'a', 'b', 'c', 'd', 'e'};
+	auto const *const bytes{reinterpret_cast<::std::byte const *>(payload)};
+	exact_remainder_output output;
+
+	// The first native `some` call consumes one element and publishes a four-element put area. The remaining exact fit
+	// must complete locally; a second provider call would be both redundant and observably different.
+	output.reset();
+	::fast_io::operations::write_all(output, payload, payload + 5u);
+	assert(output.typed_some_calls == 1u);
+	assert(output.byte_some_calls == 0u);
+	assert(output.prefix == 'a');
+	assert(output.current == output.end);
+	assert(::std::string_view(output.tail.data(), output.tail.size()) == "bcde");
+
+	output.reset();
+	::fast_io::operations::write_all_bytes(output, bytes, bytes + 5u);
+	assert(output.typed_some_calls == 0u);
+	assert(output.byte_some_calls == 1u);
+	assert(output.prefix == 'a');
+	assert(output.current == output.end);
+	assert(::std::string_view(output.tail.data(), output.tail.size()) == "bcde");
+}
+
 } // namespace
 
 int main()
 {
 	test_print_exact_fit();
 	test_scatter_exact_fit();
+	test_scalar_exact_fit_dispatch();
+	test_cold_retry_exact_remainder();
 }

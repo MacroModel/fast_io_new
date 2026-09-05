@@ -18,6 +18,59 @@ struct exact_source
 	::std::string_view view;
 };
 
+/// @brief Models an exact producer whose size is deliberately neither cached nor replayable.
+/// @details The counters make one-shot protocol selection observable. Its precise writer is non-failing and reports an
+///          endpoint, so concat may reserve a fresh audited runtime put area after all size queries complete; it may not
+///          infer the stronger cached/eager traits required by the speculative bounded strategy.
+struct single_observation_exact_source
+{
+	::std::string_view view;
+	unsigned *dynamic_size_calls;
+	unsigned *dynamic_define_calls;
+	unsigned *precise_size_calls;
+	unsigned *precise_define_calls;
+};
+
+inline ::std::size_t print_reserve_size(
+	::fast_io::io_reserve_type_t<char, single_observation_exact_source>,
+	single_observation_exact_source source) noexcept
+{
+	++*source.dynamic_size_calls;
+	return source.view.size() + 5u;
+}
+
+inline char *print_reserve_define(
+	::fast_io::io_reserve_type_t<char, single_observation_exact_source>, char *destination,
+	single_observation_exact_source source) noexcept
+{
+	++*source.dynamic_define_calls;
+	for (char value : source.view)
+	{
+		*destination++ = value;
+	}
+	return destination;
+}
+
+inline ::std::size_t print_reserve_precise_size(
+	::fast_io::io_reserve_type_t<char, single_observation_exact_source>,
+	single_observation_exact_source source) noexcept
+{
+	++*source.precise_size_calls;
+	return source.view.size();
+}
+
+inline char *print_reserve_precise_define(
+	::fast_io::io_reserve_type_t<char, single_observation_exact_source>, char *destination,
+	::std::size_t precise_size, single_observation_exact_source source) noexcept
+{
+	++*source.precise_define_calls;
+	for (::std::size_t index{}; index != precise_size; ++index)
+	{
+		destination[index] = source.view[index];
+	}
+	return destination + precise_size;
+}
+
 inline constexpr ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char, exact_source>, exact_source source) noexcept
 {
@@ -204,6 +257,8 @@ inline constexpr char *strlike_precise_resize_and_get_begin(
 
 static_assert(::fast_io::output_growth_independent_precise_reserve_printable<char, exact_source>);
 static_assert(::fast_io::details::decay::basic_general_concat_single_pass_exact_component_v<char, exact_source>);
+static_assert(::fast_io::nothrow_precise_reserve_printable<char, single_observation_exact_source>);
+static_assert(!::fast_io::cached_precise_reserve_printable<char, single_observation_exact_source>);
 static_assert(!::fast_io::eager_materialization_safe_printable<char, unsafe_static_source>);
 static_assert(::fast_io::eager_materialization_safe_printable<char, safe_static_source>);
 static_assert(::fast_io::concat_fresh_runtime_exact_direct_strlike<char, audited_runtime_result>);
@@ -234,6 +289,7 @@ template <bool line, typename result_type, ::std::size_t extent>
 int main()
 {
 	using runtime_exact_direct_test::exact_source;
+	using runtime_exact_direct_test::single_observation_exact_source;
 
 	::std::array<char, 700u> first_storage{};
 	::std::array<char, 503u> second_storage{};
@@ -282,6 +338,33 @@ int main()
 		{
 			return EXIT_FAILURE;
 		}
+	}
+
+	unsigned dynamic_size_calls{};
+	unsigned dynamic_define_calls{};
+	unsigned precise_size_calls{};
+	unsigned precise_define_calls{};
+	static constexpr char one_shot_token[]{'p', 'r', 'o', 'o', 'f'};
+	::std::array<single_observation_exact_source, 8u> one_shot_sources{};
+	for (auto &source : one_shot_sources)
+	{
+		source = {{one_shot_token, sizeof(one_shot_token)},
+				  &dynamic_size_calls, &dynamic_define_calls,
+				  &precise_size_calls, &precise_define_calls};
+	}
+	auto one_shot_result{::std::apply(
+		[](auto &...source) {
+			return ::fast_io::basic_general_concat<
+				false, char, runtime_exact_direct_test::audited_runtime_result>(source...);
+		},
+		one_shot_sources)};
+	if (one_shot_result.reserve_calls != 1u || one_shot_result.commit_calls != 1u ||
+		one_shot_result.size != one_shot_sources.size() * sizeof(one_shot_token) ||
+		dynamic_size_calls != 0u || dynamic_define_calls != 0u ||
+		precise_size_calls != one_shot_sources.size() ||
+		precise_define_calls != one_shot_sources.size())
+	{
+		return EXIT_FAILURE;
 	}
 
 	/*

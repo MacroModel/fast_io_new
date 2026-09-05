@@ -813,7 +813,7 @@ FAST_IO_BENCH_TIMED_BOUNDARY inline void benchmark_native_output(
 	if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_buffer_flush_define<
 					  decltype(normalized)>)
 	{
-		::fast_io::operations::decay::output_stream_buffer_flush_decay(normalized);
+		::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(normalized);
 	}
 	report(backend, operation, workload, elapsed, verified);
 }

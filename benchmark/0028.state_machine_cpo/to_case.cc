@@ -49,11 +49,13 @@ template <unsigned operation, bool validate>
 	/*
 	`operation` must be a template argument rather than a namespace constant.
 	This makes every discarded branch substitution-dependent, so a compiler may
-	not instantiate an unavailable old-tree CPO (notably floating scan) while
-	building an unrelated integer or string row.  The instantiated expression is
-	therefore exactly the front door named by the executable's matrix key.  The
-	floating target alias below is itself operation-dependent because Clang is
-	permitted to resolve a nondependent template-id while parsing this definition.
+	not instantiate a CPO absent from a historical include snapshot while building
+	an unrelated integer or string row. The current official baseline does provide
+	floating scan; this isolation is not a claim that its floating rows are
+	unsupported. The instantiated expression is therefore exactly the front door
+	named by the executable's matrix key. The floating target alias is itself
+	operation-dependent because Clang may resolve a nondependent template-id
+	while parsing this definition.
 	*/
 	if constexpr (operation == 0u)
 	{
@@ -116,11 +118,11 @@ template <unsigned operation>
 	/*
 	A `to` conversion is a print-to-scan composition.  These checks distinguish
 	valid domain boundaries from lexical failure and overflow.  Each translation
-	unit instantiates only its selected public front door: this is required for a
-	well-formed old/new matrix because the official old tree has no floating scan
-	CPO, while its integer and string conversion CPOs remain valid controls.  The
-	checks intentionally do not impose a stronger rollback guarantee on a failed
-	`inplace_to` target than the public scanner protocol specifies.
+	unit instantiates only its selected public front door. This preserves unrelated
+	integer and string controls even for a historical snapshot lacking an optional
+	scan CPO; the current official baseline supports floating scan and is tested by
+	default. These checks do not impose a stronger rollback guarantee on failed
+	`inplace_to` targets than the public scanner protocol specifies.
 	*/
 	[[maybe_unused]] static constexpr char signed_minimum[]{
 		"-9223372036854775808"};

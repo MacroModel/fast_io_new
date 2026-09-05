@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "byte_oracle.h"
 #include "common_sources.h"
 
 namespace fast_io_cpo_matrix::oracle
@@ -55,32 +56,9 @@ in old/new normalization cannot make the preflight self-validating.
 	char const *actual, ::std::size_t actual_size,
 	expected_record const &expected) noexcept
 {
-	auto const common_size{
-		actual_size < expected.size ? actual_size : expected.size};
-	for (::std::size_t index{}; index != common_size; ++index)
-	{
-		if (actual[index] != expected.bytes[index])
-		{
-			return {false, index};
-		}
-	}
-	if (actual_size != expected.size)
-	{
-		return {false, common_size};
-	}
-	return {true, actual_size};
-}
-
-[[nodiscard]] inline constexpr ::std::uint_least64_t digest_bytes(
-	::std::uint_least64_t digest, char const *first,
-	::std::size_t size) noexcept
-{
-	for (::std::size_t index{}; index != size; ++index)
-	{
-		digest ^= static_cast<unsigned char>(first[index]);
-		digest *= UINT64_C(1099511628211);
-	}
-	return digest;
+	auto const result{compare_bytes(
+		actual, actual_size, expected.bytes.data(), expected.size)};
+	return {result.equal, result.mismatch};
 }
 
 } // namespace fast_io_cpo_matrix::oracle

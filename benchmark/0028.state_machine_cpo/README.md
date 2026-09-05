@@ -66,11 +66,13 @@ exception but intentionally do not claim transactional rollback of the
 pre-existing target: that stronger property is not part of every scanner CPO
 contract.
 
-The official old baseline has no floating scan CPO.  Consequently the serial
-runner records four old `scan`/`double` rows and old `to`/`text-double` as
-`SKIP,no-floating-scan-cpo`; this is a capability result, not a failed build.
-When comparing another baseline that does provide the same public CPO, set
-`OLD_SUPPORTS_FLOAT_SCAN=1` to enable those old rows.
+The current official baseline exposes decimal floating scan CPOs, so the serial
+runner defaults to `OLD_SUPPORTS_FLOAT_SCAN=1` and attempts the four old
+`scan`/`double` rows and old `to`/`text-double` row. For a historical include
+snapshot whose missing capability has been verified, explicitly set
+`OLD_SUPPORTS_FLOAT_SCAN=0` to record `SKIP,no-floating-scan-cpo`. Do not infer
+capability from the compiler version or silently classify a failed build as a
+missing interface.
 
 ```sh
 make -j1 to FAST_IO_ROOT=../.. TO=scalar-string
@@ -157,6 +159,116 @@ make -s to-protocol-object-path \
   TO_PROTOCOL_MODE=runtime TO_PROTOCOL_SOURCE=ss TO_PROTOCOL_PACK=32 \
   TO_PROTOCOL_FRONTDOOR=inplace TO_PROTOCOL_TARGET=context
 ```
+
+## Large-payload `to` scratch and early-stop cells
+
+`to_large_payload_case.cc` complements the eighteen-digit protocol matrix with
+runtime fragments up to 4097 bytes. Each executable owns exactly one protocol
+tuple; no extra numeric scanner or unrelated operation is instantiated in its
+timed translation unit. The public entry is `to<collector>` or
+`inplace_to(collector, ...)`, and the receiver is a context-only byte collector.
+The collector copies its accepted prefix into a bounded inline array, so the
+measured operation includes destination materialization as well as formatter
+scratch. The scatter control retains the same receiver and bytes while removing
+formatter scratch; this is not a standalone measurement of an internal ensure
+helper.
+
+| Make variable | Values |
+|---|---|
+| `TO_PAYLOAD_SOURCE` | `dynamic`, `hinted-256`, `scatter` |
+| `TO_PAYLOAD_PROFILE` | `reuse`, `growth`, `stop-interior`, `stop-boundary` |
+| `TO_PAYLOAD_PACK` | `4`, `8` |
+| `TO_PAYLOAD_FRONTDOOR` | `to`, `inplace` |
+| `TO_PAYLOAD_BASELINE` | `new`, `official-old` |
+
+The dynamic source has an exact runtime reserve-size CPO. `hinted-256` adds
+only `print_reserve_static_stack_size == 256`; this is a scratch preference,
+not a maximum source size. Neither type grants speculative materialization or
+requires an observable query count. The old controller may legally query the
+whole pack before scanning, while the current controller can defer suffix
+queries. The benchmark compares those costs without treating either legal
+schedule as the byte-level result.
+
+Let `L` be the runtime leaf-size argument, admitted in `[32,4097]`:
+
+| Profile | Per-source size schedule | Semantic result | Baseline status |
+|---|---|---|---|
+| `reuse` | `L,L-1,L,L-1,...` | Entire concatenated interval, one EOF publication | Old/new common |
+| `growth` | `8,16,L,16,L,16,...` | Entire concatenated interval, one EOF publication | Old/new common |
+| `stop-interior` | `32,L,L,L,...`; delimiter is byte 8 | First 8 bytes, no EOF publication | Old/new common |
+| `stop-boundary` | `8,L,L,L,...`; delimiter is byte 8 | First 8 bytes, no EOF publication | New-only |
+
+The names `growth` and `reuse` describe an in-operation source schedule, not a
+mandated allocator policy or reuse across public calls. Every timed call starts
+with a fresh target and a fresh library conversion lifetime. In particular,
+small hinted fragments may use stack scratch even after a preceding large
+fragment used the heap. Requests around 255/256/257 are negative/transition
+controls; 2047/2048/2049 and 4095/4096/4097 expose larger staging and repeated
+capacity-hit costs. P4 at `L=4097` reaches 16386 input bytes in `reuse`; P8
+reaches 32772 bytes, with no decimal receiver-width restriction.
+
+The current official old controller tests whether the returned iterator differs
+from the fragment end before honoring `ok`. Thus `stop-interior` is comparable,
+but success exactly at the fragment boundary is not equivalent. Both the
+Makefile and the source reject `official-old` plus `stop-boundary` explicitly;
+there is no emulation or misleading old timing for that cell. This capability
+label must be revisited if the selected old snapshot fixes that behavior.
+
+All eight corpus records are generated from the runtime seed in owned storage
+before validation. An independent oracle walks that original storage directly,
+finds the delimiter from bytes rather than source boundaries, and checks every
+accepted output byte plus the exact terminal-publication count. Its digest is
+computed outside timing. The timed kernel exposes its complete committed output
+to an opaque memory barrier and does no hash traversal. Collector copies, if
+NRVO is not performed, transport only the initialized prefix; correctness does
+not depend on copying indeterminate array tails being optimized away. Inspect
+`fast_io_to_large_payload_kernel` when attributing a result to scratch rather
+than return-object transport.
+
+Build a single current cell serially, from this directory, then run its bounded
+profile:
+
+```sh
+make -B -j1 to-payload FAST_IO_ROOT=../.. TAG=new \
+  BUILD_DIR=/tmp/fast_io_to_payload \
+  TO_PAYLOAD_SOURCE=dynamic TO_PAYLOAD_PROFILE=growth \
+  TO_PAYLOAD_PACK=8 TO_PAYLOAD_FRONTDOOR=inplace
+/tmp/fast_io_to_payload/new/to-payload-new-dynamic-growth-p8-inplace 4097 12345 40
+```
+
+For its old pair, change only the include root, tag, and declared baseline:
+
+```sh
+make -B -j1 to-payload FAST_IO_ROOT=../../../fast_io TAG=old \
+  BUILD_DIR=/tmp/fast_io_to_payload TO_PAYLOAD_BASELINE=official-old \
+  TO_PAYLOAD_SOURCE=dynamic TO_PAYLOAD_PROFILE=growth \
+  TO_PAYLOAD_PACK=8 TO_PAYLOAD_FRONTDOOR=inplace
+```
+
+Finish both builds before timing and run `old,new,new,old` with identical
+`LEAF_BYTES SEED TARGET_MS` arguments. On SSH Linux, prefix each timed executable
+with `taskset -c 14` after verifying that P-core and its sibling are idle. On M4,
+use the configured Clang with `--sysroot=$SYSROOT -march=native -fuse-ld=lld`,
+keep `BUILD_DIR` below `/tmp`, and do not overlap any compilation or timing job.
+Executables accept only 20--80 ms samples and independently arm an 800 ms
+process deadline. ASan, LSan, and UBSan runs are separate correctness evidence,
+not performance samples.
+
+`to-payload-object` builds one isolated object; `to-payload-path` and
+`to-payload-object-path` print the exact artifacts for disassembly or size
+collection. Each command accepts the same tuple variables. The raw CSV schema
+is:
+
+```text
+operation,source,profile,pack,frontdoor,baseline,leaf_bytes,total_input_bytes,accepted_bytes,seed,iterations,seconds,ns_per_call,checksum,validation_digest
+```
+
+This fixture is intentionally not folded into `run_cases.sh`: common and
+new-only profiles need separate schedules. A finite first regression uses
+dynamic/hinted sources, reuse/growth/interior-stop profiles, both packs and
+front doors; add matching scatter controls for P8, and run boundary-stop only
+for new. Keep each tuple in its own executable and record compiler commands,
+object/link sizes, and the exact include snapshot beside the runtime CSV.
 
 ## New-only streaming transcoder path
 
@@ -293,8 +405,8 @@ copy constructors.
 
 `run_cases.sh` builds every available original scan and `to` tuple plus a narrow
 protocol selection against the current tree and the official `../fast_io` tree,
-emitting the documented old floating SKIPs without attempting an ill-formed old
-translation unit.  Every old/new cell executes a true `old,new,new,old` ABBA
+including old floating rows by default. Only an explicit, capability-verified
+historical override emits floating SKIPs. Every old/new cell executes a true `old,new,new,old` ABBA
 schedule.  The transcoder adapter and its staged control are new-only, so their
 explicit variants use the analogous `adapter,staged,staged,adapter` schedule
 without pretending that staged is an old-tree result.  Compilation is forcibly

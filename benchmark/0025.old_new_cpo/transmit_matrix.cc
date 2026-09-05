@@ -24,6 +24,17 @@
 #define FAST_IO_OLD_NEW_TRANSMIT_OUTPUT 0
 #endif
 
+#ifndef FAST_IO_OLD_NEW_TRANSMIT_CAPACITY
+#define FAST_IO_OLD_NEW_TRANSMIT_CAPACITY 4096
+#endif
+
+#ifndef FAST_IO_OLD_NEW_TRANSMIT_REQUEST_BOUND
+// The audited default byte budget is 128 KiB on ordinary 32/64-bit targets;
+// only targets with a size_t no wider than 16 bits use the 4 KiB budget.
+#define FAST_IO_OLD_NEW_TRANSMIT_REQUEST_BOUND \
+	(sizeof(::std::size_t) <= sizeof(::std::uint_least16_t) ? 4096u : 131072u)
+#endif
+
 namespace
 {
 
@@ -31,8 +42,16 @@ inline constexpr unsigned selected_kind{FAST_IO_OLD_NEW_TRANSMIT_KIND};
 inline constexpr ::std::size_t selected_chunk_size{
 	FAST_IO_OLD_NEW_TRANSMIT_CHUNK};
 inline constexpr unsigned selected_output{FAST_IO_OLD_NEW_TRANSMIT_OUTPUT};
-inline constexpr ::std::size_t storage_size{4096u};
+inline constexpr ::std::size_t storage_size{FAST_IO_OLD_NEW_TRANSMIT_CAPACITY};
+inline constexpr ::std::size_t selected_request_bound{
+	FAST_IO_OLD_NEW_TRANSMIT_REQUEST_BOUND};
 static_assert(selected_kind <= 5u);
+static_assert(storage_size != 0u);
+static_assert(selected_request_bound != 0u);
+// Keep the oracle premise independent, but reject an incorrectly configured
+// experiment before it can mistake a different staging window for a CPO bug.
+static_assert(selected_request_bound ==
+	::fast_io::details::transmit_buffer_size_cache<1u>);
 static_assert(selected_chunk_size != 0u && selected_chunk_size <= storage_size);
 static_assert(selected_output <= 1u);
 
@@ -314,16 +333,29 @@ FAST_IO_OLD_NEW_NOINLINE ::std::uint_least64_t transmit_once(
 	}
 	/*
 	Exact/some zero-count calls know their closed interval in advance and permit
-	no primitive data-plane call.  EOF transfer has no count parameter: even an
-	empty logical input requires exactly one read returning no progress.  For a
-	nonempty EOF transfer, ceil(size/chunk) progress reads plus that terminal read
-	prove that short chunks were not mistaken for EOF.  A fixed obuffer performs
-	no output primitive; its cursor is the publication witness instead.
+	no primitive data-plane call. EOF transfer has no count parameter: even an
+	empty logical input requires exactly one read returning no progress. A
+	partial-read primitive cannot publish more than the smaller of the fixture
+	chunk and the library staging request; the resulting progress reads plus one
+	empty read prove physical EOF. Exact transfer calls read_all once per staging
+	request and therefore ignores the partial-read chunk. Keeping these limits
+	separate is necessary once payloads exceed the selected staging window. A
+	fixed obuffer performs no output primitive; its cursor is the publication
+	witness instead.
 	*/
+	constexpr ::std::size_t effective_partial_chunk{
+		selected_chunk_size < selected_request_bound ? selected_chunk_size
+																	 : selected_request_bound};
 	::std::size_t const progress_reads{
 		expected_size == 0u ? 0u
-							: (expected_size + selected_chunk_size - 1u) /
-								  selected_chunk_size};
+							: expected_size / effective_partial_chunk +
+								  static_cast<::std::size_t>(
+									  expected_size % effective_partial_chunk != 0u)};
+	::std::size_t const staging_rounds{
+		expected_size == 0u ? 0u
+							: expected_size / selected_request_bound +
+								  static_cast<::std::size_t>(
+									  expected_size % selected_request_bound != 0u)};
 	::std::size_t expected_input_delta{};
 	if (selected_kind >= 4u)
 	{
@@ -337,13 +369,13 @@ FAST_IO_OLD_NEW_NOINLINE ::std::uint_least64_t transmit_once(
 	}
 	else
 	{
-		expected_input_delta = expected_size == 0u ? 0u : 1u;
+		expected_input_delta = staging_rounds;
 	}
 	::std::size_t const expected_output_delta{
 		selected_output == 0u
 			? ((selected_kind == 1u || selected_kind == 3u || selected_kind >= 4u)
 				   ? progress_reads
-				   : (expected_size == 0u ? 0u : 1u))
+				   : staging_rounds)
 			: 0u};
 	auto const actual_input_delta{input.primitive_calls - before_input_calls};
 	auto const actual_output_delta{output.primitive_calls - before_output_calls};
@@ -382,16 +414,30 @@ FAST_IO_OLD_NEW_NOINLINE ::std::uint_least64_t transmit_once(
 
 int main(int argc, char **argv)
 {
-	if (argc != 3 && argc != 4)
+	if (argc != 3 && argc != 4 && argc != 6)
 	{
 		::std::fprintf(
 			stderr,
-			"usage: transmit_matrix AVAILABLE [REQUESTED] ITERATIONS\n");
+			"usage: transmit_matrix AVAILABLE [REQUESTED] ITERATIONS [EXPECTED_CAPACITY EXPECTED_REQUEST_BOUND]\n");
 		return 2;
 	}
 	auto const available{parse_size(argv[1])};
-	auto const requested{argc == 4 ? parse_size(argv[2]) : available};
-	auto const iterations{parse_size(argv[argc - 1])};
+	auto const requested{argc == 3 ? available : parse_size(argv[2])};
+	auto const iterations{parse_size(argv[argc == 3 ? 2 : 3])};
+	/*
+	The optional identity pair lets an external large-payload runner prove that
+	the executable it launched owns the requested fixture capacity and the audited
+	library staging bound without changing the established eleven-field result
+	schema. Legacy three/four-argument invocations retain their exact behavior.
+	*/
+	if (argc == 6 &&
+		(parse_size(argv[4]) != storage_size ||
+		 parse_size(argv[5]) != selected_request_bound))
+	{
+		::std::fputs("transmit fixture capacity/request-bound identity mismatch\n",
+			stderr);
+		return 2;
+	}
 	if (storage_size < available || storage_size < requested ||
 		iterations == 0u ||
 		(selected_kind != 1u && selected_kind != 3u && selected_kind < 4u &&

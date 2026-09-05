@@ -18,6 +18,11 @@ TO_PROTOCOL_PACK ?= 1
 TO_PROTOCOL_FRONTDOOR ?= to
 TO_PROTOCOL_TARGET ?= builtin
 TO_PROTOCOL_MODE ?= runtime
+TO_PAYLOAD_SOURCE ?= dynamic
+TO_PAYLOAD_PROFILE ?= reuse
+TO_PAYLOAD_PACK ?= 4
+TO_PAYLOAD_FRONTDOOR ?= to
+TO_PAYLOAD_BASELINE ?= new
 CXXFLAGS ?= -O3 -march=native -std=c++20 -DNDEBUG
 
 INPUT_ID_contiguous := 0
@@ -89,6 +94,22 @@ TO_PROTOCOL_MODE_ID_runtime := 0
 TO_PROTOCOL_MODE_ID_literal := 1
 TO_PROTOCOL_MODE_ID := $(TO_PROTOCOL_MODE_ID_$(TO_PROTOCOL_MODE))
 
+TO_PAYLOAD_SOURCE_ID_dynamic := 0
+TO_PAYLOAD_SOURCE_ID_hinted-256 := 1
+TO_PAYLOAD_SOURCE_ID_scatter := 2
+TO_PAYLOAD_SOURCE_ID := $(TO_PAYLOAD_SOURCE_ID_$(TO_PAYLOAD_SOURCE))
+TO_PAYLOAD_PROFILE_ID_reuse := 0
+TO_PAYLOAD_PROFILE_ID_growth := 1
+TO_PAYLOAD_PROFILE_ID_stop-interior := 2
+TO_PAYLOAD_PROFILE_ID_stop-boundary := 3
+TO_PAYLOAD_PROFILE_ID := $(TO_PAYLOAD_PROFILE_ID_$(TO_PAYLOAD_PROFILE))
+TO_PAYLOAD_FRONTDOOR_ID_to := 0
+TO_PAYLOAD_FRONTDOOR_ID_inplace := 1
+TO_PAYLOAD_FRONTDOOR_ID := $(TO_PAYLOAD_FRONTDOOR_ID_$(TO_PAYLOAD_FRONTDOOR))
+TO_PAYLOAD_BASELINE_ID_new := 0
+TO_PAYLOAD_BASELINE_ID_official-old := 1
+TO_PAYLOAD_BASELINE_ID := $(TO_PAYLOAD_BASELINE_ID_$(TO_PAYLOAD_BASELINE))
+
 ifeq ($(INPUT_ID),)
 $(error INPUT must be one of: contiguous chunk1 chunk3 chunk7)
 endif
@@ -138,6 +159,24 @@ endif
 ifeq ($(TO_PROTOCOL_MODE_ID),)
 $(error TO_PROTOCOL_MODE must be one of: runtime literal)
 endif
+ifeq ($(TO_PAYLOAD_SOURCE_ID),)
+$(error TO_PAYLOAD_SOURCE must be one of: dynamic hinted-256 scatter)
+endif
+ifeq ($(TO_PAYLOAD_PROFILE_ID),)
+$(error TO_PAYLOAD_PROFILE must be one of: reuse growth stop-interior stop-boundary)
+endif
+ifeq ($(filter $(TO_PAYLOAD_PACK),4 8),)
+$(error TO_PAYLOAD_PACK must be one of: 4 8)
+endif
+ifeq ($(TO_PAYLOAD_FRONTDOOR_ID),)
+$(error TO_PAYLOAD_FRONTDOOR must be one of: to inplace)
+endif
+ifeq ($(TO_PAYLOAD_BASELINE_ID),)
+$(error TO_PAYLOAD_BASELINE must be one of: new official-old)
+endif
+ifeq ($(TO_PAYLOAD_BASELINE):$(TO_PAYLOAD_PROFILE),official-old:stop-boundary)
+$(error stop-boundary is new-only; official-old does not stop on ok at the current fragment end)
+endif
 ifeq ($(TO_PROTOCOL_MODE),runtime)
 ifeq ($(filter $(TO_PROTOCOL_SOURCE),f d pp ss mixed-proof),)
 $(error runtime to-protocol cells require TO_PROTOCOL_SOURCE=f, d, pp, ss, or mixed-proof)
@@ -178,8 +217,18 @@ TO_PROTOCOL_DEFINES := \
 # Linker selection is not a compile input and Clang diagnoses it as unused for
 # `-c`; remove only that driver flag so strict object-metric cells remain clean.
 TO_PROTOCOL_OBJECT_CXXFLAGS := $(filter-out -fuse-ld=%,$(CXXFLAGS))
+TO_PAYLOAD_BIN := $(BIN_DIR)/to-payload-$(TO_PAYLOAD_BASELINE)-$(TO_PAYLOAD_SOURCE)-$(TO_PAYLOAD_PROFILE)-p$(TO_PAYLOAD_PACK)-$(TO_PAYLOAD_FRONTDOOR)
+TO_PAYLOAD_OBJ := $(TO_PAYLOAD_BIN).o
+TO_PAYLOAD_DEFINES := \
+	-DFAST_IO_TO_PAYLOAD_SOURCE=$(TO_PAYLOAD_SOURCE_ID) \
+	-DFAST_IO_TO_PAYLOAD_PROFILE=$(TO_PAYLOAD_PROFILE_ID) \
+	-DFAST_IO_TO_PAYLOAD_PACK=$(TO_PAYLOAD_PACK) \
+	-DFAST_IO_TO_PAYLOAD_FRONTDOOR=$(TO_PAYLOAD_FRONTDOOR_ID) \
+	-DFAST_IO_TO_PAYLOAD_OLD=$(TO_PAYLOAD_BASELINE_ID)
+TO_PAYLOAD_OBJECT_CXXFLAGS := $(filter-out -fuse-ld=%,$(CXXFLAGS))
 
 .PHONY: all scan to transcoder transcoder-direction to-protocol to-protocol-object scan-path to-path transcoder-path transcoder-direction-path to-protocol-path to-protocol-object-path
+.PHONY: to-payload to-payload-object to-payload-path to-payload-object-path
 
 all: scan to transcoder to-protocol
 
@@ -194,6 +243,10 @@ transcoder-direction: $(TRANSCODER_DIRECTION_BIN)
 to-protocol: $(TO_PROTOCOL_BIN)
 
 to-protocol-object: $(TO_PROTOCOL_OBJ)
+
+to-payload: $(TO_PAYLOAD_BIN)
+
+to-payload-object: $(TO_PAYLOAD_OBJ)
 
 $(BIN_DIR):
 	mkdir -p $@
@@ -222,6 +275,12 @@ $(TO_PROTOCOL_BIN): to_protocol_case.cc ../0026.cpo_matrix/case_driver.h ../0026
 $(TO_PROTOCOL_OBJ): to_protocol_case.cc ../0026.cpo_matrix/case_driver.h ../0026.cpo_matrix/common_sources.h | $(BIN_DIR)
 	$(CXX) $(CPPFLAGS) $(TO_PROTOCOL_DEFINES) $(TO_PROTOCOL_OBJECT_CXXFLAGS) -c $< -o $@
 
+$(TO_PAYLOAD_BIN): to_large_payload_case.cc ../0026.cpo_matrix/case_driver.h | $(BIN_DIR)
+	$(CXX) $(CPPFLAGS) $(TO_PAYLOAD_DEFINES) $(CXXFLAGS) $< -o $@
+
+$(TO_PAYLOAD_OBJ): to_large_payload_case.cc ../0026.cpo_matrix/case_driver.h | $(BIN_DIR)
+	$(CXX) $(CPPFLAGS) $(TO_PAYLOAD_DEFINES) $(TO_PAYLOAD_OBJECT_CXXFLAGS) -c $< -o $@
+
 scan-path:
 	@printf '%s\n' '$(SCAN_BIN)'
 
@@ -239,3 +298,9 @@ to-protocol-path:
 
 to-protocol-object-path:
 	@printf '%s\n' '$(TO_PROTOCOL_OBJ)'
+
+to-payload-path:
+	@printf '%s\n' '$(TO_PAYLOAD_BIN)'
+
+to-payload-object-path:
+	@printf '%s\n' '$(TO_PAYLOAD_OBJ)'

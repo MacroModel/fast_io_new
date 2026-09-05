@@ -448,6 +448,21 @@ inline constexpr ::fast_io::parse_result<char const *> scan_contiguous_define(
 	return parse_decimal(first, last, proxy.target->value);
 }
 
+using inplace_decay_value_entry = void (*)(contiguous_proxy, fixed_proxy);
+using inplace_decay_borrowed_target_entry = void (*)(contiguous_proxy &, fixed_proxy);
+
+// `decay` is the owning ABI boundary, so an ordinary normalized target must remain a value parameter. The separately
+// named borrowed entry exists only for a customization-authored stable lvalue; making the common entry `T&&` would
+// silently replace an AAPCS/SysV register-class proxy with a pointer whenever the wrapper is not inlined.
+static_assert(::std::same_as<
+	decltype(&::fast_io::basic_inplace_to_decay<
+		char, contiguous_proxy, fixed_proxy>),
+	inplace_decay_value_entry>);
+static_assert(::std::same_as<
+	decltype(&::fast_io::basic_inplace_to_decay_borrowed_target<
+		char, contiguous_proxy, fixed_proxy>),
+	inplace_decay_borrowed_target_entry>);
+
 struct move_scan_target
 {
 	::std::uint_least64_t value{};

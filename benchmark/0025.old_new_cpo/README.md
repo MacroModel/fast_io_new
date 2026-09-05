@@ -49,6 +49,17 @@ publishes at most `FAST_IO_OLD_NEW_TRANSMIT_CHUNK` bytes per partial read, so
 0 is a typed/byte overflow observer; mode 1 is a fixed public obuffer view.
 Thus each row is an explicit input-state-machine × output-capability product.
 
+`FAST_IO_OLD_NEW_TRANSMIT_CAPACITY` configures the fixture's input and output
+storage and defaults to 4096, preserving existing binaries and commands.
+`FAST_IO_OLD_NEW_TRANSMIT_REQUEST_BOUND` records the independently audited
+maximum staging request made by the selected library: 131072 bytes on ordinary
+32/64-bit targets, or 4096 on targets whose `size_t` is at most 16 bits. A
+compile-time check rejects a mismatched oracle premise. Partial-read call counts use
+`min(TRANSMIT_CHUNK, TRANSMIT_REQUEST_BOUND)`, while exact-read counts use the
+request bound directly. This distinction is observable only when the payload or
+declared fixture chunk exceeds a staging window. The macro records an oracle
+premise; it must be re-audited rather than guessed when testing another tree.
+
 The available and requested counts remain runtime arguments across a noinline
 public-CPO boundary, so a zero-count exact/some sample still reveals an eager
 staging allocation instead of being folded away as a compile-time constant.
@@ -58,8 +69,11 @@ invalid precondition. EOF has no count parameter, drains `AVAILABLE`, and must
 perform one empty read to discover the terminal state; the oracle checks that
 separately rather than applying the zero-count identity illegally.
 Deterministic raw bytes receive a full untimed comparison, the complete
-destination escapes through a memory barrier, and exact primitive/reference
-call counts expose premature-EOF and duplicate-publication bugs. Every process
+destination escapes through a memory barrier, and exact primitive-call counts
+are asserted to detect premature EOF and duplicate publication. The combined
+input/output normalization count is reported in the result but is not currently
+asserted by the preflight oracle; it must not be cited as an independently
+verified exactly-once normalization guarantee. Every process
 arms an independent 800 ms `ITIMER_REAL` deadline, including validation, so an
 unexpected state-machine loop cannot violate the sub-second experiment rule.
 
@@ -74,6 +88,18 @@ make -j1 transmit ROOT=../.. TRANSMIT_KIND=5 TRANSMIT_CHUNK=3 \
 The middle argument is optional and defaults to `AVAILABLE`; for example,
 `./transmit_matrix 24 4096 10000` exercises a bounded transfer that reaches
 physical EOF after fragmented 23-byte plus 1-byte progress reads.
+
+Large-payload runners may append the compile-time capacity and request bound as
+an identity pair without changing the result CSV schema:
+
+```sh
+./transmit_matrix 131073 131073 1000 131074 131072
+```
+
+The process rejects a mismatched identity before validation or timing. A large
+fixed-output fixture should keep at least one spare element beyond the maximum
+payload. This avoids conflating the official baseline's exact-capacity
+`basic_obuffer_view` behavior with the EOF/transmit boundary being tested.
 
 On Apple M4, build serially into `/tmp` with the configured upstream Clang and
 LLD:

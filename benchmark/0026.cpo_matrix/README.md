@@ -185,6 +185,82 @@ printing. The case therefore controls for allocator growth and measures the
 maintained put area itself; it is the print-side companion to fresh-result
 concat, not another construction benchmark.
 
+## Ordered-staging regression runner
+
+`run_concat_ordered_staging.py` is the bounded full regression for the
+ordered one-pass concat policy. Its `main` group has exactly 16 translation
+units: unretained `mixed` packs at N=7/8/9/32, plus the borrowed-scatter and
+homogeneous-precise negative controls at N=8/32, each targeting both string
+results. The separately labelled supplemental groups add four narrow newline
+checks and three single-barrier positions. By default, every binary runs `small`, 2047,
+2048, and 2049-byte payloads, so the inline/spill boundary is crossed without
+adding another template instantiation.
+
+The runner freezes the common source bytes, hashes each exact include tree,
+and performs syntax, `-O3` object, and link passes for each O-N-N-O build. It
+records wall time, peak RSS, object/linked text and file sizes, then performs
+runtime O-N-N-O with independent full-byte validation and an old/new digest
+equality check. `build.csv`, `runtime.csv`, the manifest, diagnostics, and all
+artifacts remain in the printed run directory.
+
+On Apple M4 the runner selects the repository's custom Clang 23, discovers the
+active SDK with `/usr/bin/xcrun --show-sdk-path`, always supplies `--sysroot`,
+uses `-march=native`, and explicitly selects `ld64.lld` by default because the
+Apple linker cannot consume this LLVM build's builtins bitcode. It also rejects
+any output directory outside `/tmp` and refuses runtime sampling when load or
+Spotlight activity exceeds its guard. Review the finite grid without compiling
+it with:
+
+```sh
+./run_concat_ordered_staging.py --list-cases
+./run_concat_ordered_staging.py --dry-run --group main
+```
+
+The default profile set remains `small/2047/2048/2049`. To isolate the
+adaptive destination's byte transition without creating another translation
+unit, the same binary also accepts the opt-in `511/512/513` profiles:
+
+```sh
+./run_concat_ordered_staging.py \
+  --case main.mixed.n8.std-string.line0.repeated \
+  --profiles 511 512 513 --target-milliseconds 20
+```
+
+Larger opt-in profiles are available at `2559/2560/2561`, `4095/4096/4097`,
+and `8191/8192/8193`. Run each derived batch independently, for example:
+
+```sh
+./run_concat_ordered_staging.py \
+  --case main.mixed.n8.std-string.line0.repeated \
+  --profiles 4095 4096 4097 --target-milliseconds 20
+```
+
+The runner defines `FAST_IO_ORDERED_STAGING_MAXIMUM_TOTAL_PAYLOAD` as the
+largest selected numeric profile, with a minimum of 2049. This bounds both
+the corpus storage and the fixed-source CPO's static reserve contract at
+`ceil(maximum_total_payload/N)` per leaf. The default batch and the optional
+`511/512/513` batch retain the original 2049 bound and code-generation path.
+The actual bound is recorded in `manifest.json`, every build/runtime CSV row,
+and the syntax/object compiler commands; the CSV schema is
+`concat-ordered-staging-2`.
+
+Compare old and new within the same derived batch. A `small` profile compiled
+alongside an 8193-byte profile has a larger type-level reserve bound than
+`small` in the default batch, so comparing those binaries is not a
+single-variable payload-length experiment. Separate invocations and their
+recorded bounds keep this distinction auditable.
+
+On SSH Linux, `--p-core-cpu` is mandatory and applies to compilation, linking,
+and runtime. The named CPU is checked against the process affinity and sysfs;
+because Linux has no portable P/E-core label, the operator must select a
+verified idle performance core and the runner records the raw `core_type` and
+SMT sibling set for audit:
+
+```sh
+./run_concat_ordered_staging.py --compiler /usr/bin/g++ \
+  --standard c++23 --p-core-cpu 4 --group main
+```
+
 Future batches should add status, mutex, scatter-output, context,
 reserve-scatters, semantic thresholds, and new-only provenance markers in
 separate translation units rather than expanding either initial case into a

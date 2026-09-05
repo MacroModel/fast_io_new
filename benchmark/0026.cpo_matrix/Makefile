@@ -68,10 +68,10 @@ concat: $(CONCAT_BIN)
 $(BIN_DIR):
 	mkdir -p $@
 
-$(PRINT_BIN): print_case.cc common_sources.h common_outputs.h independent_oracle.h case_driver.h | $(BIN_DIR)
+$(PRINT_BIN): print_case.cc common_sources.h common_outputs.h independent_oracle.h byte_oracle.h case_driver.h | $(BIN_DIR)
 	$(CXX) $(CPPFLAGS) -DFAST_IO_CPO_MATRIX_OUTPUT=$(OUTPUT_ID) $(CXXFLAGS) $< -o $@
 
-$(CONCAT_BIN): concat_case.cc common_sources.h independent_oracle.h case_driver.h | $(BIN_DIR)
+$(CONCAT_BIN): concat_case.cc common_sources.h independent_oracle.h byte_oracle.h case_driver.h | $(BIN_DIR)
 	$(CXX) $(CPPFLAGS) -DFAST_IO_CPO_MATRIX_RESULT=$(RESULT_ID) $(CXXFLAGS) $< -o $@
 
 print-path:
