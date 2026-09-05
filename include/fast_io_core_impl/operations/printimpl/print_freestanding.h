@@ -301,6 +301,111 @@ inline constexpr bool retained_reserve_scatters_printable_v =
 	 ::fast_io::dynamic_reserve_scatters_printable<char_type, T>) &&
 	::fast_io::borrowed_reserve_scatters_source<char_type, T>;
 
+#if (__cplusplus > 202302L && __cpp_pack_indexing >= 202311L) || FAST_IO_HAS_BUILTIN(__type_pack_element)
+
+/// @brief Stores the accepted leading source descriptors without repeating a shrinking type pack.
+/// @details Indexed member constants preserve the original lazy stop: a source after the first rejected source never
+///          instantiates its formatter or size expression. The enclosing pack is shared by all scalar-index members.
+template <typename classifier, typename... source_types>
+struct print_leading_run_scan_elements
+{
+	using element_type = typename classifier::element_type;
+	template <::std::size_t index>
+	using source_type =
+#if __cplusplus > 202302L && __cpp_pack_indexing >= 202311L
+		source_types...[index];
+#else
+		__type_pack_element<index, source_types...>;
+#endif
+
+	template <::std::size_t index>
+	inline static constexpr element_type element{[]() consteval {
+		if constexpr (index != 0u)
+		{
+			if constexpr (element<index - 1u>.stop)
+			{
+				return element_type{};
+			}
+			else
+			{
+				return classifier::template classify<source_type<index>>();
+			}
+		}
+		else
+		{
+			return classifier::template classify<source_type<index>>();
+		}
+	}()};
+
+	struct table_type
+	{
+		element_type values[sizeof...(source_types)];
+	};
+
+	template <::std::size_t... index>
+	inline static consteval table_type make_table(::std::index_sequence<index...>) noexcept
+	{
+		return {{element<index>...}};
+	}
+
+	inline static constexpr table_type table{
+		make_table(::std::make_index_sequence<sizeof...(source_types)>{})};
+};
+
+struct contiguous_scatter_scan_element
+{
+	bool stop{true};
+	bool reserve{};
+	bool dynamic_reserve{};
+	bool scatter{};
+	bool null{};
+	::std::size_t space{};
+	::std::size_t scatters{};
+};
+
+template <bool retain_static_scatter, ::std::integral char_type>
+struct contiguous_scatter_scan_classifier
+{
+	using element_type = contiguous_scatter_scan_element;
+	template <typename Arg>
+	inline static consteval element_type classify() noexcept
+	{
+		using value_type = ::std::remove_cvref_t<Arg>;
+		if constexpr (::fast_io::details::decay::retained_scatter_printable_v<char_type, Arg &> ||
+					  (retain_static_scatter && ::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available))
+		{
+			return {false, false, false, true, false, 0u, 1u};
+		}
+		else if constexpr (::fast_io::reserve_printable<char_type, Arg>)
+		{
+			constexpr ::std::size_t size{print_reserve_size(::fast_io::io_reserve_type<char_type, Arg>)};
+			static_assert(size != 0u);
+			return {false, true, false, false, false, size, 1u};
+		}
+		else if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg>)
+		{
+			return {false, false, true, false, false, 0u, 1u};
+		}
+		else if constexpr (::fast_io::reserve_scatters_printable<char_type, Arg> &&
+						   ::fast_io::details::decay::retained_reserve_scatters_printable_v<char_type, Arg>)
+		{
+			constexpr auto size{print_reserve_scatters_size(::fast_io::io_reserve_type<char_type, Arg>)};
+			static_assert(size.scatters_size != 0u);
+			return {false, true, false, true, false, size.reserve_size, size.scatters_size};
+		}
+		else if constexpr (::std::same_as<value_type, ::fast_io::io_null_t>)
+		{
+			return {false, false, false, false, true, 0u, 0u};
+		}
+		else
+		{
+			return {};
+		}
+	}
+};
+
+#endif
+
 /// @brief    Scans a parameter pack for the leading contiguous scatter/reserve-friendly print run.
 /// @details  The result records how many arguments can be grouped, how many scatter descriptors and reserve
 ///           characters are needed, and whether the run contains null or reserve-like outputs.
@@ -311,139 +416,206 @@ inline constexpr bool retained_reserve_scatters_printable_v =
 template <bool retain_static_scatter, ::std::integral char_type, typename Arg, typename... Args>
 inline constexpr contiguous_scatter_result find_continuous_scatters_n_impl()
 {
-	contiguous_scatter_result ret{};
-	using value_type = ::std::remove_cvref_t<Arg>;
-	constexpr bool static_scatter{
-		::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available};
-	if constexpr (
-		::fast_io::details::decay::retained_scatter_printable_v<char_type, Arg &> ||
-		(retain_static_scatter && static_scatter))
+#if (__cplusplus > 202302L && __cpp_pack_indexing >= 202311L) || FAST_IO_HAS_BUILTIN(__type_pack_element)
+	// Short runs share already-instantiated suffixes across related active records. Indexing only a large run
+	// avoids replacing that useful cache with a separate descriptor table for every small condition selection.
+	if constexpr (sizeof...(Args) >= 127u)
 	{
-		// A scatter-printable argument contributes one existing output range to the contiguous run.
-		if constexpr (sizeof...(Args) != 0)
+		using classifier = ::fast_io::details::decay::contiguous_scatter_scan_classifier<retain_static_scatter, char_type>;
+		if constexpr (classifier::template classify<Arg>().stop)
 		{
-			// Remaining arguments are scanned first so the current argument can extend the leading run.
-			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
-		}
-		constexpr ::std::size_t one{1u};
-		::std::size_t const neededscatters{
-			::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
-		if (neededscatters == SIZE_MAX)
-		{
-			// Descriptor aggregation is optional.  Splitting here lets the dispatcher emit the current object and retry
-			// the tail instead of instantiating an unrepresentable retained descriptor array.
+			// The historical scanner stops immediately here; do not build scalar metadata for an unreachable tail.
 			return {};
 		}
-		++ret.position;
-		ret.hasscatters = true;
-		ret.neededscatters = neededscatters;
+		else
+		{
+			using elements_type = ::fast_io::details::decay::print_leading_run_scan_elements<
+				::fast_io::details::decay::contiguous_scatter_scan_classifier<retain_static_scatter, char_type>, Arg, Args...>;
+			constexpr auto &elements{elements_type::table.values};
+			constexpr ::std::size_t count{sizeof...(Args) + 1u};
+			::std::size_t accepted{};
+			while (accepted != count && !elements[accepted].stop)
+			{
+				++accepted;
+			}
+			contiguous_scatter_result result{};
+			while (accepted != 0u)
+			{
+				auto const current{elements[--accepted]};
+				if (current.null)
+				{
+					::std::size_t const null_count{::fast_io::details::decay::print_strategy_saturating_add(result.null, 1u)};
+					if (null_count == SIZE_MAX)
+					{
+						result = {};
+						continue;
+					}
+					result.null = null_count;
+				}
+				else
+				{
+					::std::size_t const scatters{::fast_io::details::decay::print_strategy_extent_add_or_unavailable(
+						result.neededscatters, current.scatters)};
+					::std::size_t const space{current.reserve ? ::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(result.neededspace, current.space) : result.neededspace};
+					if (scatters == SIZE_MAX || space == SIZE_MAX)
+					{
+						result = {};
+						continue;
+					}
+					result.neededscatters = scatters;
+					result.neededspace = space;
+					result.hasreserve |= current.reserve;
+					result.hasdynamicreserve |= current.dynamic_reserve;
+					result.hasscatters |= current.scatter;
+					// The original rule concerns the complete source-pack tail, not a prefix cut short by a stop or overflow.
+					if (accepted + 1u == count && !current.scatter && (current.reserve || current.dynamic_reserve))
+					{
+						result.lastisreserve = true;
+					}
+				}
+				++result.position;
+			}
+			return result;
+		}
 	}
-	else if constexpr (::fast_io::reserve_printable<char_type, Arg>)
+	else
+#endif
 	{
-		// A static reserve-printable argument contributes one materialized range and a known reserve size.
-		if constexpr (sizeof...(Args) != 0)
+
+		contiguous_scatter_result ret{};
+		using value_type = ::std::remove_cvref_t<Arg>;
+		constexpr bool static_scatter{
+			::fast_io::details::decay::print_static_scatter_traits<char_type, value_type>::available};
+		if constexpr (
+			::fast_io::details::decay::retained_scatter_printable_v<char_type, Arg &> ||
+			(retain_static_scatter && static_scatter))
 		{
-			// Remaining arguments are scanned first to preserve the aggregate run accounting.
-			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			// A scatter-printable argument contributes one existing output range to the contiguous run.
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first so the current argument can extend the leading run.
+				ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			}
+			constexpr ::std::size_t one{1u};
+			::std::size_t const neededscatters{
+				::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
+			if (neededscatters == SIZE_MAX)
+			{
+				// Descriptor aggregation is optional.  Splitting here lets the dispatcher emit the current object and retry
+				// the tail instead of instantiating an unrepresentable retained descriptor array.
+				return {};
+			}
+			++ret.position;
+			ret.hasscatters = true;
+			ret.neededscatters = neededscatters;
 		}
-		constexpr ::std::size_t sz{print_reserve_size(::fast_io::io_reserve_type<char_type, Arg>)};
-		static_assert(sz != 0);
-		constexpr ::std::size_t one{1u};
-		::std::size_t const neededscatters{
-			::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
-		::std::size_t const neededspace{
-			::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
-				ret.neededspace, sz)};
-		if (neededscatters == SIZE_MAX || neededspace == SIZE_MAX)
+		else if constexpr (::fast_io::reserve_printable<char_type, Arg>)
 		{
-			// Every individual reserve producer remains valid; only this contiguous combination is declined.
-			return {};
+			// A static reserve-printable argument contributes one materialized range and a known reserve size.
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first to preserve the aggregate run accounting.
+				ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			}
+			constexpr ::std::size_t sz{print_reserve_size(::fast_io::io_reserve_type<char_type, Arg>)};
+			static_assert(sz != 0);
+			constexpr ::std::size_t one{1u};
+			::std::size_t const neededscatters{
+				::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
+			::std::size_t const neededspace{
+				::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+					ret.neededspace, sz)};
+			if (neededscatters == SIZE_MAX || neededspace == SIZE_MAX)
+			{
+				// Every individual reserve producer remains valid; only this contiguous combination is declined.
+				return {};
+			}
+			if constexpr (sizeof...(Args) == 0)
+			{
+				// A trailing reserve argument can be emitted directly without an extra scatter continuation.
+				ret.lastisreserve = true;
+			}
+			++ret.position;
+			ret.neededscatters = neededscatters;
+			ret.neededspace = neededspace;
+			ret.hasreserve = true;
 		}
-		if constexpr (sizeof...(Args) == 0)
+		else if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg>)
 		{
-			// A trailing reserve argument can be emitted directly without an extra scatter continuation.
-			ret.lastisreserve = true;
+			// A dynamic reserve-printable argument is part of the run, but its reserve size is measured later.
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first so this dynamic reserve extends the same leading run.
+				ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			}
+			constexpr ::std::size_t one{1u};
+			::std::size_t const neededscatters{
+				::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
+			if (neededscatters == SIZE_MAX)
+			{
+				return {};
+			}
+			if constexpr (sizeof...(Args) == 0)
+			{
+				// A trailing dynamic reserve argument can be handled as the final materialized output.
+				ret.lastisreserve = true;
+			}
+			++ret.position;
+			ret.neededscatters = neededscatters;
+			ret.hasdynamicreserve = true;
 		}
-		++ret.position;
-		ret.neededscatters = neededscatters;
-		ret.neededspace = neededspace;
-		ret.hasreserve = true;
+		else if constexpr (
+			::fast_io::reserve_scatters_printable<char_type, Arg> &&
+			::fast_io::details::decay::retained_reserve_scatters_printable_v<char_type, Arg>)
+		{
+			// A reserve-scatters argument contributes its declared scatter count and reserve storage requirement.
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first to accumulate the complete leading run.
+				ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			}
+			constexpr auto scatszres{print_reserve_scatters_size(::fast_io::io_reserve_type<char_type, Arg>)};
+			static_assert(scatszres.scatters_size != 0);
+			::std::size_t const neededspace{
+				::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+					ret.neededspace, scatszres.reserve_size)};
+			::std::size_t const neededscatters{
+				::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters,
+																					scatszres.scatters_size)};
+			if (neededspace == SIZE_MAX || neededscatters == SIZE_MAX)
+			{
+				// A retained reserve-scatter plan is only a batching optimization; an oversized aggregate is split safely.
+				return {};
+			}
+			ret.hasscatters = true;
+			ret.hasreserve = true;
+			++ret.position;
+			ret.neededspace = neededspace;
+			ret.neededscatters = neededscatters;
+		}
+		else if constexpr (::std::same_as<::std::remove_cvref_t<Arg>, ::fast_io::io_null_t>)
+		{
+			// Null output is counted so pack positions remain correct while no emitted characters are reserved.
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first before adding this null position to the run.
+				ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
+			}
+			::std::size_t const null_count{
+				::fast_io::details::decay::print_strategy_saturating_add(ret.null, static_cast<::std::size_t>(1u))};
+			if (null_count == SIZE_MAX)
+			{
+				return {};
+			}
+			++ret.position;
+			ret.null = null_count;
+		}
+		else if constexpr (::fast_io::printable<char_type, Arg>)
+		{
+			// A generic printable argument stops the scatter/reserve run because it needs the normal emit path.
+		}
+		return ret;
 	}
-	else if constexpr (::fast_io::dynamic_reserve_printable<char_type, Arg>)
-	{
-		// A dynamic reserve-printable argument is part of the run, but its reserve size is measured later.
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first so this dynamic reserve extends the same leading run.
-			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
-		}
-		constexpr ::std::size_t one{1u};
-		::std::size_t const neededscatters{
-			::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters, one)};
-		if (neededscatters == SIZE_MAX)
-		{
-			return {};
-		}
-		if constexpr (sizeof...(Args) == 0)
-		{
-			// A trailing dynamic reserve argument can be handled as the final materialized output.
-			ret.lastisreserve = true;
-		}
-		++ret.position;
-		ret.neededscatters = neededscatters;
-		ret.hasdynamicreserve = true;
-	}
-	else if constexpr (
-		::fast_io::reserve_scatters_printable<char_type, Arg> &&
-		::fast_io::details::decay::retained_reserve_scatters_printable_v<char_type, Arg>)
-	{
-		// A reserve-scatters argument contributes its declared scatter count and reserve storage requirement.
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first to accumulate the complete leading run.
-			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
-		}
-		constexpr auto scatszres{print_reserve_scatters_size(::fast_io::io_reserve_type<char_type, Arg>)};
-		static_assert(scatszres.scatters_size != 0);
-		::std::size_t const neededspace{
-			::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
-				ret.neededspace, scatszres.reserve_size)};
-		::std::size_t const neededscatters{
-			::fast_io::details::decay::print_strategy_extent_add_or_unavailable(ret.neededscatters,
-																				scatszres.scatters_size)};
-		if (neededspace == SIZE_MAX || neededscatters == SIZE_MAX)
-		{
-			// A retained reserve-scatter plan is only a batching optimization; an oversized aggregate is split safely.
-			return {};
-		}
-		ret.hasscatters = true;
-		ret.hasreserve = true;
-		++ret.position;
-		ret.neededspace = neededspace;
-		ret.neededscatters = neededscatters;
-	}
-	else if constexpr (::std::same_as<::std::remove_cvref_t<Arg>, ::fast_io::io_null_t>)
-	{
-		// Null output is counted so pack positions remain correct while no emitted characters are reserved.
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first before adding this null position to the run.
-			ret = find_continuous_scatters_n_impl<retain_static_scatter, char_type, Args...>();
-		}
-		::std::size_t const null_count{
-			::fast_io::details::decay::print_strategy_saturating_add(ret.null, static_cast<::std::size_t>(1u))};
-		if (null_count == SIZE_MAX)
-		{
-			return {};
-		}
-		++ret.position;
-		ret.null = null_count;
-	}
-	else if constexpr (::fast_io::printable<char_type, Arg>)
-	{
-		// A generic printable argument stops the scatter/reserve run because it needs the normal emit path.
-	}
-	return ret;
 }
 
 /// @brief Scans a run with the historical reserve preference for fixed scatters.
@@ -5123,6 +5295,55 @@ struct context_capture_run_result
 	bool has_dynamic{};
 };
 
+#if (__cplusplus > 202302L && __cpp_pack_indexing >= 202311L) || FAST_IO_HAS_BUILTIN(__type_pack_element)
+
+struct context_capture_scan_element
+{
+	bool stop{true};
+	bool reserve{};
+	bool dynamic_reserve{};
+	bool context{};
+	::std::size_t size{};
+};
+
+template <::std::integral char_type>
+struct context_capture_scan_classifier
+{
+	using element_type = context_capture_scan_element;
+	template <typename Arg>
+	inline static consteval element_type classify() noexcept
+	{
+		using value_type = ::std::remove_cvref_t<Arg>;
+		if constexpr (::fast_io::reserve_printable<char_type, value_type>)
+		{
+			constexpr ::std::size_t size{print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>)};
+			static_assert(size != 0u);
+			return {false, true, false, false, size};
+		}
+		else if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, value_type>)
+		{
+			constexpr ::std::size_t hint{print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, value_type>)};
+			return {false, false, true, false,
+					::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<hint, char_type>()};
+		}
+		else if constexpr (::fast_io::context_printable_with_static_buffer_size<char_type, value_type>)
+		{
+			return {false, false, false, true,
+					::fast_io::details::decay::context_print_static_buffer_size_v<false, char_type, value_type>};
+		}
+		else if constexpr (::std::same_as<value_type, ::fast_io::io_null_t>)
+		{
+			return {false, false, false, false, 0u};
+		}
+		else
+		{
+			return {};
+		}
+	}
+};
+
+#endif
+
 /// @brief    Finds the leading run that benefits from context-capture buffering.
 /// @details  Static reserve outputs are grouped into burst sizes, while context and bounded dynamic reserve outputs
 ///           contribute reusable window sizes. Null outputs keep position accounting without increasing storage.
@@ -5133,96 +5354,165 @@ struct context_capture_run_result
 template <::std::integral char_type, typename Arg, typename... Args>
 inline constexpr context_capture_run_result find_context_capture_run_n()
 {
-	using nocvreft = ::std::remove_cvref_t<Arg>;
-	if constexpr (::fast_io::reserve_printable<char_type, nocvreft>)
+#if (__cplusplus > 202302L && __cpp_pack_indexing >= 202311L) || FAST_IO_HAS_BUILTIN(__type_pack_element)
+	// Short runs share already-instantiated suffixes across related active records. Indexing only a large run
+	// avoids replacing that useful cache with a separate descriptor table for every small condition selection.
+	if constexpr (sizeof...(Args) >= 127u)
 	{
-		// Static reserve output can be accumulated into the leading contiguous reserve burst.
-		context_capture_run_result ret{};
-		if constexpr (sizeof...(Args) != 0)
+		using classifier = ::fast_io::details::decay::context_capture_scan_classifier<char_type>;
+		if constexpr (classifier::template classify<Arg>().stop)
 		{
-			// Remaining arguments are scanned first so this reserve output extends the front of the run.
-			ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
-		}
-		constexpr ::std::size_t sz{print_reserve_size(::fast_io::io_reserve_type<char_type, nocvreft>)};
-		static_assert(sz != 0);
-		::std::size_t const leading_burst{
-			::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
-				ret.leading_static_reserve_burst_size, sz)};
-		if (leading_burst == SIZE_MAX)
-		{
-			// Context capture is an optional coalescing plan.  Declining this prefix preserves each producer's valid
-			// individual protocol and prevents an impossible aggregate array from becoming an NTTP.
+			// The historical scanner stops immediately here; do not build scalar metadata for an unreachable tail.
 			return {};
 		}
-		++ret.position;
-		ret.leading_static_reserve_burst_size = leading_burst;
-		if (ret.max_static_reserve_burst_size < ret.leading_static_reserve_burst_size)
+		else
 		{
-			// The current static reserve burst is the largest contiguous reserve output seen so far.
-			ret.max_static_reserve_burst_size = ret.leading_static_reserve_burst_size;
+			using elements_type = ::fast_io::details::decay::print_leading_run_scan_elements<
+				::fast_io::details::decay::context_capture_scan_classifier<char_type>, Arg, Args...>;
+			constexpr auto &elements{elements_type::table.values};
+			constexpr ::std::size_t count{sizeof...(Args) + 1u};
+			::std::size_t accepted{};
+			while (accepted != count && !elements[accepted].stop)
+			{
+				++accepted;
+			}
+			context_capture_run_result result{};
+			while (accepted != 0u)
+			{
+				auto const current{elements[--accepted]};
+				if (current.reserve)
+				{
+					::std::size_t const burst{::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+						result.leading_static_reserve_burst_size, current.size)};
+					if (burst == SIZE_MAX)
+					{
+						result = {};
+						continue;
+					}
+					result.leading_static_reserve_burst_size = burst;
+					if (result.max_static_reserve_burst_size < burst)
+					{
+						result.max_static_reserve_burst_size = burst;
+					}
+				}
+				else if (current.dynamic_reserve)
+				{
+					result.leading_static_reserve_burst_size = 0u;
+					result.has_dynamic = true;
+					if (result.dynamic_buffer_size < current.size)
+					{
+						result.dynamic_buffer_size = current.size;
+					}
+				}
+				else if (current.context)
+				{
+					result.leading_static_reserve_burst_size = 0u;
+					result.has_context = true;
+					if (result.context_buffer_size < current.size)
+					{
+						result.context_buffer_size = current.size;
+					}
+				}
+				++result.position;
+			}
+			return result;
 		}
-		return ret;
-	}
-	else if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, nocvreft>)
-	{
-		// Bounded dynamic reserve output participates through its reusable maximum stack window.
-		context_capture_run_result ret{};
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first before this dynamic producer resets the static burst.
-			ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
-		}
-		constexpr ::std::size_t static_stack_size{
-			print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, nocvreft>)};
-		constexpr ::std::size_t dynamic_buffer_size{
-			::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<static_stack_size, char_type>()};
-		++ret.position;
-		ret.leading_static_reserve_burst_size = 0;
-		ret.has_dynamic = true;
-		if (ret.dynamic_buffer_size < dynamic_buffer_size)
-		{
-			// The capture buffer must fit the largest bounded dynamic reserve window in the run.
-			ret.dynamic_buffer_size = dynamic_buffer_size;
-		}
-		return ret;
-	}
-	else if constexpr (::fast_io::context_printable_with_static_buffer_size<char_type, nocvreft>)
-	{
-		// Context-printable output anchors the capture run and requires its declared context window.
-		context_capture_run_result ret{};
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first before this context producer resets the static burst.
-			ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
-		}
-		constexpr ::std::size_t context_buffer_size{
-			::fast_io::details::decay::context_print_static_buffer_size_v<false, char_type, nocvreft>};
-		++ret.position;
-		ret.leading_static_reserve_burst_size = 0;
-		ret.has_context = true;
-		if (ret.context_buffer_size < context_buffer_size)
-		{
-			// The capture buffer must fit the largest static context window in the run.
-			ret.context_buffer_size = context_buffer_size;
-		}
-		return ret;
-	}
-	else if constexpr (::std::same_as<nocvreft, ::fast_io::io_null_t>)
-	{
-		// Null output keeps the argument position in the run while requiring no capture storage.
-		context_capture_run_result ret{};
-		if constexpr (sizeof...(Args) != 0)
-		{
-			// Remaining arguments are scanned first so the null can extend the positional prefix.
-			ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
-		}
-		++ret.position;
-		return ret;
 	}
 	else
+#endif
 	{
-		// Any other output protocol terminates the context-capture prefix.
-		return {};
+
+		using nocvreft = ::std::remove_cvref_t<Arg>;
+		if constexpr (::fast_io::reserve_printable<char_type, nocvreft>)
+		{
+			// Static reserve output can be accumulated into the leading contiguous reserve burst.
+			context_capture_run_result ret{};
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first so this reserve output extends the front of the run.
+				ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
+			}
+			constexpr ::std::size_t sz{print_reserve_size(::fast_io::io_reserve_type<char_type, nocvreft>)};
+			static_assert(sz != 0);
+			::std::size_t const leading_burst{
+				::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(
+					ret.leading_static_reserve_burst_size, sz)};
+			if (leading_burst == SIZE_MAX)
+			{
+				// Context capture is an optional coalescing plan.  Declining this prefix preserves each producer's valid
+				// individual protocol and prevents an impossible aggregate array from becoming an NTTP.
+				return {};
+			}
+			++ret.position;
+			ret.leading_static_reserve_burst_size = leading_burst;
+			if (ret.max_static_reserve_burst_size < ret.leading_static_reserve_burst_size)
+			{
+				// The current static reserve burst is the largest contiguous reserve output seen so far.
+				ret.max_static_reserve_burst_size = ret.leading_static_reserve_burst_size;
+			}
+			return ret;
+		}
+		else if constexpr (::fast_io::dynamic_reserve_with_possible_static_stack_size<char_type, nocvreft>)
+		{
+			// Bounded dynamic reserve output participates through its reusable maximum stack window.
+			context_capture_run_result ret{};
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first before this dynamic producer resets the static burst.
+				ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
+			}
+			constexpr ::std::size_t static_stack_size{
+				print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, nocvreft>)};
+			constexpr ::std::size_t dynamic_buffer_size{
+				::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<static_stack_size, char_type>()};
+			++ret.position;
+			ret.leading_static_reserve_burst_size = 0;
+			ret.has_dynamic = true;
+			if (ret.dynamic_buffer_size < dynamic_buffer_size)
+			{
+				// The capture buffer must fit the largest bounded dynamic reserve window in the run.
+				ret.dynamic_buffer_size = dynamic_buffer_size;
+			}
+			return ret;
+		}
+		else if constexpr (::fast_io::context_printable_with_static_buffer_size<char_type, nocvreft>)
+		{
+			// Context-printable output anchors the capture run and requires its declared context window.
+			context_capture_run_result ret{};
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first before this context producer resets the static burst.
+				ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
+			}
+			constexpr ::std::size_t context_buffer_size{
+				::fast_io::details::decay::context_print_static_buffer_size_v<false, char_type, nocvreft>};
+			++ret.position;
+			ret.leading_static_reserve_burst_size = 0;
+			ret.has_context = true;
+			if (ret.context_buffer_size < context_buffer_size)
+			{
+				// The capture buffer must fit the largest static context window in the run.
+				ret.context_buffer_size = context_buffer_size;
+			}
+			return ret;
+		}
+		else if constexpr (::std::same_as<nocvreft, ::fast_io::io_null_t>)
+		{
+			// Null output keeps the argument position in the run while requiring no capture storage.
+			context_capture_run_result ret{};
+			if constexpr (sizeof...(Args) != 0)
+			{
+				// Remaining arguments are scanned first so the null can extend the positional prefix.
+				ret = ::fast_io::details::decay::find_context_capture_run_n<char_type, Args...>();
+			}
+			++ret.position;
+			return ret;
+		}
+		else
+		{
+			// Any other output protocol terminates the context-capture prefix.
+			return {};
+		}
 	}
 }
 
@@ -7986,6 +8276,21 @@ inline constexpr void print_controls_dynamic_scatters_reserve(
 template <bool line, typename outputstmtype, ::std::size_t skippings, typename T, typename... Args>
 inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...args);
 
+#if __cplusplus > 202302L && __cpp_pack_indexing >= 202311L
+/// @brief Re-enters the original control scanner at the first unconsumed argument.
+/// @details Only named lvalues cross this type-only edge. Pack indexing removes skipped specializations without
+///          copying a source, forwarding it again, or introducing any intermediate output-strategy decision.
+template <bool line, ::std::size_t skippings, typename outputstmtype, typename... Values>
+inline constexpr void print_controls_skip(outputstmtype &optstm, Values &...values)
+{
+	static_assert(skippings < sizeof...(Values));
+	[&]<::std::size_t... index>(::std::index_sequence<index...>) constexpr {
+		::fast_io::details::decay::print_controls_impl<line, outputstmtype, 0u>(
+			optstm, values...[skippings + index]...);
+	}(::std::make_index_sequence<sizeof...(Values) - skippings>{});
+}
+#endif
+
 /// @brief Tests whether this exact run contains immutable payload which the destination can consume in place.
 /// @details A selected compiler-constant proxy and a type-sized `static_scatter_t` carry the same relevant lifetime
 ///          proof: their payload is independent of the descriptor/materialization frame.  Preserving that fact in a
@@ -8181,168 +8486,190 @@ builds likewise retain the original policy.
 #endif
 inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...args)
 {
-	using char_type = typename outputstmtype::output_char_type;
-	using scatter_type [[maybe_unused]] = ::std::conditional_t<
-		::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>,
-		io_scatter_t, basic_io_scatter_t<char_type>>;
-	constexpr contiguous_scatter_result res{
-		::fast_io::details::decay::find_output_continuous_scatters_n<outputstmtype, T, Args...>()};
-	constexpr bool retain_static_scatter{
-		::fast_io::details::decay::print_output_retains_static_scatter<outputstmtype>};
-	constexpr bool preserve_static_fragments{
-		retain_static_scatter &&
-		::fast_io::details::decay::print_first_n_contains_static_fragment<
-			res.position, char_type, T, Args...>::value};
-	constexpr context_capture_run_result context_capture_res{
-		::fast_io::details::decay::find_context_capture_run_n<char_type, T, Args...>()};
 	if constexpr (skippings != 0)
 	{
-		// Already-emitted prefix positions are skipped before dispatching the remaining arguments.
+		// Consumed positions do not participate in another strategy decision. Discard their scanners as well as
+		// their emitters; otherwise every skipped suffix recreates metadata that the selected run never uses.
+#if __cplusplus > 202302L && __cpp_pack_indexing >= 202311L
+		::fast_io::details::decay::print_controls_skip<line, skippings>(optstm, t, args...);
+#else
 		print_controls_impl<line, outputstmtype, skippings - 1>(optstm, args...);
+#endif
 	}
 	else if constexpr (sizeof...(Args) == 0)
 	{
-		// A single remaining argument uses the specialized one-control emitter with the caller's line policy.
 		print_control_single<line>(optstm, t);
-	}
-	else if constexpr (context_capture_res.has_context)
-	{
-		// Runs containing context-printable output use a reusable capture buffer to reduce small writes.
-		static_assert(SIZE_MAX != sizeof...(Args));
-		constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
-		constexpr bool needprintlf{n == context_capture_res.position && line};
-		/*
-		Context and dynamic producer sizes are reusable streaming windows.
-		Only consecutive static reserve producers contribute a burst size, so
-		the final capture buffer uses max semantics instead of summing producer
-		windows across the run.
-		*/
-		constexpr ::std::size_t context_dynamic_size{
-			context_capture_res.context_buffer_size < context_capture_res.dynamic_buffer_size
-				? context_capture_res.dynamic_buffer_size
-				: context_capture_res.context_buffer_size};
-		constexpr ::std::size_t reserve_context_dynamic_size{
-			context_dynamic_size < context_capture_res.max_static_reserve_burst_size
-				? context_capture_res.max_static_reserve_burst_size
-				: context_dynamic_size};
-		constexpr ::std::size_t buffer_size{reserve_context_dynamic_size < 32u ? 32u
-																			   : reserve_context_dynamic_size};
-		if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<buffer_size, char_type>)
-		{
-			// Small context-capture buffers stay on the stack while the captured run is emitted.
-			char_type buffer[buffer_size];
-			::fast_io::details::decay::print_context_capture_run<needprintlf, context_capture_res.position>(
-				optstm, buffer, buffer, buffer + buffer_size, t, args...);
-		}
-		else
-		{
-			// Large context-capture buffers are allocated before the captured run is emitted.
-			::fast_io::details::local_operator_new_array_ptr<char_type> newptr(buffer_size);
-			char_type *buffer{newptr.ptr};
-			::fast_io::details::decay::print_context_capture_run<needprintlf, context_capture_res.position>(
-				optstm, buffer, buffer, buffer + buffer_size, t, args...);
-		}
-		if constexpr (context_capture_res.position != n)
-		{
-			// Arguments after the context-captured prefix continue through the general dispatcher.
-			print_controls_impl<line, outputstmtype, context_capture_res.position - 1>(optstm, args...);
-		}
-	}
-	else if constexpr (res.position == 0)
-	{
-		// The current argument cannot join a contiguous optimized prefix, so emit it alone.
-		print_control_single<false>(optstm, t);
-		// Spell the known stream type and zero skip count explicitly. GCC 11 cannot apply the default non-type argument
-		// before deducing the following type pack here, although newer frontends produce the same specialization.
-		print_controls_impl<line, outputstmtype, 0u>(optstm, args...);
 	}
 	else
 	{
-		// A contiguous scatter/reserve-friendly prefix was found and can be emitted as one optimized run.
-		if constexpr (line)
+		using char_type = typename outputstmtype::output_char_type;
+		using scatter_type [[maybe_unused]] = ::std::conditional_t<
+			::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>,
+			io_scatter_t, basic_io_scatter_t<char_type>>;
+		constexpr contiguous_scatter_result res{
+			::fast_io::details::decay::find_output_continuous_scatters_n<outputstmtype, T, Args...>()};
+		constexpr bool retain_static_scatter{
+			::fast_io::details::decay::print_output_retains_static_scatter<outputstmtype>};
+		constexpr bool preserve_static_fragments{
+			retain_static_scatter &&
+			::fast_io::details::decay::print_first_n_contains_static_fragment<
+				res.position, char_type, T, Args...>::value};
+		constexpr context_capture_run_result context_capture_res{
+			::fast_io::details::decay::find_context_capture_run_n<char_type, T, Args...>()};
+		if constexpr (context_capture_res.has_context)
 		{
-			// A line-terminated optimized prefix must have a finite scatter count when a newline descriptor is needed.
-			static_assert(res.neededscatters != SIZE_MAX);
-		}
-		static_assert(SIZE_MAX != sizeof...(Args));
-		constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
-		constexpr bool needprintlf{n == res.position && line};
-		if constexpr (res.hasscatters && !res.hasreserve && !res.hasdynamicreserve)
-		{
-			// Scatter-only prefixes are emitted directly as scatter descriptors.
-			constexpr ::std::size_t scatterscount{res.neededscatters + static_cast<::std::size_t>(needprintlf)};
-			::fast_io::details::decay::print_controls_scatters<
-				needprintlf, res.position, scatterscount, char_type,
-				preserve_static_fragments>(
-				optstm, t, args...);
-			if constexpr (res.position != n)
+			// Runs containing context-printable output use a reusable capture buffer to reduce small writes.
+			static_assert(SIZE_MAX != sizeof...(Args));
+			constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
+			constexpr bool needprintlf{n == context_capture_res.position && line};
+			/*
+			Context and dynamic producer sizes are reusable streaming windows.
+			Only consecutive static reserve producers contribute a burst size, so
+			the final capture buffer uses max semantics instead of summing producer
+			windows across the run.
+			*/
+			constexpr ::std::size_t context_dynamic_size{
+				context_capture_res.context_buffer_size < context_capture_res.dynamic_buffer_size
+					? context_capture_res.dynamic_buffer_size
+					: context_capture_res.context_buffer_size};
+			constexpr ::std::size_t reserve_context_dynamic_size{
+				context_dynamic_size < context_capture_res.max_static_reserve_burst_size
+					? context_capture_res.max_static_reserve_burst_size
+					: context_dynamic_size};
+			constexpr ::std::size_t buffer_size{reserve_context_dynamic_size < 32u ? 32u
+																				   : reserve_context_dynamic_size};
+			if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<buffer_size, char_type>)
 			{
-				// Arguments after the scatter-only prefix continue through the general dispatcher.
-				print_controls_impl<line, outputstmtype, res.position - 1>(optstm, args...);
+				// Small context-capture buffers stay on the stack while the captured run is emitted.
+				char_type buffer[buffer_size];
+				::fast_io::details::decay::print_context_capture_run<needprintlf, context_capture_res.position>(
+					optstm, buffer, buffer, buffer + buffer_size, t, args...);
 			}
+			else
+			{
+				// Large context-capture buffers are allocated before the captured run is emitted.
+				::fast_io::details::local_operator_new_array_ptr<char_type> newptr(buffer_size);
+				char_type *buffer{newptr.ptr};
+				::fast_io::details::decay::print_context_capture_run<needprintlf, context_capture_res.position>(
+					optstm, buffer, buffer, buffer + buffer_size, t, args...);
+			}
+			if constexpr (context_capture_res.position != n)
+			{
+				// Arguments after the context-captured prefix continue through the general dispatcher.
+				print_controls_impl<line, outputstmtype, context_capture_res.position - 1>(optstm, args...);
+			}
+		}
+		else if constexpr (res.position == 0)
+		{
+			// The current argument cannot join a contiguous optimized prefix, so emit it alone.
+			print_control_single<false>(optstm, t);
+			// Spell the known stream type and zero skip count explicitly. GCC 11 cannot apply the default non-type argument
+			// before deducing the following type pack here, although newer frontends produce the same specialization.
+			print_controls_impl<line, outputstmtype, 0u>(optstm, args...);
 		}
 		else
 		{
-			// Prefixes with reserve output need temporary character storage before they can be written.
-			constexpr ::std::size_t mxsize{
-				static_cast<::std::size_t>(res.neededspace + static_cast<::std::size_t>(needprintlf))};
-			if constexpr (!res.hasscatters)
+			// A contiguous scatter/reserve-friendly prefix was found and can be emitted as one optimized run.
+			if constexpr (line)
 			{
-				// Reserve-only prefixes can be materialized as one contiguous output range.
-				static_assert(!needprintlf || res.neededspace != SIZE_MAX);
-				if constexpr (res.hasdynamicreserve)
+				// A line-terminated optimized prefix must have a finite scatter count when a newline descriptor is needed.
+				static_assert(res.neededscatters != SIZE_MAX);
+			}
+			static_assert(SIZE_MAX != sizeof...(Args));
+			constexpr ::std::size_t n{sizeof...(Args) + static_cast<::std::size_t>(1)};
+			constexpr bool needprintlf{n == res.position && line};
+			if constexpr (res.hasscatters && !res.hasreserve && !res.hasdynamicreserve)
+			{
+				// Scatter-only prefixes are emitted directly as scatter descriptors.
+				constexpr ::std::size_t scatterscount{res.neededscatters + static_cast<::std::size_t>(needprintlf)};
+				::fast_io::details::decay::print_controls_scatters<
+					needprintlf, res.position, scatterscount, char_type,
+					preserve_static_fragments>(
+					optstm, t, args...);
+				if constexpr (res.position != n)
 				{
-					// Dynamic reserve-only prefixes are measured before choosing stack or heap storage.
-					constexpr bool has_static_stack_size{
-						::fast_io::details::decay::ndynamic_print_reserve_has_static_stack_size<res.position,
-																								char_type, T,
-																								Args...>()};
-					constexpr ::std::size_t producer_static_stack_size{
-						::fast_io::details::decay::ndynamic_print_reserve_static_stack_size<res.position, char_type,
-																							T, Args...>()};
-					constexpr ::std::size_t dynamic_stack_budget{
-						::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<producer_static_stack_size,
-																							 char_type>()};
-					constexpr ::std::size_t stack_buffer_size{
-						::fast_io::details::intrinsics::add_or_overflow_die(mxsize, dynamic_stack_budget)};
-					::std::size_t const dynsz{
-						::fast_io::details::decay::ndynamic_print_reserve_size<res.position, char_type>(t, args...)};
-					::std::size_t const totalsz{
-						::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(mxsize,
-																											  dynsz)};
-					if (totalsz == SIZE_MAX)
+					// Arguments after the scatter-only prefix continue through the general dispatcher.
+					print_controls_impl<line, outputstmtype, res.position - 1>(optstm, args...);
+				}
+			}
+			else
+			{
+				// Prefixes with reserve output need temporary character storage before they can be written.
+				constexpr ::std::size_t mxsize{
+					static_cast<::std::size_t>(res.neededspace + static_cast<::std::size_t>(needprintlf))};
+				if constexpr (!res.hasscatters)
+				{
+					// Reserve-only prefixes can be materialized as one contiguous output range.
+					static_assert(!needprintlf || res.neededspace != SIZE_MAX);
+					if constexpr (res.hasdynamicreserve)
 					{
-						// One shared dynamic reserve range is optional; preserve output with per-control emission instead.
-						return ::fast_io::details::decay::print_controls_sequential<line>(optstm, t, args...);
-					}
-					if constexpr (has_static_stack_size &&
-								  ::fast_io::details::decay::print_stack_buffer_size_within_limit<stack_buffer_size,
-																								  char_type>)
-					{
-						// A statically bounded dynamic reserve prefix may stay on the stack.
-						if (totalsz <= stack_buffer_size)
+						// Dynamic reserve-only prefixes are measured before choosing stack or heap storage.
+						constexpr bool has_static_stack_size{
+							::fast_io::details::decay::ndynamic_print_reserve_has_static_stack_size<res.position,
+																									char_type, T,
+																									Args...>()};
+						constexpr ::std::size_t producer_static_stack_size{
+							::fast_io::details::decay::ndynamic_print_reserve_static_stack_size<res.position, char_type,
+																								T, Args...>()};
+						constexpr ::std::size_t dynamic_stack_budget{
+							::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<producer_static_stack_size,
+																								 char_type>()};
+						constexpr ::std::size_t stack_buffer_size{
+							::fast_io::details::intrinsics::add_or_overflow_die(mxsize, dynamic_stack_budget)};
+						::std::size_t const dynsz{
+							::fast_io::details::decay::ndynamic_print_reserve_size<res.position, char_type>(t, args...)};
+						::std::size_t const totalsz{
+							::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(mxsize,
+																												  dynsz)};
+						if (totalsz == SIZE_MAX)
 						{
-							// The measured dynamic reserve prefix fits in the bounded stack buffer.
-							char_type buffer[stack_buffer_size];
-							char_type *ptred{
-								::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t,
-																									args...)};
-							if constexpr (needprintlf)
+							// One shared dynamic reserve range is optional; preserve output with per-control emission instead.
+							return ::fast_io::details::decay::print_controls_sequential<line>(optstm, t, args...);
+						}
+						if constexpr (has_static_stack_size &&
+									  ::fast_io::details::decay::print_stack_buffer_size_within_limit<stack_buffer_size,
+																									  char_type>)
+						{
+							// A statically bounded dynamic reserve prefix may stay on the stack.
+							if (totalsz <= stack_buffer_size)
 							{
-								// The line variant appends the newline to the contiguous stack buffer.
-								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
-								++ptred;
+								// The measured dynamic reserve prefix fits in the bounded stack buffer.
+								char_type buffer[stack_buffer_size];
+								char_type *ptred{
+									::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t,
+																										args...)};
+								if constexpr (needprintlf)
+								{
+									// The line variant appends the newline to the contiguous stack buffer.
+									*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
+									++ptred;
+								}
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 							}
-							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
+							else
+							{
+								// The measured dynamic reserve prefix exceeds the stack budget and uses heap storage.
+								::fast_io::details::local_operator_new_array_ptr<char_type> newptr(totalsz);
+								char_type *buffer{newptr.ptr};
+								char_type *ptred{
+									::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t,
+																										args...)};
+								if constexpr (needprintlf)
+								{
+									// The line variant appends the newline to the contiguous heap buffer.
+									*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
+									++ptred;
+								}
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
+							}
 						}
 						else
 						{
-							// The measured dynamic reserve prefix exceeds the stack budget and uses heap storage.
+							// Dynamic reserve prefixes without bounded stack eligibility use heap storage.
 							::fast_io::details::local_operator_new_array_ptr<char_type> newptr(totalsz);
 							char_type *buffer{newptr.ptr};
 							char_type *ptred{
-								::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t,
-																									args...)};
+								::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
 							if constexpr (needprintlf)
 							{
 								// The line variant appends the newline to the contiguous heap buffer.
@@ -8352,114 +8679,99 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 					}
-					else
+					else if constexpr (res.hasreserve)
 					{
-						// Dynamic reserve prefixes without bounded stack eligibility use heap storage.
-						::fast_io::details::local_operator_new_array_ptr<char_type> newptr(totalsz);
-						char_type *buffer{newptr.ptr};
-						char_type *ptred{
-							::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
-						if constexpr (needprintlf)
+						// Static reserve-only prefixes have a compile-time storage requirement.
+						if constexpr (res.neededspace == 0)
 						{
-							// The line variant appends the newline to the contiguous heap buffer.
-							*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
-							++ptred;
-						}
-						::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
-					}
-				}
-				else if constexpr (res.hasreserve)
-				{
-					// Static reserve-only prefixes have a compile-time storage requirement.
-					if constexpr (res.neededspace == 0)
-					{
-						// A zero-sized reserve prefix can only emit the optional trailing newline.
-						if constexpr (needprintlf)
-						{
-							// The line variant emits the trailing newline as a single character output.
-							::fast_io::operations::decay::char_put_decay_dispatch(optstm,
-																		 ::fast_io::char_literal_v<u8'\n', char_type>);
-						}
-					}
-					else
-					{
-						// Non-empty static reserve prefixes are materialized before a single contiguous write.
-						if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<mxsize,
-																									  char_type>)
-						{
-							// Small static reserve prefixes are materialized on the stack.
-							char_type buffer[mxsize];
-							char_type *ptred{
-								::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
+							// A zero-sized reserve prefix can only emit the optional trailing newline.
 							if constexpr (needprintlf)
 							{
-								// The line variant appends the newline to the stack buffer.
-								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
-								++ptred;
+								// The line variant emits the trailing newline as a single character output.
+								::fast_io::operations::decay::char_put_decay_dispatch(optstm,
+																					  ::fast_io::char_literal_v<u8'\n', char_type>);
 							}
-							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 						else
 						{
-							// Large static reserve prefixes are materialized in heap storage.
-							::fast_io::details::local_operator_new_array_ptr<char_type> newptr(mxsize);
-							char_type *buffer{newptr.ptr};
-							char_type *ptred{
-								::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
-							if constexpr (needprintlf)
+							// Non-empty static reserve prefixes are materialized before a single contiguous write.
+							if constexpr (::fast_io::details::decay::print_stack_buffer_size_within_limit<mxsize,
+																										  char_type>)
 							{
-								// The line variant appends the newline to the heap buffer.
-								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
-								++ptred;
+								// Small static reserve prefixes are materialized on the stack.
+								char_type buffer[mxsize];
+								char_type *ptred{
+									::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
+								if constexpr (needprintlf)
+								{
+									// The line variant appends the newline to the stack buffer.
+									*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
+									++ptred;
+								}
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 							}
-							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
+							else
+							{
+								// Large static reserve prefixes are materialized in heap storage.
+								::fast_io::details::local_operator_new_array_ptr<char_type> newptr(mxsize);
+								char_type *buffer{newptr.ptr};
+								char_type *ptred{
+									::fast_io::details::decay::print_n_reserve<res.position, char_type>(buffer, t, args...)};
+								if constexpr (needprintlf)
+								{
+									// The line variant appends the newline to the heap buffer.
+									*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
+									++ptred;
+								}
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
+							}
 						}
 					}
 				}
-			}
-			else if constexpr (res.hasreserve && !res.hasdynamicreserve)
-			{
-				// Mixed scatter/static-reserve prefixes are emitted through prebuilt scatter descriptors.
-				constexpr ::std::size_t scatterscount{res.neededscatters +
-													  static_cast<::std::size_t>(line && res.position == n)};
-				::fast_io::details::decay::print_controls_scatters_reserve<
-					needprintlf, res.position, scatterscount, mxsize, char_type,
-					retain_static_scatter, preserve_static_fragments>(
-					optstm, t, args...);
-			}
-			else if constexpr (res.hasdynamicreserve)
-			{
-				// Mixed scatter/dynamic-reserve prefixes are measured before descriptor materialization.
-				constexpr ::std::size_t scatterscount{res.neededscatters +
-													  static_cast<::std::size_t>(line && res.position == n)};
-				constexpr bool has_static_stack_size{
-					::fast_io::details::decay::ndynamic_print_reserve_has_static_stack_size<res.position, char_type, T,
-																							Args...>()};
-				constexpr ::std::size_t producer_static_stack_size{
-					::fast_io::details::decay::ndynamic_print_reserve_static_stack_size<res.position, char_type, T,
-																						Args...>()};
-				constexpr ::std::size_t dynamic_stack_budget{
-					::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<producer_static_stack_size,
-																						 char_type>()};
-				constexpr ::std::size_t stack_buffer_size{
-					::fast_io::details::intrinsics::add_or_overflow_die(mxsize, dynamic_stack_budget)};
-				::std::size_t const dynsz{
-					::fast_io::details::decay::ndynamic_print_reserve_size<res.position, char_type>(t, args...)};
-				::std::size_t const totalsz{
-					::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(mxsize, dynsz)};
-				if (totalsz == SIZE_MAX)
+				else if constexpr (res.hasreserve && !res.hasdynamicreserve)
 				{
-					// A measured aggregate may be unavailable even when every producer is individually printable.
-					return ::fast_io::details::decay::print_controls_sequential<line>(optstm, t, args...);
+					// Mixed scatter/static-reserve prefixes are emitted through prebuilt scatter descriptors.
+					constexpr ::std::size_t scatterscount{res.neededscatters +
+														  static_cast<::std::size_t>(line && res.position == n)};
+					::fast_io::details::decay::print_controls_scatters_reserve<
+						needprintlf, res.position, scatterscount, mxsize, char_type,
+						retain_static_scatter, preserve_static_fragments>(
+						optstm, t, args...);
 				}
-				::fast_io::details::decay::print_controls_dynamic_scatters_reserve<
-					needprintlf, res.position, scatterscount, stack_buffer_size, has_static_stack_size, char_type,
-					retain_static_scatter, preserve_static_fragments>(optstm, totalsz, t, args...);
-			}
-			if constexpr (res.position != n)
-			{
-				// Arguments after the optimized prefix continue through the general dispatcher.
-				print_controls_impl<line, outputstmtype, res.position - 1>(optstm, args...);
+				else if constexpr (res.hasdynamicreserve)
+				{
+					// Mixed scatter/dynamic-reserve prefixes are measured before descriptor materialization.
+					constexpr ::std::size_t scatterscount{res.neededscatters +
+														  static_cast<::std::size_t>(line && res.position == n)};
+					constexpr bool has_static_stack_size{
+						::fast_io::details::decay::ndynamic_print_reserve_has_static_stack_size<res.position, char_type, T,
+																								Args...>()};
+					constexpr ::std::size_t producer_static_stack_size{
+						::fast_io::details::decay::ndynamic_print_reserve_static_stack_size<res.position, char_type, T,
+																							Args...>()};
+					constexpr ::std::size_t dynamic_stack_budget{
+						::fast_io::details::decay::dynamic_print_reserve_static_stack_budget<producer_static_stack_size,
+																							 char_type>()};
+					constexpr ::std::size_t stack_buffer_size{
+						::fast_io::details::intrinsics::add_or_overflow_die(mxsize, dynamic_stack_budget)};
+					::std::size_t const dynsz{
+						::fast_io::details::decay::ndynamic_print_reserve_size<res.position, char_type>(t, args...)};
+					::std::size_t const totalsz{
+						::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<char_type>(mxsize, dynsz)};
+					if (totalsz == SIZE_MAX)
+					{
+						// A measured aggregate may be unavailable even when every producer is individually printable.
+						return ::fast_io::details::decay::print_controls_sequential<line>(optstm, t, args...);
+					}
+					::fast_io::details::decay::print_controls_dynamic_scatters_reserve<
+						needprintlf, res.position, scatterscount, stack_buffer_size, has_static_stack_size, char_type,
+						retain_static_scatter, preserve_static_fragments>(optstm, totalsz, t, args...);
+				}
+				if constexpr (res.position != n)
+				{
+					// Arguments after the optimized prefix continue through the general dispatcher.
+					print_controls_impl<line, outputstmtype, res.position - 1>(optstm, args...);
+				}
 			}
 		}
 	}
@@ -16923,6 +17235,67 @@ struct print_semantic_filter_flat_continuation
 	}
 };
 
+#include "print_semantic_status_probe.h"
+#include "print_semantic_linear.h"
+
+/// @brief Shares the ordinary control plan only after all earlier active-record strategies are excluded.
+/// @details Closed literal conditions cannot introduce staged or runtime-scatter producers. At least three mandatory
+///          leaves exclude empty/singleton/exact-two whole-record policies. Exact status ownership remains separately
+///          proved for every active type sequence; no provider declaration is inferred from a formatting protocol.
+template <bool line, ::std::integral char_type, typename outputstmtype, typename... Args>
+inline consteval bool print_semantic_linear_control_plan_available() noexcept
+{
+#if __cplusplus > 202302L && ((defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11) || (defined(__clang__) && __clang_major__ >= 13))
+	constexpr ::std::size_t selections{(static_cast<::std::size_t>(
+											::fast_io::details::decay::print_semantic_top_level_condition_v<Args &>) +
+										... + 0u)};
+	if constexpr (selections < 4u || sizeof...(Args) - selections < 3u ||
+				  ::fast_io::operations::decay::defines::has_obuffer_basic_operations<outputstmtype> ||
+				  ::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<outputstmtype> ||
+				  ::fast_io::direct_obuffer_copy_safe<char_type, outputstmtype> ||
+				  !::fast_io::semantic_optional_scatter_plan_stream<char_type, outputstmtype> ||
+				  ::fast_io::semantic_plain_leaf_coalesce_preferred_stream<char_type, outputstmtype> ||
+				  (false || ... || ::fast_io::staged_printable<char_type, ::std::remove_cvref_t<Args>>) ||
+				  (false || ... || ::fast_io::single_pass_staging_printable<char_type, ::std::remove_cvref_t<Args>>))
+	{
+		return false;
+	}
+	else
+	{
+		constexpr bool native_scatter{[]() consteval {
+			if constexpr (::fast_io::details::decay::print_uses_byte_scatter_representation<outputstmtype>)
+			{
+				return ::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>;
+			}
+			else
+			{
+				return ::fast_io::details::decay::print_has_direct_scatter_write_operations<outputstmtype>;
+			}
+		}()};
+		if constexpr (!native_scatter ||
+					  !::fast_io::operations::decay::print_semantic_linear::plan_available<char_type, outputstmtype, Args...>())
+		{
+			return false;
+		}
+		else
+		{
+			// Audited GNU/Clang active-record compiler-constant dispatch is structurally query-free. Sources which could
+			// select a different whole-record policy were discarded above, leaving the unchanged no-pack control order.
+			if constexpr (::fast_io::semantic_status_free_record<line, char_type, outputstmtype, Args...>)
+			{
+				return true;
+			}
+			else
+			{
+				return !::fast_io::operations::decay::print_semantic_any_exact_status<line, char_type, outputstmtype, Args...>();
+			}
+		}
+	}
+#else
+	return false;
+#endif
+}
+
 /// @brief    Emits a semantic-aware freestanding print run.
 /// @details  The entry expands semantic packs and nulls when needed, then routes the resulting flat run through
 ///           coalescing and semantic node emission. Ordinary `inline` is deliberate. A GCC 11--16 and Clang 17--23
@@ -16998,6 +17371,19 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 			return false;
 		}
 	}();
+	constexpr bool use_linear_control_plan = []() consteval {
+		if constexpr (already_forwarded && !has_pack_or_null && has_top_level_condition &&
+					  !use_optional_scatter_source_plan && !use_optional_scatter_width_coalescing_plan && !use_optional_scatter_barrier_plan)
+		{
+			return ::fast_io::operations::decay::print_semantic_linear_control_plan_available<
+				line, char_type, outputstmtype, ::std::remove_reference_t<Args>...>();
+		}
+		else
+		{
+			return false;
+		}
+	}();
+
 #if defined(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC)
 	// Diagnostic-only fail-fast gate for real-project shape discovery. It stops before active-record type enumeration and
 	// is absent from normal translation units, so it cannot alter public admission, execution, or optimizer-constant paths.
@@ -17011,7 +17397,7 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 					FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC) ||
 			use_optional_scatter_source_plan ||
 			use_optional_scatter_width_coalescing_plan ||
-			use_optional_scatter_barrier_plan,
+			use_optional_scatter_barrier_plan || use_linear_control_plan,
 		"unclassified large semantic condition record");
 #endif
 	constexpr bool bypass_condition_selection = []() consteval {
@@ -17062,6 +17448,11 @@ inline constexpr void print_semantic_emit(outputstmtype &optstm, Args &&...args)
 			print_semantic_optional_scatter_barrier_plan_emit<
 				line, char_type>(optstm, args...);
 	}
+	else if constexpr (use_linear_control_plan)
+	{
+		::fast_io::operations::decay::print_semantic_linear::emit<line>(optstm, args...);
+	}
+
 #if defined(FAST_IO_SEMANTIC_CONDITION_DIAGNOSTIC)
 	else if constexpr (
 		diagnostic_top_level_condition_count >=

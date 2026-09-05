@@ -40,6 +40,9 @@ if [[ ${PROVIDERS:-0} == 1 ]]; then
 	flags+=(-DFAST_IO_UWVM_EXPERIMENTAL_PROOFS=1)
 	flags+=(-include "$script_dir/uwvm_compile_proofs.h")
 fi
+if [[ ${STATUS_CONTRACTS:-0} == 1 ]]; then
+	flags+=(-DFAST_IO_UWVM_STATUS_AUDIT=1 -include "$script_dir/uwvm_status_contracts.h")
+fi
 if [[ ${PHASE:-object} == syntax ]]; then
 	flags+=(-fsyntax-only)
 else

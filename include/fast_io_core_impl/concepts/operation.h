@@ -2163,6 +2163,24 @@ concept semantic_optional_scatter_status_transparent_leaf = ::std::integral<char
 	} -> ::std::same_as<::std::true_type>;
 };
 
+/// @brief Proves absence of whole-record status ownership for one complete normalized semantic source graph.
+/// @details The provider returning true_type promises that every active argument sequence reachable by selecting
+///          conditions and performing their ordinary input forwarding has no valid status_print_define for the exact
+///          effective output and line policy. This includes the empty sequence and all destination/argument-associated
+///          namespaces, not merely the provider's namespace. Source tags preserve their exact named-lvalue types,
+///          including const qualification. A later status overload invalidating the promise violates this contract.
+///          The consumer checks this proof only after source-record status dispatch and mutex unwrapping. The proof
+///          eliminates only the otherwise exhaustive status search: it grants no reserve/scatter/context capability,
+///          regrouping, forwarding, lifetime, or output-strategy permission. Those remain independently proved.
+///          Without this explicit complete-record promise, exact status ownership is checked for every selection.
+template <bool line, typename char_type, typename output, typename... Args>
+concept semantic_status_free_record = ::std::integral<char_type> && requires {
+	{
+		print_semantic_status_free_record(io_reserve_type<char_type, output>, ::std::bool_constant<line>{},
+										  ::fast_io::io_type_t<Args &>{}...)
+	} -> ::std::same_as<::std::true_type>;
+};
+
 /// @brief      semantic_optional_scatter_barrier_plan_stream
 /// @details    Extends an exact destination's closed-scatter proof to records containing explicitly marked direct-
 ///             print barriers. A provider returning `std::true_type` proves all of the following for its exact stream

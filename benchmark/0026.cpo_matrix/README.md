@@ -8,6 +8,15 @@ one line policy, and one destination.  This prevents unrelated template
 instantiations from changing inliner budgets, compiler memory, binary size, or
 hot-code placement.
 
+The C++26 huge-uwvm compile investigation has separate fixtures and an audited
+status-only integration header. See
+[linear control validation](VALIDATION_LINEAR_CONTROL_20260905.md) for the exact
+scope, resource measurements, before/after/official runtime comparison, and
+reproduction commands. `run_uwvm_compile.sh` builds an isolated main object;
+`run_uwvm_program.py` finishes that same configuration and checks eight executable
+cases without changing the source snapshot. The status proof is explicit and
+must be re-audited when the pinned source types change.
+
 ## Protocol set
 
 | Name | Source contract |
