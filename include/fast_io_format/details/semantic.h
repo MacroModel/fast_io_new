@@ -138,8 +138,51 @@ inline constexpr ::std::size_t print_reserve_size(
 		char_type,
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>) noexcept
 {
-	return print_reserve_size(::fast_io::io_reserve_type<char_type, scalar_type>);
+	// A static reserve size is a type policy, not a run-time call edge. Materializing the value here proves successful
+	// constant evaluation even when an experimental effect annotation is present on the provider declaration.
+	constexpr ::std::size_t result{
+		print_reserve_size(::fast_io::io_reserve_type<char_type, scalar_type>)};
+	return result;
 }
+
+#if defined(__HERBCEPTIONS__)
+namespace details
+{
+
+/// @brief Classifies the deterministic effect of format-scalar protocol forwarding.
+/// @details Each query names the child expression used by the corresponding wrapper body. Keeping this channel
+///          separate from traditional `noexcept` expresses the language's two independent failure properties. Matching
+///          named operand categories makes the declaration and its delegated protocol edge formally identical.
+template <::std::integral char_type, typename scalar_type>
+inline constexpr bool format_scalar_dynamic_reserve_size_herbceptions_may_fail =
+	throws((print_reserve_size(
+		::fast_io::io_reserve_type<char_type, scalar_type>,
+		::std::declval<scalar_type &>())));
+
+template <::std::integral char_type, typename scalar_type>
+inline constexpr bool format_scalar_reserve_define_herbceptions_may_fail =
+	throws((print_reserve_define(
+		::fast_io::io_reserve_type<char_type, scalar_type>,
+		::std::declval<char_type *&>(), ::std::declval<scalar_type &>())));
+
+template <::std::integral char_type, typename scalar_type>
+inline constexpr bool format_scalar_precise_size_herbceptions_may_fail =
+	throws((print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, scalar_type>,
+		::std::declval<scalar_type &>())));
+
+template <::std::integral char_type, ::std::random_access_iterator iterator,
+		  typename scalar_type>
+inline constexpr bool format_scalar_precise_define_herbceptions_may_fail =
+	throws((print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, scalar_type>,
+		// Both by-value wrapper parameters are named lvalues at the child call. Reproducing those categories prevents
+		// a char/iterator/size overload set from being classified through a different prvalue-only declaration.
+		::std::declval<iterator &>(), ::std::declval<::std::size_t &>(),
+		::std::declval<scalar_type &>())));
+
+} // namespace details
+#endif
 
 /// Forwards an object-dependent reserve bound without pretending that it is static.
 ///
@@ -158,9 +201,14 @@ inline constexpr ::std::size_t print_reserve_size(
 		char_type,
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>,
 	::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign> value)
-	noexcept(noexcept(print_reserve_size(
-		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)))
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::format_scalar_dynamic_reserve_size_herbceptions_may_fail<
+			char_type, scalar_type>),
+		noexcept(print_reserve_size(
+			::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)))
 {
+	// The wrapper adds no run-time sizing work. Its deterministic effect and ordinary exception property are therefore
+	// exactly those of the child call made with the stored scalar as a named lvalue.
 	return print_reserve_size(
 		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar);
 }
@@ -175,9 +223,14 @@ inline constexpr char_type *print_reserve_define(
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>,
 	char_type *iter,
 	::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign> value)
-	noexcept(noexcept(print_reserve_define(
-		::fast_io::io_reserve_type<char_type, scalar_type>, iter, value.scalar)))
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::format_scalar_reserve_define_herbceptions_may_fail<
+			char_type, scalar_type>),
+		noexcept(print_reserve_define(
+			::fast_io::io_reserve_type<char_type, scalar_type>, iter, value.scalar)))
 {
+	// Sign spelling mutates only already-produced bytes and cannot fail. The wrapper consequently forwards the complete
+	// failure contract of the named child emission without changing phase-1 scalar ownership.
 	auto const begin{iter};
 	auto const end{print_reserve_define(
 		::fast_io::io_reserve_type<char_type, scalar_type>, iter, value.scalar)};
@@ -542,8 +595,9 @@ inline constexpr ::std::size_t print_compiler_constant_static_fragments_size(
 		::fast_io::manipulators::format_scalar_t<
 			scalar_type, base_prefix_size, space_sign>>) noexcept
 {
-	return print_compiler_constant_static_fragments_size(
-		::fast_io::io_reserve_type<char_type, scalar_type>);
+	constexpr ::std::size_t result{print_compiler_constant_static_fragments_size(
+		::fast_io::io_reserve_type<char_type, scalar_type>)};
+	return result;
 }
 
 template <::std::integral char_type, typename scalar_type,
@@ -630,7 +684,11 @@ inline constexpr ::std::size_t print_reserve_static_stack_size(
 		char_type,
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>) noexcept
 {
-	return print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, scalar_type>);
+	// This policy is consumed as a compile-time bound. Caching it prevents an effect-annotated declaration from becoming
+	// a run-time call hidden behind this wrapper's plain `noexcept` ABI.
+	constexpr ::std::size_t result{
+		print_reserve_static_stack_size(::fast_io::io_reserve_type<char_type, scalar_type>)};
+	return result;
 }
 
 /// @brief Forwards exact-size queries for the already-materialized constant precision-float proxy.
@@ -691,9 +749,14 @@ inline constexpr ::std::size_t print_reserve_precise_size(
 		char_type,
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>,
 	::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign> value)
-	noexcept(noexcept(print_reserve_precise_size(
-		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)))
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::format_scalar_precise_size_herbceptions_may_fail<
+			char_type, scalar_type>),
+		noexcept(print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar)))
 {
+	// Exact sizing is transparently delegated through the named scalar member, so both failure properties equal those
+	// of that one child protocol edge.
 	return print_reserve_precise_size(
 		::fast_io::io_reserve_type<char_type, scalar_type>, value.scalar);
 }
@@ -710,9 +773,15 @@ inline constexpr decltype(auto) print_reserve_precise_define(
 		::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign>>,
 	iterator iter, ::std::size_t size,
 	::fast_io::manipulators::format_scalar_t<scalar_type, base_prefix_size, space_sign> value)
-	noexcept(noexcept(print_reserve_precise_define(
-		::fast_io::io_reserve_type<char_type, scalar_type>, iter, size, value.scalar)))
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::format_scalar_precise_define_herbceptions_may_fail<
+			char_type, iterator, scalar_type>),
+		noexcept(print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, scalar_type>, iter, size, value.scalar)))
 {
+	// `iter`, `size`, and `value.scalar` are all named lvalues in the executed child call; the constraint and both
+	// effect proofs intentionally use those same categories. `decltype(auto)` retains either void or the exact endpoint
+	// result rather than adding a transport conversion at this transparent layer.
 	using define_result = decltype(print_reserve_precise_define(
 		::fast_io::io_reserve_type<char_type, scalar_type>, iter, size, value.scalar));
 	if constexpr (::std::same_as<define_result, void>)

@@ -12,6 +12,7 @@
 #include "error.h"
 #include "traits.h"
 #include "storage.h"
+#include "cursor.h"
 #include "bridge.h"
 #include "output.h"
 #include "input.h"

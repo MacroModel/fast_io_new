@@ -16,13 +16,37 @@ namespace fast_io
 namespace operations::decay::defines
 {
 
-// Observer transport invariant shared by every transmit strategy:
-// Public transmit functions retain each stream-ref result in a `decltype(auto)` local. A prvalue therefore has exactly
-// one owner, whereas ABI-aware normalization can preserve a stable lvalue for a large, non-trivial, or noncopyable
-// observer. Decay and main layers accept forwarding/reference parameters only as lifetime-preserving borrows: they
-// never forward those named parameters into another owner. At a mutex edge, the unlocked CPO result is likewise
-// retained before recursion. These rules are stronger than an ABI-size heuristic because no observer copy edge remains
-// in transmit at all; `abi_value_*` is consequently neither needed nor truthful as an admission condition here.
+/*
+ * Observer transport invariant shared by every transmit strategy:
+ *
+ * Public transmit functions retain each stream-ref result in a `decltype(auto)`
+ * local. A prvalue therefore has exactly one normalization owner, while a
+ * mutable CPO lvalue keeps its original identity. Let Vout and Vin denote the corresponding
+ * `abi_value_{output,input}_stream_ref_result<T &>` propositions, and define
+ *
+ *     P(V, T) = T  if V is true, otherwise T &.
+ *
+ * The mandatory-inline dispatch boundary selects
+ * `operation(P(Vout, O), P(Vin, I), ...)`. Thus the two directions are
+ * independent: an identity-sensitive input cannot force a proven output proxy
+ * back to reference transport, or vice versa. Each V proposition includes both
+ * the explicit ADL `stream_ref_value_transport_safe_define` substitution proof
+ * and the target ABI argument policy; size or triviality alone is insufficient.
+ *
+ * The selected transport entry immediately borrows its named parameters into
+ * one recursive implementation. Mutex recursion also stores every unlocked CPO
+ * result once and continues through that borrowed implementation. Consequently
+ * inline cursors, noncopyable observers, and immovable prvalue owners retain
+ * exact identity, while explicitly substitutable small proxies can still cross
+ * an outlined boundary as true value parameters. Final register allocation
+ * remains the compiler's ABI decision. The historical unsuffixed `*_decay`
+ * functions remain separate true by-value owner entries.
+ */
+
+/// @brief Maps one independently proved transmit direction to its ABI parameter form.
+template <bool value_transport, typename observer>
+using transmit_stream_transport_parameter =
+	::std::conditional_t<value_transport, observer, observer &>;
 
 /// @brief Requires every synchronization marker participating in a transmit to provide its complete directional
 ///        protocol.
@@ -45,6 +69,107 @@ concept has_complete_transmit_mutex_protocols =
 	 ::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<::std::remove_cvref_t<input>>);
 
 } // namespace operations::decay::defines
+
+namespace operations::decay
+{
+
+/**
+ * @brief Materializes the independently selected stream pair for a counted transmit.
+ * @details The non-type operation denotes the single borrowed implementation. Value
+ *          parameters become named owners here and are never copied again.
+ */
+template <bool output_value_transport, bool input_value_transport,
+		  auto borrowed_operation, typename output, typename input>
+inline constexpr decltype(auto) transmit_stream_pair_count_transport(
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		output_value_transport, output>
+		output_stream,
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		input_value_transport, input>
+		input_stream,
+	::fast_io::uintfpos_t count)
+{
+	return borrowed_operation(output_stream, input_stream, count);
+}
+
+/** @brief Selects the two counted-transmit parameter forms at the mandatory-inline boundary. */
+template <auto borrowed_operation, typename output, typename input>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_stream_pair_count_dispatch(output &output_stream, input &input_stream,
+									::fast_io::uintfpos_t count)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_count_transport<
+		::fast_io::operations::defines::abi_value_output_stream_ref_result<output &>,
+		::fast_io::operations::defines::abi_value_input_stream_ref_result<input &>,
+		borrowed_operation, output, input>(output_stream, input_stream, count);
+}
+
+/**
+ * @brief Materializes the independently selected stream pair for an unbounded transmit.
+ * @details This overload carries no operation state; both parameter decisions remain
+ *          visible in the specialized function type and therefore in its target ABI.
+ */
+template <bool output_value_transport, bool input_value_transport,
+		  auto borrowed_operation, typename output, typename input>
+inline constexpr decltype(auto) transmit_stream_pair_transport(
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		output_value_transport, output>
+		output_stream,
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		input_value_transport, input>
+		input_stream)
+{
+	return borrowed_operation(output_stream, input_stream);
+}
+
+/** @brief Selects the two unbounded-transmit parameter forms at the mandatory-inline boundary. */
+template <auto borrowed_operation, typename output, typename input>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_stream_pair_dispatch(output &output_stream, input &input_stream)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_transport<
+		::fast_io::operations::defines::abi_value_output_stream_ref_result<output &>,
+		::fast_io::operations::defines::abi_value_input_stream_ref_result<input &>,
+		borrowed_operation, output, input>(output_stream, input_stream);
+}
+
+/**
+ * @brief Materializes a selected stream pair while borrowing one progress accumulator.
+ * @details Progress adaptation has no stream-ref substitution marker. Its owner is
+ *          therefore created only by the historical/public value boundary and every
+ *          recursive continuation observes that same named accumulator by reference.
+ */
+template <bool output_value_transport, bool input_value_transport,
+		  auto borrowed_operation, typename output, typename input,
+		  typename accumulator>
+inline constexpr decltype(auto) transmit_stream_pair_accumulator_transport(
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		output_value_transport, output>
+		output_stream,
+	::fast_io::operations::decay::defines::transmit_stream_transport_parameter<
+		input_value_transport, input>
+		input_stream,
+	accumulator &result)
+{
+	return borrowed_operation(output_stream, input_stream, result);
+}
+
+/** @brief Selects both stream forms without changing the accumulator's identity. */
+template <auto borrowed_operation, typename output, typename input,
+		  typename accumulator>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_stream_pair_accumulator_dispatch(output &output_stream,
+										  input &input_stream,
+										  accumulator &result)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_accumulator_transport<
+		::fast_io::operations::defines::abi_value_output_stream_ref_result<output &>,
+		::fast_io::operations::defines::abi_value_input_stream_ref_result<input &>,
+		borrowed_operation, output, input, accumulator>(output_stream, input_stream,
+														result);
+}
+
+} // namespace operations::decay
 
 namespace details
 {

@@ -118,7 +118,7 @@ namespace fast_io
 namespace details
 {
 
-template <::std::chars_format format,
+template <::fast_io::chars_format format,
 		  ::fast_io::manipulators::floating_rounding rounding>
 inline consteval ::fast_io::manipulators::scalar_flags
 from_chars_floating_flags() noexcept
@@ -127,7 +127,7 @@ from_chars_floating_flags() noexcept
 	flags.noskipws = true;
 	flags.allow_leading_plus = false;
 	flags.rounding = rounding;
-	if constexpr (format == ::std::chars_format::fixed)
+	if constexpr (format == ::fast_io::chars_format::fixed)
 	{
 		/*
 		Fixed grammar ends before an exponent marker.  Selecting the fixed
@@ -136,7 +136,7 @@ from_chars_floating_flags() noexcept
 		*/
 		flags.floating = ::fast_io::manipulators::floating_format::fixed;
 	}
-	else if constexpr (format == ::std::chars_format::scientific)
+	else if constexpr (format == ::fast_io::chars_format::scientific)
 	{
 		/*
 		Scientific charconv requires a syntactically complete exponent.
@@ -145,7 +145,7 @@ from_chars_floating_flags() noexcept
 		*/
 		flags.floating = ::fast_io::manipulators::floating_format::scientific;
 	}
-	else if constexpr (format == ::std::chars_format::hex)
+	else if constexpr (format == ::fast_io::chars_format::hex)
 	{
 		/*
 		Hexadecimal input uses the exact H*2^q engine.  `showbase=false`
@@ -156,7 +156,7 @@ from_chars_floating_flags() noexcept
 	}
 	else
 	{
-		static_assert(format == ::std::chars_format::general);
+		static_assert(format == ::fast_io::chars_format::general);
 		/*
 		General admits either fixed or scientific decimal syntax.  Decimal
 		mode accepts both and applies the longest-valid-prefix rule proved in
@@ -190,14 +190,14 @@ from_chars_floating_map_result(
 		result_out_of_range; the caller-visible value remains unchanged because
 		conversion was performed into a temporary.
 		*/
-		return {result.iter, ::std::errc::result_out_of_range};
+		return {result.iter, ::fast_io::charconv_errc::result_out_of_range};
 	}
 	/*
 	For a grammatical failure, charconv defines zero consumption regardless of
 	how far a speculative scanner looked.  Restoring original_first is the
 	strong lexical rollback required by that rule.
 	*/
-	return {original_first, ::std::errc::invalid_argument};
+	return {original_first, ::fast_io::charconv_errc::invalid_argument};
 }
 
 template <::fast_io::details::character char_type>
@@ -386,7 +386,7 @@ from_chars_hexadecimal_optional_exponent(
 			binary_exponent)};
 }
 
-template <::std::chars_format format,
+template <::fast_io::chars_format format,
 		  ::fast_io::manipulators::floating_rounding rounding,
 		  ::fast_io::details::scan_decfloat_supported_floating_point T,
 		  ::fast_io::details::character char_type>
@@ -403,7 +403,7 @@ from_chars_floating_fixed(
 		::fast_io::details::from_chars_floating_flags<format, rounding>()};
 	T temporary{};
 	::fast_io::parse_result<char_type const *> parsed;
-	if constexpr (format == ::std::chars_format::hex)
+	if constexpr (format == ::fast_io::chars_format::hex)
 	{
 		/*
 		The hexadecimal adapter differs only in the optional exponent grammar;
@@ -419,7 +419,7 @@ from_chars_floating_fixed(
 		parsed =
 			::fast_io::details::scan_decfloat_contiguous_define<
 				char_type, flags>(first, last, temporary);
-		if constexpr (format == ::std::chars_format::general)
+		if constexpr (format == ::fast_io::chars_format::general)
 		{
 			if (parsed.code == ::fast_io::parse_code::partial &&
 				parsed.iter == last &&
@@ -436,7 +436,7 @@ from_chars_floating_fixed(
 				*/
 				constexpr auto fixed_flags{
 					::fast_io::details::from_chars_floating_flags<
-						::std::chars_format::fixed, rounding>()};
+						::fast_io::chars_format::fixed, rounding>()};
 				parsed =
 					::fast_io::details::scan_decfloat_contiguous_define<
 						char_type, fixed_flags>(first, last, temporary);
@@ -445,7 +445,7 @@ from_chars_floating_fixed(
 	}
 	auto result{
 		::fast_io::details::from_chars_floating_map_result(parsed, first)};
-	if (result.ec == ::std::errc{})
+	if (result.ec == ::fast_io::charconv_errc{})
 	{
 		/*
 		Only successful conversion commits the temporary.  Invalid and
@@ -478,7 +478,7 @@ template <
 #endif
 [[nodiscard]] inline constexpr ::fast_io::basic_from_chars_result<char_type>
 from_chars(char_type const *first, char_type const *last, T &value,
-		   ::std::chars_format format = ::std::chars_format::general) noexcept
+		   ::fast_io::chars_format format = ::fast_io::chars_format::general) noexcept
 {
 #if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
 	/*
@@ -488,28 +488,28 @@ from_chars(char_type const *first, char_type const *last, T &value,
 	wrong arm.
 	*/
 	if (__builtin_constant_p(format) &&
-		format == ::std::chars_format::general)
+		format == ::fast_io::chars_format::general)
 	{
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::general, rounding>(first, last, value);
+			::fast_io::chars_format::general, rounding>(first, last, value);
 	}
 	if (__builtin_constant_p(format) &&
-		format == ::std::chars_format::scientific)
+		format == ::fast_io::chars_format::scientific)
 	{
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::scientific, rounding>(first, last, value);
+			::fast_io::chars_format::scientific, rounding>(first, last, value);
 	}
 	if (__builtin_constant_p(format) &&
-		format == ::std::chars_format::fixed)
+		format == ::fast_io::chars_format::fixed)
 	{
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::fixed, rounding>(first, last, value);
+			::fast_io::chars_format::fixed, rounding>(first, last, value);
 	}
 	if (__builtin_constant_p(format) &&
-		format == ::std::chars_format::hex)
+		format == ::fast_io::chars_format::hex)
 	{
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::hex, rounding>(first, last, value);
+			::fast_io::chars_format::hex, rounding>(first, last, value);
 	}
 #endif
 	switch (format)
@@ -519,25 +519,25 @@ from_chars(char_type const *first, char_type const *last, T &value,
 	by this overload.  Each case is definitionally identical to its
 	optimizer-constant arm above; only the time of dispatch differs.
 	*/
-	case ::std::chars_format::general:
+	case ::fast_io::chars_format::general:
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::general, rounding>(first, last, value);
-	case ::std::chars_format::scientific:
+			::fast_io::chars_format::general, rounding>(first, last, value);
+	case ::fast_io::chars_format::scientific:
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::scientific, rounding>(first, last, value);
-	case ::std::chars_format::fixed:
+			::fast_io::chars_format::scientific, rounding>(first, last, value);
+	case ::fast_io::chars_format::fixed:
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::fixed, rounding>(first, last, value);
-	case ::std::chars_format::hex:
+			::fast_io::chars_format::fixed, rounding>(first, last, value);
+	case ::fast_io::chars_format::hex:
 		return ::fast_io::details::from_chars_floating_fixed<
-			::std::chars_format::hex, rounding>(first, last, value);
+			::fast_io::chars_format::hex, rounding>(first, last, value);
 	default:
 		/*
 		Any other bit pattern names no supported grammar.  No scanner has run,
 		so returning `first` proves both zero consumption and no destination
 		mutation.
 		*/
-		return {first, ::std::errc::invalid_argument};
+		return {first, ::fast_io::charconv_errc::invalid_argument};
 	}
 }
 

@@ -3376,13 +3376,18 @@ scan_int_contiguous_none_space_part_define_impl(char_type const *first, char_typ
 			}
 			else
 #endif
-			// Clang AArch64 fully expands a compile-time-bounded loop of at most nine
-			// code units.  The same validation and radix recurrence are preserved;
-			// the pragma supplies layout policy rather than an arithmetic assumption.
 #if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__clang__)
 				if constexpr (base == 2u || (5u <= base && base <= 10u))
 			{
-#pragma clang loop unroll(full)
+				/*
+				One digit has already been consumed and inline_limit is nine, so this
+				loop performs at most eight validated transitions.  Its end-of-range
+				and invalid-digit exits nevertheless make the exact trip count data
+				dependent; an unroll(full) contract is therefore not valid.  Clang
+				AArch64 emits the same code shape when the rejected hint is absent.
+				Keep this loop unforced: unroll_count is not an equivalent contract and
+				can inflate the scanner enough to inhibit inlining.
+				*/
 				for (::std::size_t short_index{1}; short_index != inline_limit; ++short_index)
 				{
 					if (short_iter == last)

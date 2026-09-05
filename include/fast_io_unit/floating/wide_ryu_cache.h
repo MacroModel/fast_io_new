@@ -361,8 +361,9 @@ inline constexpr uint64_t pow5_inv_errors[154] = {
  0x0040000400105555u, 0x0000000000000001u,
 };
 
-// Returns e == 0 ? 1 : ceil(log_2(5^e)); requires 0 <= e <= 32768.
-static inline uint32_t pow5bits(const int32_t e) {
+// Returns e == 0 ? 1 : ceil(log_2(5^e)); requires e <= 32768. The unsigned parameter encodes the proved nonnegative
+// exponent domain and prevents the fixed-point multiplication from silently changing signedness.
+static inline uint32_t pow5bits(const uint32_t e) {
   return (uint32_t) (((e * 163391164108059ull) >> 46) + 1);
 }
 
@@ -507,7 +508,9 @@ static inline uint128_t mulShift(const uint128_t m, const uint64_t* const mul, c
   a[0] = (uint64_t) m;
   a[1] = (uint64_t) (m >> 64);
   uint64_t result[4];
-  mul_128_256_shift(a, mul, j, 0, result);
+  // Every caller proves 0 < j < 256 before entering this cache primitive. Publish that range proof at the unsigned
+  // shift-count boundary rather than relying on an implicit signed conversion.
+  mul_128_256_shift(a, mul, (uint32_t) j, 0, result);
   return (((uint128_t) result[1]) << 64) | result[0];
 }
 
@@ -526,13 +529,19 @@ static inline uint32_t decimalLength(const uint128_t v) {
 // Returns floor(log_10(2^e)).
 static inline uint32_t log10Pow2(const int32_t e) {
   // The first value this approximation fails for is 2^1651 which is just greater than 10^297.
-  return (uint32_t) ((((uint64_t) e) * 169464822037455ull) >> 49);
+  // Keep both operands in this implementation's exact uint64_t type. On LP64, a ULL suffix otherwise converts the
+  // unsigned-long operand to unsigned long long; GCC diagnoses that harmless representation change under
+  // -Wsign-conversion, while Clang does not.
+  const uint64_t multiplier = (uint64_t) 169464822037455ull;
+  return (uint32_t) ((((uint64_t) e) * multiplier) >> 49);
 }
 
 // Returns floor(log_10(5^e)).
 static inline uint32_t log10Pow5(const int32_t e) {
   // The first value this approximation fails for is 5^2621 which is just greater than 10^1832.
-  return (uint32_t) ((((uint64_t) e) * 196742565691928ull) >> 48);
+  // Use the same exact-type multiplication as log10Pow2 so every GCC/Clang LP64 and LLP64 spelling has one operand type.
+  const uint64_t multiplier = (uint64_t) 196742565691928ull;
+  return (uint32_t) ((((uint64_t) e) * multiplier) >> 48);
 }
 
 /*

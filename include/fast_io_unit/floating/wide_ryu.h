@@ -206,7 +206,8 @@ wide_ryu_nearest_even(
 		auto const i{
 			-e2 - static_cast<::std::int_least32_t>(q)};
 		auto const k{
-			static_cast<::std::int_least32_t>(pow5bits(i)) -
+			static_cast<::std::int_least32_t>(
+				pow5bits(static_cast<::std::uint_least32_t>(i))) -
 			float_128_pow5_bitcount};
 		auto const shift{
 			static_cast<::std::int_least32_t>(q) - k};
@@ -692,9 +693,10 @@ wide_ryu_policy(
 		e10 = static_cast<::std::int_least32_t>(q) + e2;
 		auto const i{
 			-e2 - static_cast<::std::int_least32_t>(q)};
-		auto const k{
-			static_cast<::std::int_least32_t>(pow5bits(i)) -
-			float_128_pow5_bitcount};
+			auto const k{
+				static_cast<::std::int_least32_t>(
+					pow5bits(static_cast<::std::uint_least32_t>(i))) -
+				float_128_pow5_bitcount};
 		auto const shift{
 			static_cast<::std::int_least32_t>(q) - k};
 		::std::uint_least64_t power[4];

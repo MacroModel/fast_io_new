@@ -62,8 +62,9 @@ simd_lf_crlf_process_chars(char_type const *fromfirst, char_type const *fromlast
 			{
 				// Copy full vectors until one contains the searched newline unit.
 				vec.load(fromfirst);
-				auto comres{vec != charsvec};
-				if (!::fast_io::intrinsics::is_all_zeros(comres))
+				// Equality is zero in every lane exactly when this complete block contains no delimiter.
+				auto matches{vec == charsvec};
+				if (!::fast_io::intrinsics::is_all_zeros(matches))
 				{
 					// Stop vector copying at a block containing a convertible unit.
 					break;
@@ -102,6 +103,12 @@ simd_lf_crlf_process_chars(char_type const *fromfirst, char_type const *fromlast
 				// The bounded scalar tail contained no convertible unit.
 				break;
 			}
+		}
+		if (tofirst + 1 == tolast)
+		{
+			// Expansion requires two live destination slots. Preserve the matching source unit for the adapter's
+			// resumable scalar path when this bounded kernel observes only the final slot.
+			break;
 		}
 		if constexpr (cr)
 		{
@@ -157,16 +164,23 @@ simd_crlf_lf_process_chars(char_type const *fromfirst, char_type const *fromlast
 			break;
 		}
 		vec.load(fromfirst);
-		auto comres{vec != charsvec};
-		vec.store(tofirst);
-		if (::fast_io::intrinsics::is_all_zeros(comres))
+		// Retain the direct CR predicate for both the all-plain proof and the first matching lane calculation.
+		auto matches{vec == charsvec};
+		if (::fast_io::intrinsics::is_all_zeros(matches))
 		{
 			// A vector with no CR can be copied without scalar pair inspection.
+			vec.store(tofirst);
 			fromfirst += N;
 			tofirst += N;
 			continue;
 		}
-		unsigned pos{::fast_io::intrinsics::vector_mask_countr_one(comres)};
+		// The mask utility normalizes byte masks to element lanes and preserves source address order across endianness.
+		// Since this block contains a CR, the result is strictly below N and element N remains valid lookahead.
+		unsigned pos{::fast_io::intrinsics::vector_mask_countr_zero(matches)};
+		FAST_IO_ASSUME(pos < N);
+		// Commit only through the matched CR. Storing the complete vector here would mutate bytes beyond `to_next`,
+		// violating the bounded process contract even though those bytes remain inside the physical allocation.
+		::fast_io::details::non_overlapped_copy_n(fromfirst, static_cast<::std::size_t>(pos) + 1u, tofirst);
 		fromfirst += pos + 1;
 		tofirst += pos + 1;
 		if (*fromfirst != lfchct)

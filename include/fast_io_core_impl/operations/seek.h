@@ -16,6 +16,20 @@ namespace fast_io::operations
 namespace decay
 {
 
+/*
+ * Seek primitives expose the same two transport contracts as read and write.
+ * The historical unsuffixed `*_decay` entry is a value owner and therefore
+ * retains the platform aggregate ABI visible to address-taking callers.  The
+ * `_borrowed` entry is the sole recursive graph: it preserves mutable observer
+ * identity across buffer publication and every mutex/unlocked edge.  A named
+ * normalized observer reaches the value owner only through the mandatory-
+ * inline `_dispatch` bridge and only when the stream author has supplied the
+ * `stream_ref_value_transport_safe_define` substitution proof and the target
+ * ABI policy admits that representation.  Thus size or triviality alone never
+ * turns an inline cursor into a discarded copy, while proven descriptor-like
+ * proxies may still arrive in argument registers.
+ */
+
 namespace defines
 {
 
@@ -226,7 +240,7 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void input_stream_buffer_flush_decay(T &&t)
+inline constexpr void input_stream_buffer_flush_decay_borrowed(T &t)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<observer_type>)
@@ -238,7 +252,7 @@ inline constexpr void input_stream_buffer_flush_decay(T &&t)
 		// `decltype(auto)` owns a prvalue unlocked proxy but preserves a stable reference result. Passing the named
 		// local then borrows either representation; recursive synchronization never copies an observer.
 		decltype(auto) unlocked{::fast_io::operations::decay::input_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::input_stream_buffer_flush_decay(unlocked);
+		return ::fast_io::operations::decay::input_stream_buffer_flush_decay_borrowed(unlocked);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_input_stream_buffer_flush_define<observer_type>)
 	{
@@ -251,13 +265,34 @@ inline constexpr void input_stream_buffer_flush_decay(T &&t)
 }
 
 template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_buffer_flush_dispatchable<T>)
+inline constexpr void input_stream_buffer_flush_decay(T t)
+{
+	return ::fast_io::operations::decay::input_stream_buffer_flush_decay_borrowed(t);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_buffer_flush_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void input_stream_buffer_flush_decay_dispatch(T &t)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_input_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::input_stream_buffer_flush_decay(t);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::input_stream_buffer_flush_decay_borrowed(t);
+	}
+}
+
+template <typename T>
 	requires(::fast_io::operations::decay::defines::output_stream_buffer_flush_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void output_stream_buffer_flush_decay(T &&t)
+inline constexpr void output_stream_buffer_flush_decay_borrowed(T &t)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<observer_type>)
@@ -265,7 +300,7 @@ inline constexpr void output_stream_buffer_flush_decay(T &&t)
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::output_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::output_stream_buffer_flush_decay(unlocked);
+		return ::fast_io::operations::decay::output_stream_buffer_flush_decay_borrowed(unlocked);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_output_stream_buffer_flush_define<observer_type>)
 	{
@@ -278,13 +313,34 @@ inline constexpr void output_stream_buffer_flush_decay(T &&t)
 }
 
 template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_buffer_flush_dispatchable<T>)
+inline constexpr void output_stream_buffer_flush_decay(T t)
+{
+	return ::fast_io::operations::decay::output_stream_buffer_flush_decay_borrowed(t);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_buffer_flush_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void output_stream_buffer_flush_decay_dispatch(T &t)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_output_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::output_stream_buffer_flush_decay(t);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::output_stream_buffer_flush_decay_borrowed(t);
+	}
+}
+
+template <typename T>
 	requires(::fast_io::operations::decay::defines::io_stream_buffer_flush_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void io_stream_buffer_flush_decay(T &&t)
+inline constexpr void io_stream_buffer_flush_decay_borrowed(T &t)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_io_stream_mutex_protocol<observer_type>)
@@ -294,11 +350,32 @@ inline constexpr void io_stream_buffer_flush_decay(T &&t)
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::io_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::io_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::io_stream_buffer_flush_decay(unlocked);
+		return ::fast_io::operations::decay::io_stream_buffer_flush_decay_borrowed(unlocked);
 	}
 	else
 	{
 		return io_stream_buffer_flush_define(t);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_buffer_flush_dispatchable<T>)
+inline constexpr void io_stream_buffer_flush_decay(T t)
+{
+	return ::fast_io::operations::decay::io_stream_buffer_flush_decay_borrowed(t);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_buffer_flush_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void io_stream_buffer_flush_decay_dispatch(T &t)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_io_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::io_stream_buffer_flush_decay(t);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::io_stream_buffer_flush_decay_borrowed(t);
 	}
 }
 
@@ -309,8 +386,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay(T &&t, ::fast_io::intfpos_t off,
-																	::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+																		 ::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<observer_type>)
@@ -318,7 +395,7 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay(T &&t, ::fas
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::input_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::input_stream_seek_bytes_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::input_stream_seek_bytes_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
@@ -331,7 +408,7 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay(T &&t, ::fas
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::input_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::input_stream_buffer_flush_decay_borrowed(t);
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_input_stream_seek_bytes_define<observer_type>)
 		{
@@ -346,14 +423,37 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay(T &&t, ::fas
 
 template <typename T>
 	requires(::fast_io::operations::decay::defines::input_stream_seek_bytes_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes_decay(T t, ::fast_io::intfpos_t off,
+																   ::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::input_stream_seek_bytes_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_seek_bytes_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+input_stream_seek_bytes_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_input_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::input_stream_seek_bytes_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::input_stream_seek_bytes_decay_borrowed(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_seek_bytes_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void input_stream_rewind_bytes_decay(T &&t)
+inline constexpr void input_stream_rewind_bytes_decay(T t)
 {
-	::fast_io::operations::decay::input_stream_seek_bytes_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::input_stream_seek_bytes_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -363,8 +463,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes_decay(T &&t, ::fast_io::intfpos_t off,
-																	 ::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+																		  ::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<observer_type>)
@@ -372,13 +472,13 @@ inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes_decay(T &&t, ::fa
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::output_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::output_stream_seek_bytes_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::output_stream_seek_bytes_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
 		if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::output_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::output_stream_buffer_flush_decay_borrowed(t);
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_output_stream_seek_bytes_define<observer_type>)
 		{
@@ -393,14 +493,37 @@ inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes_decay(T &&t, ::fa
 
 template <typename T>
 	requires(::fast_io::operations::decay::defines::output_stream_seek_bytes_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes_decay(T t, ::fast_io::intfpos_t off,
+																	::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::output_stream_seek_bytes_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_seek_bytes_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+output_stream_seek_bytes_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_output_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::output_stream_seek_bytes_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::output_stream_seek_bytes_decay_borrowed(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_seek_bytes_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void output_stream_rewind_bytes_decay(T &&t)
+inline constexpr void output_stream_rewind_bytes_decay(T t)
 {
-	::fast_io::operations::decay::output_stream_seek_bytes_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::output_stream_seek_bytes_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -410,8 +533,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes_decay(T &&t, ::fast_io::intfpos_t off,
-																 ::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+																	 ::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_io_stream_mutex_protocol<observer_type>)
@@ -419,7 +542,7 @@ inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes_decay(T &&t, ::fast_i
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::io_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::io_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::io_stream_seek_bytes_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::io_stream_seek_bytes_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
@@ -432,9 +555,32 @@ inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes_decay(T &&t, ::fast_i
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::io_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::io_stream_buffer_flush_decay_borrowed(t);
 		}
 		return io_stream_seek_bytes_define(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_seek_bytes_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes_decay(T t, ::fast_io::intfpos_t off,
+																::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::io_stream_seek_bytes_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_seek_bytes_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+io_stream_seek_bytes_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_io_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::io_stream_seek_bytes_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::io_stream_seek_bytes_decay_borrowed(t, off, skd);
 	}
 }
 
@@ -445,9 +591,9 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void io_stream_rewind_bytes_decay(T &&t)
+inline constexpr void io_stream_rewind_bytes_decay(T t)
 {
-	::fast_io::operations::decay::io_stream_seek_bytes_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::io_stream_seek_bytes_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -457,8 +603,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t input_stream_seek_decay(T &&t, ::fast_io::intfpos_t off,
-															  ::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t input_stream_seek_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+																   ::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<observer_type>)
@@ -466,7 +612,7 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_decay(T &&t, ::fast_io::
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::input_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::input_stream_seek_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::input_stream_seek_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
@@ -479,7 +625,7 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_decay(T &&t, ::fast_io::
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::input_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::input_stream_buffer_flush_decay_borrowed(t);
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_input_stream_seek_define<observer_type>)
 		{
@@ -494,14 +640,37 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_decay(T &&t, ::fast_io::
 
 template <typename T>
 	requires(::fast_io::operations::decay::defines::input_stream_seek_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t input_stream_seek_decay(T t, ::fast_io::intfpos_t off,
+														  ::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::input_stream_seek_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_seek_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+input_stream_seek_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_input_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::input_stream_seek_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::input_stream_seek_decay_borrowed(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::input_stream_seek_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void input_stream_rewind_decay(T &&t)
+inline constexpr void input_stream_rewind_decay(T t)
 {
-	::fast_io::operations::decay::input_stream_seek_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::input_stream_seek_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -511,8 +680,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t output_stream_seek_decay(T &&t, ::fast_io::intfpos_t off,
-															   ::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t output_stream_seek_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+																	::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<observer_type>)
@@ -520,13 +689,13 @@ inline constexpr ::fast_io::intfpos_t output_stream_seek_decay(T &&t, ::fast_io:
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::output_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::output_stream_seek_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::output_stream_seek_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
 		if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::output_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::output_stream_buffer_flush_decay_borrowed(t);
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_output_stream_seek_define<observer_type>)
 		{
@@ -541,14 +710,37 @@ inline constexpr ::fast_io::intfpos_t output_stream_seek_decay(T &&t, ::fast_io:
 
 template <typename T>
 	requires(::fast_io::operations::decay::defines::output_stream_seek_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t output_stream_seek_decay(T t, ::fast_io::intfpos_t off,
+														   ::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::output_stream_seek_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_seek_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+output_stream_seek_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_output_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::output_stream_seek_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::output_stream_seek_decay_borrowed(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::output_stream_seek_dispatchable<T>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void output_stream_rewind_decay(T &&t)
+inline constexpr void output_stream_rewind_decay(T t)
 {
-	::fast_io::operations::decay::output_stream_seek_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::output_stream_seek_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -558,7 +750,8 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr ::fast_io::intfpos_t io_stream_seek_decay(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+inline constexpr ::fast_io::intfpos_t io_stream_seek_decay_borrowed(T &t, ::fast_io::intfpos_t off,
+														::fast_io::seekdir skd)
 {
 	using observer_type = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::operations::decay::defines::has_complete_io_stream_mutex_protocol<observer_type>)
@@ -566,7 +759,7 @@ inline constexpr ::fast_io::intfpos_t io_stream_seek_decay(T &&t, ::fast_io::int
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::io_stream_mutex_ref_decay(t)};
 		decltype(auto) unlocked{::fast_io::operations::decay::io_stream_unlocked_ref_decay(t)};
-		return ::fast_io::operations::decay::io_stream_seek_decay(unlocked, off, skd);
+		return ::fast_io::operations::decay::io_stream_seek_decay_borrowed(unlocked, off, skd);
 	}
 	else
 	{
@@ -579,9 +772,32 @@ inline constexpr ::fast_io::intfpos_t io_stream_seek_decay(T &&t, ::fast_io::int
 		}
 		if constexpr (::fast_io::operations::decay::defines::has_io_stream_buffer_flush_define<observer_type>)
 		{
-			::fast_io::operations::decay::io_stream_buffer_flush_decay(t);
+			::fast_io::operations::decay::io_stream_buffer_flush_decay_borrowed(t);
 		}
 		return io_stream_seek_define(t, off, skd);
+	}
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_seek_dispatchable<T>)
+inline constexpr ::fast_io::intfpos_t io_stream_seek_decay(T t, ::fast_io::intfpos_t off,
+													   ::fast_io::seekdir skd)
+{
+	return ::fast_io::operations::decay::io_stream_seek_decay_borrowed(t, off, skd);
+}
+
+template <typename T>
+	requires(::fast_io::operations::decay::defines::io_stream_seek_dispatchable<T>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::intfpos_t
+io_stream_seek_decay_dispatch(T &t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
+{
+	if constexpr (::fast_io::operations::defines::abi_value_io_stream_ref_result<T &>)
+	{
+		return ::fast_io::operations::decay::io_stream_seek_decay(t, off, skd);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::io_stream_seek_decay_borrowed(t, off, skd);
 	}
 }
 
@@ -592,9 +808,9 @@ template <typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void io_stream_rewind_decay(T &&t)
+inline constexpr void io_stream_rewind_decay(T t)
 {
-	::fast_io::operations::decay::io_stream_seek_decay(t, 0, ::fast_io::seekdir::beg);
+	::fast_io::operations::decay::io_stream_seek_decay_borrowed(t, 0, ::fast_io::seekdir::beg);
 }
 
 } // namespace decay
@@ -610,7 +826,7 @@ inline constexpr ::fast_io::intfpos_t input_stream_seek_bytes(T &&t, ::fast_io::
 	// The normalized expression is the only owner when the stream-ref CPO returns a prvalue. `decltype(auto)` also
 	// preserves the reference selected by ABI-aware normalization for a large or noncopyable lvalue observer.
 	decltype(auto) observer{::fast_io::operations::input_stream_ref(t)};
-	return ::fast_io::operations::decay::input_stream_seek_bytes_decay(observer, off, skd);
+	return ::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -622,7 +838,7 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t output_stream_seek_bytes(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
 {
 	decltype(auto) observer{::fast_io::operations::output_stream_ref(t)};
-	return ::fast_io::operations::decay::output_stream_seek_bytes_decay(observer, off, skd);
+	return ::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -634,7 +850,7 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t io_stream_seek_bytes(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
 {
 	decltype(auto) observer{::fast_io::operations::io_stream_ref(t)};
-	return ::fast_io::operations::decay::io_stream_seek_bytes_decay(observer, off, skd);
+	return ::fast_io::operations::decay::io_stream_seek_bytes_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -646,7 +862,7 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t input_stream_seek(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
 {
 	decltype(auto) observer{::fast_io::operations::input_stream_ref(t)};
-	return ::fast_io::operations::decay::input_stream_seek_decay(observer, off, skd);
+	return ::fast_io::operations::decay::input_stream_seek_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -658,7 +874,7 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t output_stream_seek(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
 {
 	decltype(auto) observer{::fast_io::operations::output_stream_ref(t)};
-	return ::fast_io::operations::decay::output_stream_seek_decay(observer, off, skd);
+	return ::fast_io::operations::decay::output_stream_seek_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -670,7 +886,7 @@ template <typename T>
 inline constexpr ::fast_io::intfpos_t io_stream_seek(T &&t, ::fast_io::intfpos_t off, ::fast_io::seekdir skd)
 {
 	decltype(auto) observer{::fast_io::operations::io_stream_ref(t)};
-	return ::fast_io::operations::decay::io_stream_seek_decay(observer, off, skd);
+	return ::fast_io::operations::decay::io_stream_seek_decay_dispatch(observer, off, skd);
 }
 
 template <typename T>
@@ -682,7 +898,7 @@ template <typename T>
 inline constexpr void input_stream_rewind_bytes(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::input_stream_ref(t)};
-	::fast_io::operations::decay::input_stream_rewind_bytes_decay(observer);
+	::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -694,7 +910,7 @@ template <typename T>
 inline constexpr void output_stream_rewind_bytes(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::output_stream_ref(t)};
-	::fast_io::operations::decay::output_stream_rewind_bytes_decay(observer);
+	::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -706,7 +922,7 @@ template <typename T>
 inline constexpr void io_stream_rewind_bytes(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::io_stream_ref(t)};
-	::fast_io::operations::decay::io_stream_rewind_bytes_decay(observer);
+	::fast_io::operations::decay::io_stream_seek_bytes_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -718,7 +934,7 @@ template <typename T>
 inline constexpr void input_stream_rewind(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::input_stream_ref(t)};
-	::fast_io::operations::decay::input_stream_rewind_decay(observer);
+	::fast_io::operations::decay::input_stream_seek_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -730,7 +946,7 @@ template <typename T>
 inline constexpr void output_stream_rewind(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::output_stream_ref(t)};
-	::fast_io::operations::decay::output_stream_rewind_decay(observer);
+	::fast_io::operations::decay::output_stream_seek_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -742,7 +958,7 @@ template <typename T>
 inline constexpr void io_stream_rewind(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::io_stream_ref(t)};
-	::fast_io::operations::decay::io_stream_rewind_decay(observer);
+	::fast_io::operations::decay::io_stream_seek_decay_dispatch(observer, 0, ::fast_io::seekdir::beg);
 }
 
 template <typename T>
@@ -754,7 +970,7 @@ template <typename T>
 inline constexpr void input_stream_buffer_flush(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::input_stream_ref(t)};
-	::fast_io::operations::decay::input_stream_buffer_flush_decay(observer);
+	::fast_io::operations::decay::input_stream_buffer_flush_decay_dispatch(observer);
 }
 
 template <typename T>
@@ -766,7 +982,7 @@ template <typename T>
 inline constexpr void output_stream_buffer_flush(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::output_stream_ref(t)};
-	::fast_io::operations::decay::output_stream_buffer_flush_decay(observer);
+	::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(observer);
 }
 
 template <typename T>
@@ -778,7 +994,7 @@ template <typename T>
 inline constexpr void io_stream_buffer_flush(T &&t)
 {
 	decltype(auto) observer{::fast_io::operations::io_stream_ref(t)};
-	::fast_io::operations::decay::io_stream_buffer_flush_decay(observer);
+	::fast_io::operations::decay::io_stream_buffer_flush_decay_dispatch(observer);
 }
 
 } // namespace fast_io::operations

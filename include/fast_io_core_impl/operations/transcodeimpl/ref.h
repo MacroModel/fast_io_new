@@ -117,7 +117,18 @@ inline void obuffer_set_curr(basic_otranscoder_ref<owner> ref,
 							 typename owner::output_char_type *current)
 {
 	ref.ptr->require_typed_write_boundary();
-	ref.ptr->public_buffer.buffer_curr = current;
+	auto const validated{
+		::fast_io::details::validate_transcode_closed_range_offsets(
+			ref.ptr->public_buffer.buffer_begin,
+			ref.ptr->public_buffer.buffer_end, current)};
+	if (!validated.valid) [[unlikely]]
+	{
+		// Public print CPO callers are outside the adapter's ownership boundary.
+		// Reject their cursor unless an aligned closed-range offset is proven.
+		::fast_io::throw_transcode_stream_error(
+			::fast_io::transcode_stream_errc::protocol_violation);
+	}
+	ref.ptr->public_buffer.buffer_curr = validated.current;
 }
 
 /** @brief Declares put-area pointer subtraction valid within one allocation. */
@@ -257,16 +268,18 @@ inline void ibuffer_set_curr(
 	// nevertheless, because accepting an out-of-range pointer corrupts every
 	// later byte-boundary calculation.
 	ref.ptr->require_typed_read_boundary();
-	auto begin{ref.ptr->public_buffer.buffer_begin};
-	auto end{ref.ptr->public_buffer.buffer_end};
-	if ((begin == nullptr && current != nullptr) ||
-		(begin != nullptr && (current < begin || current > end))) [[unlikely]]
+	auto const validated{
+		::fast_io::details::validate_transcode_closed_range_offsets(
+			ref.ptr->public_buffer.buffer_begin,
+			ref.ptr->public_buffer.buffer_end, current)};
+	if (!validated.valid) [[unlikely]]
 	{
-		// Reject null/range mismatches before they corrupt alignment state.
+		// Scanner-provided cursors are not trusted to share allocation provenance;
+		// validate integer offsets before rebuilding the committed cursor.
 		::fast_io::throw_transcode_stream_error(
 			::fast_io::transcode_stream_errc::protocol_violation);
 	}
-	ref.ptr->public_buffer.buffer_curr = current;
+	ref.ptr->public_buffer.buffer_curr = validated.current;
 }
 
 /** @brief Refills the input adapter's public get area when possible. */

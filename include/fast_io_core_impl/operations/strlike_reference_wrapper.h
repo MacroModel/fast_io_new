@@ -381,6 +381,12 @@ template <::std::integral ch_type, typename T>
 inline constexpr void write_all_overflow_define(io_strlike_reference_wrapper<ch_type, T> bref, ch_type const *first,
 												ch_type const *last)
 {
+	if (first == last)
+	{
+		// The overflow CPO remains a valid direct customization point. An empty range must not inspect lazy null cursors
+		// or turn a no-op into the destination's first allocation when a caller reaches the CPO without core dispatch.
+		return;
+	}
 	auto &strref{*bref.ptr};
 	// Auxiliary adapters provide an overlap-aware append operation and bypass private cursor management.
 	if constexpr (auxiliary_strlike<ch_type, T>)
@@ -395,6 +401,13 @@ inline constexpr void write_all_overflow_define(io_strlike_reference_wrapper<ch_
 		curr = ::fast_io::freestanding::non_overlapped_copy_n(first, bufferdiff, curr);
 		first += bufferdiff;
 		obuffer_set_curr(bref, curr);
+		if (first == last)
+		{
+			// A defensive exact-fit boundary is required even though core now handles equality in its hot path. Another
+			// conforming caller may enter this overflow CPO at the exact-capacity boundary; the copied prefix already
+			// completes that request.
+			return;
+		}
 		auto bptr{obuffer_begin(bref)};
 		auto eptr{obuffer_end(bref)};
 		auto cap{static_cast<::std::size_t>(eptr - bptr)};

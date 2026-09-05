@@ -212,7 +212,7 @@ public:
 					outref, transform_buffer, minimum,
 					traits_type::transform_buffer_size)};
 			auto result{
-				::fast_io::operations::decay::transcode_process_decay(
+				::fast_io::operations::decay::transcode_process_decay_dispatch(
 					engine_ref, first, last, destination.first, destination.last)};
 			if (result.status != ::fast_io::transcode_step_status::need_input &&
 				result.status != ::fast_io::transcode_step_status::need_output)
@@ -221,17 +221,22 @@ public:
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			if (result.from_next < first || result.from_next > last)
+			auto const validated_from{
+				::fast_io::details::validate_transcode_closed_range_offsets(
+					first, last, result.from_next)};
+			if (!validated_from.valid) [[unlikely]]
 			{
-				// Reject a provider cursor outside the source range just supplied.
+				// The engine result is untrusted: prove a closed-range integer offset
+				// before rebuilding or comparing its source cursor.
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			bool const made_progress{result.from_next != first ||
-									 result.to_next != destination.first};
-			::fast_io::details::commit_transcode_destination(
-				outref, destination, result.to_next);
-			first = result.from_next;
+			auto const validated_to{
+				::fast_io::details::commit_transcode_destination(
+					outref, destination, result.to_next)};
+			bool const made_progress{validated_from.current_offset != 0u ||
+								 validated_to != destination.first};
+			first = validated_from.current;
 			if (result.status == ::fast_io::transcode_step_status::need_input)
 			{
 				// Need-input is legal only after the entire bounded source is consumed.
@@ -299,13 +304,13 @@ public:
 			if constexpr (phase == ::fast_io::transcode_phase::sync_flush)
 			{
 				// Nonterminal drain preserves the engine for subsequent processing.
-				result = ::fast_io::operations::decay::transcode_sync_flush_decay(
+				result = ::fast_io::operations::decay::transcode_sync_flush_decay_dispatch(
 					engine_ref, destination.first, destination.last);
 			}
 			else
 			{
 				// Terminal drain validates and closes the logical output message.
-				result = ::fast_io::operations::decay::transcode_finish_decay(
+				result = ::fast_io::operations::decay::transcode_finish_decay_dispatch(
 					engine_ref, destination.first, destination.last);
 			}
 			if (result.status != ::fast_io::transcode_drain_status::complete &&
@@ -315,9 +320,10 @@ public:
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			bool const made_progress{result.to_next != destination.first};
-			::fast_io::details::commit_transcode_destination(
-				outref, destination, result.to_next);
+			auto const validated_to{
+				::fast_io::details::commit_transcode_destination(
+					outref, destination, result.to_next)};
+			bool const made_progress{validated_to != destination.first};
 			if (result.status == ::fast_io::transcode_drain_status::complete)
 			{
 				// The phase is complete after its produced prefix has been committed.
@@ -353,8 +359,9 @@ public:
 		if constexpr (::fast_io::operations::decay::defines::
 						  output_stream_buffer_flush_dispatchable<output_ref>)
 		{
-			// Propagate visibility through the normalized underlying output observer.
-			::fast_io::operations::decay::output_stream_buffer_flush_decay(
+			// Propagate visibility through the normalized underlying output observer. Policy dispatch preserves a
+			// stateful adapter's identity while retaining value ABI for explicitly substitutable descriptors.
+			::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(
 				outref);
 		}
 	}

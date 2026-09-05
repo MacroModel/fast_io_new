@@ -2150,8 +2150,10 @@ template <typename flt>
 			// biasing by 127 gives k+103.  Shifting that leading bit to
 			// binary32's implicit position constructs the exact mantissa,
 			// without executing a floating conversion instruction.
+			// The enclosing nonzero test proves `bit_width` is at least one. Convert before subtracting so the bit index
+			// remains in the unsigned representation domain without an implicit sign change.
 			auto const leading_bit{static_cast<::std::uint_least32_t>(
-				::std::bit_width(static_cast<::std::uint_least32_t>(m2)) - 1u)};
+				::std::bit_width(static_cast<::std::uint_least32_t>(m2))) - 1u};
 			constexpr ::std::uint_least32_t float_mantissa_mask{0x7FFFFFu};
 			return {
 				(static_cast<::std::uint_least32_t>(m2) << (23u - leading_bit)) &
@@ -2232,8 +2234,10 @@ dragonbox_binary32_finite_fields_to_binary64(
 	}
 	else if (mantissa)
 	{
+		// The branch proves a nonzero 23-bit mantissa, so `bit_width` is in [1, 23]. Convert that proved positive
+		// result before unsigned subtraction instead of relying on an implementation warning-prone signed conversion.
 		auto const leading_bit{static_cast<::std::uint_least32_t>(
-			::std::bit_width(mantissa) - 1u)};
+			::std::bit_width(mantissa)) - 1u};
 		raw |= static_cast<::std::uint_least64_t>(leading_bit + 874u) << 52u;
 		raw |= static_cast<::std::uint_least64_t>(
 			mantissa ^ (static_cast<::std::uint_least32_t>(1u) << leading_bit))
@@ -3729,7 +3733,8 @@ fixed_case1_integer_and_point_maybe_json(char_type *iter,
 		auto tmp{iter};
 		::fast_io::details::print_rsv_fp_digits_len<flt>(iter + 1u, m10,
 														 static_cast<::std::uint_least32_t>(olength));
-		iter += olength + 1u;
+		// `olength` is a positive signed digit count; retain that pointer-difference domain when accounting for the point.
+		iter += olength + 1;
 		my_copy_n(tmp + 1u, static_cast<::std::uint_least32_t>(eposition), tmp);
 		tmp[eposition] = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
 	}
@@ -6955,7 +6960,9 @@ struct exact_precision_wide_window_product
 [[nodiscard]] inline constexpr unsigned exact_precision_wide_window_bit_width(
 	::std::uint_least64_t value) noexcept
 {
-	return value ? static_cast<unsigned>(64u - ::std::countl_zero(value)) : 0u;
+	// A nonzero 64-bit value has a count in [0, 63]. Keep both operands in the unsigned result domain so the
+	// subtraction states that range proof directly and strict conversion diagnostics cannot mask real callers.
+	return value ? 64u - static_cast<unsigned>(::std::countl_zero(value)) : 0u;
 }
 
 [[nodiscard]] inline constexpr exact_precision_wide_window_product
@@ -10127,8 +10134,10 @@ struct exact_precision_binary32_power10_decimal_table_type
 			binary_mantissa |= static_cast<::std::uint_least32_t>(1u) << trait::mbits;
 			auto const binary_exponent{static_cast<::std::int_least32_t>(exponent) -
 				bias - static_cast<::std::int_least32_t>(trait::mbits)};
+			// The hidden bit above proves a nonzero mantissa. Perform the zero-based bit index in the signed domain used
+			// by the binary exponent rather than mixing `bit_width`'s signed result with an unsigned literal.
 			auto const binary_floor_exponent{binary_exponent +
-				static_cast<::std::int_least32_t>(::std::bit_width(binary_mantissa) - 1u)};
+				static_cast<::std::int_least32_t>(::std::bit_width(binary_mantissa) - 1)};
 			auto real_exponent{::fast_io::details::mul_ln2_div_ln10_floor(
 				binary_floor_exponent) + 1};
 			real_exponent =
@@ -14221,8 +14230,12 @@ template <typename flt>
 	// The magnitude is strictly below 2^(unbiased_exponent + 1).  If even
 	// that upper bound is one decimal decade below the requested quantum,
 	// every nearest policy rounds to zero.
-	auto const binary_upper_exponent{exponent
-		? static_cast<::std::int_least32_t>(exponent) - exponent_bias + 1
+	// Both alternatives are signed exponents. Explicitly convert the bias before subtraction; otherwise the normal
+	// branch wraps negative exponents through unsigned arithmetic and relies on an implementation-defined conversion
+	// when the logarithm helper accepts its signed argument.
+	::std::int_least32_t const binary_upper_exponent{exponent
+		? static_cast<::std::int_least32_t>(exponent) -
+			  static_cast<::std::int_least32_t>(exponent_bias) + 1
 		: 1 - static_cast<::std::int_least32_t>(exponent_bias)};
 	auto const decimal_upper_exponent{
 		::fast_io::details::mul_ln2_div_ln10_floor(binary_upper_exponent)};

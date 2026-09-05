@@ -119,8 +119,13 @@ inline void posix_named_pipe_set_socket_options(int fd)
 {
 #ifdef SO_NOSIGPIPE
 	int value{1};
+	// POSIX specifies the option extent as socklen_t rather than size_t.  The
+	// object is exactly one int, so this explicit conversion is representable
+	// on every conforming socket ABI and prevents an implicit ABI-width change
+	// at the noexcept_call forwarding boundary.
+	constexpr ::socklen_t value_extent{static_cast<::socklen_t>(sizeof(value))};
 	if (::fast_io::noexcept_call(::setsockopt, fd, SOL_SOCKET,
-								 SO_NOSIGPIPE, __builtin_addressof(value), sizeof(value)) == -1) [[unlikely]]
+								 SO_NOSIGPIPE, __builtin_addressof(value), value_extent) == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}

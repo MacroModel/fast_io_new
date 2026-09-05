@@ -284,9 +284,11 @@ concept concat_fresh_fixed_scalar_direct_preferred_strlike =
 ///          or that output/status/locking customizations associated with `T` are observationally equivalent to direct
 ///          scatter copies. This explicit opt-in supplies those output-side facts to
 ///          `io_strlike_reference_wrapper`; the range strategy still requires independent source-side lifetime,
-///          cursor-independence, and direct-print-equivalence proofs. Keeping the marker on `T` is important because a
-///          class template argument contributes its namespace to ADL: a blanket wrapper marker would silently certify
-///          user-defined hooks which the wrapper itself cannot inspect or exclude.
+///          cursor-independence, and direct-print-equivalence proofs. The promise also covers exceptional destruction:
+///          if a strategy has written a suffix but has not yet published its logical cursor, destroying `T` must remain
+///          valid even when those raw writes replaced the previously published terminator. Keeping the marker on `T` is
+///          important because a class template argument contributes its namespace to ADL: a blanket wrapper marker
+///          would silently certify user-defined hooks which the wrapper itself cannot inspect or exclude.
 /// @fn      strlike_deferred_obuffer_commit_safe
 /// @return  std::true_type
 template <typename char_type, typename T>

@@ -1704,13 +1704,18 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		if (!::std::is_constant_evaluated() && value.size <= 1u &&
 			exponent >= ::fast_io::details::scan_decfloat_pow5_anchor_exponent)
 		{
-			auto const anchor_index{static_cast<::std::size_t>(
-				exponent /
-				::fast_io::details::scan_decfloat_pow5_anchor_exponent)};
 			using table_type =
 				::fast_io::details::scan_decfloat_pow5_anchor_table<limb_capacity>;
-			if (anchor_index < table_type::extent)
+			auto const anchor_index_wide{
+				exponent /
+				::fast_io::details::scan_decfloat_pow5_anchor_exponent};
+			if (anchor_index_wide <
+				static_cast<::std::uint_least64_t>(table_type::extent))
 			{
+				// Compare in the exponent's full domain before narrowing. This ordering is required on 32-bit targets:
+				// truncating an adversarial quotient first could make an out-of-range exponent name a valid anchor.
+				auto const anchor_index{
+					static_cast<::std::size_t>(anchor_index_wide)};
 				auto const coefficient{
 					value.size ? value.limb[0u] : ::std::uint_least64_t{}};
 				::fast_io::details::scan_decfloat_bigint_copy(
@@ -1738,8 +1743,11 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		}
 		if (exponent != 0)
 		{
+			// The loop exit invariant is `0 < exponent < chunk`, and chunk is 27. The explicit conversion therefore
+			// preserves the complete index on every supported size_t width and documents the table-bound proof.
+			auto const tail_index{static_cast<::std::size_t>(exponent)};
 			if (!::fast_io::details::scan_decfloat_bigint_mul_u64(
-					value, ::fast_io::details::scan_decfloat_pow5_0_to_27_table[exponent]))
+					value, ::fast_io::details::scan_decfloat_pow5_0_to_27_table[tail_index]))
 			{
 				return false;
 			}

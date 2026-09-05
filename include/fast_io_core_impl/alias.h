@@ -51,6 +51,36 @@ inline constexpr bool io_print_alias_nothrow = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Computes only the deterministic error effect of the branch selected by `io_print_alias`.
+/// @details This proof is deliberately independent of `io_print_alias_nothrow`: a plain function may still propagate a
+///          traditional C++ exception, whereas a Herbception condition controls the deterministic-result ABI.
+template <typename T>
+inline constexpr bool io_print_alias_herbceptions_throws = []() constexpr {
+	using no_cvref_t = ::std::remove_cvref_t<T>;
+	if constexpr (::std::is_function_v<no_cvref_t>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::alias_printable<T>)
+	{
+		return throws((print_alias_define(::fast_io::io_alias, ::std::declval<T>())));
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return false;
+	}
+	else if constexpr (!::fast_io::details::io_print_complete_object<T>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::is_herbceptions_throws_constructible_v<no_cvref_t, T &&>;
+	}
+}();
+#endif
+
 /// @brief Largest object eligible for the normalized print transport's bounded ownership-copy branch.
 /// @details This is a copy-work budget, not a formatting capacity or a promise of direct register return. Optional
 ///          lvalue copies additionally pass the model-specific aggregate-result policy; a non-lvalue may need the
@@ -179,6 +209,34 @@ inline constexpr bool io_print_forward_transport_nothrow = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies the deterministic effect of the exact value/reference transport branch.
+/// @details The lvalue-wrapper arm stores one existing reference and therefore has no construction effect. The other
+///          arms query the expression actually returned, preserving the ABI-small by-value policy rather than changing
+///          it merely to accommodate the error mechanism.
+template <typename T>
+inline constexpr bool io_print_forward_transport_herbceptions_throws = []() constexpr {
+	using no_cvref_t = ::std::remove_cvref_t<T>;
+	if constexpr (!::fast_io::details::io_print_forward_transportable<T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::details::io_print_forward_transport_by_value<T>)
+	{
+		return throws((static_cast<no_cvref_t>(
+			::std::declval<::std::remove_reference_t<T> &>())));
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::is_herbceptions_throws_constructible_v<no_cvref_t, T &&>;
+	}
+}();
+#endif
+
 /// @brief Converts one alias/status-forward result into the by-value transport used by the print engines.
 /// @details This is deliberately separate from the ADL dispatcher. In particular, a status customization is first
 ///          evaluated with its exact value category and only its result is normalized. Consequently a noncopyable
@@ -186,9 +244,15 @@ inline constexpr bool io_print_forward_transport_nothrow = []() constexpr {
 ///          boundary. The compact reference wrapper lets the established control, semantic, and concat paths remain
 ///          ordinary by-value graphs without claiming that every ABI returns the wrapper in a register.
 template <typename T>
-	requires ::fast_io::details::io_print_forward_transportable<T>
-inline constexpr auto io_print_forward_transport(T &&t) noexcept(::fast_io::details::io_print_forward_transport_nothrow<T>)
+	requires(::fast_io::details::io_print_forward_transportable<T>)
+inline constexpr auto io_print_forward_transport(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_print_forward_transport_herbceptions_throws<T>),
+		::fast_io::details::io_print_forward_transport_nothrow<T>)
 {
+	// The two effect proofs describe the same selected construction without changing ownership or value category.
+	// Conditional `throws(false)` therefore keeps the ordinary ABI, while a fallible construction gains precisely one
+	// discriminator; standard compilers retain the selected construction's exact noexcept result.
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::details::io_print_forward_transport_by_value<T>)
 	{
@@ -226,10 +290,37 @@ inline constexpr bool io_print_forward_transport_nothrow_for = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+template <::std::integral char_type, typename T>
+inline constexpr bool io_print_forward_transport_herbceptions_throws_for = []() constexpr {
+	using no_cvref_t = ::std::remove_cvref_t<T>;
+	if constexpr (!::fast_io::details::io_print_forward_transportable_for<char_type, T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::details::io_print_forward_transport_by_value_for<char_type, T>)
+	{
+		return throws((static_cast<no_cvref_t>(
+			::std::declval<::std::remove_reference_t<T> &>())));
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::is_herbceptions_throws_constructible_v<no_cvref_t, T &&>;
+	}
+}();
+#endif
+
 /// @brief Applies character-aware value/reference decay without invalidating a retained borrowed descriptor.
 template <::std::integral char_type, typename T>
-	requires ::fast_io::details::io_print_forward_transportable_for<char_type, T>
-inline constexpr auto io_print_forward_transport_for(T &&t) noexcept(::fast_io::details::io_print_forward_transport_nothrow_for<char_type, T>)
+	requires(::fast_io::details::io_print_forward_transportable_for<char_type, T>)
+inline constexpr auto io_print_forward_transport_for(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_print_forward_transport_herbceptions_throws_for<char_type, T>),
+		::fast_io::details::io_print_forward_transport_nothrow_for<char_type, T>)
 {
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	if constexpr (::fast_io::details::io_print_forward_transport_by_value_for<char_type, T>)
@@ -268,6 +359,34 @@ inline constexpr bool io_print_forward_nothrow = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Computes the Herbception effect of status forwarding followed by the selected decay transport.
+/// @details Both expressions belong to one normalization transaction. A fallible status CPO and a fallible owned-result
+///          construction therefore make the conditional specification true, while a borrowed or ABI-small safe result
+///          keeps the condition false and remains on the plain ABI.
+template <::std::integral char_type, typename T>
+inline constexpr bool io_print_forward_herbceptions_throws = []() constexpr {
+	using no_cvref_t = ::std::remove_cvref_t<T>;
+	if constexpr (::std::is_function_v<no_cvref_t>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::status_io_print_forwardable<char_type, T>)
+	{
+		using forwarded_type = decltype(status_io_print_forward(
+			::fast_io::io_alias_type<char_type>, ::std::declval<T>()));
+		return throws((status_io_print_forward(
+				   ::fast_io::io_alias_type<char_type>, ::std::declval<T>()))) ||
+			   ::fast_io::details::io_print_forward_transport_herbceptions_throws_for<
+				   char_type, forwarded_type>;
+	}
+	else
+	{
+		return ::fast_io::details::io_print_forward_transport_herbceptions_throws_for<char_type, T>;
+	}
+}();
+#endif
+
 /// @brief Admits the selected print-alias branch without instantiating ownership of an incomplete rvalue.
 /// @details A valid ADL alias has already proved its result transport at the CPO boundary. Ordinary lvalues need only
 ///          retain their reference, while an ordinary rvalue follows the exact owning construction in
@@ -276,8 +395,18 @@ inline constexpr bool io_print_forward_nothrow = []() constexpr {
 template <typename T>
 inline constexpr bool io_print_alias_admissible = []() constexpr {
 	using no_cvref_t = ::std::remove_cvref_t<T>;
-	if constexpr (::std::is_function_v<no_cvref_t> || ::fast_io::alias_printable<T> ||
-				  ::std::is_lvalue_reference_v<T &&>)
+	if constexpr (::std::is_function_v<no_cvref_t>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::alias_printable<T>)
+	{
+		// The alias CPO owns its declared result category. A deterministic-error ABI must carry a reference as a
+		// reference (address plus discriminator), exactly as a plain call does; library constraints must not replace
+		// that language-level identity contract with an owned copy.
+		return true;
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
 	{
 		return true;
 	}
@@ -295,10 +424,14 @@ inline constexpr bool io_print_alias_admissible = []() constexpr {
 template <::std::integral char_type, typename T>
 inline constexpr bool io_print_forward_admissible = []() constexpr {
 	using no_cvref_t = ::std::remove_cvref_t<T>;
-	if constexpr (::std::is_function_v<no_cvref_t> ||
-				  ::fast_io::status_io_print_forwardable<char_type, T>)
+	if constexpr (::std::is_function_v<no_cvref_t>)
 	{
-		// The status concept includes the exact rvalue-result ownership proof.
+		return true;
+	}
+	else if constexpr (::fast_io::status_io_print_forwardable<char_type, T>)
+	{
+		// The status concept includes the exact non-lvalue ownership proof; an lvalue result is deliberately borrowed
+		// and remains representable by the deterministic-error calling convention.
 		return true;
 	}
 	else
@@ -315,8 +448,17 @@ inline constexpr bool io_print_forward_admissible = []() constexpr {
 template <typename T>
 inline constexpr bool io_scan_alias_admissible = []() constexpr {
 	using no_ref_t = ::std::remove_reference_t<T>;
-	if constexpr (::std::is_function_v<no_ref_t> || ::fast_io::alias_scannable<T> ||
-				  ::std::is_lvalue_reference_v<T &&>)
+	if constexpr (::std::is_function_v<no_ref_t>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::alias_scannable<T>)
+	{
+		// Preserve the customization's exact result category. In particular, a fallible reference is a valid borrowed
+		// alias under the language ABI and must not be converted to an owned scanner proxy by this admission layer.
+		return true;
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
 	{
 		return true;
 	}
@@ -330,6 +472,151 @@ inline constexpr bool io_scan_alias_admissible = []() constexpr {
 	}
 }();
 
+/// @brief Proves that scan status forwarding can execute its selected borrow-or-own transport.
+/// @details The status concept already proves that a non-reference result can become owned storage. Reference results
+///          retain identity through the deterministic-error ABI and consequently need no construction predicate here.
+template <::std::integral char_type, typename T>
+inline constexpr bool io_scan_forward_admissible = []() constexpr {
+	if constexpr (::fast_io::status_io_scan_forwardable<char_type, T>)
+	{
+		return true;
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return true;
+	}
+	else if constexpr (!::fast_io::details::io_print_complete_object<T>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::constructible_from<::std::remove_cvref_t<T>, T &&>;
+	}
+}();
+
+/// @brief Classifies the traditional exception effect of the exact scan-forward normalization transaction.
+/// @details A conditional Herbception specification may select its plain ABI only if both the status CPO and any
+///          required ownership construction are non-throwing. The expression categories mirror the function body;
+///          in particular, an lvalue status result is returned directly and is never copied merely to prove noexcept.
+template <::std::integral char_type, typename T>
+inline constexpr bool io_scan_forward_nothrow = []() constexpr {
+	if constexpr (!::fast_io::details::io_scan_forward_admissible<char_type, T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::status_io_scan_forwardable<char_type, T>)
+	{
+		using result_type = decltype(status_io_scan_forward(
+			::fast_io::io_alias_type<char_type>, ::std::declval<T>()));
+		if constexpr (::std::is_lvalue_reference_v<result_type>)
+		{
+			return noexcept(status_io_scan_forward(
+				::fast_io::io_alias_type<char_type>, ::std::declval<T>()));
+		}
+		else
+		{
+			return noexcept(::std::remove_cvref_t<result_type>(status_io_scan_forward(
+				::fast_io::io_alias_type<char_type>, ::std::declval<T>())));
+		}
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return true;
+	}
+	else
+	{
+		return ::std::is_nothrow_constructible_v<::std::remove_cvref_t<T>, T &&>;
+	}
+}();
+
+/// @brief Classifies the ordinary exception effect of the selected scan-alias branch.
+/// @details The proof deliberately includes rvalue ownership construction but leaves lvalue transports as references.
+///          This keeps a no-failure Herb specialization on the ordinary ABI without weakening the historical
+///          potentially-throwing signature for a CPO or constructor that can actually unwind.
+template <typename T>
+inline constexpr bool io_scan_alias_nothrow = []() constexpr {
+	using no_ref_t = ::std::remove_reference_t<T>;
+	if constexpr (!::fast_io::details::io_scan_alias_admissible<T>)
+	{
+		return false;
+	}
+	else if constexpr (::std::is_function_v<no_ref_t>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::alias_scannable<T>)
+	{
+		return noexcept(scan_alias_define(::fast_io::io_alias, ::std::declval<T>()));
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return true;
+	}
+	else if constexpr (::fast_io::manipulator<no_ref_t>)
+	{
+		return ::std::is_nothrow_constructible_v<no_ref_t, T &&>;
+	}
+	else
+	{
+		return noexcept(::fast_io::parameter<no_ref_t>{::std::declval<T>()});
+	}
+}();
+
+#if defined(__HERBCEPTIONS__)
+template <::std::integral char_type, typename T>
+inline constexpr bool io_scan_forward_herbceptions_throws = []() constexpr {
+	if constexpr (!::fast_io::details::io_scan_forward_admissible<char_type, T>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::status_io_scan_forwardable<char_type, T>)
+	{
+		using result_type = decltype(status_io_scan_forward(
+			::fast_io::io_alias_type<char_type>, ::std::declval<T>()));
+		if constexpr (::std::is_lvalue_reference_v<result_type>)
+		{
+			return throws((status_io_scan_forward(
+				::fast_io::io_alias_type<char_type>, ::std::declval<T>())));
+		}
+		else
+		{
+			return throws((::std::remove_cvref_t<result_type>(status_io_scan_forward(
+				::fast_io::io_alias_type<char_type>, ::std::declval<T>()))));
+		}
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::is_herbceptions_throws_constructible_v<::std::remove_cvref_t<T>, T &&>;
+	}
+}();
+
+template <typename T>
+inline constexpr bool io_scan_alias_herbceptions_throws = []() constexpr {
+	using no_ref_t = ::std::remove_reference_t<T>;
+	if constexpr (::std::is_function_v<no_ref_t>)
+	{
+		return false;
+	}
+	else if constexpr (::fast_io::alias_scannable<T>)
+	{
+		return throws((scan_alias_define(::fast_io::io_alias, ::std::declval<T>())));
+	}
+	else if constexpr (::std::is_lvalue_reference_v<T &&>)
+	{
+		return false;
+	}
+	else
+	{
+		return ::std::is_herbceptions_throws_constructible_v<no_ref_t, T &&>;
+	}
+}();
+#endif
+
 } // namespace details
 
 /// @brief Applies the print-alias customization for the argument's actual value category.
@@ -340,9 +627,14 @@ inline constexpr bool io_scan_alias_admissible = []() constexpr {
 ///          reference to this function parameter would leave a dangling reference as soon as the helper returned.
 ///          No unconditional `noexcept` is stated because an alias is allowed to validate or allocate.
 template <typename T>
-	requires ::fast_io::details::io_print_alias_admissible<T>
-inline constexpr decltype(auto) io_print_alias(T &&t) noexcept(::fast_io::details::io_print_alias_nothrow<T>)
+	requires(::fast_io::details::io_print_alias_admissible<T>)
+inline constexpr decltype(auto) io_print_alias(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_print_alias_herbceptions_throws<T>),
+		::fast_io::details::io_print_alias_nothrow<T>)
 {
+	// The ADL branch owns both its exact success category and its deterministic effect. A conditional specification
+	// transports `T&`/`T&&` as references on success and never substitutes an owned value for compiler convenience.
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	if constexpr (::std::is_function_v<no_cvref_t>)
 	{
@@ -372,8 +664,11 @@ inline constexpr decltype(auto) io_print_alias(T &&t) noexcept(::fast_io::detail
 ///          by-value without erasing mutability, const qualification, or noncopyable proxy identity. Customization
 ///          exceptions propagate because neither the status-forward nor alias protocol requires a non-throwing CPO.
 template <::std::integral char_type, typename T>
-	requires ::fast_io::details::io_print_forward_admissible<char_type, T>
-inline constexpr auto io_print_forward(T &&t) noexcept(::fast_io::details::io_print_forward_nothrow<char_type, T>)
+	requires(::fast_io::details::io_print_forward_admissible<char_type, T>)
+inline constexpr auto io_print_forward(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_print_forward_herbceptions_throws<char_type, T>),
+		::fast_io::details::io_print_forward_nothrow<char_type, T>)
 {
 	using no_cvref_t = ::std::remove_cvref_t<T>;
 	if constexpr (::std::is_function_v<no_cvref_t>)
@@ -400,8 +695,17 @@ inline constexpr auto io_print_forward(T &&t) noexcept(::fast_io::details::io_pr
 ///          a delayed body diagnostic. Custom forwarding exceptions remain visible because the protocol does not promise
 ///          `noexcept`.
 template <::std::integral char_type, typename T>
+#if defined(__HERBCEPTIONS__)
+	requires(::fast_io::details::io_scan_forward_admissible<char_type, T>)
+#endif
 inline constexpr decltype(auto) io_scan_forward(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_scan_forward_herbceptions_throws<char_type, T>),
+		::fast_io::details::io_scan_forward_nothrow<char_type, T>)
 {
+	// This normalization boundary invokes one open ADL CPO and may materialize its result. The conditional specification
+	// represents that exact transaction without changing a reference result's identity; ordinary mode deliberately
+	// remains potentially throwing, matching the historical contract.
 	if constexpr (status_io_scan_forwardable<char_type, T>)
 	{
 		using result_type = decltype(status_io_scan_forward(
@@ -435,9 +739,15 @@ inline constexpr decltype(auto) io_scan_forward(T &&t)
 ///          not add a copy to the common path. The function is not unconditionally `noexcept`, because an alias
 ///          customization or rvalue construction may validate, allocate, or throw.
 template <typename T>
-	requires ::fast_io::details::io_scan_alias_admissible<T>
+	requires(::fast_io::details::io_scan_alias_admissible<T>)
 inline constexpr decltype(auto) io_scan_alias(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::io_scan_alias_herbceptions_throws<T>),
+		::fast_io::details::io_scan_alias_nothrow<T>)
 {
+	// Alias validation and owned rvalue construction are one user-extensible effect transaction. Conditional `throws`
+	// preserves its precise error ABI, including a plain ABI for the no-failure case, while ordinary mode retains the
+	// historical potentially-throwing signature.
 	using no_ref_t = ::std::remove_reference_t<T>;
 	if constexpr (::std::is_function_v<no_ref_t>)
 	{

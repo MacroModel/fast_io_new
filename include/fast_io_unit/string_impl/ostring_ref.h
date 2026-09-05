@@ -360,6 +360,73 @@ inline constexpr ::std::true_type concat_single_pass_bounded_destination_preferr
 	return {};
 }
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__ &&                        \
+	defined(_LIBCPP_VERSION) && 210000 <= _LIBCPP_VERSION &&              \
+	defined(_LIBCPP_ABI_VERSION) && _LIBCPP_ABI_VERSION == 1 &&           \
+	defined(_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT)
+/// @brief Selects ordered concat staging for long neutral-protocol packs on the measured Apple standard string.
+/// @details Clang 23 with the libc++ ABI-v1 alternate layout expands repeated fresh-string append through allocation,
+///          overlap, SSO, and size-publication branches for every leaf. Seven leaves repay formatting once into concat's
+///          existing two-KiB inline buffer and invoking the default string's range constructor once. This marker is
+///          restricted to `char`, standard traits/allocator, Apple AArch64, and the audited libc++ layout: custom traits,
+///          allocators, targets, or string ABIs may have different hooks and costs. Concat independently rejects direct
+///          and context formatters and sends the normalized pack through the ordinary ordered dispatcher, so an unmarked
+///          scatter remains immediately consumed rather than becoming a retained descriptor.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 ::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+[[nodiscard]] inline constexpr ::std::size_t concat_ordered_staging_minimum_leaf_count(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return 7u;
+}
+
+/// @brief Extends ordered staging to retained heterogeneous neutral packs on the audited standard string.
+/// @details Repeated append/growth is substantially more expensive for these packs than one ordered pass through the
+///          inline staging area. The concat selector independently excludes a complete non-failing precise run when the
+///          same destination can reserve its exact runtime put area and publish one cursor; that stronger one-allocation
+///          construction has no staging cost to amortize. Keeping the exclusion in the consumer makes this destination
+///          CPO a profitability premise only and prevents it from manufacturing source exactness or failure guarantees.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 ::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+concat_ordered_staging_complete_neutral_preferred(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+
+/// @brief Certifies one-way ordered-staging promotion into the audited standard-string put area.
+/// @details A default string owns storage disjoint from every concat source. Runtime reserve preserves its published
+///          prefix, and the maintained ABI adapter exposes and publishes the same character sequence that the standard
+///          range constructor would own. Promotion performs no source query and therefore may occur inside one range
+///          overflow without retaining its descriptor. This opt-in also adopts direct-output exception ordering:
+///          allocation failure at the promotion point may prevent later stateful producers from running, but no partial
+///          result is returned. While concat caches the maintained put-area cursors, no associated output hook observes
+///          the temporarily unpublished string size. If a later source throws after replacing the old terminator, the
+///          audited libc++ destructor reads only the string representation and allocation ownership; it neither scans
+///          nor requires that unpublished terminator, so unwinding remains valid. The enclosing Apple/Clang/libc++ ABI
+///          and default traits/allocator restrictions keep custom allocation, hooks, and cursor representations outside
+///          this proof.
+template <::std::integral char_type, typename traits_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 ::std::same_as<traits_type, ::std::char_traits<char_type>> &&
+			 ::std::same_as<allocator_type, ::std::allocator<char_type>>)
+[[nodiscard]] inline constexpr ::std::true_type
+concat_ordered_staging_adaptive_promotion_safe(
+	io_strlike_type_t<char_type,
+					  ::std::basic_string<char_type, traits_type, allocator_type>>) noexcept
+{
+	return {};
+}
+#endif
+
 /// @brief Constructs a fresh default standard string from one borrowed descriptor and a trailing line feed.
 /// @details Returning a new object is the aliasing proof: its allocation cannot own the source descriptor, so one exact
 ///          reserve may safely precede append. A general scatter-write CPO cannot make that promise because its source

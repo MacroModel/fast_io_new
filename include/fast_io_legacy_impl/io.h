@@ -27,143 +27,6 @@
 namespace fast_io
 {
 
-namespace details
-{
-
-template <typename T>
-inline constexpr bool raw_character_scalar_print_arg{
-	::fast_io::details::character_integral<::std::remove_cvref_t<T>>};
-
-template <typename T>
-using raw_character_pointer_pointee_t =
-	::std::remove_cv_t<::std::remove_pointer_t<::std::remove_cvref_t<T>>>;
-
-template <typename T>
-inline constexpr bool raw_character_pointer_print_arg{
-	::std::is_pointer_v<::std::remove_cvref_t<T>> &&
-	::fast_io::details::character_integral<raw_character_pointer_pointee_t<T>>};
-
-template <typename T>
-inline constexpr bool raw_function_pointer_print_arg{
-	::std::is_pointer_v<::std::remove_cvref_t<T>> &&
-	::std::is_function_v<raw_character_pointer_pointee_t<T>>};
-
-template <typename T>
-inline constexpr bool raw_non_character_pointer_print_arg{
-	::std::is_pointer_v<::std::remove_cvref_t<T>> && (!raw_character_pointer_print_arg<T>) &&
-	(!raw_function_pointer_print_arg<T>)};
-
-template <typename T>
-inline constexpr bool raw_member_object_pointer_print_arg{
-	::std::is_member_object_pointer_v<::std::remove_cvref_t<T>>};
-
-template <typename T>
-inline constexpr bool raw_member_function_pointer_print_arg{
-	::std::is_member_function_pointer_v<::std::remove_cvref_t<T>>};
-
-template <typename... Args>
-inline constexpr bool has_raw_character_scalar_print_arg{(... || raw_character_scalar_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_character_pointer_print_arg{(... || raw_character_pointer_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_function_pointer_print_arg{(... || raw_function_pointer_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_non_character_pointer_print_arg{(... || raw_non_character_pointer_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_member_object_pointer_print_arg{(... || raw_member_object_pointer_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_member_function_pointer_print_arg{(... || raw_member_function_pointer_print_arg<Args>)};
-
-template <typename... Args>
-inline constexpr bool has_raw_print_arg{has_raw_character_scalar_print_arg<Args...> ||
-										has_raw_character_pointer_print_arg<Args...> ||
-										has_raw_function_pointer_print_arg<Args...> ||
-										has_raw_non_character_pointer_print_arg<Args...> ||
-										has_raw_member_object_pointer_print_arg<Args...> ||
-										has_raw_member_function_pointer_print_arg<Args...>};
-
-template <bool has_raw_character_scalar>
-inline constexpr void print_raw_character_scalar_static_assert() noexcept
-{
-	static_assert(!has_raw_character_scalar,
-				  "fast_io: raw character scalar is ambiguous. Use mnp::chvw(ch) for character text or "
-				  "mnp::dec(ch) for its code value.");
-}
-
-template <bool has_raw_character_pointer>
-inline constexpr void print_raw_character_pointer_static_assert() noexcept
-{
-	static_assert(!has_raw_character_pointer,
-				  "fast_io: raw character pointer is ambiguous. Use mnp::pointervw(ptr) for pointer value or "
-				  "mnp::os_c_str(ptr) for OS/C string text.");
-}
-
-template <bool has_raw_non_character_pointer>
-inline constexpr void print_raw_non_character_pointer_static_assert() noexcept
-{
-	static_assert(!has_raw_non_character_pointer,
-				  "fast_io: raw pointer is not printable directly. Use mnp::pointervw(ptr) for pointer value.");
-}
-
-template <bool has_raw_function_pointer>
-inline constexpr void print_raw_function_pointer_static_assert() noexcept
-{
-	static_assert(!has_raw_function_pointer,
-				  "fast_io: raw function pointer is not printable directly. Use mnp::funcvw(fn) for function address.");
-}
-
-template <bool has_raw_member_object_pointer>
-inline constexpr void print_raw_member_object_pointer_static_assert() noexcept
-{
-	static_assert(!has_raw_member_object_pointer,
-				  "fast_io: raw member object pointer is not printable directly. Use mnp::fieldptrvw(ptr) for its "
-				  "member-pointer representation.");
-}
-
-template <bool has_raw_member_function_pointer>
-inline constexpr void print_raw_member_function_pointer_static_assert() noexcept
-{
-	static_assert(!has_raw_member_function_pointer,
-				  "fast_io: raw member function pointer is not printable directly. Use mnp::methodvw(ptr) for its "
-				  "member-pointer representation.");
-}
-
-template <typename... Args>
-inline constexpr void print_raw_static_assert() noexcept
-{
-	if constexpr (has_raw_character_scalar_print_arg<Args...>)
-	{
-		print_raw_character_scalar_static_assert<has_raw_character_scalar_print_arg<Args...>>();
-	}
-	else if constexpr (has_raw_character_pointer_print_arg<Args...>)
-	{
-		print_raw_character_pointer_static_assert<has_raw_character_pointer_print_arg<Args...>>();
-	}
-	else if constexpr (has_raw_function_pointer_print_arg<Args...>)
-	{
-		print_raw_function_pointer_static_assert<has_raw_function_pointer_print_arg<Args...>>();
-	}
-	else if constexpr (has_raw_non_character_pointer_print_arg<Args...>)
-	{
-		print_raw_non_character_pointer_static_assert<has_raw_non_character_pointer_print_arg<Args...>>();
-	}
-	else if constexpr (has_raw_member_object_pointer_print_arg<Args...>)
-	{
-		print_raw_member_object_pointer_static_assert<has_raw_member_object_pointer_print_arg<Args...>>();
-	}
-	else if constexpr (has_raw_member_function_pointer_print_arg<Args...>)
-	{
-		print_raw_member_function_pointer_static_assert<has_raw_member_function_pointer_print_arg<Args...>>();
-	}
-}
-
-} // namespace details
-
 inline namespace io
 {
 
@@ -876,7 +739,12 @@ scan(::fast_io::basic_ibuffer_view<char_type> &in, T &value)
 template <bool report = false, typename input, typename... Args>
 inline constexpr ::std::conditional_t<report, bool, void> scan(input &&in, Args &&...args)
 {
-	constexpr bool device_error{::fast_io::operations::defines::has_input_or_io_stream_ref_define<input>};
+	// Normalization observes the named input as an lvalue, including when the
+	// caller supplied a temporary whose full-expression lifetime covers scan.
+	// Probe that exact expression: forwarding the owner here would change the
+	// synchronous borrowing contract and could select an unrelated consuming CPO.
+	constexpr bool device_error{::fast_io::operations::defines::has_input_or_io_stream_ref_define<
+		::std::remove_reference_t<input> &>};
 	if constexpr (device_error)
 	{
 		decltype(auto) inref = ::fast_io::operations::input_stream_ref(in);

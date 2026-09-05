@@ -1,5 +1,9 @@
 ﻿// Please keep it in reverse order with the macros in push_macros.h
 
+#pragma pop_macro("FAST_IO_HERBCEPTIONS_NOEXCEPT")
+#pragma pop_macro("FAST_IO_HERBCEPTIONS_NOTHROWS")
+#pragma pop_macro("FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT")
+#pragma pop_macro("FAST_IO_HERBCEPTIONS_THROWS")
 #pragma pop_macro("FAST_IO_CPP_EXCEPTIONS")
 #pragma pop_macro("FAST_IO_CPP_RTTI")
 #pragma pop_macro("FAST_IO_ASSUME")

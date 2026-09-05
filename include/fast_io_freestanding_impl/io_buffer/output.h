@@ -31,7 +31,7 @@ inline constexpr char_type const *write_some_typical_case(optstmtype &optstm,
 										reinterpret_cast<::std::byte const *>(pointers.buffer_begin))},
 			{first, static_cast<::std::size_t>(reinterpret_cast<::std::byte const *>(last) -
 											   reinterpret_cast<::std::byte const *>(first))}};
-		auto [position, scpos]{::fast_io::operations::decay::scatter_write_some_bytes_decay(optstm, scatters, 2)};
+		auto [position, scpos]{::fast_io::operations::decay::scatter_write_some_bytes_decay_dispatch(optstm, scatters, 2)};
 		if (position == 2)
 		{
 			pointers.buffer_curr = pointers.buffer_begin;
@@ -55,7 +55,7 @@ inline constexpr char_type const *write_some_typical_case(optstmtype &optstm,
 		basic_io_scatter_t<char_type> const scatters[2]{
 			{pointers.buffer_begin, static_cast<::std::size_t>(pointers.buffer_curr - pointers.buffer_begin)},
 			{first, static_cast<::std::size_t>(last - first)}};
-		auto [position, scpos]{::fast_io::operations::decay::scatter_write_some_decay(optstm, scatters, 2)};
+		auto [position, scpos]{::fast_io::operations::decay::scatter_write_some_decay_dispatch(optstm, scatters, 2)};
 		if (position == 2)
 		{
 			pointers.buffer_curr = pointers.buffer_begin;
@@ -88,14 +88,14 @@ inline constexpr void write_all_typical_case(optstmtype &optstm,
 										reinterpret_cast<::std::byte const *>(pointers.buffer_begin))},
 			{first, static_cast<::std::size_t>(reinterpret_cast<::std::byte const *>(last) -
 											   reinterpret_cast<::std::byte const *>(first))}};
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(optstm, scatters, 2);
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(optstm, scatters, 2);
 	}
 	else
 	{
 		basic_io_scatter_t<char_type> const scatters[2]{
 			{pointers.buffer_begin, static_cast<::std::size_t>(pointers.buffer_curr - pointers.buffer_begin)},
 			{first, static_cast<::std::size_t>(last - first)}};
-		::fast_io::operations::decay::scatter_write_all_decay(optstm, scatters, 2);
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(optstm, scatters, 2);
 	}
 	pointers.buffer_curr = pointers.buffer_begin;
 }
@@ -115,7 +115,7 @@ inline constexpr char_type const *write_some_overflow_impl(optstmtype &optstm,
 		}
 		else
 		{
-			return ::fast_io::operations::decay::write_some_decay(optstm, first, last);
+			return ::fast_io::operations::decay::write_some_decay_dispatch(optstm, first, last);
 		}
 	}
 	return write_some_typical_case<char_type>(optstm, pointers, first, last);
@@ -136,7 +136,7 @@ inline constexpr void write_all_nullptr_case(optstmtype &optstm, basic_io_buffer
 			{reinterpret_cast<::std::byte const *>(first),
 			 static_cast<::std::size_t>(reinterpret_cast<::std::byte const *>(last) -
 										 reinterpret_cast<::std::byte const *>(first))}};
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(optstm, scatters, 2);
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(optstm, scatters, 2);
 	}
 	else
 	{
@@ -144,7 +144,7 @@ inline constexpr void write_all_nullptr_case(optstmtype &optstm, basic_io_buffer
 			{(pointers.buffer_begin ? pointers.buffer_begin : first),
 			 static_cast<::std::size_t>(pointers.buffer_begin ? (pointers.buffer_curr - pointers.buffer_begin) : 0u)},
 			{first, static_cast<::std::size_t>(last - first)}};
-		::fast_io::operations::decay::scatter_write_all_decay(optstm, scatters, 2);
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(optstm, scatters, 2);
 	}
 	pointers.buffer_curr = pointers.buffer_begin;
 }
@@ -162,7 +162,7 @@ inline constexpr void write_all_overflow_impl(optstmtype &optstm, basic_io_buffe
 		}
 		else
 		{
-			::fast_io::operations::decay::write_all_decay(optstm, first, last);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 		}
 		return;
 	}
@@ -176,7 +176,7 @@ inline constexpr void output_stream_buffer_flush_impl(optstmtype &optstm, basic_
 	{
 		return;
 	}
-	::fast_io::operations::decay::write_all_decay(optstm, pointers.buffer_begin, pointers.buffer_curr);
+	::fast_io::operations::decay::write_all_decay_dispatch(optstm, pointers.buffer_begin, pointers.buffer_curr);
 	pointers.buffer_curr = pointers.buffer_begin;
 }
 
@@ -196,7 +196,7 @@ inline constexpr void obuffer_minimum_size_flush_prepare_impl(optstmtype &optstm
 	}
 	else
 	{
-		::fast_io::operations::decay::write_all_decay(optstm, pointers.buffer_begin, pointers.buffer_curr);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, pointers.buffer_begin, pointers.buffer_curr);
 		pointers.buffer_curr = pointers.buffer_begin;
 	}
 }
@@ -239,7 +239,7 @@ pwrite_some_overflow_define(basic_io_buffer_ref<io_buffer_type> iobref,
 							::fast_io::intfpos_t off)
 {
 	decltype(auto) outref = ::fast_io::operations::output_stream_ref(iobref.iobptr->handle);
-	return ::fast_io::operations::decay::pwrite_some_decay(outref, first, last, off);
+	return ::fast_io::operations::decay::pwrite_some_decay_dispatch(outref, first, last, off);
 }
 
 template <typename io_buffer_type>
@@ -249,7 +249,7 @@ inline constexpr void pwrite_all_overflow_define(basic_io_buffer_ref<io_buffer_t
 												 ::fast_io::intfpos_t off)
 {
 	decltype(auto) outref = ::fast_io::operations::output_stream_ref(iobref.iobptr->handle);
-	::fast_io::operations::decay::pwrite_all_decay(outref, first, last, off);
+	::fast_io::operations::decay::pwrite_all_decay_dispatch(outref, first, last, off);
 }
 
 template <typename io_buffer_type>
@@ -259,7 +259,7 @@ scatter_pwrite_some_overflow_define(basic_io_buffer_ref<io_buffer_type> iobref,
 									::std::size_t n, ::fast_io::intfpos_t off)
 {
 	decltype(auto) outref = ::fast_io::operations::output_stream_ref(iobref.iobptr->handle);
-	return ::fast_io::operations::decay::scatter_pwrite_some_decay(outref, pscatters, n, off);
+	return ::fast_io::operations::decay::scatter_pwrite_some_decay_dispatch(outref, pscatters, n, off);
 }
 
 template <typename io_buffer_type>
@@ -268,7 +268,7 @@ inline constexpr void scatter_pwrite_all_overflow_define(basic_io_buffer_ref<io_
 														 ::std::size_t n, ::fast_io::intfpos_t off)
 {
 	decltype(auto) outref = ::fast_io::operations::output_stream_ref(iobref.iobptr->handle);
-	::fast_io::operations::decay::scatter_pwrite_all_decay(outref, pscatters, n, off);
+	::fast_io::operations::decay::scatter_pwrite_all_decay_dispatch(outref, pscatters, n, off);
 }
 
 template <typename io_buffer_type>

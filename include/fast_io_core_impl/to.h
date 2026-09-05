@@ -1353,15 +1353,27 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 	}
 }
 
-/// @brief Owns normalized proxy prvalues supplied by the public inplace conversion boundary.
-/// @details Guaranteed parameter lifetime contains the borrowed algorithm call.  The separate wrapper is necessary:
-///          value-returning `to` already has an owned pack and enters the borrowed body directly, avoiding both a full
-///          extra O(N) copy layer and an otherwise ill-formed copy of a move-only normalization proxy.
+/// @brief Owns a normalized scan target and source proxy prvalues supplied by the public inplace conversion boundary.
+/// @details This is the value-decay ABI boundary: small trivial target proxies retain the platform's ordinary
+///          register/stack argument classification, while guaranteed parameter initialization owns prvalues for the
+///          complete borrowed algorithm call. Value-returning `to` already owns its target locally and therefore enters
+///          the borrowed body directly, avoiding an extra target construction and an extra source-pack copy layer.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr void basic_inplace_to_decay(T &&t, Args... args)
+inline constexpr void basic_inplace_to_decay(T t, Args... args)
 {
-	::fast_io::basic_inplace_to_decay_borrowed<char_type, T, Args...>(
-		::std::forward<T>(t), args...);
+	::fast_io::basic_inplace_to_decay_borrowed<char_type>(t, args...);
+}
+
+/// @brief Owns normalized source values while retaining an existing scan-alias lvalue by identity.
+/// @details A scan customization may deliberately return a stable, noncopyable lvalue proxy. Such a result cannot pass
+///          through the value-decay target entry above, but it also needs no lifetime extension: the public target owns
+///          it for the complete synchronous conversion. Keeping this case in a separately named entry prevents its
+///          reference ABI from replacing value transport for the common prvalue target while preserving the exact
+///          lvalue selected by the alias CPO.
+template <::std::integral char_type, typename T, typename... Args>
+inline constexpr void basic_inplace_to_decay_borrowed_target(T &t, Args... args)
+{
+	::fast_io::basic_inplace_to_decay_borrowed<char_type>(t, args...);
 }
 
 namespace details
@@ -1908,7 +1920,7 @@ inline constexpr T to_compiler_constant_source_materialized(Args... args)
 /// @brief Shared public source boundary for every character-domain `inplace_to` facade.
 /// @details The false arm is exactly the historical alias/forward/decay expression. Consequently an unknown value pays
 ///          no proxy construction, size query, or extra output pass; only a proven true optimizer query enters the
-///          optional replacement arm.
+///          optional replacement arm. Forbidden raw output sources are diagnosed here before either strategy is formed.
 template <::std::integral char_type, typename T, typename... Args>
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // GCC 11--17 otherwise outline this source-query boundary for an existing target. A literal dynamic-precision source
@@ -1919,10 +1931,18 @@ FAST_IO_GNU_ALWAYS_INLINE
 inline constexpr void inplace_to_compiler_constant_checked_entry(
 	T &&target, Args &&...args)
 {
+	constexpr bool has_raw_source{
+		::fast_io::details::has_raw_print_arg<Args...>};
 	constexpr bool ordinary_available{
+		!has_raw_source &&
 		::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
 	// Keep malformed public source/target combinations in the diagnostic arm without instantiating either execution path.
-	if constexpr (ordinary_available)
+	if constexpr (has_raw_source)
+	{
+		// Every public character-domain facade shares the IO-level raw-source diagnostic.
+		::fast_io::details::print_raw_static_assert<Args...>();
+	}
+	else if constexpr (ordinary_available)
 	{
 		// Enter the optional source replacement only when its normalized scan and status semantics have been proved.
 		if constexpr (
@@ -1938,16 +1958,34 @@ inline constexpr void inplace_to_compiler_constant_checked_entry(
 				return;
 			}
 		}
-		::fast_io::basic_inplace_to_decay<char_type>(
+		using normalized_target_expression = decltype(
 			::fast_io::io_scan_forward<char_type>(
-				::fast_io::io_scan_alias(target)),
-			::fast_io::io_print_forward<char_type>(
-				::fast_io::io_print_alias(args))...);
+				::fast_io::io_scan_alias(target)));
+		if constexpr (::std::is_lvalue_reference_v<normalized_target_expression>)
+		{
+			// A customization-authored lvalue is already owned by the public target. Borrow that exact object, but keep
+			// the source pack's ordinary by-value decay boundary.
+			::fast_io::basic_inplace_to_decay_borrowed_target<char_type>(
+				::fast_io::io_scan_forward<char_type>(
+					::fast_io::io_scan_alias(target)),
+				::fast_io::io_print_forward<char_type>(
+					::fast_io::io_print_alias(args))...);
+		}
+		else
+		{
+			// A normalized prvalue is initialized directly into the decayed parameter, preserving both ownership and
+			// the target ABI's value classification without an intervening reference parameter.
+			::fast_io::basic_inplace_to_decay<char_type>(
+				::fast_io::io_scan_forward<char_type>(
+					::fast_io::io_scan_alias(target)),
+				::fast_io::io_print_forward<char_type>(
+					::fast_io::io_print_alias(args))...);
+		}
 	}
 	else
 	{
 		static_assert(ordinary_available,
-			"either some arguments are not printable or the target is not scannable");
+					  "either some arguments are not printable or the target is not scannable");
 	}
 }
 
@@ -2105,6 +2143,7 @@ namespace details
 /// @details Both arms normalize public print sources before constructing the scan target. The successful query enters
 ///          the bounded formatter-free materializer; the false arm remains the historical `basic_to_decay` expression.
 ///          This preserves the observable order in which source alias CPO side effects precede `T`'s construction.
+///          Forbidden raw output sources use the same Core diagnostic as the stream-oriented IO facades.
 template <::std::integral char_type, typename T, typename... Args>
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
@@ -2125,10 +2164,18 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 	}
 	else
 	{
+		constexpr bool has_raw_source{
+			::fast_io::details::has_raw_print_arg<Args...>};
 		constexpr bool ordinary_available{
+			!has_raw_source &&
 			::fast_io::details::can_do_inplace_to<char_type, T, Args...>};
 		// Delay all conversion instantiation until the public alias and scanner protocols are known to be valid.
-		if constexpr (ordinary_available)
+		if constexpr (has_raw_source)
+		{
+			// Match inplace_to and the stream facades before forming any print/scan strategy.
+			::fast_io::details::print_raw_static_assert<Args...>();
+		}
+		else if constexpr (ordinary_available)
 		{
 			// The compiler-constant arm is available only when replacing sources preserves the exact selected scan strategy.
 			if constexpr (
@@ -2141,9 +2188,9 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 					return ::fast_io::details::
 						to_compiler_constant_source_materialized<
 							char_type, T>(
-						::fast_io::operations::decay::
-							print_compiler_constant_pre_normalization_plain_true_forward<
-								false, char_type>(::std::forward<Args>(args))...);
+							::fast_io::operations::decay::
+								print_compiler_constant_pre_normalization_plain_true_forward<
+									false, char_type>(::std::forward<Args>(args))...);
 				}
 			}
 			return ::fast_io::decay::basic_to_decay<char_type, T>(
@@ -2153,7 +2200,7 @@ inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
 		else
 		{
 			static_assert(ordinary_available,
-				"either some arguments are not printable or the target is not scannable");
+						  "either some arguments are not printable or the target is not scannable");
 		}
 	}
 }

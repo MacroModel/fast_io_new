@@ -53,7 +53,7 @@ public:
 						  ::fast_io::operations::decay::defines::readable<decaytype>)
 			{
 				decltype(auto) inref = ::fast_io::operations::input_stream_ref(value);
-				return ::fast_io::operations::decay::scatter_read_some_decay(
+				return ::fast_io::operations::decay::scatter_read_some_decay_dispatch(
 					inref, base, n);
 			}
 			else
@@ -78,7 +78,7 @@ public:
 						  ::fast_io::operations::decay::defines::preadable<decaytype>)
 			{
 				decltype(auto) inref = ::fast_io::operations::input_stream_ref(value);
-				return ::fast_io::operations::decay::scatter_pread_some_decay(
+				return ::fast_io::operations::decay::scatter_pread_some_decay_dispatch(
 					inref, base, n, off);
 			}
 			else
@@ -102,9 +102,10 @@ public:
 						  ::fast_io::operations::decay::defines::input_stream_seek_dispatchable<decaytype>)
 			{
 				// Dispatchability includes a finite complete mutex chain. Testing only the terminal seek CPO here would
-				// reject a valid locked wrapper even though the borrowed decay layer can safely unwrap it.
+				// reject a valid locked wrapper even though the borrowed decay layer can safely unwrap it. This named
+				// normalized observer uses policy dispatch so a mutable cursor cannot be copied accidentally.
 				decltype(auto) inref = ::fast_io::operations::input_stream_ref(value);
-				return ::fast_io::operations::decay::input_stream_seek_decay(
+				return ::fast_io::operations::decay::input_stream_seek_decay_dispatch(
 					inref, off, sdir);
 			}
 			else
@@ -129,7 +130,7 @@ public:
 						  ::fast_io::operations::decay::defines::writable<decaytype>)
 			{
 				decltype(auto) outref = ::fast_io::operations::output_stream_ref(value);
-				return ::fast_io::operations::decay::scatter_write_some_decay(
+				return ::fast_io::operations::decay::scatter_write_some_decay_dispatch(
 					outref, base, n);
 			}
 			else
@@ -154,7 +155,7 @@ public:
 						  ::fast_io::operations::decay::defines::pwritable<decaytype>)
 			{
 				decltype(auto) outref = ::fast_io::operations::output_stream_ref(value);
-				return ::fast_io::operations::decay::scatter_pwrite_some_decay(
+				return ::fast_io::operations::decay::scatter_pwrite_some_decay_dispatch(
 					outref, base, n, off);
 			}
 			else
@@ -177,8 +178,9 @@ public:
 			if constexpr (::std::same_as<typename decaytype::output_char_type, outchar_type> &&
 						  ::fast_io::operations::decay::defines::output_stream_seek_dispatchable<decaytype>)
 			{
+				// Keep a stateful normalized output observer borrowed unless its explicit semantic and ABI proofs admit a copy.
 				decltype(auto) outref = ::fast_io::operations::output_stream_ref(value);
-				return ::fast_io::operations::decay::output_stream_seek_decay(
+				return ::fast_io::operations::decay::output_stream_seek_decay_dispatch(
 					outref, off, sdir);
 			}
 			else

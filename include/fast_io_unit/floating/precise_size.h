@@ -2656,8 +2656,9 @@ floating_precise_exact_compare_power10(
 		auto const count{static_cast<::std::uint_least32_t>(decimal_exponent)};
 		::std::uint_least64_t power[4u];
 		generic_computePow5(count, power);
+		// `count` is the nonnegative decimal exponent required by the unsigned power-cache contract.
 		auto const cache_exponent{static_cast<::std::int_least32_t>(
-			pow5bits(static_cast<::std::int_least32_t>(count))) -
+			pow5bits(count)) -
 			float_128_pow5_bitcount};
 		/* M*2^E >= 10^n iff M*2^(E-n) >= 5^n. */
 		auto const lower_comparison{
@@ -2694,8 +2695,9 @@ floating_precise_exact_compare_power10(
 	auto const count{static_cast<::std::uint_least32_t>(-decimal_exponent)};
 	::std::uint_least64_t power[4u];
 	generic_computePow5(count, power);
+	// Negation is performed before conversion, so `count` is again the cache's proved nonnegative exponent domain.
 	auto const cache_exponent{static_cast<::std::int_least32_t>(
-		pow5bits(static_cast<::std::int_least32_t>(count))) -
+		pow5bits(count)) -
 		float_128_pow5_bitcount};
 	/* M*2^E >= 10^-n iff M*5^n*2^(E+n) >= 1. */
 	auto const scaled_exponent{cache_exponent + binary_exponent - decimal_exponent};

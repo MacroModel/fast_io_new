@@ -45,8 +45,9 @@ simd_lf_crlf_process_chars(char_type const *fromfirst, char_type const *fromlast
 			for (; fromdiff; --fromdiff)
 			{
 				vec.load(fromfirst);
-				auto comres{vec != charsvec};
-				if (!::fast_io::intrinsics::is_all_zeros(comres))
+				// Equality is the searched predicate: an all-zero mask proves that the entire block is ordinary text.
+				auto matches{vec == charsvec};
+				if (!::fast_io::intrinsics::is_all_zeros(matches))
 				{
 					break;
 				}
@@ -79,6 +80,12 @@ simd_lf_crlf_process_chars(char_type const *fromfirst, char_type const *fromlast
 			{
 				break;
 			}
+		}
+		if (tofirst + 1 == tolast)
+		{
+			// A delimiter expands to two output code units. Leave it unconsumed when only one slot remains so the
+			// scalar state machine can publish the prefix and resume the expansion without crossing `tolast`.
+			break;
 		}
 		if constexpr (cr)
 		{
@@ -127,15 +134,24 @@ simd_crlf_lf_process_chars(char_type const *fromfirst, char_type const *fromlast
 			break;
 		}
 		vec.load(fromfirst);
-		auto comres{vec != charsvec};
-		vec.store(tofirst);
-		if (::fast_io::intrinsics::is_all_zeros(comres))
+		// Keep a direct CR-match mask so the no-match proof and first-match lane calculation use the same polarity.
+		auto matches{vec == charsvec};
+		if (::fast_io::intrinsics::is_all_zeros(matches))
 		{
+			// Only an all-plain vector may be committed as a whole. A matching vector has a shorter logical output
+			// prefix and must not overwrite storage beyond the cursor returned to the decorator driver.
+			vec.store(tofirst);
 			fromfirst += N;
 			tofirst += N;
 			continue;
 		}
-		unsigned pos{::fast_io::intrinsics::vector_mask_countr_one(comres)};
+		// mask_countr reports element lanes (not bytes) and preserves address order on every supported endianness.
+		// The preceding nonzero proof also establishes `pos < N`, leaving source element N live for pair lookahead.
+		unsigned pos{::fast_io::intrinsics::vector_mask_countr_zero(matches)};
+		FAST_IO_ASSUME(pos < N);
+		// Copy exactly the committed prefix, including the CR at `pos`; the following pair-resolution step may
+		// replace that final code unit but cannot expose or modify any byte beyond the returned output cursor.
+		::fast_io::details::non_overlapped_copy_n(fromfirst, static_cast<::std::size_t>(pos) + 1u, tofirst);
 		fromfirst += pos + 1;
 		tofirst += pos + 1;
 		if (*fromfirst != lfchct)

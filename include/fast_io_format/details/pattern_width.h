@@ -16,6 +16,10 @@
 #include <type_traits>
 #include <utility>
 
+// `semantic.h` is a public-format boundary and restores fast_io's private macros before returning. Pattern-width is
+// another independently includable protocol boundary, so acquire its own balanced scope for Herbception effects.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
 namespace fast_io::fmt::details
 {
 
@@ -85,8 +89,9 @@ inline constexpr bool pattern_width_child_size_nothrow = []() constexpr {
 	}
 	else if constexpr (::fast_io::reserve_printable<char_type, child_type &>)
 	{
-		return noexcept(print_reserve_size(
-			::fast_io::io_reserve_type<char_type, child_type>));
+		// A static reserve extent is consumed as a constant expression below. No run-time call, unwind edge, or
+		// deterministic-error result enters this wrapper's ABI after that value has been cached locally.
+		return true;
 	}
 	else
 	{
@@ -97,6 +102,31 @@ inline constexpr bool pattern_width_child_size_nothrow = []() constexpr {
 			::std::declval<child_type &>()));
 	}
 }();
+
+#if defined(__HERBCEPTIONS__)
+/** Classifies the deterministic channel of the exact capacity protocol selected above. */
+template <typename child_type, ::fast_io::fmt::format_character char_type>
+	requires pattern_width_child_materializable<child_type, char_type>
+inline constexpr bool pattern_width_child_size_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::scatter_printable_for<char_type, child_type &>)
+	{
+		return throws((print_scatter_define(
+			::fast_io::io_reserve_type<char_type, child_type>,
+			::std::declval<child_type &>())));
+	}
+	else if constexpr (::fast_io::reserve_printable<char_type, child_type &>)
+	{
+		// This type-only policy is evaluated while forming a constexpr local, so it contributes no run-time effect.
+		return false;
+	}
+	else
+	{
+		return throws((print_reserve_size(
+			::fast_io::io_reserve_type<char_type, child_type>,
+			::std::declval<child_type &>())));
+	}
+}();
+#endif
 
 /** Computes the exception contract of the matching child emission protocol. */
 template <typename child_type, ::fast_io::fmt::format_character char_type>
@@ -114,10 +144,33 @@ inline constexpr bool pattern_width_child_emit_nothrow = []() constexpr {
 		// the same char_type pointer result used by the implementation.
 		return noexcept(print_reserve_define(
 			::fast_io::io_reserve_type<char_type, child_type>,
-			::std::declval<char_type *>(),
+			::std::declval<char_type *&>(),
 			::std::declval<child_type &>()));
 	}
 }();
+
+#if defined(__HERBCEPTIONS__)
+/** Classifies the deterministic channel of the exact child-emission expression. */
+template <typename child_type, ::fast_io::fmt::format_character char_type>
+	requires pattern_width_child_materializable<child_type, char_type>
+inline constexpr bool pattern_width_child_emit_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::scatter_printable_for<char_type, child_type &>)
+	{
+		return throws((print_scatter_define(
+			::fast_io::io_reserve_type<char_type, child_type>,
+			::std::declval<child_type &>())));
+	}
+	else
+	{
+		return throws((print_reserve_define(
+			::fast_io::io_reserve_type<char_type, child_type>,
+			// `emit_pattern_width_child` passes its named output cursor. The lvalue category is observable by ADL and must
+			// be identical in the classifier and the eventual call.
+			::std::declval<char_type *&>(),
+			::std::declval<child_type &>())));
+	}
+}();
+#endif
 
 /** Computes whether the optional internal-placement query may throw. */
 template <typename child_type, ::fast_io::fmt::format_character char_type>
@@ -134,10 +187,32 @@ inline constexpr bool pattern_width_internal_shift_nothrow = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/** Classifies the deterministic channel of the optional internal-placement query. */
+template <typename child_type, ::fast_io::fmt::format_character char_type>
+inline constexpr bool pattern_width_internal_shift_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::printable_internal_shift<char_type, child_type &>)
+	{
+		return throws((print_define_internal_shift(
+			::fast_io::io_reserve_type<char_type, child_type>,
+			::std::declval<child_type &>())));
+	}
+	else
+	{
+		return false;
+	}
+}();
+#endif
+
+// Let E be the exact selected capacity CPO on the named child lvalue and B = `throws(E)`. The single function type
+// carries `throws(B)` in Herbception mode while ordinary compilers retain the historical conditional `noexcept`.
 template <typename child_type, ::fast_io::fmt::format_character char_type>
 	requires pattern_width_child_materializable<child_type, char_type>
 [[nodiscard]] inline constexpr ::std::size_t pattern_width_child_reserve_size(
-	child_type &child) noexcept(pattern_width_child_size_nothrow<child_type, char_type>)
+	child_type &child)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(pattern_width_child_size_herbceptions_throws<child_type, char_type>),
+		(pattern_width_child_size_nothrow<child_type, char_type>))
 {
 	if constexpr (::fast_io::scatter_printable_for<char_type, child_type &>)
 	{
@@ -148,8 +223,9 @@ template <typename child_type, ::fast_io::fmt::format_character char_type>
 	}
 	else if constexpr (::fast_io::reserve_printable<char_type, child_type &>)
 	{
-		return print_reserve_size(
-			::fast_io::io_reserve_type<char_type, child_type>);
+		constexpr ::std::size_t child_size{print_reserve_size(
+			::fast_io::io_reserve_type<char_type, child_type>)};
+		return child_size;
 	}
 	else
 	{
@@ -164,7 +240,9 @@ template <typename child_type, ::fast_io::fmt::format_character char_type>
 	requires pattern_width_child_materializable<child_type, char_type>
 inline constexpr char_type *emit_pattern_width_child(
 	char_type *output, child_type &child)
-	noexcept(pattern_width_child_emit_nothrow<child_type, char_type>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(pattern_width_child_emit_herbceptions_throws<child_type, char_type>),
+		(pattern_width_child_emit_nothrow<child_type, char_type>))
 {
 	if constexpr (::fast_io::scatter_printable_for<char_type, child_type &>)
 	{
@@ -190,7 +268,9 @@ inline constexpr char_type *emit_pattern_width_child(
 template <typename child_type, ::fast_io::fmt::format_character char_type>
 [[nodiscard]] inline constexpr ::std::size_t pattern_width_internal_shift(
 	child_type &child)
-	noexcept(pattern_width_internal_shift_nothrow<child_type, char_type>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(pattern_width_internal_shift_herbceptions_throws<child_type, char_type>),
+		(pattern_width_internal_shift_nothrow<child_type, char_type>))
 {
 	if constexpr (::fast_io::printable_internal_shift<char_type, child_type &>)
 	{
@@ -237,6 +317,8 @@ inline constexpr char_type *emit_pattern_fill(
 	}
 }
 
+// Emission and the optional internal-shift query form one effect transaction. Let E be child emission and S be the
+// shift query. Run-time placement may execute S, so the canonical signature is conditionally fallible iff E or S is.
 template <::fast_io::fmt::format_character char_type,
 	::std::size_t fill_size, typename value_type, typename child_type>
 	requires pattern_width_child_materializable<child_type, char_type>
@@ -244,8 +326,11 @@ inline constexpr char_type *emit_pattern_width_impl(
 	char_type *output,
 	basic_pattern_width<char_type, fill_size, value_type> const &field,
 	child_type &child)
-	noexcept(pattern_width_child_emit_nothrow<child_type, char_type> &&
-			 pattern_width_internal_shift_nothrow<child_type, char_type>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(pattern_width_child_emit_herbceptions_throws<child_type, char_type> ||
+		 pattern_width_internal_shift_herbceptions_throws<child_type, char_type>),
+		(pattern_width_child_emit_nothrow<child_type, char_type> &&
+		 pattern_width_internal_shift_nothrow<child_type, char_type>))
 {
 	auto const child_end{emit_pattern_width_child<child_type, char_type>(output, child)};
 	auto const child_size{static_cast<::std::size_t>(child_end - output)};
@@ -278,8 +363,8 @@ inline constexpr char_type *emit_pattern_width_impl(
 			(void)emit_pattern_fill(output + shift, field, repetitions);
 			return child_end + inserted_units;
 		}
-		// A non-numeric custom child cannot prove a sign/prefix boundary.  Core
-		// width uses the same safe fallback: internal becomes right alignment.
+		// A non-numeric custom child cannot prove a sign/prefix boundary. Core width uses the same safe fallback:
+		// internal becomes right alignment.
 		left_repetitions = repetitions;
 	}
 	else
@@ -305,7 +390,9 @@ template <::std::size_t fill_size,
 	T &&value, ::std::size_t width,
 	::fast_io::manipulators::scalar_placement placement,
 	char_type const *fill)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	static_assert(fill_size != 0u && fill_size <= 4u);
 	using storage_type = ::fast_io::details::width_storage_type<T>;
@@ -324,6 +411,9 @@ template <::std::size_t fill_size,
 namespace fast_io
 {
 
+/// @brief Computes the conservative storage bound of one pattern-width node.
+/// @details The child capacity CPO is the only fallible operation. Its exact effect predicate determines one canonical
+///          conditional Herbception signature; ordinary builds retain the same conditional-noexcept expression.
 template <::fast_io::fmt::format_character char_type,
 	::std::size_t fill_size, typename value_type>
 	requires ::fast_io::fmt::details::pattern_width_child_materializable<
@@ -334,8 +424,11 @@ template <::fast_io::fmt::format_character char_type,
 			char_type, fill_size, value_type>>,
 	::fast_io::fmt::details::basic_pattern_width<
 		char_type, fill_size, value_type> field)
-	noexcept(::fast_io::fmt::details::pattern_width_child_size_nothrow<
-		::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::fmt::details::pattern_width_child_size_herbceptions_throws<
+			::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>),
+		(::fast_io::fmt::details::pattern_width_child_size_nothrow<
+			::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>))
 {
 	if constexpr (::std::is_reference_v<value_type>)
 	{
@@ -364,6 +457,9 @@ template <::fast_io::fmt::format_character char_type,
 	}
 }
 
+/// @brief Emits one pattern-width node into its preflighted contiguous range.
+/// @details Child emission E and the possible internal-shift query S are one transaction. The public CPO is
+///          conditionally fallible exactly when `throws(E) || throws(S)`, without splitting its overload identity.
 template <::fast_io::fmt::format_character char_type,
 	::std::size_t fill_size, typename value_type>
 	requires ::fast_io::fmt::details::pattern_width_child_materializable<
@@ -375,11 +471,15 @@ inline constexpr char_type *print_reserve_define(
 	char_type *output,
 	::fast_io::fmt::details::basic_pattern_width<
 		char_type, fill_size, value_type> field)
-	noexcept(
-		::fast_io::fmt::details::pattern_width_child_emit_nothrow<
-			::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type> &&
-		::fast_io::fmt::details::pattern_width_internal_shift_nothrow<
-			::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::fmt::details::pattern_width_child_emit_herbceptions_throws<
+			 ::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type> ||
+		 ::fast_io::fmt::details::pattern_width_internal_shift_herbceptions_throws<
+			 ::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>),
+		(::fast_io::fmt::details::pattern_width_child_emit_nothrow<
+			 ::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type> &&
+		 ::fast_io::fmt::details::pattern_width_internal_shift_nothrow<
+			 ::fast_io::fmt::details::pattern_width_child_t<value_type>, char_type>))
 {
 	if constexpr (::std::is_reference_v<value_type>)
 	{
@@ -399,3 +499,5 @@ inline constexpr char_type *print_reserve_define(
 }
 
 } // namespace fast_io
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

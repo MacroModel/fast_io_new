@@ -34,7 +34,7 @@ decoread_some_underflow_define_sz_impl(instmtype &instm, indecotype &indeco,
 				return first;
 			}
 		}
-		auto ret{::fast_io::operations::decay::read_some_decay(instm, bufbg, bufbg + sz)};
+		auto ret{::fast_io::operations::decay::read_some_decay_dispatch(instm, bufbg, bufbg + sz)};
 		input_buffer.buffer_curr = bufcur = bufbg;
 		input_buffer.buffer_end = bufed = ret;
 		if (ret == bufbg)

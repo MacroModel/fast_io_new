@@ -114,7 +114,7 @@ namespace fast_io
 namespace details
 {
 
-template <::std::chars_format format, bool shortest_general,
+template <::fast_io::chars_format format, bool shortest_general,
 		  ::fast_io::manipulators::floating_rounding rounding>
 inline consteval ::fast_io::manipulators::scalar_flags
 to_chars_floating_flags() noexcept
@@ -124,7 +124,7 @@ to_chars_floating_flags() noexcept
 	flags.showpos = false;
 	flags.showbase = false;
 	flags.comma = false;
-	if constexpr (format == ::std::chars_format::fixed)
+	if constexpr (format == ::fast_io::chars_format::fixed)
 	{
 		/*
 		Fixed presentation inserts the radix according to the decimal exponent
@@ -132,7 +132,7 @@ to_chars_floating_flags() noexcept
 		*/
 		flags.floating = ::fast_io::manipulators::floating_format::fixed;
 	}
-	else if constexpr (format == ::std::chars_format::scientific)
+	else if constexpr (format == ::fast_io::chars_format::scientific)
 	{
 		/*
 		Scientific presentation normalizes to one leading decimal digit and
@@ -141,7 +141,7 @@ to_chars_floating_flags() noexcept
 		*/
 		flags.floating = ::fast_io::manipulators::floating_format::scientific;
 	}
-	else if constexpr (format == ::std::chars_format::hex)
+	else if constexpr (format == ::fast_io::chars_format::hex)
 	{
 		/*
 		Hexadecimal presentation consumes the exact m*2^e decomposition and
@@ -151,7 +151,7 @@ to_chars_floating_flags() noexcept
 	}
 	else
 	{
-		static_assert(format == ::std::chars_format::general);
+		static_assert(format == ::fast_io::chars_format::general);
 		/*
 		The three-argument overload (`shortest_general=true`) minimizes the
 		complete fixed/scientific spelling.  Explicit `chars_format::general`
@@ -166,7 +166,7 @@ to_chars_floating_flags() noexcept
 	return flags;
 }
 
-template <::std::chars_format format,
+template <::fast_io::chars_format format,
 		  ::fast_io::manipulators::floating_rounding rounding>
 inline consteval ::fast_io::manipulators::scalar_flags
 to_chars_floating_precision_flags() noexcept
@@ -174,7 +174,7 @@ to_chars_floating_precision_flags() noexcept
 	auto flags{
 		::fast_io::details::to_chars_floating_flags<
 			format, false, rounding>()};
-	if constexpr (format == ::std::chars_format::general)
+	if constexpr (format == ::fast_io::chars_format::general)
 	{
 		/*
 		Precision P is a significant-digit grid for general format.  The
@@ -189,7 +189,7 @@ to_chars_floating_precision_flags() noexcept
 	}
 	else
 	{
-		if constexpr (format == ::std::chars_format::hex)
+		if constexpr (format == ::fast_io::chars_format::hex)
 		{
 			/*
 			Hex precision counts fractional hexadecimal digits.  Its dedicated
@@ -273,7 +273,7 @@ to_chars_floating_emit(char_type *first, char_type *last,
 		Returning `last` with value_too_large while performing no write is the
 		strong bounded-buffer contract.
 		*/
-		return {last, ::std::errc::value_too_large};
+		return {last, ::fast_io::charconv_errc::value_too_large};
 	}
 	/*
 	Now L<=capacity.  The exact-bounds writer is parameterized by that same L
@@ -284,7 +284,7 @@ to_chars_floating_emit(char_type *first, char_type *last,
 		print_reserve_precise_define(tag, first, precise_size, value), {}};
 }
 
-template <::std::chars_format format,
+template <::fast_io::chars_format format,
 		  ::fast_io::manipulators::floating_rounding rounding,
 		  bool shortest_general = false,
 		  ::fast_io::details::my_floating_point T,
@@ -338,7 +338,7 @@ to_chars_floating_fixed(char_type *first, char_type *last, T value) noexcept
 	return ::fast_io::details::to_chars_floating_emit(first, last, source);
 }
 
-template <::std::chars_format format,
+template <::fast_io::chars_format format,
 		  ::fast_io::manipulators::floating_rounding rounding,
 		  ::fast_io::details::my_floating_point T,
 		  ::fast_io::details::character char_type>
@@ -1140,7 +1140,7 @@ to_chars_floating_standard_shortest_da_ascii_integer_candidate_residual(
 	(void)last;
 	constexpr auto flags{
 		::fast_io::details::to_chars_floating_flags<
-			::std::chars_format::general, true,
+			::fast_io::chars_format::general, true,
 			::fast_io::manipulators::floating_rounding::
 				nearest_to_even>()};
 	::fast_io::details::to_chars_floating_small_integer
@@ -1272,7 +1272,7 @@ to_chars_floating_standard_shortest_da_ascii_proved_ordinary(
 	using floating_type = ::std::remove_cv_t<T>;
 	constexpr auto flags{
 		::fast_io::details::to_chars_floating_flags<
-			::std::chars_format::general, true,
+			::fast_io::chars_format::general, true,
 			::fast_io::manipulators::floating_rounding::
 				nearest_to_even>()};
 	/*
@@ -1329,7 +1329,7 @@ to_chars_floating_standard_shortest_da_ascii_binary32_residual(
 	constexpr auto flags{[]() constexpr noexcept {
 		auto value{
 			::fast_io::details::to_chars_floating_flags<
-				::std::chars_format::general, true,
+				::fast_io::chars_format::general, true,
 				::fast_io::manipulators::floating_rounding::
 					nearest_to_even>()};
 		value.floating =
@@ -1446,7 +1446,7 @@ to_chars_floating_standard_shortest_da_ascii_gcc12_noncandidate(
 	using floating_type = ::std::remove_cv_t<T>;
 	constexpr auto flags{
 		::fast_io::details::to_chars_floating_flags<
-			::std::chars_format::general, true,
+			::fast_io::chars_format::general, true,
 			::fast_io::manipulators::floating_rounding::
 				nearest_to_even>()};
 	/*
@@ -1495,7 +1495,7 @@ to_chars_floating_standard_shortest_da_ascii(
 		(trait::mbits == 52u && trait::ebits == 11u));
 	constexpr auto flags{
 		::fast_io::details::to_chars_floating_flags<
-			::std::chars_format::general, true,
+			::fast_io::chars_format::general, true,
 			::fast_io::manipulators::floating_rounding::
 				nearest_to_even>()};
 	auto const fields{
@@ -1522,7 +1522,7 @@ to_chars_floating_standard_shortest_da_ascii(
 					auto value{
 						::fast_io::details::
 							to_chars_floating_flags<
-								::std::chars_format::general,
+								::fast_io::chars_format::general,
 								true,
 								::fast_io::manipulators::
 									floating_rounding::
@@ -1621,11 +1621,11 @@ to_chars_floating_standard_fixed(
 	if (::fast_io::details::to_chars_floating_is_integer(value))
 	{
 		return ::fast_io::details::to_chars_floating_precision_fixed<
-			::std::chars_format::fixed, rounding>(
+			::fast_io::chars_format::fixed, rounding>(
 				first, last, value, 0u);
 	}
 	return ::fast_io::details::to_chars_floating_fixed<
-		::std::chars_format::fixed, rounding>(first, last, value);
+		::fast_io::chars_format::fixed, rounding>(first, last, value);
 }
 
 template <::fast_io::manipulators::floating_rounding rounding,
@@ -1648,7 +1648,7 @@ to_chars_floating_standard_shortest(
 			path.
 			*/
 			return ::fast_io::details::to_chars_floating_fixed<
-				::std::chars_format::general, rounding, true>(
+				::fast_io::chars_format::general, rounding, true>(
 					first, last, value);
 		}
 		/*
@@ -1667,7 +1667,7 @@ to_chars_floating_standard_shortest(
 		*/
 		constexpr auto shortest_flags{
 			::fast_io::details::to_chars_floating_flags<
-				::std::chars_format::general, true, rounding>()};
+				::fast_io::chars_format::general, true, rounding>()};
 		auto shortest_source{
 			::fast_io::details::make_floating_scalar_manip<
 				shortest_flags>(value)};
@@ -1710,7 +1710,7 @@ to_chars_floating_standard_shortest(
 			constexpr auto fixed_flags{
 				::fast_io::details::
 					to_chars_floating_precision_flags<
-						::std::chars_format::fixed, rounding>()};
+						::fast_io::chars_format::fixed, rounding>()};
 			auto fixed_source{
 				::fast_io::details::
 					make_floating_scalar_manip_precision<fixed_flags>(
@@ -1730,7 +1730,7 @@ to_chars_floating_standard_shortest(
 				*/
 				return ::fast_io::details::
 					to_chars_floating_precision_fixed<
-						::std::chars_format::fixed, rounding>(
+						::fast_io::chars_format::fixed, rounding>(
 							first, last, value, 0u);
 			}
 		}
@@ -1741,7 +1741,7 @@ to_chars_floating_standard_shortest(
 	winner.  No precision-zero rounding is introduced on this path.
 	*/
 	return ::fast_io::details::to_chars_floating_fixed<
-		::std::chars_format::general, rounding, true>(
+		::fast_io::chars_format::general, rounding, true>(
 			first, last, value);
 }
 
@@ -1880,7 +1880,7 @@ to_chars_floating_subnormal_hex(
 		destination has not been touched.  Returning `last` satisfies the
 		to_chars failure cursor contract.
 		*/
-		return {last, ::std::errc::value_too_large};
+		return {last, ::fast_io::charconv_errc::value_too_large};
 	}
 	/*
 	The preceding inequality proves [first,first+size) is inside the caller's
@@ -1918,7 +1918,7 @@ to_chars_floating_standard_hex(
 	path avoids a duplicate formatter.
 	*/
 	return ::fast_io::details::to_chars_floating_fixed<
-		::std::chars_format::hex, rounding>(first, last, value);
+		::fast_io::chars_format::hex, rounding>(first, last, value);
 }
 
 } // namespace details
@@ -2072,7 +2072,7 @@ to_chars(char_type *first, char_type *last, T value) noexcept
 			{
 				constexpr auto shortest_flags{
 					::fast_io::details::to_chars_floating_flags<
-						::std::chars_format::general, true,
+						::fast_io::chars_format::general, true,
 						rounding>()};
 				using source_type = decltype(
 					::fast_io::details::make_floating_scalar_manip<
@@ -2156,7 +2156,7 @@ template <
 #endif
 inline constexpr ::fast_io::basic_to_chars_result<char_type>
 to_chars(char_type *first, char_type *last, T value,
-		 ::std::chars_format format) noexcept
+		 ::fast_io::chars_format format) noexcept
 {
 	if constexpr (
 		rounding ==
@@ -2202,28 +2202,28 @@ to_chars(char_type *first, char_type *last, T value,
 		which proves semantic equivalence by substitution.
 		*/
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::general)
+			format == ::fast_io::chars_format::general)
 		{
 			return ::fast_io::details::to_chars_floating_fixed<
-				::std::chars_format::general, rounding>(
+				::fast_io::chars_format::general, rounding>(
 				first, last, value);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::scientific)
+			format == ::fast_io::chars_format::scientific)
 		{
 			return ::fast_io::details::to_chars_floating_fixed<
-				::std::chars_format::scientific, rounding>(
+				::fast_io::chars_format::scientific, rounding>(
 				first, last, value);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::fixed)
+			format == ::fast_io::chars_format::fixed)
 		{
 			return ::fast_io::details::
 				to_chars_floating_standard_fixed<rounding>(
 				first, last, value);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::hex)
+			format == ::fast_io::chars_format::hex)
 		{
 			return ::fast_io::details::
 				to_chars_floating_standard_hex<rounding>(
@@ -2237,19 +2237,19 @@ to_chars(char_type *first, char_type *last, T value,
 		General and scientific use their shared carriers directly; fixed and
 		hex add only the exact standard-specific branches proved above.
 		*/
-		case ::std::chars_format::general:
+		case ::fast_io::chars_format::general:
 			return ::fast_io::details::to_chars_floating_fixed<
-				::std::chars_format::general, rounding>(
+				::fast_io::chars_format::general, rounding>(
 				first, last, value);
-		case ::std::chars_format::scientific:
+		case ::fast_io::chars_format::scientific:
 			return ::fast_io::details::to_chars_floating_fixed<
-				::std::chars_format::scientific, rounding>(
+				::fast_io::chars_format::scientific, rounding>(
 				first, last, value);
-		case ::std::chars_format::fixed:
+		case ::fast_io::chars_format::fixed:
 			return ::fast_io::details::
 				to_chars_floating_standard_fixed<rounding>(
 				first, last, value);
-		case ::std::chars_format::hex:
+		case ::fast_io::chars_format::hex:
 			return ::fast_io::details::
 				to_chars_floating_standard_hex<rounding>(
 				first, last, value);
@@ -2258,7 +2258,7 @@ to_chars(char_type *first, char_type *last, T value,
 			No valid grammar corresponds to another bit pattern.  Returning
 			`first` before any formatter call proves zero output mutation.
 			*/
-			return {first, ::std::errc::invalid_argument};
+			return {first, ::fast_io::charconv_errc::invalid_argument};
 		}
 	}
 }
@@ -2275,7 +2275,7 @@ template <
 #endif
 inline constexpr ::fast_io::basic_to_chars_result<char_type>
 to_chars(char_type *first, char_type *last, T value,
-		 ::std::chars_format format, int precision) noexcept
+		 ::fast_io::chars_format format, int precision) noexcept
 {
 	if constexpr (
 		rounding ==
@@ -2315,7 +2315,7 @@ to_chars(char_type *first, char_type *last, T value,
 	{
 		if (precision < 0)
 		{
-			if (format == ::std::chars_format::hex)
+			if (format == ::fast_io::chars_format::hex)
 			{
 				/*
 				A negative runtime precision has the printf meaning "precision
@@ -2355,31 +2355,31 @@ to_chars(char_type *first, char_type *last, T value,
 		only the format branch; it cannot fold or reinterpret the precision.
 		*/
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::general)
+			format == ::fast_io::chars_format::general)
 		{
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::general, rounding>(
+				::fast_io::chars_format::general, rounding>(
 				first, last, value, unsigned_precision);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::scientific)
+			format == ::fast_io::chars_format::scientific)
 		{
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::scientific, rounding>(
+				::fast_io::chars_format::scientific, rounding>(
 				first, last, value, unsigned_precision);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::fixed)
+			format == ::fast_io::chars_format::fixed)
 		{
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::fixed, rounding>(
+				::fast_io::chars_format::fixed, rounding>(
 				first, last, value, unsigned_precision);
 		}
 		if (__builtin_constant_p(format) &&
-			format == ::std::chars_format::hex)
+			format == ::fast_io::chars_format::hex)
 		{
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::hex, rounding>(
+				::fast_io::chars_format::hex, rounding>(
 				first, last, value, unsigned_precision);
 		}
 #endif
@@ -2390,28 +2390,28 @@ to_chars(char_type *first, char_type *last, T value,
 		template format changes only radix, grid definition, and final layout
 		as recorded in to_chars_floating_precision_flags.
 		*/
-		case ::std::chars_format::general:
+		case ::fast_io::chars_format::general:
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::general, rounding>(
+				::fast_io::chars_format::general, rounding>(
 				first, last, value, unsigned_precision);
-		case ::std::chars_format::scientific:
+		case ::fast_io::chars_format::scientific:
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::scientific, rounding>(
+				::fast_io::chars_format::scientific, rounding>(
 				first, last, value, unsigned_precision);
-		case ::std::chars_format::fixed:
+		case ::fast_io::chars_format::fixed:
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::fixed, rounding>(
+				::fast_io::chars_format::fixed, rounding>(
 				first, last, value, unsigned_precision);
-		case ::std::chars_format::hex:
+		case ::fast_io::chars_format::hex:
 			return ::fast_io::details::to_chars_floating_precision_fixed<
-				::std::chars_format::hex, rounding>(
+				::fast_io::chars_format::hex, rounding>(
 				first, last, value, unsigned_precision);
 		default:
 			/*
 			An invalid format reaches no writer.  The failure therefore returns
 			the original cursor and leaves the destination untouched.
 			*/
-			return {first, ::std::errc::invalid_argument};
+			return {first, ::fast_io::charconv_errc::invalid_argument};
 		}
 	}
 }

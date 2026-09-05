@@ -876,7 +876,9 @@ inline void vfork_and_execveat(pid_t &pid, int dirfd, char const *cstr, char con
 	}
 #endif
 
-	t_errno = posix_execveat(dirfd, cstr, args, envp, mode);
+	// `posix_execveat` returns only a nonnegative errno when it returns at all: success replaces the process image.
+	// Make that range proof explicit when publishing the value through the unsigned vfork communication slot.
+	t_errno = static_cast<unsigned>(posix_execveat(dirfd, cstr, args, envp, mode));
 	::fast_io::posix::libc_exit2(127);
 
 	__builtin_unreachable();
@@ -897,7 +899,8 @@ inline pid_t vfork_execveat_common_impl(int dirfd, char const *cstr, char const 
 	if (t_errno)
 	{
 		posix_waitpid(pid);
-		throw_posix_error(t_errno);
+		// POSIX errno values fit in `int`; convert the unsigned shared slot back only after the nonzero publication test.
+		throw_posix_error(static_cast<int>(t_errno));
 	}
 	return pid;
 }

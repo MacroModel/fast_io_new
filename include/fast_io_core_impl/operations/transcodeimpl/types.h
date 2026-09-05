@@ -120,8 +120,57 @@ struct transcoder_ref : ::fast_io::details::transcoder_ref_endpoint_types<T>
 	{}
 };
 
+/** @brief Proves that copies of the built-in transcoder observer are substitutable. */
+template <typename T>
+inline constexpr ::std::true_type transcode_ref_value_transport_safe_define(
+	::fast_io::io_type_t<::fast_io::transcoder_ref<T>>) noexcept
+{
+	// Every copy addresses the same engine; no transform cursor lives in the
+	// observer itself. The separate target-ABI proof still decides whether a
+	// repeated value argument is cheaper than a stable borrow.
+	return {};
+}
+
 namespace operations::defines
 {
+
+/** @brief Detects an explicit semantic proof for repeated transcoder-ref copies. */
+template <typename value_type>
+concept transcode_ref_value_transport_safe = requires {
+	{
+		transcode_ref_value_transport_safe_define(
+			::fast_io::io_type_t<value_type>{})
+	} -> ::std::same_as<::std::true_type>;
+};
+
+/**
+ * @brief Admits value transport only when transcoder identity and ABI cost agree.
+ *
+ * @details A trivial one-word observer may still store mutable transform state
+ *          inline, so size and triviality cannot justify copying it. The ADL
+ *          marker proves substitutability; the shared storable-object proof
+ *          and target envelope exclude hidden construction and indirect
+ *          aggregate lowering. Named adapter observers otherwise stay borrowed.
+ */
+template <typename result_type>
+inline consteval bool abi_value_transcode_ref_result_object() noexcept
+{
+	using result_value_type = ::std::remove_cvref_t<result_type>;
+	if constexpr (!::fast_io::operations::defines::
+					  storable_stream_ref_result_object<result_type>())
+	{
+		return false;
+	}
+	else
+	{
+		return ::fast_io::operations::defines::
+				   transcode_ref_value_transport_safe<result_value_type> &&
+			   ::fast_io::details::
+				   abi_small_trivial_argument_object<result_value_type>() &&
+			   ::std::constructible_from<result_value_type,
+										 result_value_type &>;
+	}
+}
 
 /** @brief Detects an engine-provided observer customization. */
 template <typename T>
@@ -129,11 +178,29 @@ concept has_transcode_ref_define = requires(T &engine) {
 	transcode_ref_define(engine);
 };
 
+/** @brief States the exact exception contract of engine-ref normalization. */
+template <typename T>
+inline constexpr bool transcode_ref_is_nothrow = [] {
+	if constexpr (has_transcode_ref_define<T>)
+	{
+		// The public CPO must mirror the selected ADL expression: declaring this
+		// path unconditionally noexcept would turn a permitted provider failure
+		// into termination before an adapter's guarded boundary can observe it.
+		return noexcept(transcode_ref_define(::std::declval<T &>()));
+	}
+	else
+	{
+		// Constructing the built-in one-pointer observer cannot throw.
+		return true;
+	}
+}();
+
 } // namespace operations::defines
 
 /** @brief Normalizes an engine to its customized or default borrowed observer. */
 template <typename T>
-inline constexpr decltype(auto) transcode_ref(T &engine) noexcept
+inline constexpr decltype(auto) transcode_ref(T &engine) noexcept(
+	::fast_io::operations::defines::transcode_ref_is_nothrow<T>)
 {
 	if constexpr (::fast_io::operations::defines::has_transcode_ref_define<T>)
 	{

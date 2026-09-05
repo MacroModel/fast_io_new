@@ -11,10 +11,12 @@ template <typename T>
 using pr_rsv_named_lvalue_t = ::std::add_lvalue_reference_t<::std::remove_reference_t<T>>;
 
 template <typename T>
-using pr_rsv_alias_result_t = decltype(
-	print_alias_define(::fast_io::io_alias, ::std::declval<T>()));
+using pr_rsv_alias_result_t = decltype(::fast_io::io_print_alias(::std::declval<T>()));
 
 /// @brief Computes the exception contract of the compile-time reserve-size query selected for one source category.
+/// @details An actual alias expression is type-only: `io_print_alias` is never evaluated while computing a static
+///          reserve extent. Its result is nevertheless modeled as the named lvalue used by runtime materialization.
+///          A non-aliased source retains the historical named-parameter model, including immovable rvalues.
 template <::std::integral char_type, typename T>
 inline constexpr bool pr_rsv_size_impl_nothrow = []() constexpr {
 	if constexpr (::fast_io::alias_printable<T>)
@@ -40,8 +42,7 @@ inline constexpr bool pr_rsv_size_impl_nothrow = []() constexpr {
 }();
 
 template <::std::integral char_type, typename T>
-inline constexpr ::std::size_t pr_rsv_size_impl()
-	noexcept(::fast_io::details::pr_rsv_size_impl_nothrow<char_type, T>)
+inline constexpr ::std::size_t pr_rsv_size_impl() noexcept(::fast_io::details::pr_rsv_size_impl_nothrow<char_type, T>)
 {
 	if constexpr (::fast_io::alias_printable<T>)
 	{
@@ -51,6 +52,8 @@ inline constexpr ::std::size_t pr_rsv_size_impl()
 		constexpr bool error{::fast_io::reserve_printable<char_type, alias_expression>};
 		if constexpr (error)
 		{
+			// Static reserve size depends only on the normalized result type. Keeping it in a local constant proves that
+			// querying `pr_rsv_size` does not evaluate a potentially fallible runtime alias customization.
 			constexpr ::std::size_t sz{
 				print_reserve_size(::fast_io::io_reserve_type<char_type, alias_type>)};
 			return sz;
@@ -95,7 +98,7 @@ inline constexpr bool pr_rsv_to_iterator_unchecked_nothrow = []() constexpr {
 		using alias_type = ::std::remove_cvref_t<alias_result>;
 		if constexpr (::fast_io::reserve_printable<char_type, alias_expression>)
 		{
-			return noexcept(print_alias_define(::fast_io::io_alias, ::std::declval<T>())) &&
+			return noexcept(::fast_io::io_print_alias(::std::declval<T>())) &&
 				   noexcept(print_reserve_define(
 					   ::fast_io::io_reserve_type<char_type, alias_type>, ::std::declval<Iter &>(),
 					   ::std::declval<alias_expression>()));
@@ -115,6 +118,43 @@ inline constexpr bool pr_rsv_to_iterator_unchecked_nothrow = []() constexpr {
 	return false;
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies the deterministic error effect of one unchecked reserve materialization transaction.
+/// @details The queried expression matches the executed branch exactly. An actual alias is normalized through the
+///          public CPO, named, and then consumed by the reserve writer; a non-aliased source remains the original named
+///          forwarding parameter and therefore acquires no construction effect. The result is independent from
+///          traditional `noexcept` because Herbceptions use a distinct ABI.
+template <typename Iter, typename T>
+inline constexpr bool pr_rsv_to_iterator_unchecked_herbceptions_may_fail = []() constexpr {
+	using char_type = ::std::iter_value_t<Iter>;
+	if constexpr (::fast_io::alias_printable<T>)
+	{
+		using alias_result = ::fast_io::details::pr_rsv_alias_result_t<T>;
+		using alias_expression = ::fast_io::details::pr_rsv_named_lvalue_t<alias_result>;
+		using alias_type = ::std::remove_cvref_t<alias_result>;
+		if constexpr (::fast_io::reserve_printable<char_type, alias_expression>)
+		{
+			return throws((::fast_io::io_print_alias(::std::declval<T>()))) ||
+				   throws((print_reserve_define(
+					   ::fast_io::io_reserve_type<char_type, alias_type>, ::std::declval<Iter &>(),
+					   ::std::declval<alias_expression>())));
+		}
+	}
+	else
+	{
+		using source_expression = ::fast_io::details::pr_rsv_named_lvalue_t<T>;
+		using source_type = ::std::remove_cvref_t<T>;
+		if constexpr (::fast_io::reserve_printable<char_type, source_expression>)
+		{
+			return throws((print_reserve_define(
+				::fast_io::io_reserve_type<char_type, source_type>, ::std::declval<Iter &>(),
+				::std::declval<source_expression>())));
+		}
+	}
+	return false;
+}();
+#endif
+
 } // namespace details
 
 template <::std::integral char_type, typename T>
@@ -122,13 +162,17 @@ inline constexpr ::std::size_t pr_rsv_size{::fast_io::details::pr_rsv_size_impl<
 
 template <::std::random_access_iterator Iter, typename T>
 inline constexpr Iter pr_rsv_to_iterator_unchecked(Iter it, T &&t)
-	noexcept(::fast_io::details::pr_rsv_to_iterator_unchecked_nothrow<Iter, T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::pr_rsv_to_iterator_unchecked_herbceptions_may_fail<Iter, T>),
+		::fast_io::details::pr_rsv_to_iterator_unchecked_nothrow<Iter, T>)
 {
+	// The declared deterministic effect is the disjunction of alias normalization and reserve emission. Public alias
+	// normalization remains confined to the real-alias branch, while the non-alias branch preserves the historical
+	// named lvalue and therefore introduces neither a construction nor a phase-1 ownership change.
 	using char_type = ::std::iter_value_t<Iter>;
 	if constexpr (::fast_io::alias_printable<T>)
 	{
-		decltype(auto) alias_value =
-			print_alias_define(::fast_io::io_alias, ::std::forward<T>(t));
+		decltype(auto) alias_value = ::fast_io::io_print_alias(::std::forward<T>(t));
 		using alias_expression = decltype((alias_value));
 		using alias_type = ::std::remove_cvref_t<decltype(alias_value)>;
 		constexpr bool error{::fast_io::reserve_printable<char_type, alias_expression>};
@@ -160,10 +204,13 @@ inline constexpr Iter pr_rsv_to_iterator_unchecked(Iter it, T &&t)
 		}
 	}
 }
+
 template <::std::integral char_type, ::std::size_t n, typename T>
 inline constexpr char_type *pr_rsv_to_c_array(char_type (&buffer)[n], T &&t)
-	noexcept(noexcept(::fast_io::pr_rsv_to_iterator_unchecked(
-		::std::declval<char_type *>(), ::std::declval<T>())))
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::pr_rsv_to_iterator_unchecked_herbceptions_may_fail<char_type *, T>),
+		noexcept(::fast_io::pr_rsv_to_iterator_unchecked(
+			::std::declval<char_type *>(), ::std::declval<T>())))
 {
 	constexpr bool error{(::fast_io::pr_rsv_size<char_type, T>) <= n};
 	if constexpr (error)
@@ -181,10 +228,12 @@ inline constexpr char_type *pr_rsv_to_c_array(char_type (&buffer)[n], T &&t)
 // overload disappear on libc++, even though `std::array` was already complete at this point.
 #if defined(_GLIBCXX_ARRAY) || defined(_LIBCPP_ARRAY) || defined(_ARRAY_)
 template <::std::integral char_type, ::std::size_t n, typename T>
-inline constexpr typename ::std::array<char_type, n>::iterator pr_rsv_to_array(::std::array<char_type, n> &buffer,
-																							   T &&t)
-	noexcept(noexcept(::fast_io::pr_rsv_to_iterator_unchecked(
-		::std::declval<char_type *>(), ::std::declval<T>())))
+inline constexpr typename ::std::array<char_type, n>::iterator
+pr_rsv_to_array(::std::array<char_type, n> &buffer, T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::pr_rsv_to_iterator_unchecked_herbceptions_may_fail<char_type *, T>),
+		noexcept(::fast_io::pr_rsv_to_iterator_unchecked(
+			::std::declval<char_type *>(), ::std::declval<T>())))
 {
 	constexpr bool error{(::fast_io::pr_rsv_size<char_type, T>) <= n};
 	if constexpr (error)

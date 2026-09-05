@@ -270,12 +270,20 @@ inline consteval bool has_io_transcode_decos_decay() noexcept
 
 } // namespace defines
 
+/// @brief Builds an input transcode owner while borrowing one normalized source observer.
+/// @details `t` already has lifetime-valid storage in the enclosing normalization operation. The decorator and every
+///          trailing decorator retain their exact incoming categories because an rvalue can become owned state in the
+///          returned filter. A transcode-filter customization must return a self-contained owner: it may copy or consume
+///          resources denoted by `t`, but it must not retain the address of this observer object. Public normalization may
+///          materialize that observer only for this construction call, irrespective of the ABI transport selected above
+///          it. This is the pre-existing public construction protocol, not a new precondition introduced by the borrowed
+///          helper: the historical by-value decay entry already destroyed its observer before returning the same owner.
 template <typename T, typename D, typename... Args>
 	requires(::fast_io::operations::decay::defines::has_input_transcode_decos_decay<T, D, Args...>())
 #if __has_cpp_attribute(nodiscard)
 [[nodiscard]]
 #endif
-inline constexpr auto transcode_input_decos_decay(T &t, D &&deco, Args &&...args)
+inline constexpr auto transcode_input_decos_decay_borrowed(T &t, D &&deco, Args &&...args)
 {
 	if constexpr (::fast_io::operations::decay::defines::has_storable_input_stream_transcode_deco_filter_define<T, D>)
 	{
@@ -309,12 +317,56 @@ inline constexpr auto transcode_input_decos_decay(T &t, D &&deco, Args &&...args
 	}
 }
 
+/// @brief Owns one normalized input observer at the historical decay boundary.
+/// @details The observer alone is transported by value. Decorator references remain forwarding expressions so their
+///          source category reaches the consuming customization exactly once.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_input_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+inline constexpr auto transcode_input_decos_decay(T t, D &&deco, Args &&...args)
+{
+	return ::fast_io::operations::decay::transcode_input_decos_decay_borrowed(
+		t, ::fast_io::freestanding::forward<D>(deco),
+		::fast_io::freestanding::forward<Args>(args)...);
+}
+
+/// @brief Selects value or borrowed transport for a normalized input transcode observer.
+/// @details Size and triviality cannot prove observer substitutability. The value edge is therefore instantiated only
+///          when the observer author supplies the shared stream-reference semantic marker and the target ABI admits its
+///          representation directly. Unmarked, stateful, and noncopyable observers keep their exact identity.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_input_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto transcode_input_decos_decay_dispatch(
+	T &t, D &&deco, Args &&...args)
+{
+	if constexpr (
+		::fast_io::operations::defines::abi_value_stream_ref_result_object<T &>())
+	{
+		return ::fast_io::operations::decay::transcode_input_decos_decay(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::transcode_input_decos_decay_borrowed(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
+	}
+}
+
+/// @brief Builds an output transcode owner while borrowing one normalized source observer.
+/// @details The same source-lifetime and exact decorator-category contract as the input counterpart applies here.
 template <typename T, typename D, typename... Args>
 	requires(::fast_io::operations::decay::defines::has_output_transcode_decos_decay<T, D, Args...>())
 #if __has_cpp_attribute(nodiscard)
 [[nodiscard]]
 #endif
-inline constexpr auto transcode_output_decos_decay(T &t, D &&deco, Args &&...args)
+inline constexpr auto transcode_output_decos_decay_borrowed(T &t, D &&deco, Args &&...args)
 {
 	if constexpr (::fast_io::operations::decay::defines::has_storable_output_stream_transcode_deco_filter_define<T, D>)
 	{
@@ -348,12 +400,53 @@ inline constexpr auto transcode_output_decos_decay(T &t, D &&deco, Args &&...arg
 	}
 }
 
+/// @brief Owns one normalized output observer at the historical decay boundary.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_output_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+inline constexpr auto transcode_output_decos_decay(T t, D &&deco, Args &&...args)
+{
+	return ::fast_io::operations::decay::transcode_output_decos_decay_borrowed(
+		t, ::fast_io::freestanding::forward<D>(deco),
+		::fast_io::freestanding::forward<Args>(args)...);
+}
+
+/// @brief Selects value or borrowed transport for a normalized output transcode observer.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_output_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto transcode_output_decos_decay_dispatch(
+	T &t, D &&deco, Args &&...args)
+{
+	if constexpr (
+		::fast_io::operations::defines::abi_value_stream_ref_result_object<T &>())
+	{
+		return ::fast_io::operations::decay::transcode_output_decos_decay(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::transcode_output_decos_decay_borrowed(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
+	}
+}
+
+/// @brief Builds a bidirectional transcode owner while borrowing one normalized source observer.
+/// @details The same historical construction protocol as the input path applies: the returned owner must remain
+///          independent of the observer object's address. Trailing decorators remain exact forwarding expressions and
+///          are attached only while the returned owner is alive locally.
 template <typename T, typename D, typename... Args>
 	requires(::fast_io::operations::decay::defines::has_io_transcode_decos_decay<T, D, Args...>())
 #if __has_cpp_attribute(nodiscard)
 [[nodiscard]]
 #endif
-inline constexpr auto transcode_io_decos_decay(T &t, D &&deco, Args &&...args)
+inline constexpr auto transcode_io_decos_decay_borrowed(T &t, D &&deco, Args &&...args)
 {
 	if constexpr (sizeof...(Args) == 0)
 	{
@@ -366,6 +459,43 @@ inline constexpr auto transcode_io_decos_decay(T &t, D &&deco, Args &&...args)
 		::fast_io::operations::decay::add_io_decos_decay(
 			ref, ::fast_io::freestanding::forward<Args>(args)...);
 		return newdecof;
+	}
+}
+
+/// @brief Owns one normalized bidirectional observer at the historical decay boundary.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_io_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+inline constexpr auto transcode_io_decos_decay(T t, D &&deco, Args &&...args)
+{
+	return ::fast_io::operations::decay::transcode_io_decos_decay_borrowed(
+		t, ::fast_io::freestanding::forward<D>(deco),
+		::fast_io::freestanding::forward<Args>(args)...);
+}
+
+/// @brief Selects value or borrowed transport for a normalized bidirectional transcode observer.
+template <typename T, typename D, typename... Args>
+	requires(::fast_io::operations::decay::defines::has_io_transcode_decos_decay<T, D, Args...>())
+#if __has_cpp_attribute(nodiscard)
+[[nodiscard]]
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr auto transcode_io_decos_decay_dispatch(
+	T &t, D &&deco, Args &&...args)
+{
+	if constexpr (
+		::fast_io::operations::defines::abi_value_stream_ref_result_object<T &>())
+	{
+		return ::fast_io::operations::decay::transcode_io_decos_decay(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
+	}
+	else
+	{
+		return ::fast_io::operations::decay::transcode_io_decos_decay_borrowed(
+			t, ::fast_io::freestanding::forward<D>(deco),
+			::fast_io::freestanding::forward<Args>(args)...);
 	}
 }
 
@@ -610,7 +740,7 @@ inline constexpr auto transcode_input_decos(T &&t, Deco &&d, Args &&...args)
 {
 	decltype(auto) ref = ::fast_io::operations::input_stream_transcode_deco_filter_ref(
 		::fast_io::freestanding::forward<T>(t));
-	return ::fast_io::operations::decay::transcode_input_decos_decay(
+	return ::fast_io::operations::decay::transcode_input_decos_decay_dispatch(
 		ref, ::fast_io::freestanding::forward<Deco>(d), ::fast_io::freestanding::forward<Args>(args)...);
 }
 
@@ -629,7 +759,7 @@ inline constexpr auto transcode_output_decos(T &&t, Deco &&d, Args &&...args)
 {
 	decltype(auto) ref = ::fast_io::operations::output_stream_transcode_deco_filter_ref(
 		::fast_io::freestanding::forward<T>(t));
-	return ::fast_io::operations::decay::transcode_output_decos_decay(
+	return ::fast_io::operations::decay::transcode_output_decos_decay_dispatch(
 		ref, ::fast_io::freestanding::forward<Deco>(d), ::fast_io::freestanding::forward<Args>(args)...);
 }
 
@@ -648,7 +778,7 @@ inline constexpr auto transcode_io_decos(T &&t, Deco &&d, Args &&...args)
 {
 	decltype(auto) ref = ::fast_io::operations::io_stream_transcode_deco_filter_ref(
 		::fast_io::freestanding::forward<T>(t));
-	return ::fast_io::operations::decay::transcode_io_decos_decay(
+	return ::fast_io::operations::decay::transcode_io_decos_decay_dispatch(
 		ref, ::fast_io::freestanding::forward<Deco>(d), ::fast_io::freestanding::forward<Args>(args)...);
 }
 

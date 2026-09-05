@@ -71,6 +71,7 @@
 
 #include "fast_io_core_impl/alias.h"
 #include "fast_io_core_impl/pr_rsv.h"
+#include "fast_io_core_impl/io_print_source.h"
 
 #include "fast_io_core_impl/secure_clear_guard.h"
 #include "fast_io_core_impl/local_new_array_ptr.h"

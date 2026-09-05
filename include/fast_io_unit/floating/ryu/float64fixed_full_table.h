@@ -138,7 +138,14 @@ inline constexpr ::std::size_t public_table_alignment{16u};
 // domain.  The resulting block-count formula is bounded by 36.
 constexpr ::std::size_t first_table_group_size(::std::size_t index) noexcept
 {
-	return (((16u * index * 1292913986u) >> 32u) + 25u) / 9u;
+	// Keep the fixed-point product at least 64 bits wide. On 32-bit targets size_t is commonly unsigned int, so allowing
+	// the usual arithmetic conversions to select that type would both wrap the product and make the 32-bit shift invalid.
+	auto const scaled{
+		(static_cast<::std::uint_least64_t>(16u) *
+		 static_cast<::std::uint_least64_t>(index) *
+		 static_cast<::std::uint_least64_t>(1292913986u)) >>
+		32u};
+	return static_cast<::std::size_t>((scaled + 25u) / 9u);
 }
 
 constexpr ::std::size_t first_table_generated_size() noexcept

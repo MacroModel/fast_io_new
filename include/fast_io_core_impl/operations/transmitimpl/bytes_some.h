@@ -19,7 +19,7 @@ namespace details
 /** @brief Copies up to a requested byte count and reports actual progress. */
 template <typename optstmtype, typename instmtype>
 inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype &optstm, instmtype &instm,
-																		 ::fast_io::uintfpos_t needtransmit)
+																	 ::fast_io::uintfpos_t needtransmit)
 {
 	if (needtransmit == 0u)
 	{
@@ -60,13 +60,13 @@ inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype 
 			this_round = static_cast<::std::size_t>(totransmit);
 		}
 		::std::byte *iter{
-			::fast_io::operations::decay::read_some_bytes_decay(instm, buffer_start, buffer_start + this_round)};
+			::fast_io::operations::decay::read_some_bytes_decay_dispatch(instm, buffer_start, buffer_start + this_round)};
 		if (iter == buffer_start)
 		{
 			// A zero-length read ends this partial transfer without forcing EOF.
 			break;
 		}
-		::fast_io::operations::decay::write_all_bytes_decay(optstm, buffer_start, iter);
+		::fast_io::operations::decay::write_all_bytes_decay_dispatch(optstm, buffer_start, iter);
 		totransmit -= static_cast<::std::size_t>(iter - buffer_start);
 	}
 	return needtransmit - totransmit;
@@ -80,11 +80,11 @@ namespace operations
 namespace decay
 {
 
-/** @brief Applies mutex recursion before a bounded partial byte transfer. */
+/** @brief Borrows stable observers while applying partial-byte mutex recursion. */
 template <typename optstmtype, typename instmtype>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
-inline constexpr decltype(auto) transmit_bytes_some_decay(optstmtype &&optstm, instmtype &&instm,
-														  ::fast_io::uintfpos_t totransmit)
+inline constexpr decltype(auto) transmit_bytes_some_decay_borrowed(optstmtype &optstm, instmtype &instm,
+																   ::fast_io::uintfpos_t totransmit)
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
 	using input_observer_type = ::std::remove_cvref_t<instmtype>;
@@ -107,7 +107,7 @@ inline constexpr decltype(auto) transmit_bytes_some_decay(optstmtype &&optstm, i
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
 		decltype(auto) unlocked_output{
 			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm)};
-		return ::fast_io::operations::decay::transmit_bytes_some_decay(unlocked_output, instm, totransmit);
+		return ::fast_io::operations::decay::transmit_bytes_some_decay_borrowed(unlocked_output, instm, totransmit);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<
 						   input_observer_type>)
@@ -116,13 +116,36 @@ inline constexpr decltype(auto) transmit_bytes_some_decay(optstmtype &&optstm, i
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
-		return ::fast_io::operations::decay::transmit_bytes_some_decay(optstm, unlocked_input, totransmit);
+		return ::fast_io::operations::decay::transmit_bytes_some_decay_borrowed(optstm, unlocked_input, totransmit);
 	}
 	else
 	{
 		// Execute the generic partial byte loop on unlocked observers.
 		return ::fast_io::details::transmit_bytes_some_main_impl(optstm, instm, totransmit);
 	}
+}
+
+/** @brief Owns both observers at the historical partial-byte value boundary. */
+template <typename optstmtype, typename instmtype>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
+inline constexpr decltype(auto) transmit_bytes_some_decay(optstmtype optstm, instmtype instm,
+														  ::fast_io::uintfpos_t totransmit)
+{
+	// This signature, unlike a forwarding reference, gives small explicit owners
+	// their native aggregate argument class before the borrowed algorithm begins.
+	return ::fast_io::operations::decay::transmit_bytes_some_decay_borrowed(optstm, instm, totransmit);
+}
+
+/** @brief Independently selects value or borrowed byte-stream transport. */
+template <typename optstmtype, typename instmtype>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_bytes_some_decay_dispatch(optstmtype &optstm, instmtype &instm,
+								   ::fast_io::uintfpos_t totransmit)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_count_dispatch<
+		&::fast_io::operations::decay::transmit_bytes_some_decay_borrowed<optstmtype, instmtype>>(
+		optstm, instm, totransmit);
 }
 
 } // namespace decay
@@ -135,7 +158,8 @@ inline constexpr decltype(auto) transmit_bytes_some(optstmtype &&optstm, instmty
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
-		return ::fast_io::operations::decay::transmit_bytes_some_decay(output_observer, input_observer, totransmit);
+		return ::fast_io::operations::decay::transmit_bytes_some_decay_dispatch(output_observer, input_observer,
+																				totransmit);
 	});
 }
 

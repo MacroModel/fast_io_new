@@ -384,6 +384,14 @@ inline
 template <::std::input_iterator input_iter, ::std::input_or_output_iterator output_iter>
 inline constexpr output_iter non_overlapped_copy_n(input_iter first, ::std::size_t count, output_iter result)
 {
+	if (count == 0u) [[unlikely]]
+	{
+		// A zero-length copy has no iterator-domain precondition. In particular, a
+		// lazy buffer may represent its empty cursor with nullptr; returning the
+		// unchanged iterator avoids both a library call with null operands and the
+		// otherwise undefined built-in `nullptr += 0` operation.
+		return result;
+	}
 
 	if (__builtin_is_constant_evaluated())
 	{
@@ -399,11 +407,8 @@ inline constexpr output_iter non_overlapped_copy_n(input_iter first, ::std::size
 					  (::std::same_as<input_value_type, output_value_type> ||
 					   ((::std::integral<input_value_type> || ::std::same_as<::std::byte, input_value_type>) && (::std::integral<output_value_type> || ::std::same_as<::std::byte, output_value_type>) && sizeof(input_value_type) == sizeof(output_value_type))))
 		{
-			if (count) // to avoid nullptr UB
-			{
-				my_memcpy(::std::to_address(result), ::std::to_address(first),
-						  sizeof(::std::iter_value_t<input_iter>) * count);
-			}
+			my_memcpy(::std::to_address(result), ::std::to_address(first),
+					  sizeof(::std::iter_value_t<input_iter>) * count);
 			return result += count;
 		}
 		else
@@ -420,6 +425,15 @@ inline constexpr output_iter non_overlapped_copy_n(input_iter first, ::std::size
 template <::std::input_iterator input_iter, ::std::input_or_output_iterator output_iter>
 inline constexpr output_iter non_overlapped_copy(input_iter first, input_iter last, output_iter result)
 {
+	if (first == last) [[unlikely]]
+	{
+		// Equality proves that the source range contains no element and gives the
+		// copy operation no iterator-domain precondition. Returning the destination
+		// unchanged before either subtraction or advancement is therefore required
+		// for lazy buffers whose canonical empty range is {nullptr,nullptr}.
+		return result;
+	}
+
 	if (__builtin_is_constant_evaluated())
 	{
 		return ::fast_io::freestanding::copy(first, last, result);

@@ -15,6 +15,12 @@ namespace fast_io
 
 namespace details
 {
+
+// Positioned scalarization preserves descriptor order and one CPO call per descriptor. In particular, a null-empty
+// descriptor contributes zero to the explicit offset but is represented by the shared stable typed anchor before a
+// scalar provider sees it. This is representation normalization only: nonempty ranges and named empty bases retain
+// their original provenance, and the status/offset recurrence is unchanged.
+
 template <typename outstmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
@@ -81,7 +87,8 @@ inline constexpr io_scatter_status_t scatter_pwrite_some_typed_at_byte_offset_co
 		::std::byte const *const end{reinterpret_cast<::std::byte const *>(range.last)};
 		::std::byte const *written{
 			::fast_io::details::pwrite_some_bytes_impl(outsm, base, end, byte_offset)};
-		::std::ptrdiff_t const byte_difference{written - base};
+		::std::ptrdiff_t const byte_difference{
+			::fast_io::details::output_pointer_distance(base, written)};
 		byte_offset = ::fast_io::fposoffadd_nonegative(byte_offset, byte_difference);
 		::std::size_t const partial_bytes{
 			static_cast<::std::size_t>(byte_difference) % sizeof(char_type)};
@@ -91,7 +98,10 @@ inline constexpr io_scatter_status_t scatter_pwrite_some_typed_at_byte_offset_co
 		{
 			::std::size_t const remaining_bytes{sizeof(char_type) - partial_bytes};
 			::fast_io::details::pwrite_all_bytes_impl(
-				outsm, written, written + remaining_bytes, byte_offset);
+				outsm, written,
+				::fast_io::details::output_pointer_advance(
+					written, remaining_bytes),
+				byte_offset);
 			byte_offset = ::fast_io::fposoffadd_nonegative(byte_offset, remaining_bytes);
 			++typed_progress;
 		}
@@ -167,7 +177,9 @@ scatter_pwrite_some_cold_impl(outstmtype &outsm,
 			auto [base, len] = pscatters[i];
 			auto const range{::fast_io::details::scatter_to_scalar_range(base, len)};
 			auto written{::fast_io::details::pwrite_some_impl(outsm, range.first, range.last, off)};
-			::std::size_t sz{static_cast<::std::size_t>(written - range.first)};
+			::std::size_t const sz{
+				::fast_io::details::output_pointer_range_size(
+					range.first, written)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -230,7 +242,7 @@ scatter_pwrite_some_impl(outstmtype &outsm, basic_io_scatter_t<typename outstmty
 	{
 		if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_buffer_flush_define<outstmtype>)
 		{
-			::fast_io::operations::decay::output_stream_buffer_flush_decay(outsm);
+			::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(outsm);
 		}
 		return ::fast_io::details::scatter_pwrite_some_cold_impl(outsm, pscatters, n, off);
 	}
@@ -288,7 +300,14 @@ scatter_pwrite_all_cold_impl(outstmtype &outsm,
 			if (pisc)
 			{
 				auto pi = pscatters[ret.position];
-				::fast_io::details::pwrite_all_impl(outsm, pi.base + pisc, pi.base + pi.len, off);
+				auto const range{
+					::fast_io::details::scatter_to_scalar_range(
+						pi.base, pi.len)};
+				::fast_io::details::pwrite_all_impl(
+					outsm,
+					::fast_io::details::output_pointer_advance(
+						range.first, pisc),
+					range.last, off);
 				off = ::fast_io::fposoffadd_nonegative(off, pi.len - pisc);
 				++retpos;
 			}
@@ -358,7 +377,7 @@ scatter_pwrite_all_impl(outstmtype &outsm, basic_io_scatter_t<typename outstmtyp
 	{
 		if constexpr (::fast_io::operations::decay::defines::has_output_or_io_stream_buffer_flush_define<outstmtype>)
 		{
-			::fast_io::operations::decay::output_stream_buffer_flush_decay(outsm);
+			::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(outsm);
 		}
 		return ::fast_io::details::scatter_pwrite_all_cold_impl(outsm, pscatters, n, off);
 	}

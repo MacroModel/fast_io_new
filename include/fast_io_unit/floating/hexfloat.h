@@ -747,7 +747,11 @@ inline constexpr void scan_hexfloat_append_ascii8(state_type &state, bool after_
 		{
 			return;
 		}
-		significant_digits -= ::std::countr_zero(nonzero_high) >> 3u;
+		// `countr_zero` returns a signed `int`, but a nonzero 64-bit lane mask proves a result in [0, 63]. Convert the
+		// bounded byte count explicitly before subtracting from the unsigned digit counter; this preserves the arithmetic
+		// domain and prevents strict Clang builds from diagnosing an implicit sign conversion.
+		significant_digits -= static_cast<::std::uint_least64_t>(
+			::std::countr_zero(nonzero_high) >> 3u);
 		state.has_nonzero_digit = true;
 	}
 	state.significant_hex_digits += static_cast<::std::int_least64_t>(significant_digits);

@@ -91,7 +91,7 @@ inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype
 		if (controller_first == controller_last)
 		{
 			// A same-block range reduces to one contiguous typed write.
-			::fast_io::operations::decay::write_all_decay(outsm, firstblock_curr, lastblock_curr);
+			::fast_io::operations::decay::write_all_decay_dispatch(outsm, firstblock_curr, lastblock_curr);
 			return;
 		}
 		using scattertype = ::std::conditional_t<hasbytesop, io_scatter_t, basic_io_scatter_t<output_char_type>>;
@@ -113,12 +113,12 @@ inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype
 				if constexpr (hasbytesop)
 				{
 					// Byte-capable outputs consume descriptor lengths in bytes.
-					::fast_io::operations::decay::scatter_write_all_bytes_decay(outsm, scatters, scatternum);
+					::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(outsm, scatters, scatternum);
 				}
 				else
 				{
 					// Typed-only outputs consume descriptors in output units.
-					::fast_io::operations::decay::scatter_write_all_decay(outsm, scatters, scatternum);
+					::fast_io::operations::decay::scatter_write_all_decay_dispatch(outsm, scatters, scatternum);
 				}
 				scatterit = scatters;
 			}
@@ -129,14 +129,14 @@ inline constexpr void write_all_iterator_decay_multiblock_common_impl(outstmtype
 		if constexpr (hasbytesop)
 		{
 			// Flush the final partial descriptor batch through byte dispatch.
-			::fast_io::operations::decay::scatter_write_all_bytes_decay(
+			::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 				outsm, scatters, static_cast<::std::size_t>(scatterit - scatters));
 		}
 		else
 		{
 			// Flush the final partial descriptor batch through typed dispatch.
-			::fast_io::operations::decay::scatter_write_all_decay(outsm, scatters,
-																  static_cast<::std::size_t>(scatterit - scatters));
+			::fast_io::operations::decay::scatter_write_all_decay_dispatch(outsm, scatters,
+																		   static_cast<::std::size_t>(scatterit - scatters));
 		}
 	}
 	else
@@ -237,11 +237,11 @@ inline constexpr void write_all_iterator_decay_borrowed_impl(outstmtype &outsm, 
 						::fast_io::details::bytes_copy_punning_impl(first, last, buffer, buffer + bfsz)};
 					if constexpr (use_typed_operations)
 					{
-						::fast_io::operations::decay::write_all_decay(outsm, buffer, toiter);
+						::fast_io::operations::decay::write_all_decay_dispatch(outsm, buffer, toiter);
 					}
 					else
 					{
-						::fast_io::operations::decay::write_all_bytes_decay(outsm, buffer, toiter);
+						::fast_io::operations::decay::write_all_bytes_decay_dispatch(outsm, buffer, toiter);
 					}
 				}
 			}
@@ -256,7 +256,7 @@ inline constexpr void write_all_iterator_decay_borrowed_impl(outstmtype &outsm, 
 						{
 							// Matching values use a one-element typed write directly.
 							auto firstaddr{::std::addressof(source)};
-							::fast_io::operations::decay::write_all_decay(outsm, firstaddr, firstaddr + 1);
+							::fast_io::operations::decay::write_all_decay_dispatch(outsm, firstaddr, firstaddr + 1);
 						}
 						else
 						{
@@ -271,13 +271,13 @@ inline constexpr void write_all_iterator_decay_borrowed_impl(outstmtype &outsm, 
 							auto operation_last{reinterpret_cast<type_const_ptr>(firstaddr + 1)};
 							if constexpr (use_typed_operations)
 							{
-								::fast_io::operations::decay::write_all_decay(outsm, operation_first,
-																			  operation_last);
+								::fast_io::operations::decay::write_all_decay_dispatch(outsm, operation_first,
+																					   operation_last);
 							}
 							else
 							{
-								::fast_io::operations::decay::write_all_bytes_decay(outsm, operation_first,
-																					operation_last);
+								::fast_io::operations::decay::write_all_bytes_decay_dispatch(outsm, operation_first,
+																							 operation_last);
 							}
 						}
 					};
@@ -318,17 +318,35 @@ inline constexpr void write_all_iterator_decay_impl(outstmtype &outsm, Iter firs
 namespace operations::decay
 {
 
-/** @brief Writes a normalized range through contiguous or iterator dispatch. */
-template <typename outstmtype, ::std::ranges::input_range rg>
-	requires((::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<
-				  ::std::remove_cvref_t<outstmtype>> ||
-			  (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
-				   ::std::remove_cvref_t<outstmtype>> &&
-			   (sizeof(::std::ranges::range_value_t<rg>) %
-					sizeof(typename ::std::remove_cvref_t<outstmtype>::output_char_type) ==
-				0))) &&
-			 ::fast_io::freestanding::is_trivially_copyable_or_relocatable_v<::std::ranges::range_value_t<rg>>)
-inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
+/// @brief Shares the complete output/range admission proof across all three transport entries.
+/// @details Factoring this predicate keeps owner, borrow, and ABI dispatch as parameter-form choices over one operation;
+///          no entry can accidentally accept a different byte/typed representation or iterator value category.
+template <typename outstmtype, typename rg>
+concept write_all_range_decay_compatible =
+	::std::ranges::input_range<rg> &&
+	((::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_bytes_operations<
+		  ::std::remove_cvref_t<outstmtype>> ||
+	  (::fast_io::operations::decay::defines::has_any_of_write_or_seek_pwrite_operations<
+		   ::std::remove_cvref_t<outstmtype>> &&
+	   (sizeof(::std::ranges::range_value_t<rg>) %
+			sizeof(typename ::std::remove_cvref_t<outstmtype>::output_char_type) ==
+		0))) &&
+	 ::fast_io::freestanding::is_trivially_copyable_or_relocatable_v<
+		 ::std::ranges::range_value_t<rg>>);
+
+/**
+ * @brief Writes a normalized range while borrowing one stable output observer.
+ *
+ * @details Range value-category forwarding is independent from stream
+ *          transport. The range expression is consumed synchronously, while
+ *          mutex recursion and every terminal write observe this exact output
+ *          object. Keeping the algorithm behind an explicitly borrowed name
+ *          prevents an unlocked observer from reopening a value-copy edge.
+ */
+template <typename outstmtype, typename rg>
+	requires ::fast_io::operations::decay::write_all_range_decay_compatible<
+		outstmtype, rg>
+inline constexpr void write_all_range_decay_borrowed_output(outstmtype &outsm, rg &&r)
 {
 	using normalized_outstmtype = ::std::remove_cvref_t<outstmtype>;
 	using output_char_type = typename normalized_outstmtype::output_char_type;
@@ -346,7 +364,7 @@ inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 			if constexpr (::std::same_as<rgvlt, output_char_type>)
 			{
 				// Matching range values use their native contiguous pointers.
-				::fast_io::operations::decay::write_all_decay(outsm, firstptr, lastptr);
+				::fast_io::operations::decay::write_all_decay_dispatch(outsm, firstptr, lastptr);
 			}
 			else
 			{
@@ -358,7 +376,7 @@ inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 					= output_char_type const *;
 				auto firstptrbt{reinterpret_cast<type_const_ptr>(firstptr)};
 				auto lastptrbt{reinterpret_cast<type_const_ptr>(lastptr)};
-				::fast_io::operations::decay::write_all_decay(outsm, firstptrbt, lastptrbt);
+				::fast_io::operations::decay::write_all_decay_dispatch(outsm, firstptrbt, lastptrbt);
 			}
 		}
 		else
@@ -366,13 +384,56 @@ inline constexpr void write_all_range_decay(outstmtype &&outsm, rg &&r)
 			// Fall back to explicit byte dispatch for opaque representations.
 			auto firstptrbt{reinterpret_cast<::std::byte const *>(firstptr)};
 			auto lastptrbt{reinterpret_cast<::std::byte const *>(lastptr)};
-			::fast_io::operations::decay::write_all_bytes_decay(outsm, firstptrbt, lastptrbt);
+			::fast_io::operations::decay::write_all_bytes_decay_dispatch(outsm, firstptrbt, lastptrbt);
 		}
 	}
 	else
 	{
 		// Non-contiguous ranges are lowered through the iterator implementation.
 		::fast_io::details::write_all_iterator_decay_impl(outsm, ::std::ranges::cbegin(r), ::std::ranges::cend(r));
+	}
+}
+
+/**
+ * @brief Owns the normalized output observer at the historical decay boundary.
+ *
+ * @details A genuine value parameter preserves the target aggregate ABI for
+ *          explicit low-level calls. The range retains its incoming category,
+ *          and the complete algorithm immediately borrows this one owner.
+ */
+template <typename outstmtype, typename rg>
+	requires ::fast_io::operations::decay::write_all_range_decay_compatible<
+		outstmtype, rg>
+inline constexpr void write_all_range_decay(outstmtype outsm, rg &&r)
+{
+	::fast_io::operations::decay::write_all_range_decay_borrowed_output(
+		outsm, ::std::forward<rg>(r));
+}
+
+/**
+ * @brief Selects value or borrowed output transport without changing the range.
+ *
+ * @details The semantic substitution marker and the target ABI policy must
+ *          both approve a value copy. Otherwise the named public observer is
+ *          passed by reference, preserving inline cursor identity.
+ */
+template <typename outstmtype, typename rg>
+	requires ::fast_io::operations::decay::write_all_range_decay_compatible<
+		outstmtype, rg>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+write_all_range_decay_dispatch(outstmtype &outsm, rg &&r)
+{
+	if constexpr (
+		::fast_io::operations::defines::abi_value_output_stream_ref_result<
+			outstmtype &>)
+	{
+		::fast_io::operations::decay::write_all_range_decay(
+			outsm, ::std::forward<rg>(r));
+	}
+	else
+	{
+		::fast_io::operations::decay::write_all_range_decay_borrowed_output(
+			outsm, ::std::forward<rg>(r));
 	}
 }
 
@@ -392,7 +453,8 @@ inline constexpr void write_all_range(outstmtype &&outstm, R &&r)
 {
 	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
 	::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		::fast_io::operations::decay::write_all_range_decay(outsm, ::std::forward<R>(r));
+		::fast_io::operations::decay::write_all_range_decay_dispatch(
+			outsm, ::std::forward<R>(r));
 	});
 }
 

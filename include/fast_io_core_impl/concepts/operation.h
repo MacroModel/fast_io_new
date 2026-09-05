@@ -62,6 +62,8 @@ concept contiguous_range_with_padding = requires(::std::remove_cvref_t<T> const 
 	{
 		contiguous_range_padding_size(range)
 	} noexcept -> ::std::same_as<::std::size_t>;
+	// Padding participates in speculative reads, so neither an unwind nor a deterministic error may escape its query.
+	requires FAST_IO_HERBCEPTIONS_NOTHROWS(contiguous_range_padding_size(range));
 };
 
 /// @brief    contiguous_scannable
@@ -582,6 +584,9 @@ concept protocol = ::std::integral<char_type> && requires(
 			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>,
 			value, maximum_size)
 	} noexcept -> ::std::same_as<::std::size_t>;
+	// A failure would be indistinguishable from the SIZE_MAX sentinel consumed by both print and concat.
+	requires FAST_IO_HERBCEPTIONS_NOTHROWS(single_pass_bounded_materialization_size(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value, maximum_size));
 };
 
 template <typename char_type, typename T>
@@ -689,11 +694,15 @@ concept compiler_constant_printable =
 			print_compiler_constant_materialization_eligible(
 				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
 		} noexcept -> ::std::same_as<bool>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_compiler_constant_materialization_eligible(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value));
 		{
 			print_compiler_constant_materialize(
 				::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
 		} noexcept -> ::std::same_as<
 			::fast_io::details::compiler_constant_materialized_t<char_type, T>>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_compiler_constant_materialize(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value));
 	} && reserve_printable<char_type,
 							 ::fast_io::details::compiler_constant_materialized_t<char_type, T>> &&
 	::std::is_nothrow_destructible_v<
@@ -715,6 +724,12 @@ concept compiler_constant_printable =
 					::fast_io::details::compiler_constant_materialized_t<char_type, T>>,
 				iter, materialized)
 		} noexcept -> ::std::same_as<char_type *>;
+		// The speculative constant arm may be discarded; admitting either failure channel would change program effects.
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_reserve_define(
+			::fast_io::io_reserve_type<
+				char_type,
+				::fast_io::details::compiler_constant_materialized_t<char_type, T>>,
+			iter, materialized));
 	};
 
 /// @brief Default materializer for a compiler-constant eligibility gate which core has already observed as true.
@@ -920,6 +935,9 @@ concept compiler_constant_static_fragment_printable =
 				first, value)
 		} noexcept -> ::std::same_as<
 			::fast_io::basic_io_scatter_t<char_type> *>;
+		// Fragment discovery is a strategy proof and cannot publish a recoverable failure to its caller.
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_compiler_constant_static_fragments_define(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, first, value));
 	} &&
 	(print_compiler_constant_static_fragments_size(
 		 ::fast_io::io_reserve_type<char_type,
@@ -1092,10 +1110,20 @@ inline consteval bool staged_printable_state_object_impl() noexcept
 	}
 	else
 	{
-		return ::std::default_initializable<value_type> &&
-			   ::std::is_nothrow_default_constructible_v<value_type> &&
-			   ::std::assignable_from<value_type &, value_type> &&
-			   ::std::is_nothrow_assignable_v<value_type &, value_type>;
+		constexpr bool traditional_nothrow{
+			::std::default_initializable<value_type> &&
+			::std::is_nothrow_default_constructible_v<value_type> &&
+			::std::assignable_from<value_type &, value_type> &&
+			::std::is_nothrow_assignable_v<value_type &, value_type>};
+#if defined(__HERBCEPTIONS__)
+		// The standard nothrow traits observe only unwinding. Staged array construction and assignment occur inside a
+		// no-failure region, so a deterministic constructor/assignment channel must independently be absent as well.
+		return traditional_nothrow &&
+			   !::std::is_herbceptions_throws_constructible_v<value_type> &&
+			   !::std::is_herbceptions_throws_assignable_v<value_type &, value_type>;
+#else
+		return traditional_nothrow;
+#endif
 	}
 }
 
@@ -1155,22 +1183,30 @@ concept staged_printable =
 		{
 			print_staged_type(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} noexcept;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+			print_staged_type(io_reserve_type<char_type, ::std::remove_cvref_t<T>>));
 		requires ::fast_io::details::staged_printable_state_object_impl<
 			::fast_io::details::staged_printable_state_t<char_type, T>>();
 		{
 			print_staged_width(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} noexcept -> ::std::same_as<::std::size_t>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+			print_staged_width(io_reserve_type<char_type, ::std::remove_cvref_t<T>>));
 		typename ::std::integral_constant<::std::size_t, print_staged_width(
 														 io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
 		requires(print_staged_width(io_reserve_type<char_type, ::std::remove_cvref_t<T>>) != 0u);
 		{
 			print_staged_fallback_inline(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} noexcept -> ::std::same_as<bool>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+			print_staged_fallback_inline(io_reserve_type<char_type, ::std::remove_cvref_t<T>>));
 		typename ::std::integral_constant<bool, print_staged_fallback_inline(
 										 io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
 		{
 			print_staged_max_count(io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} noexcept -> ::std::same_as<::std::size_t>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+			print_staged_max_count(io_reserve_type<char_type, ::std::remove_cvref_t<T>>));
 		typename ::std::integral_constant<::std::size_t, print_staged_max_count(
 											  io_reserve_type<char_type, ::std::remove_cvref_t<T>>)>;
 		requires(print_staged_max_count(io_reserve_type<char_type, ::std::remove_cvref_t<T>>) >=
@@ -1179,12 +1215,19 @@ concept staged_printable =
 			{
 				print_staged_eligible(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t)
 			} noexcept -> ::std::same_as<bool>;
+			requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+				print_staged_eligible(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t));
 			{
 				print_staged_prepare(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t)
 			} noexcept -> ::std::same_as<::fast_io::details::staged_printable_state_t<char_type, T>>;
+			requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+				print_staged_prepare(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, t));
 			{
 				print_staged_define(io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, t, state)
 			} noexcept -> ::std::same_as<char_type *>;
+			// Prepared state is emitted inside a no-failure scheduling region; inspect both exception mechanisms.
+			requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_staged_define(
+				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, t, state));
 		};
 	};
 
@@ -1571,11 +1614,11 @@ concept precise_reserve_printable =
 /// @brief Refines exact reserve formatting with a non-throwing, pointer-reporting emission expression.
 /// @details Exact size alone is not sufficient inside a C++23 overwrite callback: an exception escaping the callback
 ///          does not have the ordinary concat strategy's simple partially-constructed-result contract. This concept
-///          therefore tests the concrete named-lvalue expression used after phase-1 decay and requires the language
-///          `noexcept` operator to prove it. Requiring the exact `char_type*` result also lets the caller validate that
-///          the producer ended at its promised extent before the destination publishes that extent. Void-returning
-///          precise producers remain valid `precise_reserve_printable`s, but deliberately stay on the established
-///          strategy until a separate non-throwing endpoint proof exists for them.
+///          therefore tests the concrete named-lvalue expression used after phase-1 decay and requires both the
+///          traditional `noexcept` result and the absence of a Herbception channel. Requiring the exact `char_type*`
+///          result also lets the caller validate that the producer ended at its promised extent before the destination
+///          publishes that extent. Void-returning precise producers remain valid `precise_reserve_printable`s, but
+///          deliberately stay on the established strategy until a separate non-failing endpoint proof exists for them.
 template <typename char_type, typename T>
 concept nothrow_precise_reserve_printable =
 	::std::integral<char_type> && precise_reserve_printable<char_type, T> &&
@@ -1584,6 +1627,9 @@ concept nothrow_precise_reserve_printable =
 			print_reserve_precise_define(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, n, value)
 		} noexcept -> ::std::same_as<char_type *>;
+		// C++23 overwrite callbacks cannot carry either fast_io-supported failure channel across their ABI boundary.
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_reserve_precise_define(
+			io_reserve_type<char_type, ::std::remove_cvref_t<T>>, ptr, n, value));
 	};
 
 /// @brief Classifies a materialized compiler-constant proxy with one bounded integer conversion leaf.
@@ -1634,6 +1680,8 @@ concept compiler_constant_precise_compact_preferred =
 					::std::remove_cvref_t<T>>,
 				value)
 		} noexcept -> ::std::same_as<::std::size_t>;
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value));
 	};
 
 /// @brief Exposes a complete compiler-constant spelling when it is one provider-owned immutable fragment.
@@ -1653,6 +1701,9 @@ concept compiler_constant_single_static_fragment_printable =
 				value)
 		} noexcept -> ::std::same_as<
 			::fast_io::basic_io_scatter_t<char_type>>;
+		// The probe selects an immutable shortcut and must not hide a deterministic failure behind traditional noexcept.
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_compiler_constant_single_static_fragment(
+			::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value));
 	};
 
 /// @brief Marks an exact-size producer for which preinitializing the destination is a material cost.
@@ -1949,6 +2000,9 @@ concept cached_precise_reserve_printable =
 			print_reserve_precise_size(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value)
 		} noexcept -> ::std::same_as<::std::size_t>;
+		// Cached means repeatable and non-failing through both the unwind and Herbception channels.
+		requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_reserve_precise_size(
+			io_reserve_type<char_type, ::std::remove_cvref_t<T>>, value));
 	};
 
 /// @brief Proves that growing an output destination cannot invalidate a precise producer's source representation.
@@ -3131,6 +3185,27 @@ template <typename value_type>
 using parameter_const_member_reference_t =
 	decltype((::std::declval<::fast_io::parameter<value_type> const &>().reference));
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies the deterministic effect of an exact-size query delegated through `parameter`.
+/// @details `member_reference` is the precise expression type of `wrapper.reference`; keeping it independent from the
+///          wrapper's storage type makes mutable and const adapters query the same overload that their bodies invoke.
+template <::std::integral char_type, typename value_type, typename member_reference>
+inline constexpr bool parameter_precise_size_herbceptions_may_fail = throws((
+	print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
+		::std::declval<member_reference>())));
+
+/// @brief Classifies the deterministic effect of precise emission delegated through `parameter`.
+/// @details The iterator and extent are named parameters in the public adapter, hence lvalues in the executed call.
+///          Modeling those categories here includes any provider-defined argument conversion in the ABI decision.
+template <::std::integral char_type, typename value_type, typename Iter, typename member_reference>
+inline constexpr bool parameter_precise_define_herbceptions_may_fail = throws((
+	print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
+		::std::declval<Iter &>(), ::std::declval<::std::size_t &>(),
+		::std::declval<member_reference>())));
+#endif
+
 } // namespace details
 
 /// @brief Declares the reference-owning `parameter` transport safe to copy at a scan dispatch boundary.
@@ -3407,11 +3482,16 @@ template <::std::integral char_type, typename value_type>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_precise_size(io_reserve_type_t<char_type, parameter<value_type>>,
-														  parameter<value_type> &para) noexcept(noexcept(
-	print_reserve_precise_size(
-		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
-		para.reference)))
+														  parameter<value_type> &para)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::parameter_precise_size_herbceptions_may_fail<
+			char_type, value_type,
+			::fast_io::details::parameter_mutable_member_reference_t<value_type>>),
+		noexcept(print_reserve_precise_size(
+			io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference)))
 {
+	// The wrapper has exactly the child's deterministic effect and traditional exception specification. The member is
+	// evaluated as the same named lvalue in both this declaration proof and the delegated call below.
 	return print_reserve_precise_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
 
@@ -3420,13 +3500,16 @@ template <::std::integral char_type, typename value_type>
 	requires precise_reserve_printable<
 		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_precise_size(io_reserve_type_t<char_type, parameter<value_type>>,
-														  parameter<value_type> const &para) noexcept(noexcept(
-	print_reserve_precise_size(
-		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>,
-		para.reference)))
+														  parameter<value_type> const &para)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::parameter_precise_size_herbceptions_may_fail<
+			char_type, value_type,
+			::fast_io::details::parameter_const_member_reference_t<value_type>>),
+		noexcept(print_reserve_precise_size(
+			io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference)))
 {
-	// Exact sizing is permitted to update logically-const caches, but it must do so in the caller's object. Borrowing
-	// the const member supplies that identity proof and makes the later exact define phase observe the same cache.
+	// Exact sizing may update a logically-const cache, so the const member is borrowed from the caller's object. The
+	// declaration and body consequently preserve both object identity and the child's complete failure contract.
 	return print_reserve_precise_size(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, para.reference);
 }
 
@@ -3445,17 +3528,16 @@ template <::std::integral char_type, typename value_type, typename Iter>
 		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
-								 parameter<value_type> &para)
-	noexcept(noexcept(print_reserve_precise_define(
-		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
+							 parameter<value_type> &para)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::parameter_precise_define_herbceptions_may_fail<
+			char_type, value_type, Iter,
+			::fast_io::details::parameter_mutable_member_reference_t<value_type>>),
+		noexcept(print_reserve_precise_define(
+			io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
 {
-	// Preserve the wrapped customization's return type and value category. Some precise writers return the actual
-	// end pointer; discarding it in this transparent manipulator would break higher-level composition even though the
-	// characters themselves were emitted correctly. The conditional exception specification mirrors the full delegated
-	// call expression, including any conversion into an
-	// underlying by-value parameter. That last point is the parameter-transport proof required by an overwrite callback;
-	// inspecting only the callee's declared specification would miss a throwing copy performed before the callee is
-	// entered.
+	// Preserve the exact endpoint type and value category. The formal effect predicate mirrors the complete named-call
+	// expression, including any conversion into a provider-owned by-value parameter before the callee is entered.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }
@@ -3466,14 +3548,16 @@ template <::std::integral char_type, typename value_type, typename Iter>
 		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
 inline constexpr decltype(auto)
 print_reserve_precise_define(io_reserve_type_t<char_type, parameter<value_type>>, Iter begin, ::std::size_t n,
-								 parameter<value_type> const &para)
-	noexcept(noexcept(print_reserve_precise_define(
-		io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
+							 parameter<value_type> const &para)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::parameter_precise_define_herbceptions_may_fail<
+			char_type, value_type, Iter,
+			::fast_io::details::parameter_const_member_reference_t<value_type>>),
+		noexcept(print_reserve_precise_define(
+			io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n, para.reference)))
 {
-	// Preserve both the formatter's identity and its precise writer's return type. A pointer result is an actual cursor,
-	// not metadata that the transparent wrapper may replace with `begin + n`; a void result retains its distinct exact-
-	// extent contract in the caller. The complete-expression exception proof mirrors the mutable adapter so const
-	// transport cannot silently discard a throwing conversion which its underlying formatter requires.
+	// Const transport changes neither the selected child overload nor its complete failure contract. Returning
+	// `decltype(auto)` also prevents the transparent wrapper from materializing an endpoint reference result.
 	return print_reserve_precise_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, n,
 										para.reference);
 }

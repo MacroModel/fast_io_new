@@ -1777,6 +1777,48 @@ inline constexpr ::std::true_type concat_context_staging_preferred(
 	return {};
 }
 
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+/// @brief Selects ordered concat staging for long neutral-protocol packs on the measured native fast_io string.
+/// @details A default native string starts without writable capacity. When an unretained scatter splits an otherwise
+///          coalescible pack, direct dispatch grows that result through several leaf boundaries; concat's two-KiB inline
+///          buffer instead consumes the same CPO sequence without allocation and range-constructs the completed value
+///          once. Seven leaves is the first measured profitable cardinality on Apple M4/Clang 23. The native allocator
+///          restriction excludes user allocation/ADL policy, and concat keeps directly grouped reserve/borrowed-scatter
+///          packs out of this path so their one-reserve strategy is not replaced by an extra copy.
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 (::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			  ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>))
+[[nodiscard]] inline constexpr ::std::size_t concat_ordered_staging_minimum_leaf_count(
+	::fast_io::io_strlike_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	return 7u;
+}
+
+/// @brief Certifies one-way ordered-staging promotion into an audited native fast_io string.
+/// @details The native string starts empty, owns any reserved allocation, preserves its published prefix on growth, and
+///          exposes that allocation through its three direct cursor CPOs. Copying the bounded staging prefix and then
+///          continuing the current write is therefore byte-equivalent to final range construction without replaying or
+///          retaining a source CPO result. The marker also accepts direct-output exception ordering: an allocation
+///          failure during promotion may suppress later stateful producers, while the private partial destination is
+///          destroyed and never returned. No associated output hook observes the temporarily unpublished logical end
+///          while concat caches the native cursor triple. Its destructor uses only begin/end allocation ownership and
+///          never inspects the old terminator, so a source exception remains safe after raw output replaced that
+///          terminator but before cursor publication. Native allocator and target restrictions exclude user allocation
+///          and ADL policies from this semantic and cost proof.
+template <::std::integral char_type, typename allocator_type>
+	requires(::std::same_as<char_type, char> &&
+			 (::std::same_as<allocator_type, ::fast_io::native_global_allocator> ||
+			  ::std::same_as<allocator_type, ::fast_io::native_thread_local_allocator>))
+[[nodiscard]] inline constexpr ::std::true_type
+concat_ordered_staging_adaptive_promotion_safe(
+	::fast_io::io_strlike_type_t<char_type, basic_string<char_type, allocator_type>>) noexcept
+{
+	return {};
+}
+#endif
+
 template <::std::integral chtype, typename alloctype>
 inline constexpr ::fast_io::io_strlike_reference_wrapper<chtype, basic_string<chtype, alloctype>> io_strlike_ref(::fast_io::io_alias_t, basic_string<chtype, alloctype> &str) noexcept
 {

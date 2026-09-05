@@ -165,9 +165,12 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype
 		{
 			auto [baseb, len] = pscatters[i];
 			::std::byte *base{reinterpret_cast<::std::byte *>(const_cast<void *>(baseb))};
-			auto ed{base + len};
-			auto written{::fast_io::details::read_some_bytes_impl(insm, base, ed)};
-			::std::size_t sz{static_cast<::std::size_t>(written - base)};
+			auto const range{
+				::fast_io::details::scatter_to_input_scalar_range(base, len)};
+			auto written{::fast_io::details::read_some_bytes_impl(
+				insm, range.first, range.last)};
+			::std::size_t const sz{
+				::fast_io::details::input_pointer_range_size(range.first, written)};
 			if (sz != len)
 			{
 				return {i, sz};
@@ -192,12 +195,12 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype
 					   (::fast_io::operations::decay::defines::has_any_of_pread_bytes_operations<instmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(insm, 0, ::fast_io::seekdir::cur)};
 		auto ret{scatter_pread_some_bytes_cold_impl(insm, pscatters, n, current_position)};
 		// Byte seek and byte-pread concepts share one coordinate, while status semantically proves a prefix of the
 		// submitted writable ranges. Reading at the queried origin and advancing by that checked prefix exactly simulates
 		// sequential scatter input without exposing positional I/O's unchanged cursor.
-		::fast_io::operations::decay::input_stream_seek_bytes_decay(
+		::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, ret), ::fast_io::seekdir::cur);
 		return ret;
 	}
@@ -206,13 +209,13 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_cold_impl(instmtype
 					   (::fast_io::operations::decay::defines::has_any_of_pread_operations<instmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::input_stream_seek_decay(insm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::input_stream_seek_decay_dispatch(insm, 0, ::fast_io::seekdir::cur)};
 		auto ret{::fast_io::details::scatter_pread_some_bytes_via_typed_cold_impl(
 			insm, pscatters, n, current_position)};
 		// One-byte character width proves equality of byte and typed coordinates and descriptor extents. The typed pread
 		// status over member-wise converted descriptors is therefore also a valid byte-prefix proof, so the final seek
 		// publishes exactly initialized input progress without a layout-aliasing assumption.
-		::fast_io::operations::decay::input_stream_seek_decay(insm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
+		::fast_io::operations::decay::input_stream_seek_decay_dispatch(insm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
 															  ::fast_io::seekdir::cur);
 		return ret;
 	}
@@ -248,7 +251,8 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_impl(instmtype &ins
 		auto curr{ibuffer_curr(insm)};
 		auto ed{ibuffer_end(insm)};
 
-		::std::size_t buffptrdiff{static_cast<::std::size_t>(ed - curr)};
+		::std::size_t buffptrdiff{
+			::fast_io::details::ibuffer_remaining_size(curr, ed)};
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
 		{
@@ -265,7 +269,7 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_impl(instmtype &ins
 					= char_type *;
 				::fast_io::details::non_overlapped_copy_n(
 					curr, len, reinterpret_cast<char_type_ptr>(const_cast<void *>(base)));
-				curr += len;
+				curr = ::fast_io::details::input_pointer_advance(curr, len);
 				buffptrdiff -= len;
 			}
 			else
@@ -287,6 +291,12 @@ inline constexpr io_scatter_status_t scatter_read_some_bytes_impl(instmtype &ins
 	}
 	else
 	{
+		if constexpr (
+			::fast_io::details::abi_value_direct_scatter_read_some_bytes<instmtype>)
+		{
+			return ::fast_io::details::scatter_read_some_bytes_abi_value_direct_impl(
+				insm, pscatters, n);
+		}
 		return ::fast_io::details::scatter_read_some_bytes_cold_impl(insm, pscatters, n);
 	}
 }
@@ -318,7 +328,10 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 		{
 			auto [basep, len] = *i;
 			::std::byte *base{reinterpret_cast<::std::byte *>(const_cast<void *>(basep))};
-			::fast_io::details::read_all_bytes_impl(insm, base, base + len);
+			auto const range{
+				::fast_io::details::scatter_to_input_scalar_range(base, len)};
+			::fast_io::details::read_all_bytes_impl(
+				insm, range.first, range.last);
 		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_scatter_read_some_bytes_underflow_define<instmtype>)
@@ -353,7 +366,10 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 		{
 			auto [basep, len] = *i;
 			::std::byte *base{reinterpret_cast<::std::byte *>(const_cast<void *>(basep))};
-			::fast_io::details::read_all_bytes_impl(insm, base, base + len);
+			auto const range{
+				::fast_io::details::scatter_to_input_scalar_range(base, len)};
+			::fast_io::details::read_all_bytes_impl(
+				insm, range.first, range.last);
 		}
 	}
 	else if constexpr (sizeof(char_type) == 1 &&
@@ -367,11 +383,11 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 					   (::fast_io::operations::decay::defines::has_any_of_pread_bytes_operations<instmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::input_stream_seek_bytes_decay(insm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(insm, 0, ::fast_io::seekdir::cur)};
 		scatter_pread_all_bytes_cold_impl(insm, pscatters, n, current_position);
 		// Byte all-pread completion proves every destination byte initialized from the queried origin while leaving the
 		// stream cursor unchanged. The complete checked scatter extent is consequently the exact sequential advance.
-		::fast_io::operations::decay::input_stream_seek_bytes_decay(
+		::fast_io::operations::decay::input_stream_seek_bytes_decay_dispatch(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
 	else if constexpr (sizeof(char_type) == 1 &&
@@ -379,13 +395,13 @@ inline constexpr void scatter_read_all_bytes_cold_impl(instmtype &insm, io_scatt
 					   (::fast_io::operations::decay::defines::has_any_of_pread_operations<instmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::input_stream_seek_decay(insm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::input_stream_seek_decay_dispatch(insm, 0, ::fast_io::seekdir::cur)};
 		::fast_io::details::scatter_pread_all_bytes_via_typed_cold_impl(
 			insm, pscatters, n, current_position);
 		// With one-byte characters, the typed positional all-contract initializes precisely the byte descriptor ranges at
 		// the queried character origin. Member-wise conversion proves descriptor typing; positional input does not move
 		// current position, so advancing by the complete scatter extent reconstructs the sequential operation.
-		::fast_io::operations::decay::input_stream_seek_decay(
+		::fast_io::operations::decay::input_stream_seek_decay_dispatch(
 			insm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
 }
@@ -419,7 +435,8 @@ inline constexpr void scatter_read_all_bytes_impl(instmtype &insm, io_scatter_t 
 		auto curr{ibuffer_curr(insm)};
 		auto ed{ibuffer_end(insm)};
 
-		::std::size_t buffptrdiff{static_cast<::std::size_t>(ed - curr)};
+		::std::size_t buffptrdiff{
+			::fast_io::details::ibuffer_remaining_size(curr, ed)};
 
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
@@ -437,7 +454,7 @@ inline constexpr void scatter_read_all_bytes_impl(instmtype &insm, io_scatter_t 
 					= char_type *;
 				::fast_io::details::non_overlapped_copy_n(
 					curr, len, reinterpret_cast<char_type_ptr>(const_cast<void *>(base)));
-				curr += len;
+				curr = ::fast_io::details::input_pointer_advance(curr, len);
 				buffptrdiff -= len;
 			}
 			else
@@ -456,6 +473,15 @@ inline constexpr void scatter_read_all_bytes_impl(instmtype &insm, io_scatter_t 
 	}
 	else
 	{
+		if constexpr (
+			!::fast_io::operations::decay::defines::has_read_all_bytes_underflow_define<instmtype> &&
+			!::fast_io::operations::decay::defines::has_scatter_read_all_bytes_underflow_define<instmtype> &&
+			::fast_io::details::abi_value_direct_scatter_read_some_bytes<instmtype> &&
+			::fast_io::details::abi_value_direct_read_some_bytes<instmtype>)
+		{
+			return ::fast_io::details::scatter_read_all_bytes_abi_value_direct_impl(
+				insm, pscatters, n);
+		}
 		return ::fast_io::details::scatter_read_all_bytes_cold_impl(insm, pscatters, n);
 	}
 }

@@ -147,7 +147,7 @@ inline allocation_file_loader_ret allocation_load_address_options_impl(int fd,
 	auto addr_cap{addr == nullptr ? nullptr : addr + capacity};
 	if (filesize)
 	{
-		::fast_io::operations::decay::read_all_bytes_decay(piob, reinterpret_cast<::std::byte *>(addr),
+		::fast_io::operations::decay::read_all_bytes_decay_dispatch(piob, reinterpret_cast<::std::byte *>(addr),
 														   reinterpret_cast<::std::byte *>(addr_ed));
 	}
 	if (options.padding_mode == ::fast_io::file_loader_padding_mode::zero && options.extra_bytes)

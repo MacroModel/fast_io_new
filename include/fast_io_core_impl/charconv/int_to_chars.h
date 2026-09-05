@@ -8,25 +8,6 @@ namespace details
 {
 
 template <::fast_io::details::character char_type>
-struct basic_to_chars_result_impl
-{
-	char_type *ptr;
-	::std::errc ec;
-};
-
-} // namespace details
-
-template <::fast_io::details::character char_type>
-using basic_to_chars_result = ::std::conditional_t<
-	::std::same_as<char_type, char>, ::std::to_chars_result,
-	::fast_io::details::basic_to_chars_result_impl<char_type>>;
-
-using to_chars_result = ::fast_io::basic_to_chars_result<char>;
-
-namespace details
-{
-
-template <::fast_io::details::character char_type>
 inline consteval auto generate_to_chars_runtime_digits() noexcept
 {
 	::fast_io::freestanding::array<char_type, 36u> table;
@@ -210,7 +191,7 @@ to_chars_integral_checked(char_type *first, char_type *last, U value, bool negat
 	::std::size_t const length{digits + static_cast<::std::size_t>(negative)};
 	if (static_cast<::std::size_t>(last - first) < length) [[unlikely]]
 	{
-		return {last, ::std::errc::value_too_large};
+		return {last, ::fast_io::charconv_errc::value_too_large};
 	}
 	if (negative)
 	{
@@ -443,7 +424,7 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 	{
 		if (available < sign_size + 1u) [[unlikely]]
 		{
-			return {last, ::std::errc::value_too_large};
+			return {last, ::fast_io::charconv_errc::value_too_large};
 		}
 		if (negative)
 		{
@@ -481,7 +462,7 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 		::std::size_t const length{digits + sign_size};
 		if (available < length) [[unlikely]]
 		{
-			return {last, ::std::errc::value_too_large};
+			return {last, ::fast_io::charconv_errc::value_too_large};
 		}
 		char_type *const result{first + length};
 		char_type *iter{result};
@@ -647,7 +628,7 @@ to_chars_integral_runtime_base_compact(char_type *first, char_type *last, U valu
 	::std::size_t const length{digits + sign_size};
 	if (available < length) [[unlikely]]
 	{
-		return {last, ::std::errc::value_too_large};
+		return {last, ::fast_io::charconv_errc::value_too_large};
 	}
 	char_type *const result{first + length};
 	char_type *iter{result};

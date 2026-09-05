@@ -1,28 +1,7 @@
 #pragma once
 
-#include <charconv>
-
 namespace fast_io
 {
-
-namespace details
-{
-
-template <::fast_io::details::character char_type>
-struct basic_from_chars_result_impl
-{
-	char_type const *ptr;
-	::std::errc ec;
-};
-
-} // namespace details
-
-template <::fast_io::details::character char_type>
-using basic_from_chars_result = ::std::conditional_t<
-	::std::same_as<char_type, char>, ::std::from_chars_result,
-	::fast_io::details::basic_from_chars_result_impl<char_type>>;
-
-using from_chars_result = ::fast_io::basic_from_chars_result<char>;
 
 namespace details
 {
@@ -95,15 +74,15 @@ from_chars_integral_map_result(::fast_io::parse_result<char_type const *> result
 	}
 	if (result.code == ::fast_io::parse_code::overflow)
 	{
-		return {result.iter, ::std::errc::result_out_of_range};
+		return {result.iter, ::fast_io::charconv_errc::result_out_of_range};
 	}
 	if constexpr (signed_integer)
 	{
-		return {original_first, ::std::errc::invalid_argument};
+		return {original_first, ::fast_io::charconv_errc::invalid_argument};
 	}
 	else
 	{
-		return {result.iter, ::std::errc::invalid_argument};
+		return {result.iter, ::fast_io::charconv_errc::invalid_argument};
 	}
 }
 
@@ -215,7 +194,7 @@ from_chars_integral_fixed_base(char_type const *first, char_type const *last, T 
 			{
 				if (digits == 0u) [[unlikely]]
 				{
-					return {first, ::std::errc::invalid_argument};
+					return {first, ::fast_io::charconv_errc::invalid_argument};
 				}
 				value = static_cast<T>(accumulator);
 				return {iter, {}};
@@ -441,11 +420,11 @@ from_chars_integral_runtime_base_compact(char_type const *first,
 	}
 	if (!any_digit) [[unlikely]]
 	{
-		return {original_first, ::std::errc::invalid_argument};
+		return {original_first, ::fast_io::charconv_errc::invalid_argument};
 	}
 	if (overflow) [[unlikely]]
 	{
-		return {first, ::std::errc::result_out_of_range};
+		return {first, ::fast_io::charconv_errc::result_out_of_range};
 	}
 	if constexpr (::fast_io::details::my_signed_integral<T>)
 	{
@@ -607,11 +586,11 @@ from_chars_integral_gcc_literal_mid_base_compact(char_type const *first,
 	}
 	if (digits == 0u) [[unlikely]]
 	{
-		return {original_first, ::std::errc::invalid_argument};
+		return {original_first, ::fast_io::charconv_errc::invalid_argument};
 	}
 	if (overflow) [[unlikely]]
 	{
-		return {first, ::std::errc::result_out_of_range};
+		return {first, ::fast_io::charconv_errc::result_out_of_range};
 	}
 	if constexpr (::fast_io::details::my_signed_integral<T>)
 	{
@@ -744,11 +723,11 @@ from_chars_integral_gcc_mid_base_compact(char_type const *first,
 	}
 	if (result.code == ::fast_io::parse_code::invalid) [[unlikely]]
 	{
-		return {original_first, ::std::errc::invalid_argument};
+		return {original_first, ::fast_io::charconv_errc::invalid_argument};
 	}
 	if (result.code == ::fast_io::parse_code::overflow) [[unlikely]]
 	{
-		return {result.iter, ::std::errc::result_out_of_range};
+		return {result.iter, ::fast_io::charconv_errc::result_out_of_range};
 	}
 	if constexpr (::fast_io::details::my_signed_integral<T>)
 	{

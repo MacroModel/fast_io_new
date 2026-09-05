@@ -692,6 +692,25 @@ public:
 	}
 };
 
+/**
+ * @brief Proves that an NT handle observer is substitutable under value transport.
+ * @details The observer contains one non-owning handle value. NT stream
+ *          primitives mutate state owned by the referenced kernel object and do
+ *          not publish progress through the observer's `handle` member. A copy
+ *          therefore denotes the same stream state without duplicating or
+ *          transferring handle ownership. The proof is deliberately unavailable
+ *          to adapters and buffers that maintain an object-local cursor.
+ */
+template <::fast_io::nt_family family, ::std::integral ch_type>
+	requires(family == ::fast_io::nt_family::nt ||
+			 family == ::fast_io::nt_family::zw)
+inline constexpr ::std::true_type stream_ref_value_transport_safe_define(
+	::fast_io::io_type_t<
+		::fast_io::basic_nt_family_io_observer<family, ch_type>>) noexcept
+{
+	return {};
+}
+
 template <nt_family family, ::std::integral ch_type>
 inline ::std::byte *read_some_bytes_underflow_define(basic_nt_family_io_observer<family, ch_type> niob,
 													 ::std::byte *first, ::std::byte *last)

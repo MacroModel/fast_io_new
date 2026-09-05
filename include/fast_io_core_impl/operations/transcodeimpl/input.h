@@ -327,7 +327,7 @@ public:
 						public_buffer, minimum,
 						traits_type::public_buffer_size);
 					auto result{
-						::fast_io::operations::decay::transcode_process_decay(
+						::fast_io::operations::decay::transcode_process_decay_dispatch(
 							engine_ref, source.first, source.last,
 							public_buffer.buffer_begin,
 							public_buffer.buffer_capacity_end)};
@@ -340,23 +340,28 @@ public:
 						::fast_io::throw_transcode_stream_error(
 							::fast_io::transcode_stream_errc::protocol_violation);
 					}
-					if (result.to_next < public_buffer.buffer_begin ||
-						result.to_next > public_buffer.buffer_capacity_end)
+					auto const validated_to{
+						::fast_io::details::validate_transcode_closed_range_offsets(
+							public_buffer.buffer_begin,
+							public_buffer.buffer_capacity_end, result.to_next)};
+					if (!validated_to.valid) [[unlikely]]
 					{
-						// The produced cursor must stay inside the public destination.
+						// Prove the provider cursor's integer offset before any progress
+						// comparison or installation into adapter-owned state.
 						::fast_io::throw_transcode_stream_error(
 							::fast_io::transcode_stream_errc::protocol_violation);
 					}
+					auto const validated_from{
+						::fast_io::details::commit_transcode_source(
+							inref, source_buffer, source, result.from_next)};
 					bool const made_progress{
-						result.from_next != source.first ||
-						result.to_next != public_buffer.buffer_begin};
-					::fast_io::details::commit_transcode_source(
-						inref, source_buffer, source, result.from_next);
+						validated_from != source.first ||
+						validated_to.current_offset != 0u};
 					public_buffer.buffer_curr = public_buffer.buffer_begin;
-					public_buffer.buffer_end = result.to_next;
+					public_buffer.buffer_end = validated_to.current;
 					if (result.status ==
 							::fast_io::transcode_step_status::need_input &&
-						result.from_next != source.last)
+						validated_from != source.last)
 					{
 						// Need-input must account for the complete prepared source range.
 						::fast_io::throw_transcode_stream_error(
@@ -388,7 +393,7 @@ public:
 				allocator_type, traits_type::secure_clear>(
 				public_buffer, minimum, traits_type::public_buffer_size);
 			auto result{
-				::fast_io::operations::decay::transcode_finish_decay(
+				::fast_io::operations::decay::transcode_finish_decay_dispatch(
 					engine_ref, public_buffer.buffer_begin,
 					public_buffer.buffer_capacity_end)};
 			if (result.status != ::fast_io::transcode_drain_status::complete &&
@@ -399,17 +404,20 @@ public:
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			if (result.to_next < public_buffer.buffer_begin ||
-				result.to_next > public_buffer.buffer_capacity_end)
+			auto const validated_to{
+				::fast_io::details::validate_transcode_closed_range_offsets(
+					public_buffer.buffer_begin,
+					public_buffer.buffer_capacity_end, result.to_next)};
+			if (!validated_to.valid) [[unlikely]]
 			{
-				// Terminal output must stay inside the supplied public buffer.
+				// Terminal output crosses the same untrusted engine boundary and
+				// therefore obeys the identical closed-range offset proof.
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			bool const made_progress{
-				result.to_next != public_buffer.buffer_begin};
+			bool const made_progress{validated_to.current_offset != 0u};
 			public_buffer.buffer_curr = public_buffer.buffer_begin;
-			public_buffer.buffer_end = result.to_next;
+			public_buffer.buffer_end = validated_to.current;
 			if (result.status == ::fast_io::transcode_drain_status::complete)
 			{
 				// Record terminal engine completion even if output still awaits reading.
@@ -467,7 +475,7 @@ public:
 						transform_buffer, minimum,
 						traits_type::transform_buffer_size);
 					auto result{
-						::fast_io::operations::decay::transcode_process_decay(
+						::fast_io::operations::decay::transcode_process_decay_dispatch(
 							engine_ref, source.first, source.last,
 							transform_buffer.buffer_begin,
 							transform_buffer.buffer_capacity_end)};
@@ -480,24 +488,29 @@ public:
 						::fast_io::throw_transcode_stream_error(
 							::fast_io::transcode_stream_errc::protocol_violation);
 					}
-					if (result.to_next < transform_buffer.buffer_begin ||
-						result.to_next > transform_buffer.buffer_capacity_end)
+					auto const validated_to{
+						::fast_io::details::validate_transcode_closed_range_offsets(
+							transform_buffer.buffer_begin,
+							transform_buffer.buffer_capacity_end, result.to_next)};
+					if (!validated_to.valid) [[unlikely]]
 					{
-						// Reject output cursors escaping the transformed scratch range.
+						// Validate the raw destination cursor without evaluating an
+						// unrelated-pointer comparison supplied by the engine.
 						::fast_io::throw_transcode_stream_error(
 							::fast_io::transcode_stream_errc::protocol_violation);
 					}
+					auto const validated_from{
+						::fast_io::details::commit_transcode_source(
+							inref, source_buffer, source, result.from_next)};
 					bool const made_progress{
-						result.from_next != source.first ||
-						result.to_next != transform_buffer.buffer_begin};
-					::fast_io::details::commit_transcode_source(
-						inref, source_buffer, source, result.from_next);
+						validated_from != source.first ||
+						validated_to.current_offset != 0u};
 					transform_buffer.buffer_curr =
 						transform_buffer.buffer_begin;
-					transform_buffer.buffer_end = result.to_next;
+					transform_buffer.buffer_end = validated_to.current;
 					if (result.status ==
 							::fast_io::transcode_step_status::need_input &&
-						result.from_next != source.last)
+						validated_from != source.last)
 					{
 						// Need-input is valid only after consuming the supplied source.
 						::fast_io::throw_transcode_stream_error(
@@ -531,7 +544,7 @@ public:
 				transform_buffer, minimum,
 				traits_type::transform_buffer_size);
 			auto result{
-				::fast_io::operations::decay::transcode_finish_decay(
+				::fast_io::operations::decay::transcode_finish_decay_dispatch(
 					engine_ref, transform_buffer.buffer_begin,
 					transform_buffer.buffer_capacity_end)};
 			if (result.status != ::fast_io::transcode_drain_status::complete &&
@@ -542,17 +555,20 @@ public:
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			if (result.to_next < transform_buffer.buffer_begin ||
-				result.to_next > transform_buffer.buffer_capacity_end)
+			auto const validated_to{
+				::fast_io::details::validate_transcode_closed_range_offsets(
+					transform_buffer.buffer_begin,
+					transform_buffer.buffer_capacity_end, result.to_next)};
+			if (!validated_to.valid) [[unlikely]]
 			{
-				// Reject terminal output cursors outside transformed scratch.
+				// Reject terminal cursors before they become persistent adapter
+				// state; successful cursors are rebuilt from the owned base.
 				::fast_io::throw_transcode_stream_error(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
-			bool const made_progress{
-				result.to_next != transform_buffer.buffer_begin};
+			bool const made_progress{validated_to.current_offset != 0u};
 			transform_buffer.buffer_curr = transform_buffer.buffer_begin;
-			transform_buffer.buffer_end = result.to_next;
+			transform_buffer.buffer_end = validated_to.current;
 			if (result.status == ::fast_io::transcode_drain_status::complete)
 			{
 				// Remember finish completion while preserving any produced raw bytes.

@@ -212,6 +212,170 @@ concept has_output_or_io_stream_ref_define =
 	::fast_io::operations::defines::has_output_stream_ref_define<T> ||
 	::fast_io::operations::defines::has_output_compatible_io_stream_ref_define<T>;
 
+/// @brief Classifies the traditional exception effect of input stream-reference normalization.
+/// @details The query models the selected CPO and, for every non-borrowed category, the exact one-time owner
+///          construction. This is the second half of the conditional error contract: `throws(false)` is permitted only
+///          when this proof and the independent deterministic-channel proof are both false/no-failure respectively.
+template <typename T>
+inline constexpr bool input_stream_ref_nothrow = []() constexpr {
+	if constexpr (::fast_io::operations::defines::has_input_stream_ref_define<T>)
+	{
+		using result_type = decltype(input_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return noexcept(input_stream_ref_define(::std::declval<T>()));
+		}
+		else
+		{
+			return noexcept(::std::remove_cvref_t<result_type>(
+				input_stream_ref_define(::std::declval<T>())));
+		}
+	}
+	else
+	{
+		using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return noexcept(io_stream_ref_define(::std::declval<T>()));
+		}
+		else
+		{
+			return noexcept(::std::remove_cvref_t<result_type>(
+				io_stream_ref_define(::std::declval<T>())));
+		}
+	}
+}();
+
+/// @brief Output-direction counterpart of `input_stream_ref_nothrow`.
+/// @details A reference result is queried as the reference-returning call itself; an owned result includes its explicit
+///          materialization. Keeping those cases separate prevents an ABI policy from introducing a diagnostic-only
+///          copy or from declaring a legacy-throwing projection `throws(false)`.
+template <typename T>
+inline constexpr bool output_stream_ref_nothrow = []() constexpr {
+	if constexpr (::fast_io::operations::defines::has_output_stream_ref_define<T>)
+	{
+		using result_type = decltype(output_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return noexcept(output_stream_ref_define(::std::declval<T>()));
+		}
+		else
+		{
+			return noexcept(::std::remove_cvref_t<result_type>(
+				output_stream_ref_define(::std::declval<T>())));
+		}
+	}
+	else
+	{
+		using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return noexcept(io_stream_ref_define(::std::declval<T>()));
+		}
+		else
+		{
+			return noexcept(::std::remove_cvref_t<result_type>(
+				io_stream_ref_define(::std::declval<T>())));
+		}
+	}
+}();
+
+/// @brief Classifies both the projection and ownership construction of a joint input/output reference.
+template <typename T>
+inline constexpr bool io_stream_ref_nothrow = []() constexpr {
+	using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+	if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+	{
+		return noexcept(io_stream_ref_define(::std::declval<T>()));
+	}
+	else
+	{
+		return noexcept(::std::remove_cvref_t<result_type>(
+			io_stream_ref_define(::std::declval<T>())));
+	}
+}();
+
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies the deterministic effect of a directional stream-reference normalization transaction.
+/// @details The full materialization expression is queried for owned results so the CPO and its one required
+///          construction cannot disagree about the selected ABI. A mutable lvalue result instead remains the exact
+///          borrowed reference; the error discriminator is orthogonal to that success-value identity and is therefore
+///          propagated by the conditional throws specification without imposing an ownership construction.
+template <typename T>
+inline constexpr bool input_stream_ref_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::operations::defines::has_input_stream_ref_define<T>)
+	{
+		using result_type = decltype(input_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return throws((input_stream_ref_define(::std::declval<T>())));
+		}
+		else
+		{
+			return throws((::std::remove_cvref_t<result_type>(
+				input_stream_ref_define(::std::declval<T>()))));
+		}
+	}
+	else
+	{
+		using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return throws((io_stream_ref_define(::std::declval<T>())));
+		}
+		else
+		{
+			return throws((::std::remove_cvref_t<result_type>(
+				io_stream_ref_define(::std::declval<T>()))));
+		}
+	}
+}();
+
+template <typename T>
+inline constexpr bool output_stream_ref_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::operations::defines::has_output_stream_ref_define<T>)
+	{
+		using result_type = decltype(output_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return throws((output_stream_ref_define(::std::declval<T>())));
+		}
+		else
+		{
+			return throws((::std::remove_cvref_t<result_type>(
+				output_stream_ref_define(::std::declval<T>()))));
+		}
+	}
+	else
+	{
+		using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+		if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+		{
+			return throws((io_stream_ref_define(::std::declval<T>())));
+		}
+		else
+		{
+			return throws((::std::remove_cvref_t<result_type>(
+				io_stream_ref_define(::std::declval<T>()))));
+		}
+	}
+}();
+
+template <typename T>
+inline constexpr bool io_stream_ref_herbceptions_throws = []() constexpr {
+	using result_type = decltype(io_stream_ref_define(::std::declval<T>()));
+	if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
+	{
+		return throws((io_stream_ref_define(::std::declval<T>())));
+	}
+	else
+	{
+		return throws((::std::remove_cvref_t<result_type>(
+			io_stream_ref_define(::std::declval<T>()))));
+	}
+}();
+#endif
+
 } // namespace defines
 
 template <typename T>
@@ -224,7 +388,12 @@ template <typename T>
 /// `decltype(auto)` preserves only the explicitly selected stable-lvalue branch. Every other branch spells an explicit
 /// value construction, so callers see one owned proxy rather than accidentally extending an xvalue reference.
 inline constexpr decltype(auto) input_stream_ref(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::operations::defines::input_stream_ref_herbceptions_throws<T>),
+		::fast_io::operations::defines::input_stream_ref_nothrow<T>)
 {
+	// The selected ADL projection and required result materialization are one effect boundary. Its Boolean specification
+	// controls only the discriminator ABI; it never changes the exact borrowed success category.
 	if constexpr (::fast_io::operations::defines::has_input_stream_ref_define<T>)
 	{
 		using result_type = decltype(input_stream_ref_define(::fast_io::freestanding::forward<T>(t)));
@@ -261,7 +430,12 @@ template <typename T>
 [[msvc::forceinline]]
 #endif
 inline constexpr decltype(auto) output_stream_ref(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::operations::defines::output_stream_ref_herbceptions_throws<T>),
+		::fast_io::operations::defines::output_stream_ref_nothrow<T>)
 {
+	// Preserve the exact output observer category while exposing a deterministic failure raised by either the CPO or
+	// owned proxy construction. A false condition is the language-defined plain ABI, not a reason to duplicate the CPO.
 	if constexpr (::fast_io::operations::defines::has_output_stream_ref_define<T>)
 	{
 		using result_type = decltype(output_stream_ref_define(::fast_io::freestanding::forward<T>(t)));
@@ -298,7 +472,12 @@ template <typename T>
 [[msvc::forceinline]]
 #endif
 inline constexpr decltype(auto) io_stream_ref(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::operations::defines::io_stream_ref_herbceptions_throws<T>),
+		::fast_io::operations::defines::io_stream_ref_nothrow<T>)
 {
+	// Joint-direction normalization has the same single-evaluation and ownership contract as the directional forms;
+	// its effect specification must consequently cover both ADL invocation and result materialization as one operation.
 	using result_type = decltype(io_stream_ref_define(::fast_io::freestanding::forward<T>(t)));
 	if constexpr (::fast_io::operations::defines::stream_ref_result_borrows_lvalue<result_type>)
 	{

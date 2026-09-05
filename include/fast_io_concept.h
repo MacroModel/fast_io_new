@@ -34,6 +34,21 @@
 // Public protocol concepts form numeric capacity constants without relying on a higher-level umbrella header.
 #include <limits>
 
+#if defined(__HERBCEPTIONS__)
+/*
+`throws` changes a function's canonical type and return ABI, so recognizing the
+keyword without the matching std::error definition would be an unsafe partial
+configuration.  The experimental compiler publishes no versioned `__cpp_*`
+macro yet; require both its language-mode macro and the runtime header rather
+than inferring support from a vendor version.
+*/
+#if __has_include(<herbceptions/error>)
+#include <herbceptions/error>
+#else
+#error "Herbception mode requires <herbceptions/error> from the matching runtime"
+#endif
+#endif
+
 #include "fast_io_dsal/impl/misc/push_macros.h"
 #include "fast_io_dsal/impl/misc/push_warnings.h"
 

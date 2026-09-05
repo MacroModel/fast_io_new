@@ -168,7 +168,7 @@ struct basic_white_hole_engine
 		}
 		else
 		{
-			::fast_io::operations::decay::read_all_bytes_decay(
+			::fast_io::operations::decay::read_all_bytes_decay_dispatch(
 				instmref, reinterpret_cast<::std::byte *>(__builtin_addressof(value)),
 				reinterpret_cast<::std::byte *>(__builtin_addressof(value) + 1));
 		}

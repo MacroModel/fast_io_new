@@ -604,6 +604,23 @@ public:
 	}
 };
 
+/**
+ * @brief Proves that a Win32 handle observer is substitutable under value transport.
+ * @details The observer stores one non-owning copy of a Win32 handle. Read,
+ *          write, and seek progress belongs to the referenced kernel object;
+ *          primitive operations do not mutate the observer's `handle` field.
+ *          Copying the field consequently preserves both stream identity and
+ *          ownership. No such proof is inferred for wrappers with local buffer
+ *          pointers or cursors.
+ */
+template <::fast_io::win32_family family, ::std::integral ch_type>
+inline constexpr ::std::true_type stream_ref_value_transport_safe_define(
+	::fast_io::io_type_t<
+		::fast_io::basic_win32_family_io_observer<family, ch_type>>) noexcept
+{
+	return {};
+}
+
 template <win32_family family, ::std::integral ch_type>
 inline constexpr bool operator==(basic_win32_family_io_observer<family, ch_type> a,
 								 basic_win32_family_io_observer<family, ch_type> b) noexcept

@@ -38,8 +38,10 @@ template <typename result_type, ::std::integral char_type,
 		  ::fast_io::fmt::format_grammar grammar_type,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr result_type to_with_rule(
-	grammar_type grammar, argument_types &&...arguments)
+	[[maybe_unused]] grammar_type grammar, argument_types &&...arguments)
 {
+	// Grammar objects are stateless type tags; lowering consumes their type so no run-time read or ABI-visible copy is
+	// required after the by-value front-door parameter has been formed.
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
 	return ::fast_io::fmt::details::lower_format_program<
 		format_literal, rule_type>(
@@ -79,9 +81,10 @@ template <::std::integral char_type,
 		  ::fast_io::fmt::format_grammar grammar_type,
 		  typename target_type, typename... argument_types>
 inline constexpr void inplace_to_with_rule(
-	grammar_type grammar, target_type &&target,
+	[[maybe_unused]] grammar_type grammar, target_type &&target,
 	argument_types &&...arguments)
 {
+	// As above, the grammar's type selects the rule while the object intentionally carries no run-time state.
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
 	::fast_io::fmt::details::lower_format_program<format_literal, rule_type>(
 		inplace_to_lowered_components<char_type, target_type>{

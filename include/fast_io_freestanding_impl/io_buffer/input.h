@@ -17,7 +17,7 @@ inline constexpr bool ibuffer_underflow_rl_size_impl(instmtype &insm, basic_io_b
 	}
 	auto const previous_end{ibuffer.buffer_end};
 	auto const next_end{
-		::fast_io::operations::decay::read_some_decay(insm, ibuffer.buffer_begin, ibuffer.buffer_begin + bfsz)};
+		::fast_io::operations::decay::read_some_decay_dispatch(insm, ibuffer.buffer_begin, ibuffer.buffer_begin + bfsz)};
 	if (next_end == ibuffer.buffer_begin)
 	{
 		// A failed refill is an observation of EOF, not a new empty chunk. Preserve the exhausted previous span so a
@@ -50,7 +50,7 @@ ibuffer_minimum_size_underflow_all_prepare_rl_size_impl(instmtype &insm, basic_i
 	}
 	auto bg{ibuffer.buffer_begin};
 	auto ed{bg + bfsz};
-	::fast_io::operations::decay::read_all_decay(insm, bg, ed);
+	::fast_io::operations::decay::read_all_decay_dispatch(insm, bg, ed);
 	ibuffer.buffer_curr = bg;
 	ibuffer.buffer_end = ed;
 }
@@ -83,7 +83,7 @@ inline constexpr char_type *read_some_underflow_size_impl(instmtype &instm,
 			{first, static_cast<::std::size_t>(reinterpret_cast<::std::byte const *>(last) -
 											   reinterpret_cast<::std::byte const *>(first))},
 			{pointers.buffer_begin, bfsz * sizeof(char_type)}};
-		auto [pos, scpos]{::fast_io::operations::decay::scatter_read_some_bytes_decay(instm, scatters, 2)};
+		auto [pos, scpos]{::fast_io::operations::decay::scatter_read_some_bytes_decay_dispatch(instm, scatters, 2)};
 		if (pos == 2)
 		{
 			pointers.buffer_end = (pointers.buffer_curr = pointers.buffer_begin) + bfsz;
@@ -104,7 +104,7 @@ inline constexpr char_type *read_some_underflow_size_impl(instmtype &instm,
 	{
 		basic_io_scatter_t<char_type> scatters[2]{{first, static_cast<::std::size_t>(last - first)},
 												  {pointers.buffer_begin, bfsz}};
-		auto [pos, scpos]{::fast_io::operations::decay::scatter_read_some_decay(instm, scatters, 2)};
+		auto [pos, scpos]{::fast_io::operations::decay::scatter_read_some_decay_dispatch(instm, scatters, 2)};
 		if (pos == 2)
 		{
 			pointers.buffer_end = (pointers.buffer_curr = pointers.buffer_begin) + bfsz;
@@ -161,7 +161,7 @@ inline constexpr char_type *pread_some_underflow_define(basic_io_buffer_ref<io_b
 		output_stream_buffer_flush_define(iobref);
 	}
 	decltype(auto) inref = ::fast_io::operations::input_stream_ref(iobref.iobptr->handle);
-	return ::fast_io::operations::decay::pread_some_decay(inref, first, last, off);
+	return ::fast_io::operations::decay::pread_some_decay_dispatch(inref, first, last, off);
 }
 
 template <typename io_buffer_type, ::std::integral char_type>
@@ -174,7 +174,7 @@ inline constexpr void pread_all_underflow_define(basic_io_buffer_ref<io_buffer_t
 		output_stream_buffer_flush_define(iobref);
 	}
 	decltype(auto) inref = ::fast_io::operations::input_stream_ref(iobref.iobptr->handle);
-	return ::fast_io::operations::decay::pread_all_decay(inref, first, last, off);
+	return ::fast_io::operations::decay::pread_all_decay_dispatch(inref, first, last, off);
 }
 
 template <typename io_buffer_type, ::std::integral char_type>
@@ -187,7 +187,7 @@ inline constexpr ::fast_io::io_scatter_status_t scatter_pread_some_underflow_def
 		output_stream_buffer_flush_define(iobref);
 	}
 	decltype(auto) inref = ::fast_io::operations::input_stream_ref(iobref.iobptr->handle);
-	return ::fast_io::operations::decay::scatter_pread_some_decay(inref, pscatters, n, off);
+	return ::fast_io::operations::decay::scatter_pread_some_decay_dispatch(inref, pscatters, n, off);
 }
 
 template <typename io_buffer_type, ::std::integral char_type>
@@ -200,7 +200,7 @@ inline constexpr void scatter_pread_all_underflow_define(basic_io_buffer_ref<io_
 		output_stream_buffer_flush_define(iobref);
 	}
 	decltype(auto) inref = ::fast_io::operations::input_stream_ref(iobref.iobptr->handle);
-	::fast_io::operations::decay::scatter_pread_all_decay(inref, pscatters, n, off);
+	::fast_io::operations::decay::scatter_pread_all_decay_dispatch(inref, pscatters, n, off);
 }
 
 template <typename io_buffer_type>

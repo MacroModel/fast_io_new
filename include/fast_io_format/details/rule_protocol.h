@@ -17,6 +17,10 @@
 
 #include "../../fast_io_concept.h"
 
+// This detail header can be entered after a public umbrella has restored user
+// macros, so effect specifiers are scoped explicitly to this implementation.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
 namespace fast_io::fmt::details
 {
 
@@ -89,6 +93,12 @@ inline consteval bool format_replacement_rule_token_impl() noexcept
 		return ::std::default_initializable<normalized_type> &&
 			   ::std::is_empty_v<normalized_type> &&
 			   ::std::is_nothrow_default_constructible_v<normalized_type> &&
+#if defined(__HERBCEPTIONS__)
+			   // Standard nothrow traits in the experimental frontend observe
+			   // unwinding only. The orthogonal deterministic constructor effect
+			   // must also be absent for this protocol token contract.
+			   !::std::is_herbceptions_throws_constructible_v<normalized_type> &&
+#endif
 			   ::std::is_trivially_copyable_v<normalized_type> &&
 			   ::std::is_trivially_destructible_v<normalized_type>;
 	}
@@ -153,17 +163,66 @@ struct selected_advertisement<advertisement_type, true>
 			advertisement_type>::type;
 };
 
-template <typename advertisement_type, bool selector_is_nothrow>
+template <typename advertisement_type, bool selector_is_admissible>
 inline consteval bool valid_selected_advertisement_impl() noexcept
 {
 	// A reference result could point at provider-owned state even though its
 	// referred type is `io_type_t<R>`.  Requiring the carrier itself by value
 	// closes that otherwise subtle state-smuggling route.
-	return selector_is_nothrow &&
+	return selector_is_admissible &&
 		   ::std::same_as<advertisement_type,
 						  ::std::remove_cvref_t<advertisement_type>> &&
 		   format_replacement_rule_advertisement<advertisement_type>;
 }
+
+#if defined(__HERBCEPTIONS__)
+template <auto>
+struct constant_selection_proof
+{};
+
+template <typename grammar_type, auto format_literal, auto field,
+		  typename value_type>
+concept available_selection = requires {
+	format_replacement_rule_type(
+		::std::remove_cvref_t<grammar_type>{},
+		basic_format_replacement_context<format_literal, field>{},
+		::fast_io::io_type_t<value_type>{});
+};
+
+template <typename grammar_type, auto format_literal, auto field,
+		  typename value_type>
+concept constant_evaluable_selection =
+	available_selection<grammar_type, format_literal, field, value_type> &&
+	requires {
+		typename constant_selection_proof<format_replacement_rule_type(
+			::std::remove_cvref_t<grammar_type>{},
+			basic_format_replacement_context<format_literal, field>{},
+			::fast_io::io_type_t<value_type>{})>;
+	};
+
+/**
+ * Evaluates phase-one selection without introducing a run-time effect edge.
+ *
+ * A selector transports only an empty structural type token. A successful
+ * constant evaluation is therefore the relevant proof even when its
+ * declaration conservatively carries `throws`; the constexpr local consumes
+ * that effect during translation, and this plain wrapper has no generated
+ * error-result ABI. A selector which actually fails cannot initialize the
+ * local and is removed during substitution.
+ */
+template <typename grammar_type, auto format_literal, auto field,
+		  typename value_type>
+	requires constant_evaluable_selection<
+		grammar_type, format_literal, field, value_type>
+[[nodiscard]] consteval auto evaluate_selection() noexcept
+{
+	constexpr auto result{format_replacement_rule_type(
+		::std::remove_cvref_t<grammar_type>{},
+		basic_format_replacement_context<format_literal, field>{},
+		::fast_io::io_type_t<value_type>{})};
+	return result;
+}
+#endif
 
 template <typename grammar_type, auto format_literal, auto field,
 		  typename value_type, typename = void>
@@ -173,10 +232,15 @@ struct selection
 template <typename grammar_type, auto format_literal, auto field,
 		  typename value_type>
 struct selection<grammar_type, format_literal, field, value_type,
+#if defined(__HERBCEPTIONS__)
+				 ::std::void_t<decltype(evaluate_selection<
+										grammar_type, format_literal, field, value_type>())>>
+#else
 				 ::std::void_t<decltype(format_replacement_rule_type(
 					 ::std::remove_cvref_t<grammar_type>{},
 					 basic_format_replacement_context<format_literal, field>{},
 					 ::fast_io::io_type_t<value_type>{}))>>
+#endif
 	: selected_advertisement<
 		  decltype(format_replacement_rule_type(
 			  ::std::remove_cvref_t<grammar_type>{},
@@ -186,10 +250,14 @@ struct selection<grammar_type, format_literal, field, value_type,
 												::std::remove_cvref_t<grammar_type>{},
 												basic_format_replacement_context<format_literal, field>{},
 												::fast_io::io_type_t<value_type>{})),
+#if defined(__HERBCEPTIONS__)
+											true>()>
+#else
 											noexcept(format_replacement_rule_type(
 												::std::remove_cvref_t<grammar_type>{},
 												basic_format_replacement_context<format_literal, field>{},
 												::fast_io::io_type_t<value_type>{}))>()>
+#endif
 {};
 
 template <typename grammar_type, auto format_literal, auto field,
@@ -245,6 +313,24 @@ inline constexpr bool invoke_nothrow_v = noexcept(
 		::std::declval<value_type>(),
 		::std::declval<argument_pack_type &>()));
 
+/** Classifies the deterministic effect of the exact phase-two ADL call. */
+template <typename grammar_type, auto format_literal, auto field,
+		  typename value_type, typename argument_pack_type>
+inline constexpr bool invoke_herbceptions_throws_v =
+#if defined(__HERBCEPTIONS__)
+	throws((
+	format_replacement_rule_define(
+		::fast_io::io_type_t<
+			format_replacement_rule_type_adl::selected_rule_t<
+				grammar_type, format_literal, field, value_type>>{},
+		::std::remove_cvref_t<grammar_type>{},
+		basic_format_replacement_context<format_literal, field>{},
+		::std::declval<value_type>(),
+		::std::declval<argument_pack_type &>())));
+#else
+	false;
+#endif
+
 /**
  * Executes only the rule chosen in phase one.
  *
@@ -260,8 +346,13 @@ template <typename grammar_type, auto format_literal, auto field,
 	requires expression<grammar_type, format_literal, field,
 						value_type &&, argument_pack_type>
 [[nodiscard]] inline constexpr decltype(auto) invoke(
-	value_type &&value, argument_pack_type &arguments) noexcept(invoke_nothrow_v<grammar_type, format_literal, field,
-																				 value_type &&, argument_pack_type>)
+	value_type &&value, argument_pack_type &arguments)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+	(invoke_herbceptions_throws_v<
+		grammar_type, format_literal, field, value_type &&,
+		argument_pack_type>),
+	invoke_nothrow_v<grammar_type, format_literal, field,
+								 value_type &&, argument_pack_type>)
 {
 	return format_replacement_rule_define(
 		::fast_io::io_type_t<
@@ -290,3 +381,5 @@ concept format_replacement_rule_for =
 											field, value_type, argument_pack_type>;
 
 } // namespace fast_io::fmt::details
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

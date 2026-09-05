@@ -79,13 +79,36 @@ inline constexpr bool width_storage_nothrow_constructible = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies the deterministic-error effect of the exact width-storage expression.
+/// @details The query composes alias dispatch with the selected value/reference materialization without changing the
+///          existing storage type. In particular, the ABI-small decay policy remains by value and borrowed lvalues
+///          retain their exact reference identity; effect support is not permission to introduce another reference.
+template <typename T>
+inline constexpr bool width_storage_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::details::width_storable<T>)
+	{
+		return throws((static_cast<::fast_io::details::width_storage_type<T>>(
+			::fast_io::io_print_alias(::std::declval<T>()))));
+	}
+	else
+	{
+		return false;
+	}
+}();
+#endif
+
 /// @brief Normalizes one width child according to `width_storage_type`.
 /// @details The explicit cast is the single construction point shared by all placement and fill-character factories;
-///          this prevents those overloads from drifting into different alias, lifetime, or exception rules.
+///          this prevents those overloads from drifting into different alias, lifetime, or exception rules. Let E be
+///          that exact alias-and-materialization expression, B = `throws(E)`, and N = `noexcept(E)`. The one canonical
+///          signature is `throws(B)` in Herbception mode and retains the historical `noexcept(N)` contract otherwise.
 template <typename T>
 	requires ::fast_io::details::width_storable<T>
 inline constexpr ::fast_io::details::width_storage_type<T> width_store(T &&t)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	return static_cast<::fast_io::details::width_storage_type<T>>(
 		::fast_io::io_print_alias(::std::forward<T>(t)));
@@ -116,11 +139,14 @@ struct compiler_constant_width_t
 /// @brief Pads a value to a minimum width using a run-time placement and the default fill character.
 /// @details `placement` selects the side/internal policy, `n` is a minimum code-unit count, and values wider than `n`
 ///          are emitted in full. `none` or an unrecognized enum value performs no ordinary run-time padding. The wrapped
-///          value is normalized and stored immediately.
+///          value is normalized and stored immediately. Its effect is exactly the storage transaction's conditional
+///          effect; safe and fallible children therefore share one canonical function type.
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_runtime_t<storage_type>{
@@ -133,7 +159,9 @@ inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n)
 template <typename T, ::std::integral char_type>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n, char_type ch)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_runtime_ch_t<storage_type, char_type>{
@@ -145,7 +173,9 @@ inline constexpr auto width(scalar_placement placement, T &&t, ::std::size_t n, 
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto left(T &&t, ::std::size_t n)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_t<scalar_placement::left, storage_type>{
@@ -158,7 +188,9 @@ inline constexpr auto left(T &&t, ::std::size_t n)
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto middle(T &&t, ::std::size_t n)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_t<scalar_placement::middle, storage_type>{
@@ -170,7 +202,9 @@ inline constexpr auto middle(T &&t, ::std::size_t n)
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto right(T &&t, ::std::size_t n)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_t<scalar_placement::right, storage_type>{
@@ -184,7 +218,9 @@ inline constexpr auto right(T &&t, ::std::size_t n)
 template <typename T>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto internal(T &&t, ::std::size_t n)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_t<scalar_placement::internal, storage_type>{
@@ -196,7 +232,9 @@ inline constexpr auto internal(T &&t, ::std::size_t n)
 template <typename T, ::std::integral char_type>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto left(T &&t, ::std::size_t n, char_type ch)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_ch_t<scalar_placement::left, storage_type, char_type>{
@@ -209,7 +247,9 @@ inline constexpr auto left(T &&t, ::std::size_t n, char_type ch)
 template <typename T, ::std::integral char_type>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto middle(T &&t, ::std::size_t n, char_type ch)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_ch_t<scalar_placement::middle, storage_type, char_type>{
@@ -221,7 +261,9 @@ inline constexpr auto middle(T &&t, ::std::size_t n, char_type ch)
 template <typename T, ::std::integral char_type>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto right(T &&t, ::std::size_t n, char_type ch)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_ch_t<scalar_placement::right, storage_type, char_type>{
@@ -235,7 +277,9 @@ inline constexpr auto right(T &&t, ::std::size_t n, char_type ch)
 template <typename T, ::std::integral char_type>
 requires ::fast_io::details::width_storable<T>
 inline constexpr auto internal(T &&t, ::std::size_t n, char_type ch)
-	noexcept(::fast_io::details::width_storage_nothrow_constructible<T>)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::width_storage_herbceptions_throws<T>),
+		(::fast_io::details::width_storage_nothrow_constructible<T>))
 {
 	using storage_type = ::fast_io::details::width_storage_type<T>;
 	return width_ch_t<scalar_placement::internal, storage_type, char_type>{

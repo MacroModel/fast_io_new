@@ -34,11 +34,11 @@ inline constexpr void transmit_bytes_until_eof_generic_main_impl(optstmtype &opt
 	::std::byte *buffer_start{newptr.ptr};
 	::std::byte *buffer_end{newptr.ptr + newptr.size};
 	for (::std::byte *iter;
-		 (iter = ::fast_io::operations::decay::read_some_bytes_decay(instm, buffer_start, buffer_end)) != buffer_start;)
+		 (iter = ::fast_io::operations::decay::read_some_bytes_decay_dispatch(instm, buffer_start, buffer_end)) != buffer_start;)
 	{
 		// Pointer subtraction is now already expressed in the operation's byte unit.
 		::std::size_t off{static_cast<::std::size_t>(iter - buffer_start)};
-		::fast_io::operations::decay::write_all_bytes_decay(optstm, buffer_start, iter);
+		::fast_io::operations::decay::write_all_bytes_decay_dispatch(optstm, buffer_start, iter);
 		transmit_integer_add_define(resultint, off);
 	}
 }
@@ -61,12 +61,12 @@ namespace operations
 namespace decay
 {
 
-/** @brief Applies mutex recursion to generic-result byte EOF transfer. */
+/** @brief Borrows both observers and one accumulator through byte-EOF recursion. */
 template <typename optstmtype, typename instmtype, typename T>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype> &&
 			 ::fast_io::details::transmit_integer_wrapper<::std::remove_cvref_t<T>>)
-inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay(optstmtype &&optstm, instmtype &&instm,
-																	   T &&resultint)
+inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay_borrowed(optstmtype &optstm,
+																				instmtype &instm, T &resultint)
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
 	using input_observer_type = ::std::remove_cvref_t<instmtype>;
@@ -91,7 +91,8 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay(optstmtyp
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
 		decltype(auto) unlocked_output{
 			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm)};
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay(unlocked_output, instm, resultint);
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_borrowed(
+			unlocked_output, instm, resultint);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<
 						   input_observer_type>)
@@ -100,7 +101,8 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay(optstmtyp
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay(optstm, unlocked_input, resultint);
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_borrowed(
+			optstm, unlocked_input, resultint);
 	}
 	else
 	{
@@ -109,10 +111,38 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay(optstmtyp
 	}
 }
 
-/** @brief Applies mutex recursion to standard-result byte EOF transfer. */
+/**
+ * @brief Owns streams and the progress adapter at the historical byte-value boundary.
+ * @details The adapter is copied only into this explicit owner; mutex and terminal
+ *          continuations observe that one named object by reference.
+ */
+template <typename optstmtype, typename instmtype, typename T>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype> &&
+			 ::fast_io::details::transmit_integer_wrapper<::std::remove_cvref_t<T>>)
+inline constexpr decltype(auto) transmit_bytes_until_eof_generic_decay(optstmtype optstm, instmtype instm,
+																	   T resultint)
+{
+	return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_borrowed(optstm, instm,
+																						 resultint);
+}
+
+/** @brief Selects each byte-stream ABI independently while preserving accumulator identity. */
+template <typename optstmtype, typename instmtype, typename T>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype> &&
+			 ::fast_io::details::transmit_integer_wrapper<::std::remove_cvref_t<T>>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_bytes_until_eof_generic_decay_dispatch(optstmtype &optstm, instmtype &instm,
+												T &resultint)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_accumulator_dispatch<
+		&::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_borrowed<optstmtype, instmtype, T>>(
+		optstm, instm, resultint);
+}
+
+/** @brief Borrows stable observers through standard-result byte-EOF recursion. */
 template <typename optstmtype, typename instmtype>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
-inline constexpr decltype(auto) transmit_bytes_until_eof_decay(optstmtype &&optstm, instmtype &&instm)
+inline constexpr decltype(auto) transmit_bytes_until_eof_decay_borrowed(optstmtype &optstm, instmtype &instm)
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
 	using input_observer_type = ::std::remove_cvref_t<instmtype>;
@@ -135,7 +165,7 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_decay(optstmtype &&opts
 			::fast_io::operations::decay::output_stream_mutex_ref_decay(optstm)};
 		decltype(auto) unlocked_output{
 			::fast_io::operations::decay::output_stream_unlocked_ref_decay(optstm)};
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay(unlocked_output, instm);
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_borrowed(unlocked_output, instm);
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_complete_input_stream_mutex_protocol<
 						   input_observer_type>)
@@ -144,13 +174,32 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_decay(optstmtype &&opts
 		::fast_io::operations::decay::stream_ref_decay_lock_guard lg{
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay(optstm, unlocked_input);
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_borrowed(optstm, unlocked_input);
 	}
 	else
 	{
 		// Execute the standard-result byte EOF loop on unlocked observers.
 		return ::fast_io::details::transmit_bytes_until_eof_main_impl(optstm, instm);
 	}
+}
+
+/** @brief Owns both observers at the historical standard-result byte boundary. */
+template <typename optstmtype, typename instmtype>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
+inline constexpr decltype(auto) transmit_bytes_until_eof_decay(optstmtype optstm, instmtype instm)
+{
+	return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_borrowed(optstm, instm);
+}
+
+/** @brief Independently selects value or borrowed transport for each named byte observer. */
+template <typename optstmtype, typename instmtype>
+	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_bytes_until_eof_decay_dispatch(optstmtype &optstm, instmtype &instm)
+{
+	return ::fast_io::operations::decay::transmit_stream_pair_dispatch<
+		&::fast_io::operations::decay::transmit_bytes_until_eof_decay_borrowed<optstmtype, instmtype>>(
+		optstm, instm);
 }
 
 } // namespace decay
@@ -162,7 +211,7 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_generic(optstmtype &&op
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay(
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_dispatch(
 			output_observer, input_observer, resultint);
 	});
 }
@@ -174,7 +223,7 @@ inline constexpr decltype(auto) transmit_bytes_until_eof(optstmtype &&optstm, in
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
-		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay(output_observer, input_observer);
+		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_dispatch(output_observer, input_observer);
 	});
 }
 

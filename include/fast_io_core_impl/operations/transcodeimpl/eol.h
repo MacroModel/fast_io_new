@@ -156,8 +156,32 @@ private:
 				// bit pattern; this also gives older GCC releases one vpbroadcastb
 				// instead of scalar materialization through a temporary stack object.
 				delimiters += delimiter_byte;
+#if defined(__AVX512F__) && defined(__AVX512BW__) && \
+	FAST_IO_HAS_BUILTIN(__builtin_ia32_ucmpb512_mask)
+				::std::size_t const source_block_count{
+					static_cast<::std::size_t>(from_last - from_first) /
+					native_vector_size};
+				::std::size_t const destination_block_count{
+					static_cast<::std::size_t>(to_last - to_first) /
+					native_vector_size};
+				::std::size_t remaining_blocks{
+					source_block_count < destination_block_count
+						? source_block_count
+						: destination_block_count};
+				// Compute the common bounded block count once for AVX-512. Rechecking
+				// two pointer differences after every committed 64-byte vector made
+				// Clang retain two dependent countdown chains. The minimum proves that
+				// every remaining load and store fits both ranges; a matching block is
+				// still left uncommitted for the scalar first-match suffix. AVX2 and
+				// SSE2 deliberately retain their pointer-bound loop below: their
+				// shorter blocks do not amortize this quotient setup on small ranges.
+				for (; remaining_blocks != 0u; --remaining_blocks)
+#else
 				for (;;)
+#endif
 				{
+#if !(defined(__AVX512F__) && defined(__AVX512BW__) && \
+	  FAST_IO_HAS_BUILTIN(__builtin_ia32_ucmpb512_mask))
 					::std::size_t const from_size{
 						static_cast<::std::size_t>(from_last - from_first)};
 					::std::size_t const to_size{
@@ -167,6 +191,7 @@ private:
 					{
 						break;
 					}
+#endif
 					native_u8_vector source;
 					::fast_io::freestanding::my_memcpy(
 						__builtin_addressof(source), from_first, native_vector_size);
@@ -502,6 +527,12 @@ public:
 		}
 		else
 		{
+			if (from_first == from_last || to_first == to_last)
+			{
+				// Identity conversion has no state to drain. Preserve the appropriate need-input/need-output status while
+				// avoiding subtraction and pointer advancement on a valid all-null empty range.
+				return process_result(from_first, from_last, to_first);
+			}
 			// The protocol does not require disjoint source and destination ranges.
 			// Therefore the copied prefix has snapshot semantics even when either
 			// range begins inside the other: overlapped_copy uses a temporary during

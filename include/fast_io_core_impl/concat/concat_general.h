@@ -384,11 +384,11 @@ inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed_with_stor
 				{
 					::fast_io::fast_terminate();
 				}
-				::fast_io::operations::decay::write_all_decay(destination, scratch, result);
+				::fast_io::operations::decay::write_all_decay_dispatch(destination, scratch, result);
 			}
 			else if (component.scatter.len != 0u)
 			{
-				::fast_io::operations::decay::write_all_decay(
+				::fast_io::operations::decay::write_all_decay_dispatch(
 					destination, component.scatter.base, component.scatter.base + component.scatter.len);
 			}
 		};
@@ -422,7 +422,7 @@ inline constexpr void basic_general_concat_decay_ref_impl_cached_mixed_with_stor
 	}
 	if constexpr (line)
 	{
-		::fast_io::operations::decay::char_put_decay(
+		::fast_io::operations::decay::char_put_decay_dispatch(
 			destination, ::fast_io::char_literal_v<u8'\n', char_type>);
 	}
 }
@@ -597,7 +597,7 @@ inline constexpr void basic_general_concat_cached_dynamic_overflow_emit_one(
 	{
 		::fast_io::fast_terminate();
 	}
-	::fast_io::operations::decay::write_all_decay(destination, scratch, result);
+	::fast_io::operations::decay::write_all_decay_dispatch(destination, scratch, result);
 }
 
 /// @brief Completes a pure dynamic-reserve concat after its aggregate bound proved unavailable.
@@ -650,7 +650,7 @@ inline constexpr void basic_general_concat_decay_ref_impl_cached_dynamic_overflo
 	}
 	if constexpr (line)
 	{
-		::fast_io::operations::decay::char_put_decay(
+		::fast_io::operations::decay::char_put_decay_dispatch(
 			destination, ::fast_io::char_literal_v<u8'\n', char_type>);
 	}
 }
@@ -1580,6 +1580,20 @@ inline constexpr bool basic_general_concat_precise_resize_destination_run_v = []
 	}
 }();
 
+/// @brief Proves that an exact fresh-result run cannot fail after runtime spare storage has been exposed.
+/// @details Every ordinary precise writer must return its endpoint and be non-failing through both the C++ exception
+///          and Herbception channels. A raw scatter leaf is copied by fast_io's non-throwing primitive. Exact-size CPOs
+///          may still fail, but concat evaluates and caches all of them before reserving the unpublished destination.
+///          Consequently the runtime branch below never needs to destroy a string whose logical end was not published
+///          after a source failure. This is deliberately weaker than the cached/replayable source proof used by the
+///          speculative bounded strategy: each size CPO is invoked exactly once here.
+template <::std::integral char_type, typename... Args>
+inline constexpr bool basic_general_concat_runtime_precise_direct_source_run_v =
+	((::std::same_as<::std::remove_cvref_t<Args>,
+					 ::fast_io::basic_io_scatter_t<char_type>> ||
+	  ::fast_io::nothrow_precise_reserve_printable<char_type, Args>) &&
+	 ...);
+
 /// @brief Selects an explicitly preferred exact construction for one fresh concat result.
 /// @details This is intentionally a one-leaf, phase-one cost policy.  The source must advertise both the ordinary
 ///          precise protocol and its cheap-size preference.  A buffer string proves reserve/begin/commit directly;
@@ -1848,10 +1862,12 @@ basic_general_concat_precise_resize_emit_one(
 ///          The strategy invokes no scatter producer and therefore needs no descriptor-retention or borrowed-lifetime
 ///          assumption.
 ///
-///          Resize publishes the final size only inside the local result, so no `strlike_set_curr` operation is needed.
-///          A sizing exception occurs before resize or emission. A resize or writer exception propagates normally; the
-///          local result owns any live, partially written characters and is destroyed before it can escape. C++23
-///          `resize_and_overwrite` is not used because an arbitrary formatting CPO is permitted to throw.
+///          On an audited runtime put-area destination, a completely non-failing writer run reserves the exact capacity
+///          and publishes one final cursor, avoiding the value-initialization pass of portable resize. All size CPOs are
+///          cached before that reserve, and the source predicate proves that no later user operation can fail. Other
+///          runs retain exact resize: a sizing exception occurs before resize, while a resize or writer exception leaves
+///          every live character owned by the local result. C++23 `resize_and_overwrite` is not used because an
+///          arbitrary formatting CPO is permitted to throw.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires ::fast_io::details::decay::basic_general_concat_precise_resize_destination_run_v<
 		char_type, T, Args...>
@@ -1867,6 +1883,61 @@ basic_general_concat_precise_resize_run(Args &...args)
 	 ...);
 	::std::size_t const total_size{
 		::fast_io::details::decay::concat_precise_size_with_line<line>(payload_size)};
+	FAST_IO_IF_NOT_CONSTEVAL
+	{
+		if constexpr (
+			::fast_io::concat_fresh_runtime_exact_direct_strlike<char_type, T> &&
+			::fast_io::details::decay::basic_general_concat_runtime_precise_direct_source_run_v<
+				char_type, Args...>)
+		{
+			strlike_runtime_reserve(
+				::fast_io::io_strlike_type<char_type, T>, result, total_size);
+			char_type *const first{
+				strlike_runtime_curr(::fast_io::io_strlike_type<char_type, T>, result)};
+			char_type *const last{
+				strlike_runtime_end(::fast_io::io_strlike_type<char_type, T>, result)};
+			if (first == last)
+			{
+				if (total_size != 0u) [[unlikely]]
+				{
+					::fast_io::fast_terminate();
+				}
+			}
+			else if (first == nullptr || last == nullptr) [[unlikely]]
+			{
+				// Equality is handled before subtraction so a conforming zero-capacity destination may use null cursors.
+				::fast_io::fast_terminate();
+			}
+			else
+			{
+				::std::ptrdiff_t const available{last - first};
+				if (available < 0 || total_size > static_cast<::std::size_t>(available)) [[unlikely]]
+				{
+					::fast_io::fast_terminate();
+				}
+			}
+
+			component_index = 0u;
+			char_type *current{first};
+			(::fast_io::details::decay::basic_general_concat_precise_resize_emit_one<
+				 char_type>(component_sizes, component_index, current, args),
+			 ...);
+			if constexpr (line)
+			{
+				*current++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+			}
+			char_type *const expected_end{
+				total_size == 0u ? first : first + total_size};
+			if (current != expected_end) [[unlikely]]
+			{
+				// Per-component endpoint checks and the checked size fold should make this aggregate invariant tautological.
+				::fast_io::fast_terminate();
+			}
+			strlike_runtime_set_curr(
+				::fast_io::io_strlike_type<char_type, T>, result, current);
+			return result;
+		}
+	}
 	char_type *const first{strlike_precise_resize_and_get_begin(
 		::fast_io::io_strlike_type<char_type, T>, result, total_size)};
 
@@ -2220,6 +2291,830 @@ concept basic_general_concat_context_staging_preferred_destination =
 			concat_context_staging_preferred(::fast_io::io_strlike_type<ch_type, T>)
 		} -> ::std::same_as<::std::true_type>;
 	};
+
+/// @brief Recognizes an audited fresh result whose long destination-neutral fallback should use ordered staging.
+/// @details The returned nonzero count is a profitability threshold in normalized leaves, not a semantic capability.
+///          For an admitted run the destination promises that range construction from concat's completed staging
+///          interval has the same character result as its ordinary fresh output adapter and is cheaper from this count
+///          onward. Requiring an exact constant-expression result makes the decision local to a concrete string
+///          integration; range construction or writable-buffer syntax alone never opts a user type into an extra copy.
+template <typename ch_type, typename T>
+concept basic_general_concat_ordered_staging_preferred_destination =
+	::std::integral<ch_type> && ::fast_io::range_constructible_strlike<ch_type, T> && requires {
+		typename ::std::integral_constant<
+			::std::size_t,
+			concat_ordered_staging_minimum_leaf_count(
+				::fast_io::io_strlike_type<ch_type, T>)>;
+		{
+			concat_ordered_staging_minimum_leaf_count(
+				::fast_io::io_strlike_type<ch_type, T>)
+		} -> ::std::same_as<::std::size_t>;
+		requires(concat_ordered_staging_minimum_leaf_count(
+				 ::fast_io::io_strlike_type<ch_type, T>) != 0u);
+	};
+
+/// @brief Recognizes a destination whose ordered-staging cost proof covers every long neutral-protocol pack.
+/// @details The ordinary threshold marker is intentionally insufficient: most destinations have evidence only when an
+///          unretained scatter forces immediate consumption and prevents concat's grouped planner. This independent,
+///          exact-`true_type` CPO lets one audited destination state the stronger cost result that staging also beats its
+///          exact-resize or retained-mixed strategy when every leaf is otherwise destination-neutral. It grants no
+///          source capability and cannot admit a direct, context, or scatter-list customization.
+template <typename ch_type, typename T>
+concept basic_general_concat_ordered_staging_complete_neutral_preferred_destination =
+	::std::integral<ch_type> && requires {
+		{
+			concat_ordered_staging_complete_neutral_preferred(
+				::fast_io::io_strlike_type<ch_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Recognizes a fresh result which may replace a bounded ordered staging area after it fills.
+/// @details The marker is a semantic opt-in, not a consequence of writable-buffer syntax. It promises that default
+///          construction creates result-owned storage disjoint from every source object, reserve preserves the already
+///          copied prefix without consulting a source, and ordinary writes followed by cursor publication produce the
+///          same value as range construction from that prefix. It also explicitly accepts the direct-output exception
+///          boundary: allocation failure during promotion may prevent later source CPOs from running, whereas a fully
+///          staged construction would allocate only after all producers completed. No partial result escapes either
+///          path. The marker also promises that output hooks associated with this private adapter cannot observe the
+///          temporarily unpublished logical end. Deferred-commit safety for the actually selected ordinary or runtime
+///          cursor family then proves that cached cursors may advance without publishing after every leaf. These facts
+///          let concat switch destinations between two source CPO invocations, or inside the overflow handling of one
+///          invocation, without replaying that source.
+template <typename ch_type, typename T>
+concept basic_general_concat_ordered_staging_adaptive_destination =
+	::std::integral<ch_type> && ::fast_io::output_buffer_strlike<ch_type, T> &&
+	::std::constructible_from<T> && ::std::constructible_from<T, T &&> &&
+	::std::is_nothrow_default_constructible_v<T> &&
+	::std::is_nothrow_move_constructible_v<T> &&
+	::std::is_nothrow_destructible_v<T> &&
+	((::fast_io::buffer_strlike<ch_type, T> &&
+	  ::fast_io::deferred_obuffer_commit_safe_strlike<ch_type, T>) ||
+	 (!::fast_io::buffer_strlike<ch_type, T> &&
+	  ::fast_io::runtime_deferred_obuffer_commit_safe_strlike<ch_type, T>)) &&
+	::fast_io::details::output_buffer_strlike_begin_nothrow<ch_type, T>() &&
+	::fast_io::details::output_buffer_strlike_curr_nothrow<ch_type, T>() &&
+	::fast_io::details::output_buffer_strlike_end_nothrow<ch_type, T>() &&
+	::fast_io::details::output_buffer_strlike_set_curr_nothrow<ch_type, T>() &&
+	requires {
+		{
+			concat_ordered_staging_adaptive_promotion_safe(
+				::fast_io::io_strlike_type<ch_type, T>)
+		} -> ::std::same_as<::std::true_type>;
+	};
+
+/// @brief Proves that changing only the fresh destination cannot change a fallback leaf's selected source protocol.
+/// @details Static reserve, dynamic reserve, and scatter CPOs receive only the normalized source and caller-owned
+///          contiguous storage; they cannot dispatch on the final string adapter. A direct/context or scatter-list
+///          customization can observe a different output type or carry a multi-object protocol, so such a leaf is
+///          excluded even when it also happens to expose one of the three contiguous protocols. The exact named-lvalue
+///          scatter expression matches phase one's owned decay objects. This is a source-equivalence proof only;
+///          immediate scatter consumption and CPO ordering remain the responsibility of either the ordinary dispatcher
+///          or the protocol-equivalent adaptive one-shot emitter selected below.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_ordered_staging_leaf_v =
+	(::fast_io::reserve_printable<ch_type, T> ||
+	 ::fast_io::dynamic_reserve_printable<ch_type, T> ||
+	 ::fast_io::scatter_printable_for<ch_type, T &>) &&
+	!::fast_io::printable<ch_type, T> &&
+	!::fast_io::context_printable<ch_type, T> &&
+	!::fast_io::reserve_scatters_printable<ch_type, T> &&
+	!::fast_io::dynamic_reserve_scatters_printable<ch_type, T>;
+
+/// @brief Identifies an ordered leaf whose ordinary contiguous protocol has one destination-independent spelling.
+/// @details Let `R`, `D`, and `S` denote static-reserve, dynamic-reserve, and named-lvalue scatter availability.
+///          `print_control_single` selects `R` before `D` whenever `S` is absent, so `R && D && !S` may share the
+///          static-reserve spelling. A source exposing `S` together with either reserve protocol is deliberately
+///          rejected: ordinary scatter priority also depends on the static-scatter representation and destination
+///          retention policy, neither of which follows from these three shape concepts. The surrounding staging-leaf
+///          proof continues to exclude direct, context, and scatter-list CPOs. Consequently this predicate authorizes
+///          only `(R && !S) || (!R && D && !S) || (!R && !D && S)`, exactly the cases for which a local one-shot emitter
+///          can remove generic dispatcher state without changing the selected source customization.
+template <::std::integral ch_type, typename T>
+inline constexpr bool basic_general_concat_ordered_one_shot_leaf_v =
+	::fast_io::details::decay::basic_general_concat_ordered_staging_leaf_v<
+		ch_type, T> &&
+	((::fast_io::reserve_printable<ch_type, T> &&
+	  !::fast_io::scatter_printable_for<ch_type, T &>) ||
+	 (!::fast_io::reserve_printable<ch_type, T> &&
+	  ::fast_io::dynamic_reserve_printable<ch_type, T> &&
+	  !::fast_io::scatter_printable_for<ch_type, T &>) ||
+	 (!::fast_io::reserve_printable<ch_type, T> &&
+	  !::fast_io::dynamic_reserve_printable<ch_type, T> &&
+	  ::fast_io::scatter_printable_for<ch_type, T &>));
+
+/// @brief Forms the type-and-cost candidate before the concrete staging output's interception checks are available.
+/// @details Every normalized leaf is emitted once, in fold order, through the ordinary single-leaf dispatcher or the
+///          adaptive destination's protocol-equivalent one-shot overload. Consequently an unmarked scatter descriptor
+///          is copied before the next producer is invoked; no descriptor, size result, or formatter object is retained
+///          by this policy. An unretained scatter is the ordinary profitability premise. A destination may independently
+///          publish the stronger complete-neutral cost CPO when measurements also justify replacing homogeneous
+///          precise/dynamic and fully retained mixed plans. The explicit destination threshold bounds staging setup to
+///          pack sizes measured to amortize it; an independently marked runtime destination may cap the retained local
+///          prefix at 512 characters and continue in the final result after one monotonic promotion.
+template <::std::integral ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_ordered_staging_candidate_v = []() consteval {
+	if constexpr (
+		!::fast_io::details::decay::basic_general_concat_ordered_staging_preferred_destination<
+			ch_type, T> ||
+		!(::fast_io::details::decay::basic_general_concat_ordered_staging_leaf_v<
+			  ch_type, Args> &&
+		  ...))
+	{
+		return false;
+	}
+	else if constexpr (
+		::fast_io::concat_fresh_runtime_exact_direct_strlike<ch_type, T> &&
+		::fast_io::details::decay::basic_general_concat_precise_resize_destination_run_v<
+			ch_type, T, Args...> &&
+		::fast_io::details::decay::basic_general_concat_runtime_precise_direct_source_run_v<
+			ch_type, Args...>)
+	{
+		// A cached-once exact run can reserve and write the final runtime put area directly. That strictly removes the
+		// private staging destination, its possible promotion, and the final range copy, so a broader destination cost
+		// marker must not intercept it before the exact strategy is selected.
+		return false;
+	}
+	else if constexpr (
+		!((::fast_io::scatter_printable_for<ch_type, Args &> &&
+		   !::fast_io::borrowed_scatter_source<ch_type, Args>) ||
+		  ...) &&
+		!::fast_io::details::decay::
+			basic_general_concat_ordered_staging_complete_neutral_preferred_destination<
+				ch_type, T>)
+	{
+		// Without an immediate-consumption barrier, only an explicit destination cost proof may replace the grouped plan.
+		return false;
+	}
+	else
+	{
+		return concat_ordered_staging_minimum_leaf_count(
+				   ::fast_io::io_strlike_type<ch_type, T>) <= sizeof...(Args);
+	}
+}();
+
+/// @brief Runtime-only monotonic destination for ordered concat emission.
+/// @details The state machine has exactly two externally observable states. Before promotion, three cached cursors
+///          address the historical two-KiB physical safety window. At each compile-time pair boundary which precedes
+///          another source,
+///          an actual prefix over 512 characters constructs a fresh final result, copies and publishes that prefix, and
+///          permanently redirects those cursors. A reserve beyond the physical window performs the same switch earlier
+///          so no writer can overrun staging. Raw storage keeps the final object unconstructed on the measured short
+///          path; the null/non-null result pointer is both its lifetime guard and the monotonic state. Cursor publication
+///          into the final object is deferred until growth or return under the destination's explicit semantic proof.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+struct basic_concat_ordered_adaptive_buffer
+{
+	using char_type = ch_type;
+	using result_type = T;
+	inline static constexpr ::std::size_t buffer_size{
+		::fast_io::details::basic_concat_buffer<char_type>::buffer_size};
+	inline static constexpr ::std::size_t promotion_threshold{
+		buffer_size < 512u ? buffer_size : 512u};
+	inline static constexpr ::std::size_t promotion_capacity_floor{buffer_size * 2u};
+
+	char_type stack_buffer[buffer_size];
+	char_type *buffer_begin{stack_buffer};
+	char_type *buffer_current{stack_buffer};
+	char_type *buffer_end{stack_buffer + buffer_size};
+	alignas(result_type) unsigned char result_storage[sizeof(result_type)];
+	result_type *result_pointer{};
+
+	inline basic_concat_ordered_adaptive_buffer() noexcept = default;
+	basic_concat_ordered_adaptive_buffer(basic_concat_ordered_adaptive_buffer const &) = delete;
+	basic_concat_ordered_adaptive_buffer &operator=(basic_concat_ordered_adaptive_buffer const &) = delete;
+
+	inline ~basic_concat_ordered_adaptive_buffer() noexcept
+	{
+		if (result_pointer != nullptr)
+		{
+			::std::destroy_at(result_pointer);
+		}
+	}
+
+	[[nodiscard]] inline result_type *construct_result() noexcept
+	{
+		// Store the returned pointer immediately. If the following reserve throws, stack unwinding still destroys the
+		// now-live object; no source CPO has to be retried to reconstruct either its prefix or destination state.
+		result_pointer = ::std::construct_at(reinterpret_cast<result_type *>(result_storage));
+		return result_pointer;
+	}
+};
+
+/// @brief Reserves the promoted result through the exact ordinary or runtime put-area family proved by its concept.
+/// @details This helper deliberately does not subtract default cursors: a valid empty native string may represent all
+///          three pointers as null before its first allocation, and null-pointer subtraction is not a capacity proof.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::output_buffer_strlike<ch_type, T>
+inline void basic_concat_ordered_adaptive_target_reserve(T &result, ::std::size_t capacity)
+{
+	if constexpr (::fast_io::buffer_strlike<ch_type, T>)
+	{
+		strlike_reserve(::fast_io::io_strlike_type<ch_type, T>, result, capacity);
+	}
+	else
+	{
+		strlike_runtime_reserve(::fast_io::io_strlike_type<ch_type, T>, result, capacity);
+	}
+}
+
+/// @brief Promotes a full adaptive staging area exactly once and publishes its already completed prefix.
+/// @details Promotion contains no source operation. The ordinary path enters between completed source pairs; an
+///          oversized leaf instead enters from its explicit reserve boundary, where adaptive growth reacquires every
+///          cursor before copying the still-unconsumed descriptor. Thus even a scratch-backed scatter is completely
+///          consumed before a later source CPO can overwrite it. Reserving two physical staging windows folds the
+///          destination's otherwise immediate first geometric growth into the promotion allocation. Pair batching
+///          removes redundant hot checks; double writing is bounded by the 512-character threshold plus two complete
+///          leaves and never exceeds the physical safety window.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline void basic_concat_ordered_adaptive_promote(
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer,
+	::std::size_t requested_capacity)
+{
+	using buffer_type =
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>;
+	T *const result{buffer.construct_result()};
+	::std::size_t const capacity{
+		requested_capacity < buffer_type::promotion_capacity_floor
+			? buffer_type::promotion_capacity_floor
+			: requested_capacity};
+	::fast_io::details::decay::basic_concat_ordered_adaptive_target_reserve<ch_type>(
+		*result, capacity);
+	::std::size_t const prefix_size{
+		static_cast<::std::size_t>(buffer.buffer_current - buffer.stack_buffer)};
+	::fast_io::io_strlike_reference_wrapper<ch_type, T> destination{result};
+	ch_type *const target_begin{::fast_io::obuffer_begin(destination)};
+	ch_type *current{::fast_io::freestanding::non_overlapped_copy_n(
+		buffer.stack_buffer, prefix_size, target_begin)};
+	// Cache the promoted put area without repeatedly decoding the final string's ABI in every later cursor CPO. The
+	// destination's deferred-commit marker proves the copied prefix remains writable and owned until publication.
+	buffer.buffer_begin = target_begin;
+	buffer.buffer_current = current;
+	buffer.buffer_end = ::fast_io::obuffer_end(destination);
+	::fast_io::obuffer_set_curr(destination, current);
+}
+
+/// @brief Applies the actual-size transition at a source-pair boundary which has a following leaf.
+/// @details The two source dispatchers have returned before this check, so no formatter retains a local cursor. The
+///          destination may therefore relocate before the next source is invoked. Omitting the final-record check is
+///          deliberate: range construction already performs the one necessary copy when no subsequent write can benefit
+///          from promotion, while an actual physical overflow still promotes synchronously inside its current leaf.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+inline void basic_concat_ordered_adaptive_promote_between_pairs(
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer)
+{
+	using buffer_type =
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>;
+	if (buffer.result_pointer == nullptr)
+	{
+		::std::size_t const actual_size{
+			static_cast<::std::size_t>(buffer.buffer_current - buffer.stack_buffer)};
+		// Equality belongs to the promoted side.  For the measured eight-leaf boundary, two complete balanced leaves
+		// produce exactly 512 characters; delaying that state until the next checkpoint doubles the retained prefix and
+		// the eventual promotion copy without protecting any additional short record.  Records whose complete payload is
+		// near this threshold still reach their final pair without another checkpoint and retain range construction.
+		if (buffer_type::promotion_threshold <= actual_size)
+		{
+			::fast_io::details::decay::basic_concat_ordered_adaptive_promote(
+				buffer, actual_size);
+		}
+	}
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline ch_type *strlike_begin(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>,
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer) noexcept
+{
+	return buffer.buffer_begin;
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline ch_type *strlike_curr(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>,
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer) noexcept
+{
+	return buffer.buffer_current;
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline ch_type *strlike_end(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>,
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer) noexcept
+{
+	return buffer.buffer_end;
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+inline void strlike_set_curr(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>,
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer,
+	ch_type *current) noexcept
+{
+	buffer.buffer_current = current;
+}
+
+/// @brief Preserves amortized growth after an ordered destination has left its private staging array.
+/// @details A reserve CPO promises sufficient capacity, not geometric growth: both the native string and libc++ may
+///          allocate only the requested extent. For a genuine miss, doubling the actual live capacity bounds repeated
+///          prefix relocation geometrically without observing or replaying another source. The checked limit admits
+///          pointer differences, byte allocation, and one terminal character. Near that limit, optional slack is
+///          abandoned in favor of the caller's already validated request; it must not manufacture a maximum-sized
+///          allocation or an overflow. A fitting reserve remains a no-op rather than acquiring speculative capacity.
+template <::std::integral ch_type>
+[[nodiscard]] inline constexpr ::std::size_t basic_concat_ordered_adaptive_growth_capacity(
+	::std::size_t current_capacity, ::std::size_t requested) noexcept
+{
+	constexpr ::std::size_t contiguous_limit{
+		::fast_io::details::decay::print_contiguous_char_extent_max_chars<ch_type>()};
+	constexpr ::std::size_t terminated_byte_limit{SIZE_MAX / sizeof(ch_type) - 1u};
+	constexpr ::std::size_t growth_limit{
+		contiguous_limit < terminated_byte_limit ? contiguous_limit : terminated_byte_limit};
+	if (current_capacity < requested && current_capacity <= growth_limit / 2u)
+	{
+		::std::size_t const doubled{current_capacity * 2u};
+		if (requested < doubled)
+		{
+			return doubled;
+		}
+	}
+	return requested;
+}
+
+template <bool amortize_growth, ::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+inline void basic_concat_ordered_adaptive_reserve(
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer,
+	::std::size_t capacity)
+{
+	if (buffer.result_pointer == nullptr)
+	{
+		if (capacity <= buffer.buffer_size)
+		{
+			return;
+		}
+		::fast_io::details::decay::basic_concat_ordered_adaptive_promote(buffer, capacity);
+		return;
+	}
+	::fast_io::io_strlike_reference_wrapper<ch_type, T> destination{buffer.result_pointer};
+	// Only a promoted result reaches this path. Its cached endpoints designate one live allocation, so capacity is
+	// available without inspecting a default string's possibly null cursors or performing any source customization.
+	if constexpr (amortize_growth)
+	{
+		capacity = ::fast_io::details::decay::basic_concat_ordered_adaptive_growth_capacity<ch_type>(
+			static_cast<::std::size_t>(buffer.buffer_end - buffer.buffer_begin), capacity);
+	}
+	// Publish the deferred logical end before a reserve may relocate the final allocation, then reacquire every cursor.
+	// No source operation occurs here, so an allocation failure cannot expose a stale adapter or require source replay.
+	::fast_io::obuffer_set_curr(destination, buffer.buffer_current);
+	::fast_io::details::decay::basic_concat_ordered_adaptive_target_reserve<ch_type>(
+		*buffer.result_pointer, capacity);
+	buffer.buffer_begin = ::fast_io::obuffer_begin(destination);
+	buffer.buffer_current = ::fast_io::obuffer_curr(destination);
+	buffer.buffer_end = ::fast_io::obuffer_end(destination);
+}
+
+/// @brief Keeps ordinary reserve calls on the open-ended geometric-growth policy.
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+inline void strlike_reserve(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>,
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer,
+	::std::size_t capacity)
+{
+	::fast_io::details::decay::basic_concat_ordered_adaptive_reserve<true>(buffer, capacity);
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline constexpr ::std::size_t strlike_sso_size(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>) noexcept
+{
+	return ::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>::buffer_size;
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline constexpr ::std::true_type strlike_buffered_print_preferred(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>) noexcept
+{
+	return {};
+}
+
+template <::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+[[nodiscard]] inline constexpr ::std::true_type strlike_deferred_obuffer_commit_safe(
+	::fast_io::io_strlike_type_t<ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>) noexcept
+{
+	// The local cursor is a plain pointer publication; after the one-way switch, the final target's independent marker
+	// supplies the same stability and publication proof. No deferred operation can observe both backing arrays.
+	return {};
+}
+
+/// @brief Rejects an ordered candidate when its concrete output would select an intercepted print protocol.
+/// @details Ordered construction deliberately invokes the ordinary dispatcher once per normalized leaf, always without
+///          line ownership. A source namespace may define `status_print_define<false>` or `print_define` only for this
+///          exact staging adapter even when the historical dummy-output `printable` probe is false. Invoking such a hook
+///          could observe the adaptive result's deferred logical end, mutate its allocation behind the cached cursors,
+///          or simply change concat's established semantics; merely making an exact direct CPO callable also invalidates
+///          the earlier proof that the normalized source owns no destination-dependent representation. A mutex projection
+///          would likewise introduce per-leaf locking absent from that proof. The actual adaptive or fixed staging type
+///          is complete at this point, so these exact ADL checks close the open-world edge before optimization selection.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline consteval bool basic_general_concat_ordered_staging_dispatch_safe() noexcept
+{
+	if constexpr (!::fast_io::details::decay::basic_general_concat_ordered_staging_candidate_v<
+					  ch_type, T, Args...>)
+	{
+		return false;
+	}
+	else
+	{
+		auto const output_safe = []<typename output_type>() consteval {
+			return !::fast_io::operations::decay::defines::
+					has_output_or_io_stream_mutex_ref_define<output_type> &&
+				   (!(::fast_io::operations::decay::defines::has_status_print_define<
+						  false, output_type, Args>) &&
+					...) &&
+				   (!(::fast_io::details::direct_printable_to<
+						  ch_type, output_type, Args>) &&
+					...);
+		};
+		bool staging_safe{};
+		if constexpr (
+			::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+				ch_type, T>)
+		{
+			using staging_output = ::fast_io::io_strlike_reference_wrapper<
+				ch_type,
+				::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>;
+			staging_safe = output_safe.template operator()<staging_output>();
+		}
+		else
+		{
+			using staging_type = ::fast_io::details::basic_concat_buffer<ch_type>;
+			using staging_output = ::std::remove_reference_t<decltype(io_strlike_ref(
+				::fast_io::io_alias, ::std::declval<staging_type &>()))>;
+			staging_safe = output_safe.template operator()<staging_output>();
+		}
+		if (!staging_safe)
+		{
+			return false;
+		}
+		auto const whole_output_safe = []<typename output_type>() consteval {
+			return !::fast_io::operations::decay::defines::
+					has_output_or_io_stream_mutex_ref_define<output_type> &&
+				   !::fast_io::operations::decay::defines::has_status_print_define<
+					   line, output_type, Args...>;
+		};
+		if constexpr (
+			::fast_io::details::decay::basic_general_concat_direct_destination_ok<
+				line, ch_type, T, Args...>)
+		{
+			using original_output = ::std::remove_reference_t<decltype(io_strlike_ref(
+				::fast_io::io_alias, ::std::declval<T &>()))>;
+			// A whole-record status owner or destination lock belongs to the original adapter. Ordered private staging
+			// cannot replace either operation with independent per-leaf output followed by range construction.
+			return whole_output_safe.template operator()<original_output>();
+		}
+		else if constexpr (::fast_io::buffer_strlike<ch_type, T>)
+		{
+			using original_output = ::fast_io::io_strlike_reference_wrapper<ch_type, T>;
+			return whole_output_safe.template operator()<original_output>();
+		}
+		else
+		{
+			using original_staging = ::fast_io::details::basic_concat_buffer<ch_type>;
+			using original_output = ::std::remove_reference_t<decltype(io_strlike_ref(
+				::fast_io::io_alias, ::std::declval<original_staging &>()))>;
+			return whole_output_safe.template operator()<original_output>();
+		}
+	}
+}
+
+/// @brief Selects ordered staging only after cost, source equivalence, and exact-dispatch safety are proved.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+inline constexpr bool basic_general_concat_ordered_staging_run_v =
+	::fast_io::details::decay::basic_general_concat_ordered_staging_dispatch_safe<
+		line, ch_type, T, Args...>();
+
+/// @brief Establishes one complete writable interval in the adaptive destination without re-reading adapter cursors.
+/// @details The private state invariant is `B <= C <= E`, with all three pointers in one live array and `C` denoting
+///          the unpublished logical end. A hit `N <= E - C` proves directly that the requested element and byte extents
+///          fit the live same-array interval, so neither an independent global-extent check nor endpoint arithmetic is
+///          required before the writer. Only a miss forms an absolute request: the checked `(C - B) + N` is passed to
+///          the adaptive reserve CPO, which either performs the one-way stack-to-result transition or publishes the final
+///          prefix before relocating its allocation. That CPO re-establishes `B <= C <= E` and `N <= E - C`; its
+///          destination marker proves that allocating from an upper bound preserves the accepted exception boundary.
+template <bool amortize_growth = true, ::std::integral ch_type, typename T>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+		ch_type, T>
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void basic_concat_ordered_adaptive_ensure(
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> &buffer,
+	::std::size_t required)
+{
+	::std::size_t const available{
+		static_cast<::std::size_t>(buffer.buffer_end - buffer.buffer_current)};
+	if (required <= available) [[likely]]
+	{
+		return;
+	}
+	::std::size_t const used{
+		static_cast<::std::size_t>(buffer.buffer_current - buffer.buffer_begin)};
+	::std::size_t const requested{
+		::fast_io::details::decay::print_contiguous_char_extent_add_or_unavailable<ch_type>(
+			used, required)};
+	if (requested == SIZE_MAX) [[unlikely]]
+	{
+		::fast_io::fast_terminate();
+	}
+	::fast_io::details::decay::basic_concat_ordered_adaptive_reserve<amortize_growth>(buffer, requested);
+}
+
+/// @brief Emits one unambiguous reserve/scatter leaf directly through the adaptive buffer's cached cursor state.
+/// @details This overload preserves the ordinary single-leaf priority proved by
+///          `basic_general_concat_ordered_one_shot_leaf_v`: static reserve wins over dynamic reserve when both exist,
+///          while scatter is admitted only when it is the sole contiguous representation. A size or descriptor CPO is
+///          evaluated exactly once, any physical miss is resolved before its writer/copy, and `buffer_current` is then
+///          advanced exactly once. No cursor CPO, generic output-policy branch, temporary payload, or intermediate
+///          publication remains in the hot leaf graph. A scatter descriptor is copied before this function returns, so
+///          neither a pair checkpoint nor a later producer can observe it. AddressSanitizer's explicit buffer-poisoning
+///          mode retains the generic dynamic-reserve materialization path through the overload constraint below.
+template <bool amortize_growth = true, ::std::integral ch_type, typename T, typename Arg>
+	requires(
+		::fast_io::details::decay::basic_general_concat_ordered_one_shot_leaf_v<
+			ch_type, Arg> &&
+		(::fast_io::details::asan_state::current !=
+			 ::fast_io::details::asan_state::activate ||
+		 ::fast_io::reserve_printable<ch_type, Arg> ||
+		 !::fast_io::dynamic_reserve_printable<ch_type, Arg>))
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void basic_general_concat_ordered_emit_one(
+	::fast_io::io_strlike_reference_wrapper<
+		ch_type,
+		::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T>>
+		&destination,
+	Arg &arg)
+{
+	using value_type = ::std::remove_cvref_t<Arg>;
+	auto &buffer{*destination.ptr};
+	// Only the terminal leaf knows that no later source can amortize spare capacity. It uses an exact growth request
+	// while earlier leaves retain geometric growth. This type-level fact neither predicts actual formatter length
+	// from its upper bound nor evaluates a later CPO before its turn. Newline allocation remains after this writer.
+	if constexpr (::fast_io::reserve_printable<ch_type, Arg>)
+	{
+		constexpr ::std::size_t required{
+			print_reserve_size(::fast_io::io_reserve_type<ch_type, value_type>)};
+		::fast_io::details::decay::basic_concat_ordered_adaptive_ensure<amortize_growth>(buffer, required);
+		buffer.buffer_current = print_reserve_define(
+			::fast_io::io_reserve_type<ch_type, value_type>,
+			buffer.buffer_current, arg);
+	}
+	else if constexpr (::fast_io::dynamic_reserve_printable<ch_type, Arg>)
+	{
+		::std::size_t const required{print_reserve_size(
+			::fast_io::io_reserve_type<ch_type, value_type>, arg)};
+		::fast_io::details::decay::basic_concat_ordered_adaptive_ensure<amortize_growth>(buffer, required);
+		buffer.buffer_current = print_reserve_define(
+			::fast_io::io_reserve_type<ch_type, value_type>,
+			buffer.buffer_current, arg);
+	}
+	else
+	{
+		auto const scatter{print_scatter_define(
+			::fast_io::io_reserve_type<ch_type, value_type>, arg)};
+		::fast_io::details::decay::basic_concat_ordered_adaptive_ensure<amortize_growth>(buffer, scatter.len);
+		if (scatter.len != 0u)
+		{
+			buffer.buffer_current = ::fast_io::freestanding::non_overlapped_copy_n(
+				scatter.base, scatter.len, buffer.buffer_current);
+		}
+	}
+}
+
+/// @brief Emits a normalized ordered concat record through one already selected destination adapter.
+/// @details The quotient for a homogeneous pack changes only the generated call graph: each pointer still names the
+///          original phase-one decay object, and one dispatch completes before the next pointer is loaded. A physical
+///          overflow remains inside its current leaf; a threshold promotion occurs only after its complete pair. Neither
+///          transition can defer an unretained descriptor across the invocation of a later source CPO.
+template <bool amortize_growth = true, typename Destination, typename Arg>
+inline constexpr void basic_general_concat_ordered_emit_one(
+	Destination &destination, Arg &arg)
+{
+	::fast_io::operations::decay::print_freestanding_decay_impl<false>(destination, arg);
+}
+
+/// @brief Appends the final newline only after every source writer has completed.
+/// @details A terminal writer whose own bound fits must run before a later newline allocation can fail. Reserving
+///          both in advance would move that failure across an observable source CPO without a semantic proof. This
+///          separate terminal step preserves the complete ordinary character dispatcher, including its overflow edge.
+///          Even after the writer, pre-reserving one character would turn a miss into a hit and suppress an ADL
+///          character-put or bulk-write overflow customization. The adaptive promotion/publication markers do not
+///          authorize that observable substitution; terminal reserve sizing is therefore left to the selected CPO.
+template <::std::integral ch_type, typename Destination>
+inline constexpr void basic_general_concat_ordered_emit_line(Destination &destination)
+{
+	::fast_io::operations::decay::char_put_decay_dispatch(
+		destination, ::fast_io::char_literal_v<u8'\n', ch_type>);
+}
+
+/// @brief Expands a heterogeneous ordered run two leaves at a time without a run-time checkpoint counter.
+/// @details Each pair is fully emitted before the destination-only callback. A callback is instantiated only when a
+///          following source exists, so the completed final pair retains the cheaper single range construction path.
+template <typename Destination, typename AfterPair, typename Arg>
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void basic_general_concat_ordered_emit_pairs(
+	Destination &destination, AfterPair &, Arg &arg)
+{
+	::fast_io::details::decay::basic_general_concat_ordered_emit_one<false>(
+		destination, arg);
+}
+
+template <typename Destination, typename AfterPair, typename First, typename Second,
+		  typename... Rest>
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void basic_general_concat_ordered_emit_pairs(
+	Destination &destination, AfterPair &after_pair, First &first, Second &second,
+	Rest &...rest)
+{
+	::fast_io::details::decay::basic_general_concat_ordered_emit_one(
+		destination, first);
+	::fast_io::details::decay::basic_general_concat_ordered_emit_one<(sizeof...(Rest) != 0u)>(destination, second);
+	if constexpr (sizeof...(Rest) != 0u)
+	{
+		after_pair();
+		::fast_io::details::decay::basic_general_concat_ordered_emit_pairs(
+			destination, after_pair, rest...);
+	}
+}
+
+template <bool line, ::std::integral ch_type, typename Destination, typename AfterPair,
+		  typename... Args>
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)) && \
+	defined(__clang__) && 23 <= __clang_major__
+// Clang 23 otherwise outlines this one-use driver and its pair callback after the adaptive slow path raises the
+// surrounding cost estimate. Keeping the driver in its sole caller removes those call frames; promotion itself stays
+// cold and non-inlined, so this attribute does not replicate allocation or string-growth code.
+FAST_IO_GNU_ALWAYS_INLINE
+#endif
+inline constexpr void basic_general_concat_ordered_emit(
+	Destination &destination, AfterPair &after_pair, Args &...args)
+{
+	// Type selection must not introduce a comma-expression requirement on a printable class. Taking built-in
+	// addresses first makes every fold operand a pointer, excludes overloaded comma/address-of, and preserves the
+	// exact cv-qualified final decay object's type without evaluating any source operation.
+	using last_expression_type = ::std::remove_pointer_t<decltype((__builtin_addressof(args), ...))>;
+	if constexpr (
+		8u <= sizeof...(Args) &&
+		(::std::same_as<last_expression_type, ::std::remove_reference_t<Args>> && ...))
+	{
+		last_expression_type *arguments[]{__builtin_addressof(args)...};
+		::std::size_t index{};
+		// Peel the terminal source at compile time. The open-ended loop has no per-iteration finality branch and each
+		// completed pair still precedes its promotion checkpoint and the next source invocation.
+		for (; index + 2u < sizeof...(Args); index += 2u)
+		{
+			::fast_io::details::decay::basic_general_concat_ordered_emit_one(
+				destination, *arguments[index]);
+			::fast_io::details::decay::basic_general_concat_ordered_emit_one(
+				destination, *arguments[index + 1u]);
+			after_pair();
+		}
+		if constexpr ((sizeof...(Args) & 1u) == 0u)
+		{
+			::fast_io::details::decay::basic_general_concat_ordered_emit_one(
+				destination, *arguments[index]);
+			++index;
+		}
+		::fast_io::details::decay::basic_general_concat_ordered_emit_one<false>(
+			destination, *arguments[index]);
+	}
+	else
+	{
+		::fast_io::details::decay::basic_general_concat_ordered_emit_pairs(
+			destination, after_pair, args...);
+	}
+	if constexpr (line)
+	{
+		::fast_io::details::decay::basic_general_concat_ordered_emit_line<ch_type>(destination);
+	}
+}
+
+/// @brief Executes adaptive ordered emission and transfers the single live result when promotion occurred.
+/// @details Short records retain range construction from the private array. Long records move the already published
+///          final object; neither return arm invokes a source CPO, and destruction of the moved-from object closes the
+///          manually started lifetime exactly once.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires(
+		::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+			line, ch_type, T, Args...> &&
+		::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+			ch_type, T>)
+inline T basic_general_concat_ordered_adaptive_construct(Args &...args)
+{
+	::fast_io::details::decay::basic_concat_ordered_adaptive_buffer<ch_type, T> buffer;
+	{
+		::fast_io::io_strlike_reference_wrapper<
+			ch_type, decltype(buffer)> destination{__builtin_addressof(buffer)};
+		auto after_pair{[&buffer] {
+			::fast_io::details::decay::basic_concat_ordered_adaptive_promote_between_pairs(
+				buffer);
+		}};
+		::fast_io::details::decay::basic_general_concat_ordered_emit<line, ch_type>(
+			destination, after_pair, args...);
+	}
+	if (buffer.result_pointer != nullptr)
+	{
+		// Complete the one deferred publication before moving the result out of its manually managed lifetime.
+		::fast_io::obuffer_set_curr(
+			::fast_io::io_strlike_reference_wrapper<ch_type, T>{buffer.result_pointer},
+			buffer.buffer_current);
+		return static_cast<T &&>(*buffer.result_pointer);
+	}
+	return strlike_construct_define(
+		::fast_io::io_strlike_type<ch_type, T>, buffer.stack_buffer, buffer.buffer_current);
+}
+
+/// @brief Executes the destination-audited ordered staging construction.
+/// @details Each completed leaf advances the private logical cursor before the next begins. The adaptive one-shot
+///          overload updates its audited cached cursor directly; every other leaf publishes the equivalent cursor through
+///          the ordinary adapter. This is the formal immediate-consumption boundary for scratch-backed scatter producers.
+///          The adapter scope ends before range construction, so a future stateful adapter cannot defer publication past
+///          the read of the completed prefix; an exception destroys only the private buffer and cannot publish a partial
+///          result. The trailing line feed is appended once after the fold, preserving concat's record semantics without
+///          instantiating a whole-pack planner.
+template <bool line, ::std::integral ch_type, typename T, typename... Args>
+	requires ::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+		line, ch_type, T, Args...>
+inline constexpr T basic_general_concat_ordered_staging_construct(Args &...args)
+{
+	if constexpr (
+		::fast_io::details::decay::basic_general_concat_ordered_staging_adaptive_destination<
+			ch_type, T>)
+	{
+		FAST_IO_IF_NOT_CONSTEVAL
+		{
+			return ::fast_io::details::decay::basic_general_concat_ordered_adaptive_construct<
+				line, ch_type, T>(args...);
+		}
+	}
+	basic_concat_buffer<ch_type> buffer;
+	{
+		auto destination{io_strlike_ref(::fast_io::io_alias, buffer)};
+		auto after_pair{[]() constexpr noexcept {}};
+		::fast_io::details::decay::basic_general_concat_ordered_emit<line, ch_type>(
+			destination, after_pair, args...);
+	}
+	return strlike_construct_define(
+		::fast_io::io_strlike_type<ch_type, T>, buffer.buffer_begin, buffer.buffer_curr);
+}
 
 /// @brief Recognizes a construct-only destination which prefers coalescing a pure dynamic-reserve run.
 /// @details This destination policy is deliberately independent from the dynamic-reserve concept. The source protocol
@@ -3435,9 +4330,21 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 		}
 		else if constexpr (buffer_strlike<ch_type, T>)
 		{
-			T str;
-			basic_general_concat_decay_ref_impl<line, ch_type>(str, args...);
-			return str;
+			if constexpr (
+				::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+					line, ch_type, T, Args...>)
+			{
+				// The native-string policy still requires an unretained scatter barrier. The staging dispatcher consumes
+				// that descriptor immediately while its inline area avoids growing an empty result.
+				return ::fast_io::details::decay::basic_general_concat_ordered_staging_construct<
+					line, ch_type, T>(args...);
+			}
+			else
+			{
+				T str;
+				basic_general_concat_decay_ref_impl<line, ch_type>(str, args...);
+				return str;
+			}
 		}
 		else if constexpr (
 			line && sizeof...(Args) == 1u &&
@@ -3570,6 +4477,15 @@ inline constexpr T basic_general_concat_phase1_decay_ref_impl(Args &...args)
 				auto p{print_reserve_define_chain_impl<line>(buffer.ptr, args...)};
 				return strlike_construct_define(io_strlike_type<ch_type, T>, buffer.ptr, p);
 			}
+		}
+		else if constexpr (
+			::fast_io::details::decay::basic_general_concat_ordered_staging_run_v<
+				line, ch_type, T, Args...>)
+		{
+			// Earlier exact scatter and static-reserve constructions retain priority. This arm covers the remaining
+			// destination-neutral pack with one ordered inline-first emission and one final range construction.
+			return ::fast_io::details::decay::basic_general_concat_ordered_staging_construct<
+				line, ch_type, T>(args...);
 		}
 		else if constexpr (
 			::fast_io::details::decay::basic_general_concat_precise_resize_destination_run_v<

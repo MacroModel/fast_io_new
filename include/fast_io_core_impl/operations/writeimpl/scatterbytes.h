@@ -199,12 +199,12 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 							outstmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(outsm, 0, ::fast_io::seekdir::cur)};
 		auto ret{scatter_pwrite_some_bytes_cold_impl(outsm, pscatters, n, current_position)};
 		// The branch concepts prove byte seek plus byte-positional output, and scatter status semantically denotes a
 		// prefix of this descriptor array. Using the queried origin for pwrite and then seeking by that prefix's checked
 		// byte length is exactly the state transition of sequential scatter output.
-		::fast_io::operations::decay::output_stream_seek_bytes_decay(
+		::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, ret), ::fast_io::seekdir::cur);
 		return ret;
 	}
@@ -216,13 +216,13 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_cold_impl(outstmty
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::output_stream_seek_decay(outsm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::output_stream_seek_decay_dispatch(outsm, 0, ::fast_io::seekdir::cur)};
 		auto ret{::fast_io::details::scatter_pwrite_some_bytes_via_typed_cold_impl(
 			outsm, pscatters, n, current_position)};
 		// `sizeof(char_type)==1` proves byte and character offsets are identical. Together with the exact typed pwrite
 		// result/status protocol, member-wise descriptor conversion proves that the final prefix delta has the seek
 		// operation's character unit without relying on layout aliasing.
-		::fast_io::operations::decay::output_stream_seek_decay(outsm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
+		::fast_io::operations::decay::output_stream_seek_decay_dispatch(outsm, ::fast_io::fposoffadd_scatters(0, pscatters, ret),
 															   ::fast_io::seekdir::cur);
 		return ret;
 	}
@@ -265,20 +265,10 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype &o
 		char_type *curr{obuffer_curr(outsm)};
 		char_type *ed{obuffer_end(outsm)};
 
-		::std::size_t buffptrdiff;
-		if constexpr (::fast_io::operations::decay::defines::has_obuffer_is_line_buffering_define<outstmtype>)
-		{
-			::std::ptrdiff_t pptrdf{ed - curr};
-			if (pptrdf < 0)
-			{
-				pptrdf = 0;
-			}
-			buffptrdiff = static_cast<::std::size_t>(pptrdf);
-		}
-		else
-		{
-			buffptrdiff = static_cast<::std::size_t>(ed - curr);
-		}
+		// Byte descriptors share the typed put area when one output character is
+		// one byte; its lazy all-null representation therefore denotes zero capacity.
+		::std::size_t buffptrdiff{
+			::fast_io::details::obuffer_remaining_size<char_type, outstmtype>(curr, ed)};
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
 		{
@@ -313,6 +303,12 @@ inline constexpr io_scatter_status_t scatter_write_some_bytes_impl(outstmtype &o
 	}
 	else
 	{
+		if constexpr (
+			::fast_io::details::abi_value_direct_scatter_write_some_bytes<outstmtype>)
+		{
+			return ::fast_io::details::scatter_write_some_bytes_abi_value_direct_impl(
+				outsm, pscatters, n);
+		}
 		return ::fast_io::details::scatter_write_some_bytes_cold_impl(outsm, pscatters, n);
 	}
 }
@@ -401,11 +397,11 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 							outstmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::output_stream_seek_bytes_decay(outsm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(outsm, 0, ::fast_io::seekdir::cur)};
 		scatter_pwrite_all_bytes_cold_impl(outsm, pscatters, n, current_position);
 		// Normal return proves complete positional byte output and positional I/O preserves current position. Advancing
 		// from the queried origin by the checked full scatter extent therefore publishes exactly the sequential result.
-		::fast_io::operations::decay::output_stream_seek_bytes_decay(
+		::fast_io::operations::decay::output_stream_seek_bytes_decay_dispatch(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
 	else if constexpr (sizeof(char_type) == 1 &&
@@ -416,13 +412,13 @@ inline constexpr void scatter_write_all_bytes_cold_impl(outstmtype &outsm, io_sc
 						::fast_io::operations::decay::defines::has_scatter_pwrite_some_overflow_define<outstmtype>))
 	{
 		auto const current_position{
-			::fast_io::operations::decay::output_stream_seek_decay(outsm, 0, ::fast_io::seekdir::cur)};
+			::fast_io::operations::decay::output_stream_seek_decay_dispatch(outsm, 0, ::fast_io::seekdir::cur)};
 		::fast_io::details::scatter_pwrite_all_bytes_via_typed_cold_impl(
 			outsm, pscatters, n, current_position);
 		// One-byte character width proves descriptor lengths and offsets retain their values under the typed view. The
 		// member-wise conversion gives that view its correct effective type, and typed positional all consumes the full
 		// range without moving current position. The following complete extent is therefore the exact sequential delta.
-		::fast_io::operations::decay::output_stream_seek_decay(
+		::fast_io::operations::decay::output_stream_seek_decay_dispatch(
 			outsm, ::fast_io::fposoffadd_scatters(0, pscatters, {n, 0}), ::fast_io::seekdir::cur);
 	}
 }
@@ -457,20 +453,10 @@ inline constexpr void scatter_write_all_bytes_impl(outstmtype &outsm, io_scatter
 		char_type *curr{obuffer_curr(outsm)};
 		char_type *ed{obuffer_end(outsm)};
 
-		::std::size_t buffptrdiff;
-		if constexpr (::fast_io::operations::decay::defines::has_obuffer_is_line_buffering_define<outstmtype>)
-		{
-			::std::ptrdiff_t pptrdf{ed - curr};
-			if (pptrdf < 0)
-			{
-				pptrdf = 0;
-			}
-			buffptrdiff = static_cast<::std::size_t>(pptrdf);
-		}
-		else
-		{
-			buffptrdiff = static_cast<::std::size_t>(ed - curr);
-		}
+		// Preserve all-operation ordering while mapping an unallocated put area to
+		// zero capacity without undefined subtraction of its null cursor pair.
+		::std::size_t buffptrdiff{
+			::fast_io::details::obuffer_remaining_size<char_type, outstmtype>(curr, ed)};
 		auto i{pscatters}, e{pscatters + n};
 		for (; i != e; ++i)
 		{
@@ -505,6 +491,15 @@ inline constexpr void scatter_write_all_bytes_impl(outstmtype &outsm, io_scatter
 	}
 	else
 	{
+		if constexpr (
+			!::fast_io::operations::decay::defines::has_write_all_bytes_overflow_define<outstmtype> &&
+			!::fast_io::operations::decay::defines::has_scatter_write_all_bytes_overflow_define<outstmtype> &&
+			::fast_io::details::abi_value_direct_scatter_write_some_bytes<outstmtype> &&
+			::fast_io::details::abi_value_direct_write_some_bytes<outstmtype>)
+		{
+			return ::fast_io::details::scatter_write_all_bytes_abi_value_direct_impl(
+				outsm, pscatters, n);
+		}
 		return ::fast_io::details::scatter_write_all_bytes_cold_impl(outsm, pscatters, n);
 	}
 }

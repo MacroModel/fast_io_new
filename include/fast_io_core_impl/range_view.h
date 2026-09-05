@@ -244,8 +244,21 @@ sized_range_view_nothrow_reserve_define() noexcept
 	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
 	using forwarded_expression_type = typename view_type::forwarded_expression_type;
 	using forwarded_value_type = typename view_type::forwarded_value_type;
+	constexpr bool traditional_iterator_copies_nothrow{
+		::std::is_nothrow_constructible_v<It, It const &> &&
+		::std::is_nothrow_constructible_v<It, It &>};
+#if defined(__HERBCEPTIONS__)
+	// The caller copies a const view into the writer's by-value parameter, whereas `auto curr_ptr{t.begin}` copies the
+	// member from that named mutable parameter. Both exact constructions execute before the deferred cursor is published.
+	constexpr bool deterministic_iterator_copy_throws{
+		::std::is_herbceptions_throws_constructible_v<It, It const &> ||
+		::std::is_herbceptions_throws_constructible_v<It, It &>};
+#else
+	constexpr bool deterministic_iterator_copy_throws{};
+#endif
 	if constexpr (!::fast_io::sized_range_view_reserve_element_v<char_type, It> ||
-				  !::std::is_nothrow_copy_constructible_v<It> ||
+				  !traditional_iterator_copies_nothrow ||
+				  deterministic_iterator_copy_throws ||
 				  !::std::is_nothrow_destructible_v<It>)
 	{
 		return false;

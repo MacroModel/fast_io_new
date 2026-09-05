@@ -1286,7 +1286,7 @@ inline constexpr void print_write_all_materialized(
 	}
 	else
 	{
-		::fast_io::operations::decay::write_all_decay(
+		::fast_io::operations::decay::write_all_decay_dispatch(
 			outstm, first, last);
 	}
 }
@@ -1956,12 +1956,12 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 					{
 						// A single repacked byte range can bypass scatter output entirely.
 						auto first{static_cast<::std::byte const *>(out_scatters->base)};
-						::fast_io::operations::decay::write_all_bytes_decay(outstm, first,
+						::fast_io::operations::decay::write_all_bytes_decay_dispatch(outstm, first,
 																			first + out_scatters->len);
 						return;
 					}
 				}
-				::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, out_scatters, repacked_count);
+				::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(outstm, out_scatters, repacked_count);
 			};
 
 			constexpr ::std::size_t stack_scatter_count{
@@ -2202,11 +2202,11 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 					{
 						// A single repacked character range can bypass scatter output entirely.
 						auto [base, len] = *out_scatters;
-						::fast_io::operations::decay::write_all_decay(outstm, base, base + len);
+						::fast_io::operations::decay::write_all_decay_dispatch(outstm, base, base + len);
 						return;
 					}
 				}
-				::fast_io::operations::decay::scatter_write_all_decay(outstm, out_scatters, repacked_count);
+				::fast_io::operations::decay::scatter_write_all_decay_dispatch(outstm, out_scatters, repacked_count);
 			};
 
 			constexpr ::std::size_t stack_scatter_count{
@@ -2270,7 +2270,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 			}
 			else
 			{
-				::fast_io::operations::decay::write_all_bytes_decay(
+				::fast_io::operations::decay::write_all_bytes_decay_dispatch(
 					outstm, first, first + len);
 			}
 		}
@@ -2305,7 +2305,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 					{
 						return;
 					}
-					::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
+					::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(outstm, scatters, n);
 					return;
 				}
 				if (len != 0)
@@ -2326,7 +2326,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 				}
 				else
 				{
-					::fast_io::operations::decay::write_all_bytes_decay(
+					::fast_io::operations::decay::write_all_bytes_decay_dispatch(
 						outstm, first, curr);
 				}
 			}
@@ -2348,7 +2348,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 					{
 						return;
 					}
-					::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
+					::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(outstm, scatters, n);
 					return;
 				}
 				total_size += len;
@@ -2374,7 +2374,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 				}
 				else
 				{
-					::fast_io::operations::decay::write_all_bytes_decay(
+					::fast_io::operations::decay::write_all_bytes_decay_dispatch(
 						outstm, buffer.ptr, curr);
 				}
 			}
@@ -2386,7 +2386,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 	{
 		return;
 	}
-	::fast_io::operations::decay::scatter_write_all_bytes_decay(outstm, scatters, n);
+	::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(outstm, scatters, n);
 }
 
 /// @brief    Writes character scatter descriptors, optionally coalescing small scatter runs first.
@@ -2427,7 +2427,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 			}
 			else
 			{
-				::fast_io::operations::decay::write_all_decay(
+				::fast_io::operations::decay::write_all_decay_dispatch(
 					outstm, base, base + len);
 			}
 		}
@@ -2460,7 +2460,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 					{
 						return;
 					}
-					::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
+					::fast_io::operations::decay::scatter_write_all_decay_dispatch(outstm, scatters, n);
 					return;
 				}
 				if (len != 0)
@@ -2480,7 +2480,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 				}
 				else
 				{
-					::fast_io::operations::decay::write_all_decay(
+					::fast_io::operations::decay::write_all_decay_dispatch(
 						outstm, buffer, curr);
 				}
 			}
@@ -2499,7 +2499,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 					{
 						return;
 					}
-					::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
+					::fast_io::operations::decay::scatter_write_all_decay_dispatch(outstm, scatters, n);
 					return;
 				}
 				total_size += len;
@@ -2524,7 +2524,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 				}
 				else
 				{
-					::fast_io::operations::decay::write_all_decay(
+					::fast_io::operations::decay::write_all_decay_dispatch(
 						outstm, buffer.ptr, curr);
 				}
 			}
@@ -2536,7 +2536,7 @@ inline constexpr void print_scatter_write_all_maybe_coalesce(
 	{
 		return;
 	}
-	::fast_io::operations::decay::scatter_write_all_decay(outstm, scatters, n);
+	::fast_io::operations::decay::scatter_write_all_decay_dispatch(outstm, scatters, n);
 }
 
 /// @brief Keeps the general no-scatter fallback out of the small run-time-plan caller's stack frame.
@@ -2590,7 +2590,7 @@ inline constexpr void print_runtime_scatter_plan_write(
 		auto const [base, len] = *scatters;
 		if (len != 0u)
 		{
-			::fast_io::operations::decay::write_all_decay(outstm, base, base + len);
+			::fast_io::operations::decay::write_all_decay_dispatch(outstm, base, base + len);
 		}
 		return;
 	}
@@ -2629,7 +2629,7 @@ inline constexpr void print_runtime_scatter_plan_write(
 		}
 		if (curr != buffer)
 		{
-			::fast_io::operations::decay::write_all_decay(outstm, buffer, curr);
+			::fast_io::operations::decay::write_all_decay_dispatch(outstm, buffer, curr);
 		}
 		return;
 	}
@@ -2712,12 +2712,12 @@ inline constexpr void print_scatter_write_all_preserving_static_fragments(
 	}
 	if constexpr (::std::same_as<scatter_type, ::fast_io::io_scatter_t>)
 	{
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 			outstm, scatters, n);
 	}
 	else
 	{
-		::fast_io::operations::decay::scatter_write_all_decay(
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(
 			outstm, scatters, n);
 	}
 }
@@ -3211,7 +3211,8 @@ inline constexpr bool print_retained_buffered_reserve_scatters_lifetime_v =
 ///          by this implementation to be non-throwing preserves that boundary while still permitting stateful or
 ///          consuming producers: they are invoked once, from left to right, and are never replayed.
 template <::std::integral char_type, typename T>
-inline constexpr bool print_retained_buffered_reserve_scatters_nothrow_v = []() constexpr {
+inline consteval bool print_retained_buffered_reserve_scatters_nothrow() noexcept
+{
 	if constexpr (!::fast_io::details::decay::print_retained_buffered_reserve_scatters_capability_v<
 					  char_type, T>)
 	{
@@ -3221,16 +3222,33 @@ inline constexpr bool print_retained_buffered_reserve_scatters_nothrow_v = []() 
 	{
 		using value_type =
 			::fast_io::details::decay::print_runtime_scatter_plan_unwrapped_t<T &>;
-		return requires(T &arg, ::fast_io::basic_io_scatter_t<char_type> *scatters,
-						char_type *reserve) {
-			{
-				print_reserve_scatters_define(
-					::fast_io::io_reserve_type<char_type, value_type>, scatters, reserve,
-					::fast_io::details::decay::print_runtime_scatter_plan_unwrap(arg))
-			} noexcept -> ::std::same_as<::fast_io::basic_reserve_scatters_define_result<char_type>>;
-		};
+		// The capability concept above already proves that this exact named-lvalue CPO is well-formed and has the
+		// required result type. Querying its two effects directly avoids a Clang 17 constant-evaluation defect for a
+		// requires-expression returned from an immediately invoked variable-template lambda; no protocol constraint is
+		// weakened because the expression category below is identical to the materializer's `unwrap(t)` call.
+#if defined(__HERBCEPTIONS__)
+		if constexpr (throws((print_reserve_scatters_define(
+				::fast_io::io_reserve_type<char_type, value_type>,
+				::std::declval<::fast_io::basic_io_scatter_t<char_type> *>(),
+				::std::declval<char_type *>(),
+				::fast_io::details::decay::print_runtime_scatter_plan_unwrap(::std::declval<T &>())))))
+		{
+			// Formal safety obligation: a retained producer may be reordered only when its deterministic error channel
+			// is empty independently of the traditional C++ exception channel checked below.
+			return false;
+		}
+#endif
+		return noexcept(print_reserve_scatters_define(
+			::fast_io::io_reserve_type<char_type, value_type>,
+			::std::declval<::fast_io::basic_io_scatter_t<char_type> *>(),
+			::std::declval<char_type *>(),
+			::fast_io::details::decay::print_runtime_scatter_plan_unwrap(::std::declval<T &>())));
 	}
-}();
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_retained_buffered_reserve_scatters_nothrow_v =
+	::fast_io::details::decay::print_retained_buffered_reserve_scatters_nothrow<char_type, T>();
 
 /// @brief Proves that one retained component has an exact, non-throwing byte-descriptor materializer.
 /// @details `noexcept` proves only that deferring this call cannot move an exception past earlier output. It does not
@@ -3239,27 +3257,44 @@ inline constexpr bool print_retained_buffered_reserve_scatters_nothrow_v = []() 
 ///          real `io_scatter_t` objects. Absence of that refinement deliberately returns false; the caller then builds
 ///          one typed aggregate and invokes the producer's original typed CPO without descriptor conversion.
 template <::std::integral char_type, typename T>
-inline constexpr bool print_retained_buffered_reserve_scatters_exact_byte_nothrow_v = []() constexpr {
+inline consteval bool print_retained_buffered_reserve_scatters_exact_byte_nothrow() noexcept
+{
 	using value_type =
 		::fast_io::details::decay::print_runtime_scatter_plan_unwrapped_t<T &>;
 	using value_expression =
 		::fast_io::details::decay::print_runtime_scatter_plan_unwrapped_expression_t<T &>;
 	if constexpr (::fast_io::reserve_scatters_bytes_printable<char_type, value_expression>)
 	{
-		return requires(value_expression value, ::fast_io::io_scatter_t *scatters,
-						char_type *reserve) {
-			{
-				print_reserve_scatters_bytes_define(
-					::fast_io::io_reserve_type<char_type, value_type>, scatters, reserve, value)
-			} noexcept -> ::std::same_as<
-				::fast_io::basic_reserve_scatters_bytes_define_result<char_type>>;
-		};
+		// Model the named `decltype(auto) value` in the materializer, including cv-qualification, without changing the
+		// phase-one owner into a reference. The capability proof makes the direct effect query substitution-safe and
+		// avoids the same Clang 17 requires-expression constant-evaluation defect as the typed path above.
+		using named_value_expression =
+			::std::add_lvalue_reference_t<::std::remove_reference_t<value_expression>>;
+#if defined(__HERBCEPTIONS__)
+		if constexpr (throws((print_reserve_scatters_bytes_define(
+				  ::fast_io::io_reserve_type<char_type, value_type>,
+				  ::std::declval<::fast_io::io_scatter_t *>(), ::std::declval<char_type *>(),
+				  ::std::declval<named_value_expression>()))))
+		{
+			// A deferred byte producer must also have an empty deterministic error channel; `noexcept` alone does not
+			// establish that Herbceptions obligation.
+			return false;
+		}
+#endif
+		return noexcept(print_reserve_scatters_bytes_define(
+			::fast_io::io_reserve_type<char_type, value_type>,
+			::std::declval<::fast_io::io_scatter_t *>(), ::std::declval<char_type *>(),
+			::std::declval<named_value_expression>()));
 	}
 	else
 	{
 		return false;
 	}
-}();
+}
+
+template <::std::integral char_type, typename T>
+inline constexpr bool print_retained_buffered_reserve_scatters_exact_byte_nothrow_v =
+	::fast_io::details::decay::print_retained_buffered_reserve_scatters_exact_byte_nothrow<char_type, T>();
 
 /// @brief Proves exact byte-plan availability and exception safety for the selected leading component count.
 /// @details Prefix length is a strategy result and can be shorter than the argument pack. Recursing on the explicit
@@ -3815,7 +3850,7 @@ inline constexpr void print_context_define_to_window(outputstmtype &outstm, cont
 				*resit = ::fast_io::char_literal_v<u8'\n', char_type>;
 				++resit;
 			}
-			::fast_io::operations::decay::write_all_decay(outstm, buffer, resit);
+			::fast_io::operations::decay::write_all_decay_dispatch(outstm, buffer, resit);
 			if (done)
 			{
 				// The final line-terminated context window has been written.
@@ -3825,7 +3860,7 @@ inline constexpr void print_context_define_to_window(outputstmtype &outstm, cont
 		else
 		{
 			// The non-line variant writes each produced context window without adding characters.
-			::fast_io::operations::decay::write_all_decay(outstm, buffer, resit);
+			::fast_io::operations::decay::write_all_decay_dispatch(outstm, buffer, resit);
 			if (done)
 			{
 				// The final context window has been written.
@@ -3921,7 +3956,7 @@ inline constexpr void print_single_pass_staging_flush(
 	}
 	char_type *const last{state.current};
 	state.external_write_active = true;
-	::fast_io::operations::decay::write_all_decay(
+	::fast_io::operations::decay::write_all_decay_dispatch(
 		*state.output, state.begin, last);
 	state.external_write_active = false;
 	state.current = state.begin;
@@ -3966,7 +4001,7 @@ inline constexpr void write_all_overflow_define(
 		if (state.current == state.begin && capacity <= remaining)
 		{
 			state.external_write_active = true;
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				*state.output, first, last);
 			state.external_write_active = false;
 			return;
@@ -4012,7 +4047,7 @@ inline constexpr void print_single_pass_stage_and_write(
 					 staging, value);
 		if constexpr (line)
 		{
-			::fast_io::operations::decay::char_put_decay(
+			::fast_io::operations::decay::char_put_decay_dispatch(
 				staging, ::fast_io::char_literal_v<u8'\n', char_type>);
 		}
 		::fast_io::details::decay::print_single_pass_staging_flush(state);
@@ -4100,6 +4135,13 @@ inline constexpr bool print_cached_precise_growable_obuffer_available_v =
 		output_type> &&
 	::fast_io::deferred_obuffer_commit_safe<char_type, output_type> &&
 	requires(output_type &output, char_type *cursor) {
+#if defined(__HERBCEPTIONS__)
+		// Let C, E, and S be the exact cursor-read, end-read, and cursor-publication expressions used below.
+		// Deferred publication is admissible only when each operation proves `!throws(X) && noexcept(X)`.
+		requires(!throws((obuffer_curr(output))));
+		requires(!throws((obuffer_end(output))));
+		requires(!throws((obuffer_set_curr(output, cursor))));
+#endif
 		{ obuffer_curr(output) } noexcept -> ::std::same_as<char_type *>;
 		{ obuffer_end(output) } noexcept -> ::std::same_as<char_type *>;
 		{ obuffer_set_curr(output, cursor) } noexcept -> ::std::same_as<void>;
@@ -4245,7 +4287,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		{
 			auto const scatter{static_scatter_traits::define(t)};
 			auto const base{scatter.base};
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				outstm, base, base + static_scatter_traits::size);
 		}
 	}
@@ -4341,7 +4383,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 			}
 			else
 			{
-				::fast_io::operations::decay::write_all_decay(outstm, scatter_res.base, scatter_res.base + scatter_res.len);
+				::fast_io::operations::decay::write_all_decay_dispatch(outstm, scatter_res.base, scatter_res.base + scatter_res.len);
 			}
 		}
 	}
@@ -4389,7 +4431,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 				}
 				decltype(auto) staging_output{
 					print_static_reserve_staging_output_define(outstm)};
-				::fast_io::operations::decay::write_all_decay(
+				::fast_io::operations::decay::write_all_decay_dispatch(
 					staging_output, buffer, iter);
 			}
 			else if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> &&
@@ -4518,7 +4560,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		print_define(::fast_io::io_reserve_type<char_type, value_type>, outstm, t);
 		if constexpr (line)
 		{
-			::fast_io::operations::decay::char_put_decay(outstm, lfch);
+			::fast_io::operations::decay::char_put_decay_dispatch(outstm, lfch);
 		}
 	}
 	else if constexpr (
@@ -4540,7 +4582,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		print_define(::fast_io::io_reserve_type<char_type, value_type>, outstm, t);
 		if constexpr (line)
 		{
-			::fast_io::operations::decay::char_put_decay(outstm, lfch);
+			::fast_io::operations::decay::char_put_decay_dispatch(outstm, lfch);
 		}
 	}
 	else if constexpr (
@@ -4773,8 +4815,9 @@ inline constexpr void print_control_single(output &outstm, T &t)
 							{
 								// A flushable put area gets one opportunity to expose a fresh producer window.  Merely having
 								// obuffer cursors does not imply this CPO; keeping the probe here prevents a valid fixed-memory
-								// sink from failing during template instantiation in a run-time-only exhausted-buffer branch.
-								::fast_io::operations::decay::output_stream_buffer_flush_decay(outstm);
+								// sink from failing during template instantiation in a run-time-only exhausted-buffer branch. The
+								// named observer must use policy dispatch so an inline put cursor is never flushed through a copy.
+								::fast_io::operations::decay::output_stream_buffer_flush_decay_dispatch(outstm);
 								bcurr = obuffer_curr(outstm);
 								bed = obuffer_end(outstm);
 							}
@@ -4842,7 +4885,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 							if constexpr (line)
 							{
 								// The line variant writes the trailing newline after the final context window.
-								::fast_io::operations::decay::char_put_decay(outstm, lfch);
+								::fast_io::operations::decay::char_put_decay_dispatch(outstm, lfch);
 							}
 							return;
 						}
@@ -4892,7 +4935,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		if constexpr (line)
 		{
 			// The line variant appends the newline after the customization has emitted its output.
-			::fast_io::operations::decay::char_put_decay(outstm, lfch);
+			::fast_io::operations::decay::char_put_decay_dispatch(outstm, lfch);
 		}
 	}
 	else if constexpr (::std::same_as<::std::remove_cvref_t<value_type>, ::fast_io::io_null_t>)
@@ -4900,7 +4943,7 @@ inline constexpr void print_control_single(output &outstm, T &t)
 		// Null output contributes no payload, but the line variant still emits its trailing newline.
 		if constexpr (line)
 		{
-			::fast_io::operations::decay::char_put_decay(outstm, lfch);
+			::fast_io::operations::decay::char_put_decay_dispatch(outstm, lfch);
 		}
 	}
 	else
@@ -5195,7 +5238,7 @@ inline constexpr void context_capture_flush(output &outstm, char_type *buffer, c
 	if (curr != buffer)
 	{
 		// Pending captured output is emitted as one contiguous range before the buffer is reused.
-		::fast_io::operations::decay::write_all_decay(outstm, buffer, curr);
+		::fast_io::operations::decay::write_all_decay_dispatch(outstm, buffer, curr);
 		curr = buffer;
 	}
 }
@@ -5716,7 +5759,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 		{
 			*iter++ = lfch;
 		}
-		::fast_io::operations::decay::write_all_decay(outstm, buffer, iter);
+		::fast_io::operations::decay::write_all_decay_dispatch(outstm, buffer, iter);
 		return;
 	}
 
@@ -6354,9 +6397,22 @@ inline consteval bool print_buffered_mixed_put_area_leaf() noexcept
 		::fast_io::details::decay::print_buffered_passive_reserve_leaf<value_type>::value &&
 		::fast_io::reserve_printable<char_type, value_type>)
 	{
+#if defined(__HERBCEPTIONS__)
+		return requires(char_type *iter, T &value) {
+			// E is the named-lvalue reserve definition executed after the complete run passes preflight.
+			// The delayed cursor commit is valid iff E has neither deterministic nor unwind failure.
+			requires(!throws((print_reserve_define(
+				::fast_io::io_reserve_type<char_type, value_type>, iter, value))));
+			{
+				print_reserve_define(
+					::fast_io::io_reserve_type<char_type, value_type>, iter, value)
+			} noexcept -> ::std::same_as<char_type *>;
+		};
+#else
 		return noexcept(print_reserve_define(
 			::fast_io::io_reserve_type<char_type, value_type>,
 			::std::declval<char_type *>(), ::std::declval<T &>()));
+#endif
 	}
 	else
 	{
@@ -6555,7 +6611,14 @@ inline constexpr char_type *print_buffered_mixed_put_area_emit(
 /// @brief Proves the non-throwing cursor operations used by deferred put-area publication.
 template <typename outputstmtype, typename char_type>
 concept print_buffered_mixed_nothrow_put_area = ::std::integral<char_type> && requires(
-																				  outputstmtype &optstm, char_type *cursor) {
+																	  outputstmtype &optstm, char_type *cursor) {
+#if defined(__HERBCEPTIONS__)
+	// These are the exact named output expressions used by both mixed emitters. A deterministic error cannot be
+	// represented after raw bytes have been written but before the final cursor is published.
+	requires(!throws((obuffer_curr(optstm))));
+	requires(!throws((obuffer_end(optstm))));
+	requires(!throws((obuffer_set_curr(optstm, cursor))));
+#endif
 	{ obuffer_curr(optstm) } noexcept -> ::std::same_as<char_type *>;
 	{ obuffer_end(optstm) } noexcept -> ::std::same_as<char_type *>;
 	{ obuffer_set_curr(optstm, cursor) } noexcept -> ::std::same_as<void>;
@@ -6948,7 +7011,7 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 							*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
 							++ptr;
 						}
-						::fast_io::operations::decay::write_all_decay(optstm, buffer, ptr);
+						::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptr);
 					}
 					else
 					{
@@ -6961,7 +7024,7 @@ inline constexpr bool print_controls_scatters_try_materialize(outputstmtype &opt
 							*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
 							++ptr;
 						}
-						::fast_io::operations::decay::write_all_decay(optstm, buffer.ptr, ptr);
+						::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer.ptr, ptr);
 					}
 					return true;
 				}
@@ -8270,7 +8333,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
 								++ptred;
 							}
-							::fast_io::operations::decay::write_all_decay(optstm, buffer, ptred);
+							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 						else
 						{
@@ -8286,7 +8349,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
 								++ptred;
 							}
-							::fast_io::operations::decay::write_all_decay(optstm, buffer, ptred);
+							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 					}
 					else
@@ -8302,7 +8365,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 							*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
 							++ptred;
 						}
-						::fast_io::operations::decay::write_all_decay(optstm, buffer, ptred);
+						::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 					}
 				}
 				else if constexpr (res.hasreserve)
@@ -8314,7 +8377,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 						if constexpr (needprintlf)
 						{
 							// The line variant emits the trailing newline as a single character output.
-							::fast_io::operations::decay::char_put_decay(optstm,
+							::fast_io::operations::decay::char_put_decay_dispatch(optstm,
 																		 ::fast_io::char_literal_v<u8'\n', char_type>);
 						}
 					}
@@ -8334,7 +8397,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
 								++ptred;
 							}
-							::fast_io::operations::decay::write_all_decay(optstm, buffer, ptred);
+							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 						else
 						{
@@ -8349,7 +8412,7 @@ inline constexpr void print_controls_impl(outputstmtype &optstm, T &t, Args &...
 								*ptred = ::fast_io::char_literal_v<u8'\n', char_type>;
 								++ptred;
 							}
-							::fast_io::operations::decay::write_all_decay(optstm, buffer, ptred);
+							::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptred);
 						}
 					}
 				}
@@ -8630,7 +8693,7 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 									*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
 									++ptr;
 								}
-								::fast_io::operations::decay::write_all_decay(optstm, buffer, ptr);
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptr);
 							}
 							else
 							{
@@ -8646,7 +8709,7 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 									*ptr = ::fast_io::char_literal_v<u8'\n', char_type>;
 									++ptr;
 								}
-								::fast_io::operations::decay::write_all_decay(optstm, buffer, ptr);
+								::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, ptr);
 							}
 						}
 					}
@@ -8787,7 +8850,14 @@ print_fixed_public_integral_manip_source_available() noexcept
 		return false;
 	}
 	else if constexpr (requires(source_reference &source) {
-						   {
+#if defined(__HERBCEPTIONS__)
+							   // The shortcut elides the generic normalization graph. Each expression it elides must have
+							   // neither deterministic failure nor a traditional unwind edge for this exact named public lvalue.
+							   requires(!throws((::fast_io::io_print_alias(source))));
+							   requires(!throws((::fast_io::io_print_forward<char_type>(
+								   ::fast_io::io_print_alias(source)))));
+#endif
+							   {
 							   ::fast_io::io_print_alias(source)
 						   } noexcept;
 						   {
@@ -8799,7 +8869,11 @@ print_fixed_public_integral_manip_source_available() noexcept
 		return ::fast_io::reserve_printable<char_type, source_value> &&
 			requires(char_type * ptr, source_value & value)
 		{
-			{
+#if defined(__HERBCEPTIONS__)
+				requires(!throws((print_reserve_define(
+					::fast_io::io_reserve_type<char_type, source_value>, ptr, value))));
+#endif
+				{
 				print_reserve_define(
 					::fast_io::io_reserve_type<char_type, source_value>,
 					ptr, value)
@@ -8852,6 +8926,29 @@ inline constexpr bool print_semantic_input_forward_nothrow = []() constexpr {
 	}
 }();
 
+#if defined(__HERBCEPTIONS__)
+/// @brief Classifies semantic source normalization's deterministic error effect from its exact selected expression.
+/// @details A parameterless semantic alias deliberately bypasses status forwarding and enters only the ordinary
+///          value/reference transport. Every other alias enters character-aware forwarding. Querying the complete
+///          expression in each arm includes both alias evaluation and any required result materialization without
+///          conflating that ABI effect with the independent traditional-exception `noexcept` contract above.
+template <::std::integral char_type, typename T>
+inline constexpr bool print_semantic_input_forward_herbceptions_throws = []() constexpr {
+	if constexpr (::fast_io::details::decay::print_semantic_node_no_parameter_v<
+						  ::std::remove_cvref_t<
+							  decltype(::fast_io::io_print_alias(::std::declval<T>()))>>)
+	{
+		return throws((::fast_io::details::io_print_forward_transport(
+			::fast_io::io_print_alias(::std::declval<T>()))));
+	}
+	else
+	{
+		return throws((::fast_io::io_print_forward<char_type>(
+			::fast_io::io_print_alias(::std::declval<T>()))));
+	}
+}();
+#endif
+
 /// @brief    Applies the semantic input forwarding protocol to one argument.
 /// @tparam   char_type the print character type
 /// @tparam   T         the input argument type
@@ -8860,11 +8957,16 @@ inline constexpr bool print_semantic_input_forward_nothrow = []() constexpr {
 /// @note     Both aliasing and status forwarding are extension CPOs.  The conditional exception specification is
 ///           derived from the selected branch, so a throwing customization propagates rather than terminating.
 template <::std::integral char_type, typename T>
-inline constexpr decltype(auto) print_semantic_input_forward(T &&t) noexcept(::fast_io::details::decay::print_semantic_input_forward_nothrow<char_type, T>)
+inline constexpr decltype(auto) print_semantic_input_forward(T &&t)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::decay::print_semantic_input_forward_herbceptions_throws<char_type, T>),
+		::fast_io::details::decay::print_semantic_input_forward_nothrow<char_type, T>)
 {
+	// The exact alias-and-forward transaction determines one conditional deterministic effect. A false condition remains
+	// on the language-defined plain ABI; ordinary compilers retain the historical conditional-noexcept signature.
 	if constexpr (::fast_io::details::decay::print_semantic_node_no_parameter_v<
-					  ::std::remove_cvref_t<
-						  decltype(::fast_io::io_print_alias(::std::forward<T>(t)))>>)
+						  ::std::remove_cvref_t<
+							  decltype(::fast_io::io_print_alias(::std::forward<T>(t)))>>)
 	{
 		// Alias results that are already parameterless semantic nodes must not enter status forwarding again. They do,
 		// however, need the ordinary value-or-reference transport at this normalization boundary: copying a large
@@ -11767,7 +11869,7 @@ inline constexpr decltype(auto) print_freestanding_decay_no_pack(outputstmtype &
 		// reaching this branch proves line mode and emits its one required newline.
 		static_assert(line);
 		using char_type = typename outputstmtype::output_char_type;
-		return ::fast_io::operations::decay::char_put_decay(
+		return ::fast_io::operations::decay::char_put_decay_dispatch(
 			optstm, char_literal_v<u8'\n', char_type>);
 	}
 	else if constexpr (
@@ -11891,11 +11993,11 @@ inline constexpr void print_semantic_write_fill_large_contiguous(outputstmtype &
 		::fast_io::details::my_fill_n(buffer.ptr, desired_buffer_size, ch);
 		while (desired_buffer_size < n)
 		{
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				optstm, buffer.ptr, buffer.ptr + desired_buffer_size);
 			n -= desired_buffer_size;
 		}
-		::fast_io::operations::decay::write_all_decay(optstm, buffer.ptr, buffer.ptr + n);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer.ptr, buffer.ptr + n);
 	}
 	else
 	{
@@ -11905,10 +12007,10 @@ inline constexpr void print_semantic_write_fill_large_contiguous(outputstmtype &
 		::fast_io::details::my_fill_n(buffer, buffer_size, ch);
 		while (buffer_size < n)
 		{
-			::fast_io::operations::decay::write_all_decay(optstm, buffer, buffer + buffer_size);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, buffer + buffer_size);
 			n -= buffer_size;
 		}
-		::fast_io::operations::decay::write_all_decay(optstm, buffer, buffer + n);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, buffer + n);
 	}
 }
 
@@ -11941,7 +12043,7 @@ inline constexpr void print_semantic_write_fill(outputstmtype &optstm, ::std::si
 			// branch before the scatter policy prevents a 256 -> 257 transition from instantiating a 4-KiB hot frame.
 			char_type buffer[inline_capacity];
 			::fast_io::details::my_fill_n(buffer, n, ch);
-			::fast_io::operations::decay::write_all_decay(optstm, buffer, buffer + n);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, buffer + n);
 			return;
 		}
 	}
@@ -11972,7 +12074,7 @@ inline constexpr void print_semantic_write_fill(outputstmtype &optstm, ::std::si
 			::fast_io::details::my_fill_n(buffer, block_size, ch);
 			if (n <= block_size)
 			{
-				::fast_io::operations::decay::write_all_decay(optstm, buffer, buffer + n);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, buffer + n);
 				return;
 			}
 			scatter_type scatters[scatter_count];
@@ -13360,7 +13462,12 @@ template <::std::integral char_type, typename expression_type>
 inline consteval bool print_semantic_single_pass_bounded_internal_shift_nothrow() noexcept
 {
 	if constexpr (!requires {
-					  {
+#if defined(__HERBCEPTIONS__)
+						  requires(!throws((
+							  ::fast_io::details::decay::print_semantic_input_forward<char_type>(
+								  ::std::declval<expression_type>()))));
+#endif
+						  {
 						  ::fast_io::details::decay::print_semantic_input_forward<char_type>(
 							  ::std::declval<expression_type>())
 					  } noexcept;
@@ -13389,6 +13496,12 @@ inline consteval bool print_semantic_single_pass_bounded_internal_shift_nothrow(
 		else
 		{
 			return requires(stable_node_expression node) {
+#if defined(__HERBCEPTIONS__)
+				// Internal placement observes this exact named leaf after emission. A deterministic failure would
+				// strand already-written output even when the extension currently reports `noexcept(E)` as true.
+				requires(!throws((print_define_internal_shift(
+					::fast_io::io_reserve_type<char_type, node_type>, node))));
+#endif
 				{
 					print_define_internal_shift(
 						::fast_io::io_reserve_type<char_type, node_type>, node)
@@ -13406,7 +13519,12 @@ template <::std::integral char_type, typename expression_type>
 inline consteval bool print_semantic_single_pass_bounded_define_nothrow() noexcept
 {
 	if constexpr (!requires {
-					  {
+#if defined(__HERBCEPTIONS__)
+						  requires(!throws((
+							  ::fast_io::details::decay::print_semantic_input_forward<char_type>(
+								  ::std::declval<expression_type>()))));
+#endif
+						  {
 						  ::fast_io::details::decay::print_semantic_input_forward<char_type>(
 							  ::std::declval<expression_type>())
 					  } noexcept;
@@ -13469,6 +13587,12 @@ inline consteval bool print_semantic_single_pass_bounded_define_nothrow() noexce
 			 ::fast_io::dynamic_reserve_printable<char_type, node_type>))
 		{
 			return requires(char_type *iter, stable_node_expression node) {
+#if defined(__HERBCEPTIONS__)
+				// Let E be the named leaf define executed by the unchecked emitter. Strategy admission requires
+				// `!throws(E) && noexcept(E)`; the following compound requirement supplies the second conjunct.
+				requires(!throws((print_reserve_define(
+					::fast_io::io_reserve_type<char_type, node_type>, iter, node))));
+#endif
 				{
 					print_reserve_define(
 						::fast_io::io_reserve_type<char_type, node_type>,
@@ -13519,6 +13643,14 @@ concept print_semantic_single_pass_bounded_passive_companion =
 		char_type,
 		::fast_io::operations::decay::print_semantic_single_pass_bounded_node_t<T>> &&
 	requires(T &value, char_type *iter) {
+#if defined(__HERBCEPTIONS__)
+		requires(!throws((print_reserve_define(
+			::fast_io::io_reserve_type<
+				char_type,
+				::fast_io::operations::decay::print_semantic_single_pass_bounded_node_t<T>>,
+			iter,
+			::fast_io::details::decay::print_semantic_node_ref(value)))));
+#endif
 		{
 			print_reserve_define(
 				::fast_io::io_reserve_type<
@@ -13583,6 +13715,10 @@ print_semantic_extended_bounded_passive_companion_impl() noexcept
 				   (explicitly_passive &&
 					::fast_io::reserve_printable<char_type, node_type> &&
 					requires(node_expression node, char_type *iter) {
+#if defined(__HERBCEPTIONS__)
+						requires(!throws((print_reserve_define(
+							::fast_io::io_reserve_type<char_type, node_type>, iter, node))));
+#endif
 						{
 							print_reserve_define(
 								::fast_io::io_reserve_type<char_type, node_type>, iter, node)
@@ -14035,7 +14171,7 @@ inline constexpr bool print_semantic_try_large_passive_bounded_stack(
 	char_type *const actual_end{
 		::fast_io::operations::decay::print_semantic_emit_unchecked_run<
 			line, char_type, true>(buffer, args...)};
-	::fast_io::operations::decay::write_all_decay(optstm, buffer, actual_end);
+	::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, actual_end);
 	return true;
 }
 
@@ -14136,7 +14272,7 @@ inline constexpr void print_semantic_materialize_large_stack_and_write(outputstm
 			buffer, ::std::forward<Args>(args)...)};
 	if (iter != buffer)
 	{
-		::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, iter);
 	}
 }
 
@@ -14159,7 +14295,7 @@ inline constexpr void print_semantic_materialize_stack_and_write(outputstmtype &
 				buffer, ::std::forward<Args>(args)...)};
 		if (iter != buffer)
 		{
-			::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, iter);
 		}
 	}
 	else
@@ -14199,7 +14335,7 @@ inline constexpr void print_semantic_materialize_fixed_external_bounded_and_writ
 		}
 		if (actual_end != buffer)
 		{
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				optstm, buffer, actual_end);
 		}
 	}
@@ -14216,7 +14352,7 @@ inline constexpr void print_semantic_materialize_fixed_external_bounded_and_writ
 		}
 		if (actual_end != first)
 		{
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				optstm, first, actual_end);
 		}
 	}
@@ -14251,7 +14387,7 @@ print_semantic_emit_single_pass_bounded_stack(outputstmtype &optstm,
 			line, char_type, true>(buffer, args...)};
 	if (iter != buffer)
 	{
-		::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, iter);
 	}
 }
 
@@ -14446,7 +14582,7 @@ inline constexpr bool print_semantic_try_bounded_coalesce(outputstmtype &optstm,
 				char_type *const last{
 					::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type, true>(
 						first, ::std::forward<Args>(args)...)};
-				::fast_io::operations::decay::write_all_decay(optstm, first, last);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 				return true;
 			}
 		}
@@ -14561,7 +14697,7 @@ inline constexpr bool print_semantic_try_precise_coalesce(outputstmtype &optstm,
 				char_type *const last{
 					::fast_io::operations::decay::print_semantic_emit_unchecked_run<line, char_type>(
 						first, ::std::forward<Args>(args)...)};
-				::fast_io::operations::decay::write_all_decay(optstm, first, last);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 				return true;
 			}
 		}
@@ -15013,7 +15149,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 				// The line variant terminates the stack-buffered field with a newline.
 				*iter++ = ::fast_io::char_literal_v<u8'\n', char_type>;
 			}
-			::fast_io::operations::decay::write_all_decay(optstm, buffer, iter);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, iter);
 			return;
 		}
 	}
@@ -15092,14 +15228,14 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 					// An invalid insertion point has no safe prefix/suffix split. Apply the same right-placement
 					// fallback as every contiguous strategy so output semantics do not depend on buffer capacity.
 					::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-					::fast_io::operations::decay::write_all_decay(optstm, first, last);
+					::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 				}
 				else
 				{
 					// The stream receives the internal prefix, padding, and remaining child suffix in order.
-					::fast_io::operations::decay::write_all_decay(optstm, first, first + internal_len);
+					::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, first + internal_len);
 					::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-					::fast_io::operations::decay::write_all_decay(optstm, first + internal_len, last);
+					::fast_io::operations::decay::write_all_decay_dispatch(optstm, first + internal_len, last);
 				}
 			}
 		}
@@ -15113,7 +15249,7 @@ inline constexpr void print_semantic_emit_width_direct(outputstmtype &optstm, T 
 	if constexpr (line)
 	{
 		// The line variant appends the newline after the streaming fallback field.
-		::fast_io::operations::decay::char_put_decay(optstm, ::fast_io::char_literal_v<u8'\n', char_type>);
+		::fast_io::operations::decay::char_put_decay_dispatch(optstm, ::fast_io::char_literal_v<u8'\n', char_type>);
 	}
 }
 
@@ -15220,7 +15356,7 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 	if (width <= len || placement_code == 0u)
 	{
 		// Buffered fallback width is already satisfied, so the child bytes are forwarded unchanged.
-		::fast_io::operations::decay::write_all_decay(optstm, first, last);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 	}
 	else
 	{
@@ -15299,15 +15435,15 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 				{
 					// Spare capacity keeps the newline in the same final write.
 					*field_last++ = ::fast_io::char_literal_v<u8'\n', char_type>;
-					::fast_io::operations::decay::write_all_decay(optstm, mutable_first, field_last);
+					::fast_io::operations::decay::write_all_decay_dispatch(optstm, mutable_first, field_last);
 					return;
 				}
 			}
-			::fast_io::operations::decay::write_all_decay(optstm, mutable_first, field_last);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, mutable_first, field_last);
 			if constexpr (line)
 			{
 				// A completely full buffer writes its newline separately instead of growing solely for one character.
-				::fast_io::operations::decay::char_put_decay(
+				::fast_io::operations::decay::char_put_decay_dispatch(
 					optstm, ::fast_io::char_literal_v<u8'\n', char_type>);
 			}
 			return;
@@ -15315,7 +15451,7 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 		if (placement_code == 1u)
 		{
 			// Buffered fallback left placement writes the child bytes followed by trailing padding.
-			::fast_io::operations::decay::write_all_decay(optstm, first, last);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 			::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
 		}
 		else if (placement_code == 2u)
@@ -15324,7 +15460,7 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 			::std::size_t const left_padding{padding >> 1u};
 			::std::size_t const right_padding{padding - left_padding};
 			::fast_io::operations::decay::print_semantic_write_fill(optstm, left_padding, fillch);
-			::fast_io::operations::decay::write_all_decay(optstm, first, last);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 			::fast_io::operations::decay::print_semantic_write_fill(optstm, right_padding, fillch);
 		}
 		else if (placement_code == 4u)
@@ -15336,7 +15472,7 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 			{
 				// Without an internal shift point, internal placement falls back to right placement.
 				::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-				::fast_io::operations::decay::write_all_decay(optstm, first, last);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 			}
 			else if (len < internal_len)
 			{
@@ -15344,27 +15480,27 @@ inline constexpr void print_semantic_emit_width(outputstmtype &optstm, T &&t)
 				// child is the right-placement fallback and keeps this streaming branch observably identical to every
 				// contiguous width strategy.
 				::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-				::fast_io::operations::decay::write_all_decay(optstm, first, last);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 			}
 			else
 			{
 				// The stream receives the buffered internal prefix, padding, and suffix in order.
-				::fast_io::operations::decay::write_all_decay(optstm, first, first + internal_len);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, first + internal_len);
 				::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-				::fast_io::operations::decay::write_all_decay(optstm, first + internal_len, last);
+				::fast_io::operations::decay::write_all_decay_dispatch(optstm, first + internal_len, last);
 			}
 		}
 		else
 		{
 			// Buffered fallback right placement writes leading padding before the child bytes.
 			::fast_io::operations::decay::print_semantic_write_fill(optstm, padding, fillch);
-			::fast_io::operations::decay::write_all_decay(optstm, first, last);
+			::fast_io::operations::decay::write_all_decay_dispatch(optstm, first, last);
 		}
 	}
 	if constexpr (line)
 	{
 		// The line variant appends a newline after the buffered fallback field.
-		::fast_io::operations::decay::char_put_decay(optstm, ::fast_io::char_literal_v<u8'\n', char_type>);
+		::fast_io::operations::decay::char_put_decay_dispatch(optstm, ::fast_io::char_literal_v<u8'\n', char_type>);
 	}
 }
 
@@ -15981,7 +16117,7 @@ struct print_semantic_emit_flat_runtime_continuation
 				// customization is observed.  For two nonempty leaves the gate above proves exact ordered-call equivalence.
 				if ((true && ... && (filtered_args.len != 0u)))
 				{
-					(::fast_io::operations::decay::write_all_decay(
+					(::fast_io::operations::decay::write_all_decay_dispatch(
 						 optstm, filtered_args.base, filtered_args.base + filtered_args.len),
 					 ...);
 					if constexpr (line)
@@ -15989,7 +16125,7 @@ struct print_semantic_emit_flat_runtime_continuation
 						// The ordinary descriptor fallback appends this same static range.  Reusing its base preserves both the
 						// scalar write boundary and pointer identity; `char_put` would be a different output customization.
 						auto const [base, len]{::fast_io::details::decay::line_scatter_common<char_type>};
-						::fast_io::operations::decay::write_all_decay(optstm, base, base + len);
+						::fast_io::operations::decay::write_all_decay_dispatch(optstm, base, base + len);
 					}
 					return;
 				}
@@ -16255,7 +16391,7 @@ struct print_semantic_optional_scatter_barrier_segment_continuation
 		{
 			if constexpr (line)
 			{
-				::fast_io::operations::decay::char_put_decay(
+				::fast_io::operations::decay::char_put_decay_dispatch(
 					optstm,
 					::fast_io::char_literal_v<u8'\n', char_type>);
 			}
@@ -16323,7 +16459,7 @@ print_semantic_optional_scatter_emit_barrier_segment_impl(
 	{
 		if constexpr (line)
 		{
-			::fast_io::operations::decay::char_put_decay(
+			::fast_io::operations::decay::char_put_decay_dispatch(
 				optstm,
 				::fast_io::char_literal_v<u8'\n', char_type>);
 		}
@@ -16905,7 +17041,7 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 		// remaining zero-source record is line mode and owns exactly one newline.
 		static_assert(line);
 		using char_type = typename outputstmtype::output_char_type;
-		return ::fast_io::operations::decay::char_put_decay(
+		return ::fast_io::operations::decay::char_put_decay_dispatch(
 			optstm, char_literal_v<u8'\n', char_type>);
 	}
 	else if constexpr (
@@ -17290,7 +17426,7 @@ print_freestanding_decay_compiler_constant_materialized(
 			::fast_io::operations::decay::
 				print_compiler_constant_materialization_define_chain<line, char_type>(
 					buffer, args...)};
-		::fast_io::operations::decay::write_all_decay(optstm, buffer, end);
+		::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer, end);
 		return true;
 	}
 }
@@ -17451,6 +17587,13 @@ template <bool line, typename outputstmtype, typename... bounded_source_types>
 		requires { typename outputstmtype::output_char_type; } &&
 		::fast_io::operations::decay::print_semantic_single_pass_bounded_put_area_run<
 			typename outputstmtype::output_char_type, outputstmtype,
+			bounded_source_types...>() &&
+		// A direct fixed view with a compile-time reserve proof is a strictly stronger
+		// execution policy: it needs neither the conservative capacity probe nor its
+		// generic continuation.  Making that implication explicit keeps the overload
+		// set disjoint when a leaf, such as exact_decimal, advertises both protocols.
+		!::fast_io::details::decay::print_fixed_static_reserve_run_available<
+			outputstmtype, typename outputstmtype::output_char_type,
 			bounded_source_types...>() &&
 		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
 			outputstmtype> &&
@@ -17648,6 +17791,12 @@ template <bool line, typename outputstmtype, typename... bounded_source_types>
 		::fast_io::operations::decay::print_semantic_single_pass_bounded_stack_run<
 			typename outputstmtype::output_char_type, outputstmtype,
 			bounded_source_types...>() &&
+		// Preserve the same formal priority as the put-area overload above.  This
+		// exclusion also covers destinations whose coalescing threshold and direct
+		// fixed-view contract are both visible to overload resolution.
+		!::fast_io::details::decay::print_fixed_static_reserve_run_available<
+			outputstmtype, typename outputstmtype::output_char_type,
+			bounded_source_types...>() &&
 		!::fast_io::operations::decay::defines::has_output_or_io_stream_mutex_ref_define<
 			outputstmtype> &&
 		!::fast_io::operations::decay::defines::has_status_print_define<
@@ -17678,6 +17827,21 @@ inline constexpr void print_freestanding_decay_borrowed_output(
 /// microbenchmark by only about 2--5 percent, but grew the GCC 15 default-linked integration image by about 19 KiB;
 /// ordinary placement was also faster for the ample-put-area case on both audited compilers. The rare local-frame arm
 /// must therefore remain available for outlining instead of imposing its formatter graph on every buffered caller.
+template <::std::integral char_type, typename formatted_scalar_type>
+inline constexpr bool print_fixed_prefix_scalar_define_nofail_v =
+	requires(formatted_scalar_type value, char_type *iter) {
+#if defined(__HERBCEPTIONS__)
+		// Formal admission is `!throws(E) && noexcept(E)` for the exact named by-value parameter E executed by both
+		// storage arms. The extension's current `noexcept(E)` answer alone is not a deterministic-error proof.
+		requires(!throws((print_reserve_define(
+			::fast_io::io_reserve_type<char_type, formatted_scalar_type>, iter, value))));
+#endif
+		{
+			print_reserve_define(
+				::fast_io::io_reserve_type<char_type, formatted_scalar_type>, iter, value)
+		} noexcept -> ::std::same_as<char_type *>;
+	};
+
 template <bool line, typename outputstmtype, ::std::integral char_type, ::std::size_t extent,
 		  typename formatted_scalar_type>
 	requires(
@@ -17691,6 +17855,16 @@ template <bool line, typename outputstmtype, ::std::integral char_type, ::std::s
 		::fast_io::dynamic_reserve_printable<char_type, formatted_scalar_type> &&
 		::fast_io::single_pass_bounded_materialization_source<
 			char_type, formatted_scalar_type> &&
+#if defined(__HERBCEPTIONS__)
+		::fast_io::operations::decay::print_fixed_prefix_scalar_define_nofail_v<
+			char_type, formatted_scalar_type> &&
+		requires {
+			{
+				print_single_pass_bounded_direct_put_area_safe(
+					::fast_io::io_reserve_type<char_type, formatted_scalar_type>)
+			} -> ::std::same_as<::std::true_type>;
+		}
+#else
 		requires(formatted_scalar_type value, char_type *iter) {
 			{
 				print_single_pass_bounded_direct_put_area_safe(
@@ -17701,7 +17875,9 @@ template <bool line, typename outputstmtype, ::std::integral char_type, ::std::s
 					::fast_io::io_reserve_type<char_type, formatted_scalar_type>,
 					iter, value)
 			} noexcept -> ::std::same_as<char_type *>;
-		})
+		}
+#endif
+)
 inline constexpr void print_freestanding_decay_borrowed_output(
 	outputstmtype &optstm,
 	::fast_io::manipulators::static_scatter_t<char_type, extent> static_prefix,
@@ -17782,7 +17958,7 @@ inline constexpr void print_freestanding_decay_borrowed_output(
 				obuffer_set_curr(optstm, next);
 				return;
 			}
-			::fast_io::operations::decay::write_all_decay(
+			::fast_io::operations::decay::write_all_decay_dispatch(
 				optstm, record_buffer, iter);
 			return;
 		}
@@ -18921,9 +19097,22 @@ struct print_compiler_constant_pre_normalization_fragment_source
 			::fast_io::scatter_direct_print_equivalent<char_type, source_type> &&
 			::fast_io::copy_stable_borrowed_print_source<char_type, source_type>)
 		{
+#if defined(__HERBCEPTIONS__)
+			return requires(source_type &value) {
+				// The fragment plan retains the descriptor returned for this named source lvalue. Its producer must
+				// satisfy the deterministic and traditional no-failure contracts independently.
+				requires(!throws((print_scatter_define(
+					::fast_io::io_reserve_type<char_type, source_type>, value))));
+				{
+					print_scatter_define(
+						::fast_io::io_reserve_type<char_type, source_type>, value)
+				} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
+			};
+#else
 			return noexcept(print_scatter_define(
 				::fast_io::io_reserve_type<char_type, source_type>,
 				::std::declval<source_type &>()));
+#endif
 		}
 		else
 		{
@@ -19413,7 +19602,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	{
 		*current++ = ::fast_io::char_literal_v<u8'\n', char_type>;
 	}
-	::fast_io::operations::decay::write_all_decay(
+	::fast_io::operations::decay::write_all_decay_dispatch(
 		optstm, buffer.data(), current);
 }
 
@@ -20226,7 +20415,7 @@ print_compiler_constant_prepared_single_static_fragments_try(
 		}
 		else
 		{
-			::fast_io::operations::decay::scatter_write_all_bytes_decay(
+			::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 				optstm, byte_scatters, emitted);
 		}
 	}
@@ -20243,7 +20432,7 @@ print_compiler_constant_prepared_single_static_fragments_try(
 		}
 		else
 		{
-			::fast_io::operations::decay::scatter_write_all_decay(
+			::fast_io::operations::decay::scatter_write_all_decay_dispatch(
 				optstm, scatters, emitted);
 		}
 	}
@@ -20641,12 +20830,12 @@ print_compiler_constant_prepared_fragments_scatter_write(
 				::fast_io::details::intrinsics::mul_or_overflow_die(
 					scatters[index].len, sizeof(char_type))};
 		}
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 			optstm, byte_scatters, emitted);
 	}
 	else
 	{
-		::fast_io::operations::decay::scatter_write_all_decay(
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(
 			optstm, scatters, emitted);
 	}
 }
@@ -21160,12 +21349,12 @@ print_compiler_constant_pre_normalization_fragment_emit(
 				::fast_io::details::intrinsics::mul_or_overflow_die(
 					scatters[index].len, sizeof(char_type))};
 		}
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 			optstm, byte_scatters, emitted);
 	}
 	else
 	{
-		::fast_io::operations::decay::scatter_write_all_decay(
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(
 			optstm, scatters, emitted);
 	}
 }
@@ -21183,9 +21372,22 @@ struct print_compiler_constant_pre_normalization_static_source
 				value_type>::value &&
 			::fast_io::reserve_printable<char_type, value_type>)
 		{
+#if defined(__HERBCEPTIONS__)
+			return requires(char_type *iter, value_type &value) {
+				// Static pre-normalization publishes only after this named passive leaf has emitted. Preserve the
+				// strategy invariant by proving both deterministic and unwind channels empty for that exact call.
+				requires(!throws((print_reserve_define(
+					::fast_io::io_reserve_type<char_type, value_type>, iter, value))));
+				{
+					print_reserve_define(
+						::fast_io::io_reserve_type<char_type, value_type>, iter, value)
+				} noexcept -> ::std::same_as<char_type *>;
+			};
+#else
 			return noexcept(print_reserve_define(
 				::fast_io::io_reserve_type<char_type, value_type>,
 				::std::declval<char_type *>(), ::std::declval<value_type &>()));
+#endif
 		}
 		else
 		{
@@ -21407,7 +21609,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	}
 	else
 	{
-		::fast_io::operations::decay::write_all_decay(
+		::fast_io::operations::decay::write_all_decay_dispatch(
 			optstm, buffer.data(), iter);
 	}
 }
@@ -22034,8 +22236,21 @@ print_static_provider_mixed_alias_scatter_component_query()
 		::fast_io::scatter_direct_print_equivalent<char_type, value_type> &&
 		::fast_io::copy_stable_borrowed_print_source<char_type, value_type>)
 	{
+#if defined(__HERBCEPTIONS__)
+		return requires(source_reference value) {
+			// The endpoint invokes the complete alias-and-forward expression on this named source lvalue; both
+			// failure systems must classify that same expression as empty before its descriptor is retained.
+			requires(!throws((::fast_io::io_print_forward<char_type>(
+				::fast_io::io_print_alias(value)))));
+			{
+				::fast_io::io_print_forward<char_type>(
+					::fast_io::io_print_alias(value))
+			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
+		};
+#else
 		return noexcept(::fast_io::io_print_forward<char_type>(
 			::fast_io::io_print_alias(::std::declval<source_reference>())));
+#endif
 	}
 	else
 	{
@@ -22070,9 +22285,22 @@ print_static_provider_mixed_dynamic_component_query()
 		::fast_io::scatter_direct_print_equivalent<char_type, value_type> &&
 		::fast_io::copy_stable_borrowed_print_source<char_type, value_type>)
 	{
+#if defined(__HERBCEPTIONS__)
+		return requires(source_reference value) {
+			// This is the exact named-lvalue scatter projection selected in the emitter's direct branch.
+			// Descriptor retention requires `!throws(E) && noexcept(E)`, not either predicate alone.
+			requires(!throws((print_scatter_define(
+				::fast_io::io_reserve_type<char_type, value_type>, value))));
+			{
+				print_scatter_define(
+					::fast_io::io_reserve_type<char_type, value_type>, value)
+			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
+		};
+#else
 		return noexcept(print_scatter_define(
 			::fast_io::io_reserve_type<char_type, value_type>,
 			::std::declval<source_reference>()));
+#endif
 	}
 	else if constexpr (
 		::fast_io::operations::decay::
@@ -22385,12 +22613,12 @@ inline constexpr void print_static_provider_mixed_run_emit(
 				::fast_io::details::intrinsics::mul_or_overflow_die(
 					scatters[index].len, sizeof(char_type))};
 		}
-		::fast_io::operations::decay::scatter_write_all_bytes_decay(
+		::fast_io::operations::decay::scatter_write_all_bytes_decay_dispatch(
 			optstm, byte_scatters, emitted);
 	}
 	else
 	{
-		::fast_io::operations::decay::scatter_write_all_decay(
+		::fast_io::operations::decay::scatter_write_all_decay_dispatch(
 			optstm, scatters, emitted);
 	}
 }

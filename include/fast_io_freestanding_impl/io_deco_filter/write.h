@@ -16,7 +16,7 @@ inline constexpr void decowrite_all_overflow_common_define_impl(outstmtype &outs
 	while (first != last)
 	{
 		auto [it, bufferit] = outdeco.output_process_chars(first, last, bufferfirst, bufferlast);
-		::fast_io::operations::decay::write_all_decay(outstm, bufferfirst, bufferit);
+		::fast_io::operations::decay::write_all_decay_dispatch(outstm, bufferfirst, bufferit);
 		first = it;
 	}
 }

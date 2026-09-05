@@ -25,6 +25,10 @@
 #include <type_traits>
 #include <utility>
 
+// Printable forwarding below must expose the experimental deterministic-error effect without leaking helper macros
+// into a translation unit which includes this internal header directly.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
 namespace fast_io::fmt::details
 {
 
@@ -143,8 +147,57 @@ inline constexpr ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>) noexcept
 {
-	return print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>) + 1u;
+	// This is a type-static policy. A local constant proves evaluation instead of leaving a hidden run-time call in a
+	// plain `noexcept` wrapper when the provider happens to use an experimental effect annotation.
+	constexpr ::std::size_t child_size{
+		print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>)};
+	return child_size + 1u;
 }
+
+#if defined(__HERBCEPTIONS__)
+namespace details
+{
+
+/// @brief Classifies each run-time protocol edge forwarded by `printf_force_radix_t`.
+/// @details Radix insertion itself is infallible; the child invocation is therefore the complete deterministic effect
+///          of each wrapper. The queried operand categories reproduce the named expressions in the corresponding body,
+///          so overload resolution and effect declaration are one formal protocol edge.
+template <::std::integral char_type, typename value_type>
+inline constexpr bool printf_force_radix_dynamic_size_herbceptions_may_fail =
+	throws((print_reserve_size(
+		::fast_io::io_reserve_type<char_type, value_type>,
+		::std::declval<value_type &>())));
+
+template <::std::integral char_type, typename value_type>
+inline constexpr bool printf_force_radix_define_herbceptions_may_fail =
+	throws((print_reserve_define(
+		::fast_io::io_reserve_type<char_type, value_type>,
+		::std::declval<char_type *&>(), ::std::declval<value_type &>())));
+
+template <::std::integral char_type, typename value_type>
+inline constexpr bool printf_force_radix_precise_size_herbceptions_may_fail =
+	throws((print_reserve_precise_size(
+		::fast_io::io_reserve_type<char_type, value_type>,
+		::std::declval<value_type &>())));
+
+template <::std::integral char_type, ::std::random_access_iterator iterator,
+		  typename value_type>
+inline constexpr bool printf_force_radix_precise_define_herbceptions_may_fail =
+	throws((print_reserve_precise_define(
+		::fast_io::io_reserve_type<char_type, value_type>,
+		// The wrapper calls the child with its named iterator and with the const local produced after removing the
+		// radix-point slot. These reference categories are part of overload selection and therefore of the effect ABI.
+		::std::declval<iterator &>(), ::std::declval<::std::size_t const &>(),
+		::std::declval<value_type &>())));
+
+template <::std::integral char_type, typename value_type>
+inline constexpr bool printf_force_radix_internal_shift_herbceptions_may_fail =
+	throws((print_define_internal_shift(
+		::fast_io::io_reserve_type<char_type, value_type>,
+		::std::declval<value_type &>())));
+
+} // namespace details
+#endif
 
 template <::std::integral char_type, typename value_type>
 	requires requires(value_type value) {
@@ -153,8 +206,15 @@ template <::std::integral char_type, typename value_type>
 inline constexpr ::std::size_t print_reserve_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>,
-	::fast_io::manipulators::printf_force_radix_t<value_type> value) noexcept(noexcept(print_reserve_size(::fast_io::io_reserve_type<char_type, value_type>, value.value)))
+	::fast_io::manipulators::printf_force_radix_t<value_type> value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::printf_force_radix_dynamic_size_herbceptions_may_fail<
+			char_type, value_type>),
+		noexcept(print_reserve_size(
+			::fast_io::io_reserve_type<char_type, value_type>, value.value)))
 {
+	// Adding the compulsory radix slot is infallible; the declaration therefore carries exactly the named child size
+	// query's deterministic effect and its ordinary exception contract.
 	return print_reserve_size(
 			   ::fast_io::io_reserve_type<char_type, value_type>, value.value) +
 		   1u;
@@ -169,8 +229,15 @@ inline constexpr char_type *print_reserve_define(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>,
 	char_type *iter,
-	::fast_io::manipulators::printf_force_radix_t<value_type> value) noexcept(noexcept(print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, iter, value.value)))
+	::fast_io::manipulators::printf_force_radix_t<value_type> value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::printf_force_radix_define_herbceptions_may_fail<
+			char_type, value_type>),
+		noexcept(print_reserve_define(
+			::fast_io::io_reserve_type<char_type, value_type>, iter, value.value)))
 {
+	// The spelling adapter performs only bounded in-place movement; any deterministic failure is exactly the child's
+	// named emission channel, so the wrapper declares the same formal effect without changing value transport.
 	auto const end{print_reserve_define(
 		::fast_io::io_reserve_type<char_type, value_type>, iter, value.value)};
 	return ::fast_io::fmt::details::printf_insert_radix_point<char_type>(
@@ -186,9 +253,11 @@ inline constexpr ::std::size_t print_reserve_static_stack_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>) noexcept
 {
-	return print_reserve_static_stack_size(
-			   ::fast_io::io_reserve_type<char_type, value_type>) +
-		   1u;
+	// This is a type-only capacity policy. Constant evaluation proves that no run-time effectful call is hidden behind
+	// the plain wrapper and keeps the result available to array-bound consumers.
+	constexpr ::std::size_t child_size{print_reserve_static_stack_size(
+		::fast_io::io_reserve_type<char_type, value_type>)};
+	return child_size + 1u;
 }
 
 template <::std::integral char_type, typename value_type>
@@ -199,8 +268,15 @@ template <::std::integral char_type, typename value_type>
 inline constexpr ::std::size_t print_reserve_precise_size(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>,
-	::fast_io::manipulators::printf_force_radix_t<value_type> value) noexcept(noexcept(print_reserve_precise_size(::fast_io::io_reserve_type<char_type, value_type>, value.value)))
+	::fast_io::manipulators::printf_force_radix_t<value_type> value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::printf_force_radix_precise_size_herbceptions_may_fail<
+			char_type, value_type>),
+		noexcept(print_reserve_precise_size(
+			::fast_io::io_reserve_type<char_type, value_type>, value.value)))
 {
+	// The active-radix adjustment is infallible and does not inspect the child, so this wrapper's two failure channels
+	// are exactly those of the named precise-size query.
 	return print_reserve_precise_size(
 			   ::fast_io::io_reserve_type<char_type, value_type>, value.value) +
 		   static_cast<::std::size_t>(value.active);
@@ -208,17 +284,26 @@ inline constexpr ::std::size_t print_reserve_precise_size(
 
 template <::std::integral char_type, ::std::random_access_iterator iterator,
 		  typename value_type>
-	requires requires(value_type value, iterator iter, ::std::size_t size) {
+	requires requires(value_type value, iterator iter) {
 		print_reserve_precise_define(
-			::fast_io::io_reserve_type<char_type, value_type>, iter, size, value);
+			::fast_io::io_reserve_type<char_type, value_type>, iter,
+			::std::declval<::std::size_t const &>(), value);
 	}
 inline constexpr decltype(auto) print_reserve_precise_define(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>,
 	iterator iter, ::std::size_t size,
-	::fast_io::manipulators::printf_force_radix_t<value_type> value) noexcept(noexcept(print_reserve_precise_define(::fast_io::io_reserve_type<char_type, value_type>, iter,
-																													size - static_cast<::std::size_t>(value.active), value.value)))
+	::fast_io::manipulators::printf_force_radix_t<value_type> value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::printf_force_radix_precise_define_herbceptions_may_fail<
+			char_type, iterator, value_type>),
+		noexcept(print_reserve_precise_define(
+			::fast_io::io_reserve_type<char_type, value_type>, iter,
+			::std::declval<::std::size_t const &>(), value.value)))
 {
+	// `inner_size` is a named const lvalue in the executed call; the constraint, ordinary exception proof, and
+	// Herbception predicate all model that exact category. This prevents an rvalue-only decoy overload from changing
+	// admission or the declared effect while preserving the child's `void` or endpoint result domain.
 	auto const inner_size{size - static_cast<::std::size_t>(value.active)};
 	using define_result = decltype(print_reserve_precise_define(
 		::fast_io::io_reserve_type<char_type, value_type>, iter,
@@ -249,8 +334,15 @@ template <::std::integral char_type, typename value_type>
 inline constexpr ::std::size_t print_define_internal_shift(
 	::fast_io::io_reserve_type_t<char_type,
 								 ::fast_io::manipulators::printf_force_radix_t<value_type>>,
-	::fast_io::manipulators::printf_force_radix_t<value_type> value) noexcept(noexcept(print_define_internal_shift(::fast_io::io_reserve_type<char_type, value_type>, value.value)))
+	::fast_io::manipulators::printf_force_radix_t<value_type> value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		(::fast_io::details::printf_force_radix_internal_shift_herbceptions_may_fail<
+			char_type, value_type>),
+		noexcept(print_define_internal_shift(
+			::fast_io::io_reserve_type<char_type, value_type>, value.value)))
 {
+	// Radix insertion does not alter the child's internal-padding origin; the transparent query propagates the named
+	// child expression's deterministic effect and ordinary exception property unchanged.
 	return print_define_internal_shift(
 		::fast_io::io_reserve_type<char_type, value_type>, value.value);
 }
@@ -1530,3 +1622,5 @@ template <typename char_type, replacement_field field,
 }
 
 } // namespace fast_io::fmt::details
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

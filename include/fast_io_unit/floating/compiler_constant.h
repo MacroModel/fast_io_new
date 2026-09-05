@@ -1516,9 +1516,10 @@ compiler_constant_floating_to_decimal(
 		// Preserve the ordinary DA carrier exactly.  Trailing zero removal is
 		// performed by the small local loop in the materializer below instead
 		// of DA's run-time-tuned rtz helper, which need not inline in a literal
-		// fixed-format call even though every operand is optimizer-constant.
+		// fixed-format call even though every operand is optimizer-constant. This branch admits only binary32/binary64,
+		// whose raw exponent fields fit exactly in DA's signed exponent parameter.
 		return ::fast_io::details::da::to_decimal<floating_type>(
-			mantissa, exponent);
+			mantissa, static_cast<::std::int_least32_t>(exponent));
 	}
 	else
 	{

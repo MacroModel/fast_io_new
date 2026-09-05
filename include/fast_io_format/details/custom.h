@@ -12,6 +12,10 @@
 
 #include "program.h"
 
+// The format frontend is entered after the core umbrella has restored the
+// caller's macros. Re-enter fast_io's internal effect-specifier scope locally.
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
 #include <concepts>
 #include <cstddef>
 #include <type_traits>
@@ -345,9 +349,13 @@ template <auto format_literal, auto source, typename value_type>
 	requires structural_parse_expression<format_literal, source, value_type>
 [[nodiscard]] consteval auto parse_state()
 {
-	return format_parse_define(
+	// Parsing is a type-only policy. Materializing the structural result as a
+	// constant consumes a successful conservative Herbception effect during
+	// translation and can never add an error-result edge to generated code.
+	constexpr auto result{format_parse_define(
 		::fast_io::io_type_t<::std::remove_cvref_t<value_type>>{},
-		::fast_io::fmt::basic_custom_format_parse_context<format_literal, source>{});
+		::fast_io::fmt::basic_custom_format_parse_context<format_literal, source>{})};
+	return result;
 }
 
 template <typename state_tag, typename value_type>
@@ -355,12 +363,29 @@ concept alias_expression = requires(value_type &&value) {
 	format_alias_define(state_tag{}, ::std::forward<value_type>(value));
 };
 
+/** Classifies the deterministic effect of the exact ADL alias expression. */
+template <typename state_tag, typename value_type>
+inline constexpr bool alias_herbceptions_throws =
+#if defined(__HERBCEPTIONS__)
+	throws((format_alias_define(state_tag{},
+								::std::declval<value_type &&>())));
+#else
+	false;
+#endif
+
 template <typename state_tag, typename value_type>
 	requires alias_expression<state_tag, value_type>
 [[nodiscard]] inline constexpr decltype(auto) alias(
-	value_type &&value) noexcept(noexcept(format_alias_define(state_tag{}, ::std::forward<value_type>(value))))
+	value_type &&value) FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+	(alias_herbceptions_throws<state_tag, value_type>),
+	noexcept(format_alias_define(
+		state_tag{}, ::std::forward<value_type>(value))))
 {
-	// Preserve the exact source category.  In particular, do not call
+	// Preserve the exact source and result categories across the
+	// deterministic-error boundary. A successful reference result remains the
+	// provider's reference; the failure channel does not authorize
+	// materialization or ownership.
+	// In particular, do not call
 	// io_print_alias/io_print_forward here: the selected print or concat backend
 	// owns the ABI-specific decay decision and must still see the semantic node.
 	return format_alias_define(state_tag{}, ::std::forward<value_type>(value));
@@ -370,6 +395,15 @@ template <typename value_type>
 concept format_as_expression = requires(value_type &&value) {
 	format_as(::std::forward<value_type>(value));
 };
+
+/** Classifies the deterministic effect of the exact ADL format_as expression. */
+template <typename value_type>
+inline constexpr bool format_as_herbceptions_throws =
+#if defined(__HERBCEPTIONS__)
+	throws((format_as(::std::declval<value_type &&>())));
+#else
+	false;
+#endif
 
 template <bool customization_is_available, typename value_type>
 struct format_as_probe
@@ -395,9 +429,14 @@ struct format_as_probe<true, value_type>
 
 template <typename value_type>
 	requires format_as_expression<value_type>
-[[nodiscard]] inline constexpr decltype(auto) as(
-	value_type &&value) noexcept(noexcept(format_as(::std::forward<value_type>(value))))
+[[nodiscard]] inline constexpr decltype(auto) as(value_type &&value)
+	FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+		format_as_herbceptions_throws<value_type>,
+		noexcept(format_as(::std::forward<value_type>(value))))
 {
+	// The return category is part of the format_as protocol. Deterministic
+	// failure changes only the error path, so a successful lvalue or xvalue
+	// reference is forwarded without decay or an identity-changing temporary.
 	return format_as(::std::forward<value_type>(value));
 }
 
@@ -441,6 +480,32 @@ concept custom_format_alias_expression =
 		custom_format_state_tag<format_literal, source, value_type>, value_type>;
 
 /**
+ * Lazily classifies the run-time edge after the structural parser has won.
+ *
+ * The parser itself is a type-only constant-evaluation policy. Only the
+ * selected `format_alias_define` invocation contributes a run-time effect and
+ * therefore an ABI choice at this boundary.
+ */
+template <auto format_literal, auto source, typename value_type>
+inline constexpr bool custom_format_value_herbceptions_throws = []() constexpr {
+#if defined(__HERBCEPTIONS__)
+	if constexpr (structurally_compiled_custom_format<
+					  format_literal, source, value_type>)
+	{
+		using state_tag =
+			custom_format_state_tag<format_literal, source, value_type>;
+		if constexpr (custom_format_adl::alias_expression<
+						  state_tag, value_type>)
+		{
+			return custom_format_adl::alias_herbceptions_throws<
+				state_tag, value_type>;
+		}
+	}
+#endif
+	return false;
+}();
+
+/**
  * Proves that the semantic result remains consumable by the selected
  * character-domain backend after normal fast_io aliasing and ABI transport.
  * This is an unevaluated proof only; `make_custom_format_value` intentionally
@@ -458,6 +523,31 @@ concept custom_format_printable =
 	};
 
 /**
+ * Classifies the legacy exception effect of the selected run-time alias.
+ *
+ * The compile-time parser contributes no run-time edge. Once its structural
+ * proof and the ADL alias are available, the expression below is exactly the
+ * one executed by `make_custom_format_value`. An invalid customization returns
+ * true because the function body diagnoses it with a static assertion and no
+ * ABI may be inferred from an unavailable CPO.
+ */
+template <auto format_literal, auto source, typename value_type>
+inline constexpr bool custom_format_value_nothrow = []() constexpr {
+	if constexpr (custom_format_alias_expression<
+				  format_literal, source, value_type>)
+	{
+		using state_tag =
+			custom_format_state_tag<format_literal, source, value_type>;
+		return noexcept(custom_format_adl::alias<state_tag>(
+			::std::declval<value_type &&>()));
+	}
+	else
+	{
+		return false;
+	}
+}();
+
+/**
  * Parses and lowers one user-defined field without preserving frontend state.
  *
  * A parser which exists but returns non-structural/non-constant state is a
@@ -467,7 +557,10 @@ concept custom_format_printable =
  */
 template <auto format_literal, auto source, typename value_type>
 [[nodiscard]] inline constexpr decltype(auto) make_custom_format_value(
-	value_type &&value)
+	value_type &&value) FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+	(custom_format_value_herbceptions_throws<
+		format_literal, source, value_type>),
+	custom_format_value_nothrow<format_literal, source, value_type>)
 {
 	static_assert(custom_format_parse_expression<format_literal, source, value_type>,
 				  "fast_io format: custom type has no ADL format_parse_define(io_type_t<T>, parse_context) CPO");
@@ -533,6 +626,32 @@ concept printable_adl_format_as =
 			custom_format_adl::as(::std::forward<value_type>(value))));
 	};
 
+template <typename value_type>
+inline constexpr bool format_as_value_herbceptions_throws = []() constexpr {
+#if defined(__HERBCEPTIONS__)
+	if constexpr (adl_format_as_expression<value_type>)
+	{
+		return custom_format_adl::format_as_herbceptions_throws<value_type>;
+	}
+#endif
+	return false;
+}();
+
+/** Classifies the traditional exception edge of the exact nonrecursive `format_as` call. */
+template <typename value_type>
+inline constexpr bool format_as_value_nothrow = []() constexpr {
+	if constexpr (nonrecursive_adl_format_as<value_type>)
+	{
+		return noexcept(custom_format_adl::as(
+			::std::declval<value_type &&>()));
+	}
+	else
+	{
+		// The body returns `io_null` after issuing its compile-time contract diagnostic; it executes no open CPO.
+		return true;
+	}
+}();
+
 /**
  * Invokes the zero-specification `format_as` shortcut without pre-decaying its
  * result.  The caller must gate this function with
@@ -541,7 +660,9 @@ concept printable_adl_format_as =
  */
 template <::fast_io::fmt::format_character char_type, typename value_type>
 [[nodiscard]] inline constexpr decltype(auto) make_format_as_value(
-	value_type &&value)
+	value_type &&value) FAST_IO_HERBCEPTIONS_THROWS_OR_NOEXCEPT(
+	format_as_value_herbceptions_throws<value_type>,
+	format_as_value_nothrow<value_type>)
 {
 	static_assert(adl_format_as_expression<value_type>,
 				  "fast_io format: no ADL format_as(value) customization was found");
@@ -560,3 +681,5 @@ template <::fast_io::fmt::format_character char_type, typename value_type>
 }
 
 } // namespace fast_io::fmt::details
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

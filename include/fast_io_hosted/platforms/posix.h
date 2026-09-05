@@ -512,6 +512,23 @@ public:
 	}
 };
 
+/**
+ * @brief Proves that a POSIX descriptor observer is substitutable under value transport.
+ * @details The observer is a non-owning copy of one numeric descriptor. Primitive
+ *          reads, writes, and seeks mutate the kernel open-file description, not
+ *          the `fd` field in the observer object; copying that field therefore
+ *          neither forks stream position nor changes descriptor ownership. This
+ *          semantic proof is intentionally attached to this exact observer type
+ *          and does not extend to buffered views whose cursor is stored locally.
+ */
+template <::fast_io::posix_family family, ::std::integral ch_type>
+inline constexpr ::std::true_type stream_ref_value_transport_safe_define(
+	::fast_io::io_type_t<
+		::fast_io::basic_posix_family_io_observer<family, ch_type>>) noexcept
+{
+	return {};
+}
+
 template <::fast_io::posix_family family, ::std::integral ch_type>
 inline constexpr bool operator==(basic_posix_family_io_observer<family, ch_type> a, basic_posix_family_io_observer<family, ch_type> b) noexcept
 {
