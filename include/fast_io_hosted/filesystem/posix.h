@@ -1,6 +1,9 @@
 ﻿#pragma once
 #include <dirent.h>
 #include <errno.h>
+#if defined(__wasi__)
+#include <fcntl.h>
+#endif
 
 namespace fast_io
 {
@@ -87,6 +90,21 @@ inline DIR *sys_fdopendir(int fd) noexcept
 #endif
 }
 
+inline int sys_dup_dir_fd(int fd)
+{
+#if defined(__wasi__)
+	// WASI has no dup(). Give fdopendir/closedir their own directory descriptor.
+	int newfd{::openat(fd, ".", O_RDONLY | O_DIRECTORY)};
+	if (newfd == -1)
+	{
+		throw_posix_error();
+	}
+	return newfd;
+#else
+	return sys_dup(fd);
+#endif
+}
+
 inline DIR *sys_dup_dir(DIR *dirp)
 {
 	if (dirp == nullptr)
@@ -104,7 +122,7 @@ inline DIR *sys_dup_dir(DIR *dirp)
 	{
 		throw_posix_error();
 	}
-	auto newfd{details::sys_dup(fd)};
+	auto newfd{details::sys_dup_dir_fd(fd)};
 	auto newdir{details::sys_fdopendir(newfd)};
 	if (newdir == nullptr)
 	{
@@ -402,7 +420,7 @@ inline constexpr bool operator!=(posix_directory_iterator const &b, ::std::defau
 
 inline posix_directory_generator current(posix_at_entry pate)
 {
-	return {.dir_fl = posix_directory_file(posix_file(details::sys_dup(pate.fd)))};
+	return {.dir_fl = posix_directory_file(posix_file(details::sys_dup_dir_fd(pate.fd)))};
 }
 
 template <typename StackType>
@@ -492,7 +510,7 @@ operator++(basic_posix_recursive_directory_iterator<StackType> &prdit)
 			prdit.stack.emplace_back(::fast_io::posix_file(
 				::fast_io::posix_fs_dirent{
 					details::dirp_to_fd(prdit.stack.empty() ? prdit.dirp : prdit.stack.back().dirp), name},
-				::fast_io::open_mode::directory));
+				::fast_io::open_mode::in | ::fast_io::open_mode::directory));
 		}
 		if (prdit.entry) [[likely]]
 		{
@@ -577,7 +595,7 @@ inline bool operator!=(basic_posix_recursive_directory_iterator<StackType> const
 
 inline posix_recursive_directory_generator recursive(posix_at_entry pate)
 {
-	return {.dir_fl = posix_directory_file(posix_file(details::sys_dup(pate.fd)))};
+	return {.dir_fl = posix_directory_file(posix_file(details::sys_dup_dir_fd(pate.fd)))};
 }
 
 inline auto native_extension(posix_directory_entry ent) noexcept

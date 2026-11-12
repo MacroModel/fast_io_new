@@ -208,7 +208,7 @@ inline
 		for (::std::size_t i{}; i != n; ++i)
 		{
 			U v{digest[i]};
-			if constexpr (::std::endian::native == end)
+			if constexpr (::std::endian::native != end)
 			{
 				v = ::fast_io::byte_swap(v);
 			}
@@ -243,7 +243,7 @@ inline constexpr void hash_digest_to_byte_ptr_simd16_impl(U const *digest, ::std
 	constexpr ::std::size_t usz{sizeof(U)};
 	if (__builtin_is_constant_evaluated())
 	{
-		hash_digest_to_byte_ptr_common_impl(digest, n, ptr);
+		hash_digest_to_byte_ptr_common_impl<end>(digest, n, ptr);
 	}
 	else
 	{
