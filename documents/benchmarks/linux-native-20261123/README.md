@@ -10,9 +10,21 @@ Each batch opens the files, writes or scans three integer fields per record and 
 
 ![Time per batch for buffered file print and scan with fast_io, MoonBit, Node, Python and Java](runtimes.svg)
 
-Wall time and issuer occupancy describe different costs. For one stream, fast_io printed 47.77 million records/s against 31.60 for Go and 19.74 for Tokio. Joining fast_io after creating the 160,000-record batch took the total time from 0.803 ms at submission return to 3.277 ms at completion. The issuing thread consumed 1.998 ms of CPU over that interval. Go returned in 0.006 ms, completed in 4.834 ms and consumed 0.024 ms on the issuing thread. Tokio returned in 0.003 ms, completed in 7.755 ms and consumed 5.784 ms on its issuer. These are batch measurements. A runtime that hands work to another thread can return to its caller sooner. The previous fast_io snapshot reached 48.48 million records/s for single-stream print and 48.00 for eight-stream print, compared with 44.97 for the current eight-stream run.
+The earlier eager-open fixture measured wall time and issuer occupancy separately. For one stream, fast_io printed 47.77 million records/s against 31.60 for Go and 19.74 for Tokio. Joining fast_io after creating the 160,000-record batch took the total time from 0.803 ms at submission return to 3.277 ms at completion. The issuing thread consumed 1.998 ms of CPU over that interval. Go returned in 0.006 ms, completed in 4.834 ms and consumed 0.024 ms on the issuing thread. Tokio returned in 0.003 ms, completed in 7.755 ms and consumed 5.784 ms on its issuer. These are batch measurements. A runtime that hands work to another thread can return to its caller sooner. The previous fast_io snapshot reached 48.48 million records/s for single-stream print and 48.00 for eight-stream print, compared with 44.97 for the current eight-stream run.
 
 Single-stream scan reached 45.55 million records/s for fast_io, 45.29 for the previous snapshot, 28.54 for Tokio and 6.20 for Go. In a separate 16,000-record run, upstream fast_io issued three single-field waits per record. It reached 23.99 million records/s versus 46.81 for the three-field public call here. With eight streams the respective rates were 19.59 and 32.94 million.
+
+## Moving file open and formatting off the issuer
+
+The follow-up compares five implementations on one pinned P-core. Each process writes 160,000 records across one or eight ext4 files. The final bytes of each file are checked with SHA-256. Warm batches reuse the issuer and repeat the truncate, write and close sequence. A separate group measures the first batch in a fresh process. There are 15 interleaved trials for every combination. The figure shows medians for the warm single-lane group. The first and third panels use logarithmic axes to show both microsecond submissions and millisecond-scale issuer work. [All twenty combinations](print-handoff.csv)
+
+![Warm single-lane ext4 print submission, completion and issuer CPU](print-handoff.svg)
+
+The reusable fast_io worker submitted a warm batch in 0.98 µs and completed it in 3.052 ms, using 11.64 µs of issuer CPU. Go measured 3.82 µs, 4.744 ms and 15.89 µs. Tokio measured 1.98 µs, 8.209 ms and 5,430.30 µs. Tokio drove its executor on the issuing thread. Moving the open into a lazy fast_io root alone reduced submission to 0.96 µs but still required 1,580.33 µs of issuer CPU. The eager fast_io fixture completed in 2.929 ms. Creating the fast_io worker on its first batch cost 62.02 µs to submit, against 1.80 µs for Go and 1.58 µs for Tokio, whose runtimes were already initialized at the measurement boundary.
+
+A separate scan experiment checks all three integer values in every record and checks EOF. The worker finished in 1.619 ms for one lane and 2.130 ms for eight lanes. The eager snapshot measured 1.515 ms and 1.639 ms respectively. Eight lanes share the same pinned CPU. [Scan comparison, including Go and Tokio](scan-handoff.csv)
+
+A second, independently timed experiment kept the reusable worker and changed the copy of a five-byte array snapshot. Clang emitted four load/store instructions in place of ten. Actual whole-process cycles per record fell from 47.18 to 45.32 for one lane and from 58.13 to 56.12 for eight lanes. The benchmark text section shrank by 96 bytes. The stripped ELF occupied 89,008 bytes in both builds. VTune attributed 21.5% of P-core pipeline slots to front-end stalls. In the kernel sample, page clearing accounted for 13.78% of kernel cycle weight and user copying accounted for 4.72%.
 
 ## Constructed and in-place values
 
@@ -37,6 +49,16 @@ For 16 random mixed UTF-16 scalars, avoiding an unnecessary output allocation du
 The AES-128-GCM value fixture times key expansion on each record. It checks sealing against EVP and verifies that a wrong tag leaves the scan destination intact. On a 4096-byte input the runtime-sized fast_io seal used 2,152 cycles and the verified scan used 2,059. Reusing the OpenSSL 4.1.0 EVP context gave 2,848 and 3,495 cycles. The EVP open fixture decrypts to a private buffer before publishing and erases that buffer afterward. The fast_io path authenticates the ciphertext before decrypting into the destination.
 
 ![Cycles per record for authenticated AES-128-GCM print and scan](aes.svg)
+
+## Transmitting through the UTF input decorator
+
+This fixture marks both the file and its UTF decoder. It reads a 64 KiB packet from a Linux memfd and checks the transformed bytes in the sink. The previous decoder exposed small get areas and the unmarked sink issued a worker write for each one. When the engine certifies that enlarging its publication window preserves prefixes and terminal state, transmit can use a 4 KiB window for bytes already read. A pending prefix from an earlier scan is delivered first. Short pipe reads can publish a scalar immediately.
+
+![Native UTF-8 to UTF-16LE file transfer throughput by exception configuration](utf-transmit.svg)
+
+For valid UTF-8 with replacement enabled, the C++ exception build increased from 24.56 to 292.81 input MiB/s. With dense malformed input it increased from 13.06 to 49.14 MiB/s. For the latter, issuing-thread cycles per packet fell from 9.25 million to 4.36 million. Counts per packet changed from 846 worker writes to 27. Both implementations completed two ring operations. Across four exception configurations the paired speedups ranged from 10.86× to 11.80× on valid input, and 3.46× to 3.76× on dense malformed input. The selected strict controls ranged from 0.98× to 1.03×. The paired ratios use seven individual before/after windows. The plotted bars show medians for each version. [Both wire orders and all four exception configurations](utf-transmit.csv)
+
+The RVV four-scalar UTF-8 to UTF-32 loop now shares an 11-bit boundary table. In the SiFive P670 scheduling model, one measured instruction sequence at VLEN 256 changed from 36.04 to 25.83 estimated cycles per group. At VLEN 128 it changed from 35.05 to 24.86. Read-only data in the test ELF decreased by 14,336 bytes. QEMU checked the conversion results at both vector lengths, with a simdutf oracle covering every Unicode scalar and 100,000 randomized packets per vector length. Intel SDE checked that the x86 AVX-512 build executed the expected widening instructions. Native throughput figures in this report come from the host CPU.
 
 ## Frontend and regression coverage
 
