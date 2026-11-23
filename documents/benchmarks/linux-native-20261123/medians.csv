@@ -1,0 +1,63 @@
+figure,panel,workload,series,unit,rounds,q25,median,q75
+records,print,1,fast_io,Milliseconds per batch,7,3.167773,3.34929,3.554153
+records,print,8,fast_io,Milliseconds per batch,7,3.516169,3.557724,4.271167
+records,print,1,Previous fast_io,Milliseconds per batch,7,3.167944,3.300272,3.71664
+records,print,8,Previous fast_io,Milliseconds per batch,7,3.3102,3.333107,3.358582
+records,print,1,Go,Milliseconds per batch,7,4.984804,5.063903,5.212897
+records,print,8,Go,Milliseconds per batch,7,5.312921,5.441104,6.237995
+records,print,1,Rust / Tokio,Milliseconds per batch,7,8.001574,8.106977,8.163538
+records,print,8,Rust / Tokio,Milliseconds per batch,7,8.229634,8.388502,9.406164
+records,scan,1,fast_io,Milliseconds per batch,7,3.331938,3.512768,3.601254
+records,scan,8,fast_io,Milliseconds per batch,7,3.617102,3.839761,3.879193
+records,scan,1,Previous fast_io,Milliseconds per batch,7,3.451821,3.532619,3.567558
+records,scan,8,Previous fast_io,Milliseconds per batch,7,3.675755,3.689909,3.702758
+records,scan,1,Go,Milliseconds per batch,7,24.492956,25.795533,25.915094
+records,scan,8,Go,Milliseconds per batch,7,23.899006,24.062851,24.277966
+records,scan,1,Rust / Tokio,Milliseconds per batch,7,5.485578,5.606617,7.599178
+records,scan,8,Rust / Tokio,Milliseconds per batch,7,6.635184,6.742538,6.791086
+runtimes,print,1,fast_io,Milliseconds per batch,7,0.984493,1.333112,1.661074
+runtimes,print,8,fast_io,Milliseconds per batch,7,1.293839,1.343527,1.760404
+runtimes,print,1,MoonBit,Milliseconds per batch,7,8.625,9.0,9.25
+runtimes,print,8,MoonBit,Milliseconds per batch,7,8.75,9.0,9.375
+runtimes,print,1,Node.js,Milliseconds per batch,7,11.845855,12.248755,12.579132
+runtimes,print,8,Node.js,Milliseconds per batch,7,10.30097,10.635127,11.244793
+runtimes,print,1,Python / asyncio,Milliseconds per batch,7,17.598225,18.18184,20.301528
+runtimes,print,8,Python / asyncio,Milliseconds per batch,7,21.0043,21.679612,21.93061
+runtimes,print,1,Java,Milliseconds per batch,7,24.138502,25.038196,25.493358
+runtimes,print,8,Java,Milliseconds per batch,7,32.564209,33.300804,33.610961
+runtimes,scan,1,fast_io,Milliseconds per batch,7,0.979807,1.017067,1.769663
+runtimes,scan,8,fast_io,Milliseconds per batch,7,1.201256,1.233217,1.29182
+runtimes,scan,1,MoonBit,Milliseconds per batch,7,49.25,49.5,50.75
+runtimes,scan,8,MoonBit,Milliseconds per batch,7,49.125,49.75,50.0
+runtimes,scan,1,Node.js,Milliseconds per batch,7,30.990588,31.07867,31.917375
+runtimes,scan,8,Node.js,Milliseconds per batch,7,31.989297,39.592628,42.070977
+runtimes,scan,1,Python / asyncio,Milliseconds per batch,7,59.966025,61.931932,63.882172
+runtimes,scan,8,Python / asyncio,Milliseconds per batch,7,64.916683,65.883776,66.824422
+runtimes,scan,1,Java,Milliseconds per batch,7,29.100591,30.713642,32.930907
+runtimes,scan,8,Java,Milliseconds per batch,7,34.026234,35.066464,35.292642
+conversion,Returned value after an observed suspension,fast_io previous,Median,Core cycles per result,13,117.698853,118.053997,118.36153
+conversion,Returned value after an observed suspension,fast_io current,Median,Core cycles per result,13,115.754352,116.156999,118.097403
+conversion,Returned value after an observed suspension,Rust pinned,Median,Core cycles per result,13,118.05644,119.334057,121.728735
+conversion,Returned value after an observed suspension,Rust owned,Median,Core cycles per result,13,123.192539,124.07394,124.243792
+conversion,Returned value after an observed suspension,fast_io previous,Median,Nanoseconds per result,13,22.04303,22.139735,22.34027
+conversion,Returned value after an observed suspension,fast_io current,Median,Nanoseconds per result,13,21.779826,21.899494,22.134166
+conversion,Returned value after an observed suspension,Rust pinned,Median,Nanoseconds per result,13,21.66186,21.861885,22.385574
+conversion,Returned value after an observed suspension,Rust owned,Median,Nanoseconds per result,13,22.481818,22.608383,22.832168
+ext4,Open to EOF and close,1 lane 15 rounds,fast_io async,Milliseconds per batch,15,1.365521,1.41776,1.496358
+ext4,Open to EOF and close,8 lanes 11 rounds,fast_io async,Milliseconds per batch,11,3.26691,3.513689,3.688587
+ext4,Open to EOF and close,8 lanes 21 rounds,fast_io async,Milliseconds per batch,21,4.06651,5.590837,6.526944
+ext4,Open to EOF and close,1 lane 15 rounds,fast_io sync,Milliseconds per batch,15,1.354592,1.434813,1.466632
+ext4,Open to EOF and close,8 lanes 11 rounds,fast_io sync,Milliseconds per batch,11,2.808598,3.37484,4.068948
+ext4,Open to EOF and close,8 lanes 21 rounds,fast_io sync,Milliseconds per batch,21,5.125128,9.590312,11.605048
+ext4,Open to EOF and close,1 lane 15 rounds,Go,Milliseconds per batch,15,1.431799,1.456051,1.519741
+ext4,Open to EOF and close,8 lanes 11 rounds,Go,Milliseconds per batch,11,3.669736,3.737376,3.959412
+ext4,Open to EOF and close,8 lanes 21 rounds,Go,Milliseconds per batch,21,4.457727,4.95197,5.911025
+ext4,Hardware counter cost,1 lane 15 rounds,fast_io async,Core cycles per byte,15,0.919139,0.952923,0.998855
+ext4,Hardware counter cost,8 lanes 11 rounds,fast_io async,Core cycles per byte,11,1.281879,1.350115,1.52131
+ext4,Hardware counter cost,8 lanes 21 rounds,fast_io async,Core cycles per byte,21,1.661239,2.056611,2.583076
+ext4,Hardware counter cost,1 lane 15 rounds,fast_io sync,Core cycles per byte,15,0.909865,0.973108,0.987191
+ext4,Hardware counter cost,8 lanes 11 rounds,fast_io sync,Core cycles per byte,11,1.429995,1.458594,1.772705
+ext4,Hardware counter cost,8 lanes 21 rounds,fast_io sync,Core cycles per byte,21,1.733799,2.814374,3.746518
+ext4,Hardware counter cost,1 lane 15 rounds,Go,Core cycles per byte,15,0.959432,0.981584,1.010843
+ext4,Hardware counter cost,8 lanes 11 rounds,Go,Core cycles per byte,11,1.359017,1.404346,1.612127
+ext4,Hardware counter cost,8 lanes 21 rounds,Go,Core cycles per byte,21,1.865701,2.280671,2.686633
