@@ -48,6 +48,17 @@ struct owned_otranscoder_handle
 	{
 		return value;
 	}
+
+	/** @brief Finishes a nested output message for which this storage owns the terminal responsibility.
+	 * @details An opted-in owner may need to write a trailer after its last input. Reuse the observer
+	 * already normalized by the caller so all bytes and the terminal operation reach the same layer.
+	 */
+	template <typename Output>
+		requires ::fast_io::temporary_output_finish_enabled<handle_type>
+	inline void finish_owned_output(Output &out)
+	{
+		output_stream_finish_define(out);
+	}
 };
 
 /** @brief Selects borrowed storage for lvalues and owned storage for rvalues. */
@@ -103,6 +114,14 @@ struct iotranscoder_shared_handle
 		noexcept(noexcept(ptr->get()))
 	{
 		return ptr->get();
+	}
+
+	/** @brief Delegates the duplex parent's owned-output responsibility to its shared handle storage. */
+	template <typename Output>
+		requires requires(handle_storage &storage, Output &out) { storage.finish_owned_output(out); }
+	inline void finish_owned_output(Output &out) const
+	{
+		ptr->finish_owned_output(out);
 	}
 
 	/** @brief Establishes output visibility before an input refill when tied. */

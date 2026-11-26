@@ -62,8 +62,9 @@ inline constexpr auto leb128_put(T t) noexcept
 }
 
 /// @brief Deserializes one signed or unsigned LEB128 integer into `t`.
-/// @details Destination signedness selects the decoding variant. The destination is borrowed and is updated only under
-///          the scanner's success/overflow contract; malformed or overlong encodings report parse failure.
+/// @details Construction only binds the destination. Its signedness selects the decoding variant. During a buffered
+///          scan the context retains the bit offset and accumulates completed fragments in the borrowed integer. A
+///          partial or failed scan can therefore modify the destination. Use the decoded value after successful scan.
 template <::fast_io::details::my_integral T>
 inline constexpr auto leb128_get(T &t) noexcept
 {

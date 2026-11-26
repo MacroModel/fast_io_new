@@ -117,6 +117,19 @@ public:
 	};
 	using handle_type = typename has<allocator_type, has_status>::type;
 	static inline constexpr ::std::size_t default_alignment{::fast_io::details::calculate_default_alignment<allocator_type>()};
+	/**
+	 * @brief Requests aligned storage that can be released with deallocate(pointer) alone.
+	 * @details Providers opt in by implementing this exact allocation and its unsized release.
+	 * A caller may erase both the alignment and the allocation size without keeping a prefix.
+	 */
+	static inline void *allocate_aligned_for_deallocate(::std::size_t alignment, ::std::size_t bytes) noexcept
+		requires (!has_status && requires(void *p) {
+			{ allocator_type::allocate_aligned_for_deallocate(alignment, bytes) } noexcept -> ::std::same_as<void *>;
+			{ allocator_type::deallocate(p) } noexcept -> ::std::same_as<void>;
+		})
+	{
+		return allocator_type::allocate_aligned_for_deallocate(alignment, bytes);
+	}
 	static inline constexpr bool has_native_allocate{
 		!has_status && (::fast_io::details::has_allocate_at_least_impl<alloc> ||
 						::fast_io::details::has_allocate_aligned_at_least_impl<alloc> ||
@@ -3187,6 +3200,16 @@ inline constexpr ::fast_io::allocation_least_result status_allocator_pointer_ali
 	return res;
 }
 #endif
+/// @brief Detects a supplied allocator before instantiating its allocation protocol.
+/// @details A freestanding environment can leave the custom allocator declaration incomplete.
+///          Query this trait at the point of use after the application supplies any custom allocator.
+template <typename Allocator>
+inline constexpr bool allocator_provider_available = requires { sizeof(Allocator); };
+
+template <typename Allocator>
+inline constexpr bool allocator_provider_available<::fast_io::generic_allocator_adapter<Allocator>> =
+	allocator_provider_available<Allocator>;
+
 } // namespace details
 
 } // namespace fast_io

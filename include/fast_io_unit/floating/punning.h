@@ -116,8 +116,11 @@ struct iec559_traits<long double>
 #if defined(__SIZEOF_INT128__)
 
 #if defined(__SIZEOF_FLOAT128__) || defined(__FLOAT128__)
-template <>
-struct iec559_traits<__float128>
+// POWER GCC can make __float128 an alias of long double. Its explicit
+// specialization takes precedence in that ABI.
+template <typename flt>
+	requires(::std::same_as<flt, __float128>)
+struct iec559_traits<flt>
 {
 	using mantissa_type = __uint128_t;
 	inline static constexpr ::std::size_t mbits{112};
@@ -602,10 +605,78 @@ inline constexpr mantissa_type fp_quiet_nan_mantissa_mask() noexcept
 	return static_cast<mantissa_type>(static_cast<mantissa_type>(1) << (mbits - 1u));
 }
 
+/**
+ * @brief Reads the native binary32 or binary64 NaN discriminator from the compiler's quiet NaN.
+ * @details Legacy MIPS and PA-RISC use a set high fraction bit for signaling NaNs. Test the
+ * representation at compile time so a MIPS nan2008 build can select the other convention.
+ * The fixed-width interchange formats always use the IEEE 754-2008 convention.
+ */
+template <::std::size_t mbits>
+inline constexpr bool fp_native_nan_high_bit_signals = [] {
+	if constexpr (mbits == 23u && sizeof(float) == sizeof(::std::uint_least32_t) &&
+				  ::std::numeric_limits<float>::digits == 24 && ::std::numeric_limits<float>::has_quiet_NaN)
+	{
+		return (::fast_io::bit_cast<::std::uint_least32_t>(::std::numeric_limits<float>::quiet_NaN()) & 0x00400000u) == 0;
+	}
+	else if constexpr (mbits == 52u && sizeof(double) == sizeof(::std::uint_least64_t) &&
+					   ::std::numeric_limits<double>::digits == 53 && ::std::numeric_limits<double>::has_quiet_NaN)
+	{
+		return (::fast_io::bit_cast<::std::uint_least64_t>(::std::numeric_limits<double>::quiet_NaN()) &
+				UINT64_C(0x0008000000000000)) == 0;
+	}
+	else
+	{
+		return false;
+	}
+}();
+
+/** @brief Supplies the default quiet or signaling payload for a native parsed NaN. */
+template <typename U, ::std::size_t mbits, bool signaling = false>
+inline constexpr U fp_native_nan_default_payload() noexcept
+{
+	if constexpr (fp_native_nan_high_bit_signals<mbits> == signaling)
+	{
+		return fp_quiet_nan_mantissa_mask<U, mbits>();
+	}
+	else
+	{
+		return static_cast<U>(1u);
+	}
+}
+
+/**
+ * @brief Bridges native and interchange NaN encodings while retaining the sign and kind.
+ * @details Infinity and finite encodings are identical. Exchange the two default payloads
+ * directly. For other NaNs flip the discriminator and retain the low diagnostic bits.
+ * Both ABIs require a nonzero mantissa, so the class with fewer encodings can coalesce
+ * diagnostic payloads at this boundary.
+ */
+template <::std::size_t mbits, ::std::size_t ebits, typename U>
+inline constexpr U fp_translate_nan_encoding(U raw) noexcept
+{
+	if constexpr (fp_native_nan_high_bit_signals<mbits>)
+	{
+		constexpr U fraction_mask{(U{1} << mbits) - U{1}};
+		constexpr U exponent_mask{((U{1} << ebits) - U{1}) << mbits};
+		constexpr U discriminator{U{1} << (mbits - 1u)};
+		auto const fraction{raw & fraction_mask};
+		if ((raw & exponent_mask) == exponent_mask && fraction != 0)
+		{
+			if (fraction == U{1} || fraction == discriminator)
+			{
+				return raw ^ (discriminator | U{1});
+			}
+			return raw ^ discriminator;
+		}
+	}
+	return raw;
+}
+
 template <typename mantissa_type, ::std::size_t mbits>
 inline constexpr bool fp_nan_is_signaling(mantissa_type mantissa) noexcept
 {
-	return mantissa != 0 && (mantissa & fp_quiet_nan_mantissa_mask<mantissa_type, mbits>()) == 0;
+	auto const high{(mantissa & fp_quiet_nan_mantissa_mask<mantissa_type, mbits>()) != 0};
+	return mantissa != 0 && high == fp_native_nan_high_bit_signals<mbits>;
 }
 
 #if defined(__SIZEOF_FLOAT80__) ||                                                                            \
@@ -691,6 +762,9 @@ inline constexpr bool fp_floating_point_is_ibm_double_double{
 	::std::numeric_limits<long double>::max_exponent == 1024};
 
 #if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+// A finite sum has at most 309 integer and 1074 fractional positions.
+inline constexpr ::std::size_t ibm_double_double_exact_digits{309u + 1074u};
+
 struct ibm_double_double_storage
 {
 	double high;
@@ -762,12 +836,10 @@ ibm_double_double_decode_component(double value) noexcept
 
 /*
 Let h=H*2^a and l=L*2^b be the two decoded components after removing
-powers of two from H and L.  The IBM normalization invariant places the
-least significant nonzero bit of the low component no more than 105 places
-below the high component's leading bit.  Aligning at min(a,b) therefore makes
-the exact signed sum fit in 107 bits (106 value bits plus a cancellation bit),
-strictly inside the unsigned 128-bit magnitude carrier.  Same-sign addition
-and opposite-sign subtraction are performed on magnitudes, avoiding any
+powers of two from H and L. This compact carrier covers the contiguous
+106-bit value grid and allows one extra bit for neighbor arithmetic.
+Sparse pairs may place the low component much farther below the high
+component. Same-sign addition and opposite-sign subtraction use magnitudes, avoiding any
 implementation-defined unsigned-to-signed conversion.  Removing the sum's
 final powers of two returns the unique odd dyadic carrier S*2^e, and no step
 can observe the ambient floating environment.
@@ -817,10 +889,8 @@ get_ibm_double_double_dyadic(flt value) noexcept
 	if (128u < high_shift + high_width || 128u < low_shift + low_width)
 	{
 		/*
-		Language-produced IBM values satisfy the normalization theorem above.
-		For a forged wider span, shifting would discard a leading bit modulo the
-		uint128 carrier.  The width-plus-shift test is the exact representability
-		condition, so rejection occurs before any potentially lossy operation.
+		Sparse component pairs can exceed the compact carrier. Check the
+		width before shifting so neither magnitude can lose its leading bit.
 		*/
 		return {};
 	}
@@ -857,7 +927,7 @@ get_ibm_double_double_dyadic(flt value) noexcept
 	if (107u < ::fast_io::details::
 			ibm_double_double_u128_bit_width(magnitude))
 	{
-		/* A normalized IBM sum satisfies the 107-bit bound proved above. */
+		/* Wider sums need the full decimal expansion. */
 		return {};
 	}
 	unsigned trailing{};
@@ -868,6 +938,26 @@ get_ibm_double_double_dyadic(flt value) noexcept
 	return {magnitude,
 		static_cast<::std::int_least32_t>(common_exponent + static_cast<::std::int_least32_t>(trailing)),
 		negative, true};
+}
+
+template <typename flt>
+	requires(::fast_io::details::fp_floating_point_is_ibm_double_double<flt>)
+[[nodiscard]] inline constexpr bool
+ibm_double_double_has_sparse_significand(flt value) noexcept
+{
+	auto const storage{
+		::fast_io::bit_cast<::fast_io::details::ibm_double_double_storage>(value)};
+	constexpr auto magnitude_mask{UINT64_C(0x7fffffffffffffff)};
+	constexpr auto infinity{UINT64_C(0x7ff0000000000000)};
+	auto const high{::fast_io::bit_cast<::std::uint_least64_t>(storage.high) & magnitude_mask};
+	auto const low{::fast_io::bit_cast<::std::uint_least64_t>(storage.low) & magnitude_mask};
+	if (!low || high <= low || infinity <= high)
+	{
+		return false;
+	}
+	auto const dyadic{::fast_io::details::get_ibm_double_double_dyadic(value)};
+	return !dyadic.success ||
+		   106u < ::fast_io::details::ibm_double_double_u128_bit_width(dyadic.significand);
 }
 
 [[nodiscard]] inline constexpr double ibm_double_double_make_binary64(
@@ -1076,6 +1166,26 @@ inline constexpr void fp_assign_bits(flt &value, typename iec559_traits<flt>::ma
 	}
 }
 
+/**
+ * @brief Publishes parsed floating-point bits without a hardware floating-point conversion.
+ * @details Moving a binary32 or binary64 signaling NaN through an x87 register can quiet it
+ * and raise the invalid-operation flag. Copying between distinct objects of the same
+ * trivially copyable type preserves the sign, payload and signaling bit. Constant
+ * evaluation uses the language assignment without executing an x87 load or store.
+ */
+template <typename T>
+inline constexpr void scan_floating_commit_special(T &target, T const &parsed) noexcept
+{
+	if (::std::is_constant_evaluated())
+	{
+		target = parsed;
+	}
+	else
+	{
+		::fast_io::freestanding::my_memcpy(__builtin_addressof(target), __builtin_addressof(parsed), sizeof(T));
+	}
+}
+
 template <typename flt>
 inline constexpr void fp_assign_infinity(flt &value, bool sign) noexcept
 {
@@ -1148,7 +1258,7 @@ inline constexpr void fp_assign_nan(flt &value, bool sign) noexcept
 	}
 	else
 	{
-		mantissa_type mantissa{signaling ? static_cast<mantissa_type>(1) : quiet_bit};
+		mantissa_type mantissa{fp_native_nan_default_payload<mantissa_type, mbits, signaling>()};
 		mantissa_type bits{static_cast<mantissa_type>((exponent_mask << mbits) | mantissa)};
 		if (sign || indeterminate)
 		{
@@ -1201,7 +1311,7 @@ inline constexpr char_type *prsv_fp_nan_impl(char_type *iter, mantissa_type mant
 	iter = prsv_fp_nan_literal_impl<uppercase>(iter);
 	if constexpr (nan_show_type)
 	{
-		constexpr mantissa_type quiet_bit{fp_quiet_nan_mantissa_mask<mantissa_type, mbits>()};
+		constexpr mantissa_type quiet_bit{fp_native_nan_default_payload<mantissa_type, mbits>()};
 		if (sign && mantissa == quiet_bit)
 		{
 			return prsv_fp_nan_ind_literal_impl<uppercase>(iter);
@@ -1577,9 +1687,8 @@ struct punning_result
 #if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
 /*
 The exact decimal backends consume an IEC-like `(fraction, exponent, sign)`
-carrier.  IBM double-double has no such object field, but every canonical
-finite value is nevertheless one dyadic S*2^e with at most 106 significant
-bits.  The following adapter embeds that *value* (not its object bytes) in a
+carrier. IBM double-double has no such object field. For compact dyadics
+with at most 106 significant bits, this adapter embeds the value in a
 synthetic p=106 binary carrier.  Normal values use the binary64 bias solely so
 existing exact-expansion algebra reconstructs
 

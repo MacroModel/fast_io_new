@@ -74,6 +74,10 @@ template <typename T>
 inline constexpr bool print_semantic_parameter_v<::fast_io::parameter<T>> =
 	::fast_io::details::decay::print_semantic_node_no_parameter_v<::std::remove_cvref_t<T>>;
 
+/// @brief Identifies printable structure that the record planner can expand, select, or pad.
+/// @details A field representation such as leb128_put supplies its own leaf CPOs. io_null has static
+///          extent zero. When supplied directly it retains its argument identity for a destination
+///          with a matching status_print_define. Inside a pack it contributes no active leaf.
 template <typename T>
 concept print_semantic_node =
 	::fast_io::details::decay::print_semantic_node_no_parameter_v<::std::remove_cvref_t<T>> ||

@@ -11,9 +11,40 @@ using pesudo_int128type = __uint128_t;
 #else
 struct pesudo_int128type
 {
-	::std::uint_least64_t uarr[2];
+	// Each word has the target's own representation. Mixed-endian PDP machines store high words first.
+	::std::uint_least64_t uarr[2]{};
+	static inline constexpr unsigned low_index{::std::endian::native == ::std::endian::little ? 0u : 1u};
+
+	constexpr pesudo_int128type() noexcept = default;
+	/** @brief Zero-extends a native unsigned value into a 128-bit wire field. */
+	template <my_unsigned_integral U>
+	explicit constexpr pesudo_int128type(U value) noexcept { uarr[low_index] = value; }
+	/** @brief Extracts the low word after the consuming scanner has checked the full field's range. */
+	template <my_unsigned_integral U>
+	explicit constexpr operator U() const noexcept { return static_cast<U>(uarr[low_index]); }
+	/** @brief Orders two complete unsigned fields by their most significant word first. */
+	friend constexpr bool operator<(pesudo_int128type a,pesudo_int128type b) noexcept
+	{
+		return a.uarr[1-low_index] != b.uarr[1-low_index] ? a.uarr[1-low_index] < b.uarr[1-low_index] :
+			a.uarr[low_index] < b.uarr[low_index];
+	}
 };
 #endif
+
+/** @brief Converts each physical word and, for an emulated 128-bit integer, orders the two wire words independently. */
+template <::std::endian Order, typename U>
+inline constexpr U lebe_wire_order(U value) noexcept
+{
+	if constexpr (Order==::std::endian::native) { return value; }
+	else if constexpr (my_unsigned_integral<U>) { return ordered_integer<Order>(value); }
+	else
+	{
+		auto a{ordered_integer<Order>(value.uarr[0])}, b{ordered_integer<Order>(value.uarr[1])};
+		constexpr bool swap_words{(Order==::std::endian::little) != (::std::endian::native==::std::endian::little)};
+		value.uarr[0]=swap_words ? b : a; value.uarr[1]=swap_words ? a : b;
+		return value;
+	}
+}
 
 template <typename T>
 inline constexpr ::std::size_t cal_size_lebe_floatsize() noexcept
@@ -150,10 +181,8 @@ inline constexpr auto lebe_put(int_type t) noexcept(
 	uint_type u{static_cast<uint_type>(t)};
 	if constexpr (sz < (::std::numeric_limits<uint_type>::digits))
 	{
-		constexpr uint_type mx_value_halfm1{
-			static_cast<uint_type>(((static_cast<int_type>(1)) << (static_cast<int_type>(sz - 1))))};
-		constexpr uint_type mx_value{static_cast<uint_type>(
-			static_cast<uint_type>(mx_value_halfm1 - static_cast<uint_type>(1)) + mx_value_halfm1)};
+		constexpr uint_type mx_value{static_cast<uint_type>(::std::numeric_limits<uint_type>::max() >>
+			(::std::numeric_limits<uint_type>::digits-sz))};
 		if (u > mx_value)
 		{
 			throw_parse_code(::fast_io::parse_code::invalid);
@@ -346,7 +375,7 @@ inline
 {
 	constexpr ::std::size_t n{sizeof(int_type)};
 	static_assert(n != 0);
-	int_type t;
+	int_type t{};
 
 	using unsigned_char_type = ::std::make_unsigned_t<char_type>;
 	constexpr unsigned_char_type mx{static_cast<unsigned_char_type>(::std::numeric_limits<char unsigned>::max())};
@@ -354,6 +383,29 @@ inline
 	char unsigned buffer[n];
 	for (auto bit{buffer}, bie{buffer + n}; bit != bie; ++bit)
 	{
+		if constexpr (::std::endian::native != ::std::endian::little && ::std::endian::native != ::std::endian::big &&
+			sizeof(char_type) > sizeof(unsigned) &&
+			::std::numeric_limits<unsigned_char_type>::digits == sizeof(char_type) * ::std::numeric_limits<unsigned char>::digits)
+		{
+			if (!::std::is_constant_evaluated())
+			{
+				// On a narrow mixed-endian target, inspect the octets without first loading a multiword character.
+				constexpr auto positions{::std::bit_cast<::fast_io::freestanding::array<unsigned char, sizeof(char_type)>>(mx)};
+				auto raw{reinterpret_cast<unsigned char const *>(iter++)};
+				for (::std::size_t j{}; j != sizeof(char_type); ++j)
+				{
+					if (positions[j])
+					{
+						*bit = raw[j];
+					}
+					else if (raw[j])
+					{
+						return {true, t};
+					}
+				}
+				continue;
+			}
+		}
 		auto val{static_cast<unsigned_char_type>(*iter)};
 		if (mx < val)
 		{
@@ -369,20 +421,7 @@ inline
 #else
 	::std::memcpy(__builtin_addressof(t), buffer, n);
 #endif
-	if constexpr (::std::endian::native != endn)
-	{
-		if constexpr (::fast_io::details::my_unsigned_integral<int_type>)
-		{
-			t = ::fast_io::byte_swap(t);
-		}
-		else
-		{
-			::std::uint_least64_t low{t.low};
-			::std::uint_least64_t high{t.high};
-			t.low = ::fast_io::byte_swap(high);
-			t.high = ::fast_io::byte_swap(low);
-		}
-	}
+	t = lebe_wire_order<endn>(t);
 	return {false, t};
 }
 
@@ -397,7 +436,7 @@ inline
 {
 	constexpr ::std::size_t n{sizeof(int_type)};
 	static_assert(n != 0);
-	int_type t;
+	int_type t{};
 
 #if __cpp_lib_bit_cast >= 201806L
 	if (__builtin_is_constant_evaluated())
@@ -415,25 +454,13 @@ inline
 		::std::memcpy(__builtin_addressof(t), iter, sizeof(int_type));
 #endif
 	}
-	if constexpr (::std::endian::native != endn)
-	{
-		if constexpr (::fast_io::details::my_unsigned_integral<int_type>)
-		{
-			t = ::fast_io::byte_swap(t);
-		}
-		else
-		{
-			::std::uint_least64_t low{t.low};
-			::std::uint_least64_t high{t.high};
-			t.low = ::fast_io::byte_swap(high);
-			t.high = ::fast_io::byte_swap(low);
-		}
-	}
+	t = lebe_wire_order<endn>(t);
 	return t;
 }
 
 template <::std::endian endn, ::std::size_t n, ::fast_io::details::my_integral int_type, ::std::integral char_type>
-inline constexpr ::std::conditional_t<(1 < sizeof(char_type)), ::fast_io::parse_code, void>
+inline constexpr ::std::conditional_t<(1 < sizeof(char_type) || ::std::numeric_limits<::fast_io::details::my_make_unsigned_t<int_type>>::digits < n),
+									 ::fast_io::parse_code, void>
 scan_precise_reserve_define_integer_impl(char_type const *iter, int_type &t) noexcept
 {
 	static_assert(n <= 128);
@@ -567,20 +594,7 @@ inline
 {
 	constexpr ::std::size_t n{sizeof(uint_type)};
 	static_assert(n != 0);
-	if constexpr (::std::endian::native != endn)
-	{
-		if constexpr (::fast_io::details::my_unsigned_integral<uint_type>)
-		{
-			u = ::fast_io::byte_swap(u);
-		}
-		else
-		{
-			::std::uint_least64_t low{u.low};
-			::std::uint_least64_t high{u.high};
-			u.low = ::fast_io::byte_swap(high);
-			u.high = ::fast_io::byte_swap(low);
-		}
-	}
+	u = lebe_wire_order<endn>(u);
 #if __cpp_lib_bit_cast >= 201806L
 	if (__builtin_is_constant_evaluated())
 	{
@@ -591,8 +605,9 @@ inline
 	else
 #endif
 	{
-		if constexpr (1 < sizeof(uint_type))
+		if constexpr (1 < sizeof(uint_type) || 1 < sizeof(char_type))
 		{
+			// A wire octet occupies one complete destination code unit, including on wide streams.
 			auto buffer{::std::bit_cast<::fast_io::freestanding::array<char unsigned, n>>(u)};
 			non_overlapped_copy_n(buffer.data(), n, iter);
 		}

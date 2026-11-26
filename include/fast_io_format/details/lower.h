@@ -139,7 +139,7 @@ template <auto format_literal, typename grammar_tag,
 template <typename grammar_type, auto format_literal, replacement_field field,
 		  ::std::size_t... index, typename... argument_types>
 [[nodiscard]] inline constexpr decltype(auto) make_rule_replacement(
-	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments)
+	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr auto resolution{
 		resolve_argument_reference<format_literal, field.argument, argument_types...>()};
@@ -191,7 +191,7 @@ concept expression = requires(argument_pack &arguments) {
 template <auto format_literal, auto field, typename grammar_type,
 		  typename argument_pack>
 	requires expression<format_literal, field, grammar_type, argument_pack>
-[[nodiscard]] inline constexpr decltype(auto) invoke(argument_pack &arguments)
+[[nodiscard]] inline constexpr decltype(auto) invoke(argument_pack &arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return lower_format_replacement_define(
 		::std::remove_cvref_t<grammar_type>{},
@@ -610,7 +610,7 @@ make_static_format_aggregate_shape() noexcept
 {
 	using clean_type = ::std::remove_cv_t<value_type>;
 	if constexpr (::fast_io::details::my_integral<clean_type> ||
-				  ::fast_io::details::my_floating_point<clean_type> ||
+				  ::fast_io::details::floating_io_value<clean_type> ||
 				  ::std::same_as<clean_type, ::std::byte> ||
 				  ::std::same_as<clean_type, ::std::nullptr_t>)
 	{
@@ -783,7 +783,7 @@ struct static_format_native_scalar_manip<
 	::fast_io::manipulators::scalar_manip_t<flags, value_type>>
 	: ::std::bool_constant<
 		  ::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> ||
-		  ::fast_io::details::my_floating_point<
+		  ::fast_io::details::floating_io_value<
 			  ::std::remove_cvref_t<value_type>> ||
 		  ::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
 		  ::std::same_as<::std::remove_cvref_t<value_type>,
@@ -795,7 +795,7 @@ struct static_format_native_scalar_manip<
 	::fast_io::manipulators::scalar_manip_precision_t<flags, value_type>>
 	: ::std::bool_constant<
 		  ::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> ||
-		  ::fast_io::details::my_floating_point<
+		  ::fast_io::details::floating_io_value<
 			  ::std::remove_cvref_t<value_type>> ||
 		  ::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
 		  ::std::same_as<::std::remove_cvref_t<value_type>,
@@ -846,7 +846,7 @@ template <auto format_literal, argument_reference reference,
 					char_type>};
 			constexpr bool scalar_or_text{
 				::fast_io::details::my_integral<clean_value_type> ||
-				::fast_io::details::my_floating_point<clean_value_type> ||
+				::fast_io::details::floating_io_value<clean_value_type> ||
 				::std::same_as<clean_value_type, ::std::byte> ||
 				::std::same_as<clean_value_type, ::std::nullptr_t> ||
 				static_format_native_scalar_manip_v<clean_value_type> ||
@@ -2200,7 +2200,7 @@ template <auto format_literal, typename grammar_tag,
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 	[[nodiscard]] inline constexpr decltype(auto) make_format_operation(
-		indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments)
+		indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr auto const &program{
 		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>};
@@ -2237,7 +2237,7 @@ template <auto format_literal, typename grammar_tag,
 		  ::std::size_t... index,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr decltype(auto) make_static_format_operation(
-	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments)
+	indexed_argument_pack<::std::index_sequence<index...>, argument_types...> &arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr auto const &program{
 		::fast_io::fmt::details::checked_program<format_literal, grammar_tag>};
@@ -2283,7 +2283,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 #endif
 	inline constexpr decltype(auto) lower_format_program_impl(
 		callback_type &&callback, argument_pack &arguments,
-		::std::index_sequence<operation_index...>)
+		::std::index_sequence<operation_index...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::std::forward<callback_type>(callback)(
 		make_format_operation<
@@ -2305,7 +2305,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 #endif
 	inline constexpr decltype(auto) lower_format_program_impl(
 		callback_type &&callback, argument_pack &arguments,
-		::std::index_sequence<operation_index...>)
+		::std::index_sequence<operation_index...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// This is the only type expansion in the emitter. Every compiled operation is
 	// lowered exactly once; generated code contains no recursive AST walk,
@@ -2320,7 +2320,7 @@ template <auto format_literal, typename grammar_tag,
 		  ::std::size_t... operation_index>
 inline constexpr decltype(auto) lower_static_format_program_impl(
 	callback_type &&callback, argument_pack &arguments,
-	::std::index_sequence<operation_index...>)
+	::std::index_sequence<operation_index...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::std::forward<callback_type>(callback)(
 		make_static_format_operation<
@@ -2341,7 +2341,7 @@ requires(
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr decltype(auto) lower_format_program_dispatch(
-	callback_type &&callback, argument_types &...arguments)
+	callback_type &&callback, argument_types &...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr bool has_argument_list_validation{
 		::fast_io::fmt::details::format_argument_list_validation_adl::
@@ -2414,7 +2414,7 @@ requires(
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr decltype(auto) lower_format_program_dispatch(
-	callback_type &&callback, argument_types &...arguments)
+	callback_type &&callback, argument_types &...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr bool has_argument_list_validation{
 		::fast_io::fmt::details::format_argument_list_validation_adl::
@@ -2477,6 +2477,22 @@ inline constexpr decltype(auto) lower_format_program_dispatch(
 	}
 }
 
+#if defined(__HERBCEPTIONS__)
+/** @brief Delivers a deterministic lowering error to the existing synchronous formatting ABI.
+ * @details Conventional callers rethrow the original error through legacy EH when enabled. A build with
+ * legacy exceptions disabled follows the synchronous fast_io termination policy at this boundary.
+ * The coroutine facades call the deterministic dispatcher and consume the error in the task instead.
+ */
+[[noreturn]] inline void raise_synchronous_format_error([[maybe_unused]] ::std::error &failure)
+{
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+	failure.throw_legacy_exception();
+#else
+	::fast_io::fast_terminate();
+#endif
+}
+#endif
+
 /**
  * Lowers the complete compiled operation sequence in source order.
  *
@@ -2498,9 +2514,21 @@ FAST_IO_GNU_ALWAYS_INLINE
 	inline constexpr decltype(auto) lower_format_program(
 		callback_type &&callback, argument_types &...arguments)
 {
+#if defined(__HERBCEPTIONS__)
+	// Preserve the synchronous facade's legacy ABI. Marked output enters the deterministic dispatcher directly.
+	try
+	{
+#endif
 	return ::fast_io::fmt::details::lower_format_program_dispatch<
 		format_literal, grammar_tag>(
 		::std::forward<callback_type>(callback), arguments...);
+#if defined(__HERBCEPTIONS__)
+	}
+	catch throws(::std::error failure)
+	{
+		raise_synchronous_format_error(failure);
+	}
+#endif
 }
 
 template <auto format_literal, typename grammar_tag, typename callback_type,
@@ -2515,9 +2543,21 @@ FAST_IO_GNU_ALWAYS_INLINE
 	inline constexpr decltype(auto) lower_format_program(
 		callback_type &&callback, argument_types &...arguments)
 {
+#if defined(__HERBCEPTIONS__)
+	// Preserve the synchronous facade's legacy ABI. Marked output enters the deterministic dispatcher directly.
+	try
+	{
+#endif
 	return ::fast_io::fmt::details::lower_format_program_dispatch<
 		format_literal, grammar_tag>(
 		::std::forward<callback_type>(callback), arguments...);
+#if defined(__HERBCEPTIONS__)
+	}
+	catch throws(::std::error failure)
+	{
+		raise_synchronous_format_error(failure);
+	}
+#endif
 }
 
 } // namespace fast_io::fmt::details

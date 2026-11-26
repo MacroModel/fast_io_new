@@ -409,7 +409,7 @@ to_chars_floating_capture_fields(T value) noexcept
 		source bits, after which the proxy exposes the same logical fields.
 		*/
 		auto const representation{
-			::fast_io::details::capture_bfloat16_representation(value)};
+			::fast_io::details::capture_floating_scalar_representation(value)};
 		return ::fast_io::details::floating_scalar_proxy_fields<
 			floating_type>(representation);
 	}

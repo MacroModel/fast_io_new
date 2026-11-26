@@ -24,6 +24,15 @@ namespace fast_io
 template <bool>
 void status_print_define() = delete;
 
+namespace details
+{
+/** @brief Certifies a synchronous print shortcut emits the ordinary formatted fields in order.
+ * @details An async consumer may stage the same fields, then submit the bytes to the selected layers.
+ * The return type identifies the overload that actually won ADL, including source-specific overrides.
+ */
+struct staged_print_equivalent {};
+}
+
 namespace operations::decay::defines
 {
 
@@ -57,9 +66,9 @@ concept has_obuffer_basic_operations = requires(T instm) {
 /// accept a stream for an expression that the dispatcher cannot call, or hide a
 /// valid customization and incorrectly fall through to primitive I/O.  Keep the
 /// complete expression in the concept identity so overload resolution here and
-/// at the call site are provably the same operation. Status printing is a completion
-/// operation, so its result is exactly void; accepting an unrelated value would make
-/// this branch disagree with every ordinary print strategy.
+/// at the call site are provably the same operation. A void result gives the provider ownership
+/// of the whole record. The library also recognizes an explicit equivalence tag when a
+/// synchronous shortcut produces the ordinary fields and async staging may reproduce them.
 ///
 /// For an empty `Args...` pack, `status_print_define<line>(stream)` is also the
 /// provider's explicit opt-in to observing an otherwise empty logical record.
@@ -67,10 +76,15 @@ concept has_obuffer_basic_operations = requires(T instm) {
 /// output. Frontends which lower to an empty component pack must still enter the
 /// IO dispatcher so this destination-owned decision is neither invented nor lost.
 template <bool line, typename T, typename... Args>
-concept has_status_print_define = requires(T optstm, Args... args) {
-	{
-		status_print_define<line>(optstm, args...)
-	} -> ::std::same_as<void>;
+concept has_status_print_define = requires(T out, Args... args) {
+	requires ::std::same_as<decltype(status_print_define<line>(out, args...)), void> ||
+		::std::same_as<decltype(status_print_define<line>(out, args...)), ::fast_io::details::staged_print_equivalent>;
+};
+
+/** @brief A void-returning customization owns the complete record and can change its representation. */
+template <bool line, typename T, typename... Args>
+concept has_indivisible_status_print = requires(T out, Args... args) {
+	{ status_print_define<line>(out, args...) } -> ::std::same_as<void>;
 };
 
 // Primitive capability recognition deliberately constrains the result, rather than merely checking that a name is

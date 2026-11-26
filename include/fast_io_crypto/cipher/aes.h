@@ -1,8 +1,10 @@
 ﻿#pragma once
 
 #include "aes_context.h"
+#include <span>
 
 #if defined(__AES__)
+#if defined(_MSC_VER) && !defined(__clang__)
 #include <wmmintrin.h>
 
 namespace fast_io
@@ -154,6 +156,8 @@ struct aes
 			}
 		}
 	}
+	~aes() { ::fast_io::secure_clear(key_schedule, sizeof(key_schedule)); }
+
 	inline void operator()(::std::byte const *from, ::std::size_t blocks, ::std::byte *to) noexcept
 	{
 		constexpr ::std::size_t rounds = key_schedule_size - 1;
@@ -185,5 +189,55 @@ struct aes
 };
 
 } // namespace fast_io
+
+#elif defined(__has_builtin)
+#if __has_builtin(__builtin_ia32_aesenc128) && __has_builtin(__builtin_ia32_aesenclast128) && \
+	__has_builtin(__builtin_ia32_aesimc128) && __has_builtin(__builtin_ia32_aesdec128) && __has_builtin(__builtin_ia32_aesdeclast128)
+namespace fast_io
+{
+/** @brief Legacy AES-NI interface. Its public decryption schedule stores reversed, inverse-mixed middle keys. */
+template <::std::size_t keysize, bool decrypt = false>
+	requires(keysize == 16 || keysize == 24 || keysize == 32)
+struct aes
+{
+	using block_type = ::fast_io::details::aes::x86_aes_block;
+	static inline constexpr ::std::size_t block_size{16}, key_size{keysize}, key_schedule_size{keysize / 4u + 7u};
+	block_type key_schedule[key_schedule_size];
+
+	explicit aes(::std::span<::std::byte const, keysize> key) noexcept
+	{
+		::fast_io::details::aes::key_expansion<keysize / 4u, ::fast_io::details::aes::x86_aes_sub_word>(
+			key.data(), reinterpret_cast<unsigned char *>(key_schedule));
+		if constexpr (decrypt)
+		{
+			for (::std::size_t i{}, j{key_schedule_size - 1u}; i < j; ++i, --j)
+			{
+				::std::swap(key_schedule[i], key_schedule[j]);
+			}
+			for (::std::size_t i{1}; i + 1u < key_schedule_size; ++i) { key_schedule[i] = __builtin_ia32_aesimc128(key_schedule[i]); }
+		}
+	}
+
+	~aes() { ::fast_io::secure_clear(key_schedule, sizeof(key_schedule)); }
+
+	void operator()(::std::byte const *from, ::std::size_t blocks, ::std::byte *to) noexcept
+	{
+		for (; blocks; --blocks, from += block_size, to += block_size)
+		{
+			auto state{::fast_io::details::aes::load_x86_aes_block(from) ^ key_schedule[0]};
+			for (::std::size_t i{1}; i + 1u < key_schedule_size; ++i)
+			{
+				if constexpr (decrypt) { state = __builtin_ia32_aesdec128(state, key_schedule[i]); }
+				else { state = __builtin_ia32_aesenc128(state, key_schedule[i]); }
+			}
+			if constexpr (decrypt) { state = __builtin_ia32_aesdeclast128(state, key_schedule[key_schedule_size - 1u]); }
+			else { state = __builtin_ia32_aesenclast128(state, key_schedule[key_schedule_size - 1u]); }
+			__builtin_memcpy(to, __builtin_addressof(state), block_size);
+		}
+	}
+};
+} // namespace fast_io
+#endif
+#endif
 
 #endif // __AES__: legacy AES-NI interface

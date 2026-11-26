@@ -19,7 +19,12 @@
 #include "rule_protocol.h"
 
 #include <concepts>
+#if defined(__GLIBCXX__) && __has_include(<bits/ranges_base.h>)
+// These rules query range concepts and accessors. View adaptors have no role in format selection.
+#include <bits/ranges_base.h>
+#else
 #include <ranges>
+#endif
 #include <type_traits>
 #include <utility>
 
@@ -63,7 +68,7 @@ template <auto format_literal, auto field, typename value_type>
 concept brace_direct_identity_rule =
 	identity_brace_specification_v<field.specification> &&
 	format_backend_identity_printable<
-		typename decltype(format_literal)::value_type, value_type>;
+		typename ::std::remove_cvref_t<decltype(format_literal)>::value_type, value_type>;
 
 /**
  * Preserves the direct-identity proof across provider-template deduction.
@@ -107,7 +112,7 @@ concept brace_range_replacement_rule =
 	(::std::ranges::input_range<::std::remove_cvref_t<value_type> &> ||
 	 tuple_format_source<::std::remove_cvref_t<value_type>>) &&
 	(!brace_scalar_string_source<
-		typename decltype(format_literal)::value_type, value_type>);
+		typename ::std::remove_cvref_t<decltype(format_literal)>::value_type, value_type>);
 
 template <auto format_literal, auto field, typename value_type>
 concept brace_invalid_tail_replacement_rule =
@@ -124,18 +129,18 @@ concept brace_builtin_value =
 	::std::same_as<::std::remove_cvref_t<value_type>, bool> ||
 	::fast_io::details::character_integral<
 		::std::remove_cvref_t<value_type>> ||
-	format_string_like<typename decltype(format_literal)::value_type,
+	format_string_like<typename ::std::remove_cvref_t<decltype(format_literal)>::value_type,
 					   value_type> ||
 	::std::same_as<::std::remove_cvref_t<value_type>, ::std::nullptr_t> ||
 	(::std::is_pointer_v<::std::remove_cvref_t<value_type>> &&
 	 !::std::is_function_v<::std::remove_pointer_t<
 		 ::std::remove_cvref_t<value_type>>>) ||
-	::fast_io::details::my_floating_point<
+	::fast_io::details::floating_io_value<
 		::std::remove_cvref_t<value_type>> ||
 	::fast_io::details::my_integral<::std::remove_cvref_t<value_type>> ||
 	::std::same_as<::std::remove_cvref_t<value_type>, ::std::byte> ||
 	format_backend_identity_printable<
-		typename decltype(format_literal)::value_type, value_type>;
+		typename ::std::remove_cvref_t<decltype(format_literal)>::value_type, value_type>;
 
 template <auto format_literal, auto field, typename value_type>
 concept brace_unclaimed_identity_replacement_rule =
@@ -193,7 +198,7 @@ concept printf_builtin_replacement_rule = []() consteval {
 	}
 	else
 	{
-		return ::fast_io::details::my_floating_point<clean_type>;
+		return ::fast_io::details::floating_io_value<clean_type>;
 	}
 }();
 

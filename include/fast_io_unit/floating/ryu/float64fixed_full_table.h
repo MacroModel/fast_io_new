@@ -165,7 +165,9 @@ constexpr ::std::size_t first_table_generated_size() noexcept
 struct decimal_power
 {
 	::std::uint_least64_t limbs[decimal_power_limb_capacity]{};
-	::std::size_t used{1u};
+	// GCC 15 on MIPS n32 misdiagnoses an in-range limb write during constant
+	// evaluation when this member is size_t. Keep its width equal to a limb.
+	::std::uint_least64_t used{1u};
 
 	constexpr void multiply(::std::uint_least64_t multiplier) noexcept
 	{
@@ -224,6 +226,7 @@ make_first_table_offsets() noexcept
 	return result;
 }
 
+template <typename Storage>
 constexpr triple_table<first_table_row_count> make_first_table() noexcept
 {
 	triple_table<first_table_row_count> result{};
@@ -272,7 +275,19 @@ inline constexpr ::std::size_t table_size{64u};
 alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr auto power_offset{
 	fixed_precision_table_generation::make_first_table_offsets()};
 
-alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr auto pow10_split{
-	fixed_precision_table_generation::make_first_table()};
+/** @brief Makes table generation depend on the precision consumer while sharing one table across all uses. */
+template <typename Consumer>
+struct fixed_precision_table_key
+{
+	using type = void;
+};
+
+/** @brief Materializes the aligned first multiplier table only when that precision path is instantiated. */
+template <typename Storage>
+alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr fixed_precision_table_generation::triple_table<fixed_precision_table_generation::first_table_row_count> pow10_split_storage{fixed_precision_table_generation::make_first_table<Storage>()};
+
+/** @brief Provides each formatter with the same statically aligned rows and one ODR identity. */
+template <typename Consumer>
+inline constexpr auto const &pow10_split{pow10_split_storage<typename fixed_precision_table_key<Consumer>::type>};
 
 } // namespace fast_io::details::ryu

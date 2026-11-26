@@ -3,24 +3,15 @@
 namespace fast_io::details
 {
 
-/*
-Clang's x86 bfloat16 lowering without AVX512-BF16 is the only audited scalar
-domain whose nested by-value copy can rematerialize through a narrowing
-operation. Borrowing that object until its bits become an integer carrier
-preserves subnormals and signaling-NaN payloads. AVX512-BF16, AArch64, and the
-ordinary binary16/binary32/binary64/binary80/binary128 domains use their native
-by-value ABI instead.
-*/
 template <typename floating_type>
 inline constexpr bool compiler_constant_floating_capture_requires_object_reference{
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
 	(defined(__x86_64__) || defined(_M_X64)) &&                     \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC)) &&               \
 	!defined(__AVX512BF16__)
-	::std::same_as<::std::remove_cvref_t<floating_type>, __bf16>
-#else
-	false
+	::std::same_as<::std::remove_cvref_t<floating_type>, __bf16> ||
 #endif
+	::fast_io::details::native_floating_requires_integer_capture<floating_type>
 };
 
 template <typename floating_type>
@@ -31,12 +22,8 @@ using compiler_constant_floating_capture_parameter_t = ::std::conditional_t<
 	::std::remove_cvref_t<floating_type>>;
 
 /// @brief Captures IEC 60559 fields at a target-specific native scalar ABI boundary.
-/// @details The explicit template argument makes the parameter policy visible at
-///          every call site. Register-safe scalars are intentionally passed by
-///          value, so float, double, native half/bfloat, binary80, and binary128
-///          remain in their target floating register class. Only the simulated
-///          Clang/x86 bfloat16 domain above is borrowed until its raw bits have
-///          been converted to the integer field carrier.
+/// @details Borrow objects whose native transport may change the stored NaN
+///          bits. Decode the fields from integer storage on these targets.
 template <typename floating_type>
 [[nodiscard]] inline constexpr
 	::fast_io::details::punning_result<
@@ -70,7 +57,16 @@ compiler_constant_floating_capture_fields(
 #endif
 	{
 		static_assert(sizeof(clean_type) == sizeof(mantissa_type));
-		auto const unwrap{::fast_io::bit_cast<mantissa_type>(value)};
+		auto const unwrap{[&] {
+			if constexpr (::fast_io::details::native_floating_requires_integer_capture<clean_type>)
+			{
+				return ::fast_io::details::capture_floating_scalar_representation(value);
+			}
+			else
+			{
+				return ::fast_io::bit_cast<mantissa_type>(value);
+			}
+		}()};
 		constexpr auto mantissa_mask{
 			(static_cast<mantissa_type>(1u) << trait::mbits) - 1u};
 		constexpr auto exponent_mask{
@@ -470,7 +466,7 @@ compiler_constant_hex_precision_fields_size_impl(
 		if constexpr (flags.nan_show_type)
 		{
 			constexpr auto quiet_bit{
-				::fast_io::details::fp_quiet_nan_mantissa_mask<
+				::fast_io::details::fp_native_nan_default_payload<
 					mantissa_type, trait::mbits>()};
 			if (negative && mantissa == quiet_bit)
 			{

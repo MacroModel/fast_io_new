@@ -104,6 +104,7 @@ struct linux_struct_statx
 
 inline constexpr ::std::uint_least32_t linux_statx_size{0x200U};
 
+/** @brief Obtains the open file size with statx when available and falls back to descriptor stat on older kernels. */
 inline ::std::size_t posix_loader_get_file_size(int fd)
 {
 #if defined(_WIN32) && !defined(__BIONIC__) && !defined(__WINE__)
@@ -111,46 +112,45 @@ inline ::std::size_t posix_loader_get_file_size(int fd)
 	return ::fast_io::win32::details::win32_load_file_get_file_size(
 		reinterpret_cast<void *>(noexcept_call(_get_osfhandle, fd)));
 #elif defined(__linux__) && defined(__NR_statx)
-	// Linux kernel provides new __NR_statx syscall. That allows us to only extract part of information and avoid libc
-	// braindeath beneath.
+	// AT_EMPTY_PATH was part of the statx ABI from its first release.
 	linux_struct_statx statxbuf;
-	system_call_throw_error(system_call<__NR_statx, int>(fd, reinterpret_cast<char const *>(u8""),
-#if defined(AT_EMPTY_PATH)
-														 AT_EMPTY_PATH
-#else
-														 0x1000 // AT_EMPTY_PATH requires _GNU_SOURCE gets defined which
-																// might not be available for all libcs
-#endif
-														 ,
-														 linux_statx_size, __builtin_addressof(statxbuf)));
-	using stx_size_unsigned_type = ::std::make_unsigned_t<decltype(statxbuf.stx_size)>;
-	if constexpr (sizeof(stx_size_unsigned_type) > sizeof(::std::size_t))
+	auto const result{system_call<__NR_statx, int>(fd, "", 0x1000, linux_statx_size, __builtin_addressof(statxbuf))};
+	if (result != -ENOSYS) [[likely]]
 	{
-		if (static_cast<stx_size_unsigned_type>(statxbuf.stx_size) > static_cast<stx_size_unsigned_type>(SIZE_MAX))
+		system_call_throw_error(result);
+		if (statxbuf.stx_mask & linux_statx_size)
 		{
-			throw_posix_error(EINVAL);
+			if constexpr (sizeof(::std::size_t) < sizeof(statxbuf.stx_size))
+			{
+				if (statxbuf.stx_size > SIZE_MAX)
+				{
+					throw_posix_error(EINVAL);
+				}
+			}
+			return static_cast<::std::size_t>(statxbuf.stx_size);
 		}
 	}
-	return static_cast<::std::size_t>(statxbuf.stx_size);
+#endif
+#if defined(__linux__) && defined(__i386__) && defined(__NR_fstat)
+	return linux_i386_file_size(fd);
+#elif !defined(_WIN32) || defined(__BIONIC__) || defined(__WINE__)
+#if defined(__linux__) && defined(__NR_fstat) && defined(__x86_64__) && !defined(__ILP32__)
+	// Read the LP64 kernel layout even when libc uses a different public structure.
+	linux_x86_64_stat st;
+	system_call_throw_error(linux_fstat(fd, st));
 #else
-
-#if defined(__linux__) && !defined(__MLIBC_O_CLOEXEC)
+#if defined(__linux__) && defined(__USE_LARGEFILE64) && !defined(__MLIBC_O_CLOEXEC)
 	struct stat64 st;
+	auto const status{::fast_io::noexcept_call(::fstat64, fd, __builtin_addressof(st))};
 #else
 	struct stat st;
+	auto const status{::fast_io::noexcept_call(::fstat, fd, __builtin_addressof(st))};
 #endif
-
-	if (::fast_io::noexcept_call(
-#if defined(__linux__) && !defined(__MLIBC_O_CLOEXEC)
-			::fstat64
-#else
-			::fstat
-#endif
-			,
-			fd, __builtin_addressof(st)) == -1) [[unlikely]]
+	if (status == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}
+#endif
 
 	using st_size_unsigned_type = ::std::make_unsigned_t<decltype(st.st_size)>;
 	if constexpr (sizeof(st_size_unsigned_type) > sizeof(::std::size_t))

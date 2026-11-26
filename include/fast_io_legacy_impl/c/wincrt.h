@@ -271,6 +271,7 @@ inline void wincrt_fp_flush_stdout_impl()
 	fp->_ptr = fp->_base;
 }
 
+/** @brief Drains the unread CRT prefix before obtaining any additional file bytes. */
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
 #endif
@@ -281,10 +282,21 @@ inline char *wincrt_fp_read_cold_impl(FILE *__restrict fpp, char *first, ::std::
 		wincrt_fp_flush_stdout_impl();
 	}
 	::fast_io::details::crt_iobuf *fp{reinterpret_cast<::fast_io::details::crt_iobuf *>(fpp)};
-	::std::size_t cnt{static_cast<::std::size_t>(static_cast<::std::uint_least32_t>(fp->_cnt))};
-	non_overlapped_copy_n(fp->_ptr, cnt, first);
-	first += cnt;
-	diff -= cnt;
+	if (fp->_cnt > 0)
+	{
+		// Commit consumed bytes before bypassing or refilling the CRT buffer.
+		auto count{static_cast<::std::size_t>(fp->_cnt)};
+		auto copied{count < diff ? count : diff};
+		non_overlapped_copy_n(fp->_ptr, copied, first);
+		fp->_ptr += copied;
+		fp->_cnt -= static_cast<::std::int_least32_t>(copied);
+		first += copied;
+		diff -= copied;
+	}
+	if (diff == 0)
+	{
+		return first;
+	}
 	::std::size_t allocated_buffer_size{static_cast<::std::size_t>(static_cast<::std::uint_least32_t>(fp->_bufsiz))};
 	if (allocated_buffer_size < 4)
 	{
@@ -375,7 +387,8 @@ inline T *wincrt_get_buffer_ptr_impl(FILE *__restrict fpp) noexcept
 	}
 	else
 	{
-		return reinterpret_cast<T *>(fp->_ptr + fp->_cnt);
+		// A negative CRT count represents an exhausted buffer.
+		return reinterpret_cast<T *>(fp->_cnt > 0 ? fp->_ptr + fp->_cnt : fp->_ptr);
 	}
 }
 
@@ -485,13 +498,14 @@ inline void obuffer_overflow(basic_c_io_observer_unlocked<char_type> ciob, char_
 	details::wincrt_fp_overflow_impl(ciob.fp, ch);
 }
 
+/** @brief Reads through the CRT buffer while preserving any bytes already prefetched. */
 template <::std::integral char_type>
 inline ::std::byte *read_some_bytes_underflow_define(::fast_io::basic_c_io_observer_unlocked<char_type> ciob,
 													 ::std::byte *first, ::std::byte *last)
 {
 	return reinterpret_cast<::std::byte *>(::fast_io::details::wincrt_fp_read_cold_impl(ciob.fp,
 																						reinterpret_cast<char *>(first),
-																						reinterpret_cast<char *>(last)));
+																						static_cast<::std::size_t>(last - first)));
 }
 
 template <::std::integral char_type>

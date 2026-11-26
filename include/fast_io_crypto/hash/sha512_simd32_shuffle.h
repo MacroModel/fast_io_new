@@ -343,6 +343,10 @@ inline void sha512_simd32_compute_message_4rounds(
 #elif __has_cpp_attribute(__gnu__::__flatten__)
 [[__gnu__::__flatten__]]
 #endif
+#if __has_cpp_attribute(__gnu__::__access__)
+// The third argument is a sentinel. No byte is loaded through the one-past pointer.
+[[__gnu__::__access__(__none__, 3)]]
+#endif
 inline void sha512_runtime_routine(::std::uint_least64_t *__restrict state, ::std::byte const *__restrict blocks_start,
 								   ::std::byte const *__restrict blocks_last) noexcept
 {

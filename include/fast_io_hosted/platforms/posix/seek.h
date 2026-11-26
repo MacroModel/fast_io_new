@@ -21,34 +21,24 @@ inline ::fast_io::intfpos_t posix_seek_impl(int fd, ::fast_io::intfpos_t offset,
 		throw_posix_error();
 	}
 	return static_cast<::fast_io::intfpos_t>(static_cast<my_make_unsigned_t<off_t>>(ret));
-#elif defined(__linux__)
+#elif defined(__linux__) && (defined(__NR_llseek) || defined(__NR__llseek))
+	// The split-offset Linux ABI returns the full position through an output pointer.
+	// Its availability depends on the kernel ABI, including when libc uses a 64-bit off_t.
 #if defined(__NR_llseek)
-	if constexpr (sizeof(off_t) <= sizeof(::std::int_least32_t))
-	{
-		::std::uint_least64_t result{};
-		::std::uint_least64_t offset64_val{
-			static_cast<::std::uint_least64_t>(offset)};
-		auto ret{system_call<__NR_llseek, int>(fd, static_cast<::std::uint_least32_t>(offset64_val >> 32u),
-											   static_cast<::std::uint_least32_t>(offset64_val), __builtin_addressof(result),
-											   static_cast<int>(s))};
-		system_call_throw_error(ret);
-		return static_cast<::fast_io::intfpos_t>(static_cast<::std::uint_least64_t>(result));
-	}
-	else
+	constexpr auto number{__NR_llseek};
+#else
+	constexpr auto number{__NR__llseek};
 #endif
-	{
-		if constexpr (sizeof(off_t) < sizeof(::fast_io::intfpos_t))
-		{
-			if (offset < static_cast<::fast_io::intfpos_t>(::std::numeric_limits<off_t>::min()) ||
-				offset > static_cast<::fast_io::intfpos_t>(::std::numeric_limits<off_t>::max()))
-			{
-				throw_posix_error(EOVERFLOW);
-			}
-		}
-		auto ret{system_call<__NR_lseek, ::std::ptrdiff_t>(fd, offset, static_cast<int>(s))};
-		system_call_throw_error(ret);
-		return static_cast<::fast_io::intfpos_t>(static_cast<::std::uint_least64_t>(ret));
-	}
+	::std::uint_least64_t result{};
+	auto const bits{static_cast<::std::uint_least64_t>(offset)};
+	auto const ret{system_call<number, int>(fd, static_cast<::std::uint_least32_t>(bits >> 32u),
+		static_cast<::std::uint_least32_t>(bits), __builtin_addressof(result), static_cast<int>(s))};
+	system_call_throw_error(ret);
+	return static_cast<::fast_io::intfpos_t>(result);
+#elif defined(__linux__) && defined(__NR_lseek) && defined(__SIZEOF_LONG__) && __SIZEOF_LONG__ >= 8
+	auto const ret{system_call<__NR_lseek, long>(fd, static_cast<long>(offset), static_cast<int>(s))};
+	system_call_throw_error(ret);
+	return static_cast<::fast_io::intfpos_t>(ret);
 #elif (defined(_WIN32) && !defined(__WINE__) && !defined(__BIONIC__)) && !defined(__CYGWIN__)
 	if constexpr (sizeof(::std::int_least64_t) < sizeof(::fast_io::intfpos_t))
 	{

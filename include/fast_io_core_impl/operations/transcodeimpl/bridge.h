@@ -4,12 +4,31 @@
  * @file
  * @brief Bridges bounded transform-engine cursors to ordinary streams.
  *
- * An engine sees only contiguous [first,last) ranges. Exact endpoint types may
+ * An engine sees only contiguous [first,last) ranges. Compatible endpoint types may
  * borrow an underlying stream buffer directly; every other route uses adapter-
  * owned scratch storage and the normal typed/byte read or write primitives.
  * prepare_* never commits speculative engine progress. commit_* validates the
  * returned cursor and advances exactly the range accepted or produced.
  */
+
+namespace fast_io::operations::decay
+{
+/** @brief Runs a validation-only drain on a valid empty range and checks the terminal result. */
+template <::fast_io::transcode_phase Phase, typename Ref>
+	requires ::fast_io::outputless_transcode_drain<::std::remove_cvref_t<Ref>, Phase>
+inline constexpr void transcode_drain_empty(Ref &ref)
+{
+	::fast_io::transcode_to_value_t<Ref> unit;
+	auto result = [&] {
+		if constexpr (Phase == ::fast_io::transcode_phase::finish)
+			return transcode_finish_decay_dispatch(ref, &unit, &unit);
+		else
+			return transcode_sync_flush_decay_dispatch(ref, &unit, &unit);
+	}();
+	if (result.to_next != &unit || result.status != ::fast_io::transcode_drain_status::complete) [[unlikely]]
+		::fast_io::throw_transcode_stream_error(::fast_io::transcode_stream_errc::protocol_violation);
+}
+}
 
 namespace fast_io::details
 {
@@ -208,15 +227,15 @@ inline void ensure_transcode_input_buffer(
 /**
  * @brief Prepares a bounded engine source without committing stream progress.
  *
- * A direct exact-unit ibuffer is borrowed until commit. All other paths copy
+ * A compatible ibuffer is borrowed until commit. All other paths copy
  * into adapter-owned storage so an unconsumed suffix survives `need_output`.
  */
 template <typename allocator_type, bool secure_clear,
-		  ::fast_io::transcode_unit unit_type, typename input_ref>
+		  ::fast_io::transcode_unit unit_type, typename input_ref, typename Refill>
 inline basic_transcode_source<unit_type> prepare_transcode_source(
 	input_ref &inref,
 	::fast_io::details::basic_transcode_input_buffer_pointers<unit_type> &scratch,
-	bool &source_eof, ::std::size_t preferred)
+	bool &source_eof, ::std::size_t preferred, Refill refill)
 {
 	// An engine may have returned need_output before consuming all scratch
 	// input. That suffix always precedes any newly read underlying data.
@@ -230,22 +249,16 @@ inline basic_transcode_source<unit_type> prepare_transcode_source(
 		// Once physical EOF is observed, subsequent preparations remain empty.
 		return {};
 	}
-	if constexpr (::std::same_as<unit_type,
-								 typename input_ref::input_char_type> &&
-				  ::fast_io::operations::decay::defines::
-					  has_ibuffer_basic_operations<input_ref>)
+	if constexpr (::fast_io::transcode_input_window<unit_type, input_ref>)
 	{
-		// Borrow exact typed get-area storage for the zero-copy input path.
-		// Exact typed ibuffers are the zero-copy path. Cursor ownership remains
-		// with the underlying stream until commit_transcode_source succeeds.
+		// Borrow the current get area until the engine commits its consumed prefix.
 		auto range{::fast_io::details::acquire_transcode_ibuffer_range(inref)};
 		if (range.current_offset == range.end_offset)
 		{
 			// Refill the underlying get area only when its current range is empty.
-			if (!ibuffer_underflow(inref))
+			if (!refill(inref, source_eof))
 			{
-				// A false underflow result is the physical EOF observation.
-				source_eof = true;
+				// The callback distinguishes clean EOF from a failed nested decoder.
 				return {};
 			}
 			range = ::fast_io::details::acquire_transcode_ibuffer_range(inref);
@@ -256,7 +269,7 @@ inline basic_transcode_source<unit_type> prepare_transcode_source(
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
 		}
-		return {range.current, range.end, true};
+		return {reinterpret_cast<unit_type const *>(range.current), reinterpret_cast<unit_type const *>(range.end), true};
 	}
 	else
 	{
@@ -265,9 +278,7 @@ inline basic_transcode_source<unit_type> prepare_transcode_source(
 			allocator_type, secure_clear>(
 			scratch,
 			[]() consteval {
-				if constexpr (::std::same_as<unit_type, ::std::byte> &&
-							  ::fast_io::operations::decay::defines::
-								  has_ibuffer_basic_operations<input_ref>)
+				if constexpr (::std::same_as<unit_type, ::std::byte>)
 				{
 					// Byte views of typed ibuffers must hold one complete object.
 					return sizeof(typename input_ref::input_char_type);
@@ -300,10 +311,9 @@ inline basic_transcode_source<unit_type> prepare_transcode_source(
 			if (range.current_offset == range.end_offset)
 			{
 				// Ask the underlying buffered input to publish another typed range.
-				if (!ibuffer_underflow(inref))
+				if (!refill(inref, source_eof))
 				{
-					// Record EOF and leave scratch in its canonical empty state.
-					source_eof = true;
+					// Preserve the empty scratch state after EOF or a checked failure.
 					scratch.buffer_curr = scratch.buffer_end =
 						scratch.buffer_begin;
 					return {};
@@ -333,12 +343,27 @@ inline basic_transcode_source<unit_type> prepare_transcode_source(
 			ibuffer_set_curr(inref, range.current + units);
 			next = scratch.buffer_begin + bytes;
 		}
-		else
+		else if constexpr (::fast_io::operations::decay::defines::bytes_readable<input_ref>)
 		{
 			// A byte engine over an unbuffered source uses byte-read dispatch.
 			static_assert(::std::same_as<unit_type, ::std::byte>);
 			next = ::fast_io::operations::decay::read_some_bytes_decay_dispatch(
 				inref, scratch.buffer_begin, scratch.buffer_capacity_end);
+		}
+		else
+		{
+			// A typed-only reader publishes whole live objects. Copy only the returned prefix into byte storage.
+			using Char = typename input_ref::input_char_type;
+			Char objects[64];
+			::fast_io::conditional_secure_clear_guard<Char, secure_clear> wipe{objects, 64};
+			auto n{static_cast<::std::size_t>(scratch.buffer_capacity_end - scratch.buffer_begin) / sizeof(Char)};
+			if (n > 64) { n = 64; }
+			auto *last{::fast_io::operations::decay::read_some_decay_dispatch(inref, objects, objects + n)};
+			auto range{::fast_io::details::validate_transcode_closed_range_offsets(objects, objects + n, last)};
+			if (!range.valid) { ::fast_io::throw_transcode_stream_error(::fast_io::transcode_stream_errc::protocol_violation); }
+			auto bytes{range.current_offset * sizeof(Char)};
+			::fast_io::freestanding::my_memcpy(scratch.buffer_begin, objects, bytes);
+			next = scratch.buffer_begin + bytes;
 		}
 		auto const validated_next{
 			::fast_io::details::validate_transcode_closed_range_offsets(
@@ -386,24 +411,12 @@ template <::fast_io::transcode_unit unit_type, typename input_ref>
 	if (source.direct)
 	{
 		// Advance the borrowed underlying get-area cursor only after validation.
-		if constexpr (::std::same_as<
-						  unit_type, typename input_ref::input_char_type> &&
-					  ::fast_io::operations::decay::defines::
-						  has_ibuffer_basic_operations<input_ref>)
+		if constexpr (::fast_io::transcode_input_window<unit_type, input_ref>)
 		{
-			// The direct marker is valid only for an exact typed ibuffer source.
+			// Translate the validated end of the loan back into the device cursor type.
 			using cursor_type = decltype(ibuffer_curr(inref));
-			if constexpr (::std::is_const_v<
-								  ::std::remove_pointer_t<cursor_type>>)
-			{
-				// Preserve a const cursor type accepted by the underlying setter.
-				ibuffer_set_curr(inref, next);
-			}
-			else
-			{
-				// Restore mutability only for a mutable underlying cursor API.
-				ibuffer_set_curr(inref, const_cast<unit_type *>(next));
-			}
+			// The buffer concept proves one engine unit advances one device unit.
+			ibuffer_set_curr(inref, reinterpret_cast<cursor_type>(const_cast<unit_type *>(next)));
 		}
 		else
 		{
@@ -420,8 +433,11 @@ template <::fast_io::transcode_unit unit_type, typename input_ref>
 	return next;
 }
 
-/** @brief Prepares a direct output range or reusable adapter-owned scratch. */
-template <typename allocator_type, bool secure_clear,
+/** @brief Borrows a compatible put area or returns reusable encoder scratch.
+ * @details Preparing a new child window can flush several layers. A caller managing those writes
+ * independently may borrow an existing window and drive the overflow through its own child operation.
+ */
+template <typename allocator_type, bool secure_clear, bool PrepareChild = true,
 		  ::fast_io::transcode_unit unit_type,
 		  typename output_ref>
 inline basic_transcode_destination<unit_type> prepare_transcode_destination(
@@ -429,26 +445,34 @@ inline basic_transcode_destination<unit_type> prepare_transcode_destination(
 	::fast_io::details::basic_transcode_buffer_pointers<unit_type> &scratch,
 	::std::size_t minimum, ::std::size_t preferred)
 {
-	// Exact writable obuffers allow the engine to produce directly into the
-	// device's put area. Byte binding and unbuffered outputs use local scratch.
+	// A compatible put area can receive engine output without another allocation.
 	if (minimum == 0u)
 	{
 		// Normalize a defensive zero query to one writable engine unit.
 		minimum = 1u;
 	}
-	if constexpr (::std::same_as<unit_type,
-								 typename output_ref::output_char_type> &&
-				  ::fast_io::operations::decay::defines::
-					  has_obuffer_basic_operations<output_ref>)
+	if constexpr (::fast_io::transcode_output_window<unit_type, output_ref>)
 	{
 		// Prefer a matching writable put area to avoid an intermediate copy.
-		auto const range{
+		auto range{
 			::fast_io::details::acquire_transcode_obuffer_range(outref)};
+		if constexpr (PrepareChild &&
+					  ::fast_io::operations::decay::defines::has_obuffer_minimum_size_operations<output_ref>)
+		{
+			// The synchronous driver can propagate a flush while acquiring the next put area.
+			constexpr auto guarantee{obuffer_minimum_size_define(
+				::fast_io::io_reserve_type<typename output_ref::output_char_type, output_ref>)};
+			if (range.end_offset - range.current_offset < minimum && minimum <= guarantee)
+			{
+				obuffer_minimum_size_flush_prepare_define(outref);
+				range = ::fast_io::details::acquire_transcode_obuffer_range(outref);
+			}
+		}
 		if (range.current != nullptr &&
 			range.end_offset - range.current_offset >= minimum)
 		{
 			// Borrow only a put area satisfying the complete minimum-capacity query.
-			return {range.current, range.end, true};
+			return {reinterpret_cast<unit_type *>(range.current), reinterpret_cast<unit_type *>(range.end), true};
 		}
 	}
 	::fast_io::details::ensure_transcode_scratch<allocator_type, secure_clear>(
@@ -456,11 +480,56 @@ inline basic_transcode_destination<unit_type> prepare_transcode_destination(
 	return {scratch.buffer_begin, scratch.buffer_end, false};
 }
 
+/**
+ * @brief Publishes a byte prefix to a typed-only sink without constructing a misaligned typed pointer.
+ * @details Finish checks the residual byte count. A nonterminal flush preserves an unfinished code unit.
+ * An available contiguous put area receives complete object representations in one copy.
+ */
+template <bool Secure, typename Ref, typename Char>
+inline void publish_transcode_object_bytes(Ref &ref, basic_transcode_source_remainder<Char> &carry,
+										 ::std::byte const *first, ::std::byte const *last)
+{
+	if (carry.size)
+	{
+		while (first != last && carry.size != sizeof(Char)) { carry.storage[carry.size++] = *first++; }
+		if (carry.size != sizeof(Char)) { return; }
+		Char unit;
+		::fast_io::conditional_secure_clear_guard<Char, Secure> wipe{&unit, 1};
+		::fast_io::freestanding::my_memcpy(&unit, carry.storage, sizeof(Char));
+		::fast_io::operations::decay::write_all_decay_dispatch(ref, &unit, &unit + 1);
+		carry.size = 0;
+	}
+	while (static_cast<::std::size_t>(last - first) >= sizeof(Char))
+	{
+		auto n{static_cast<::std::size_t>(last - first) / sizeof(Char)};
+		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<Ref>)
+		{
+			auto const area{acquire_transcode_obuffer_range(ref)};
+			auto const space{area.end_offset - area.current_offset};
+			if (space)
+			{
+				if (n > space) { n = space; }
+				::fast_io::freestanding::my_memcpy(area.current, first, n * sizeof(Char));
+				obuffer_set_curr(ref, area.current + n);
+				first += n * sizeof(Char);
+				continue;
+			}
+		}
+		Char objects[64];
+		::fast_io::conditional_secure_clear_guard<Char, Secure> wipe{objects, 64};
+		if (n > 64) { n = 64; }
+		::fast_io::freestanding::my_memcpy(objects, first, n * sizeof(Char));
+		::fast_io::operations::decay::write_all_decay_dispatch(ref, objects, objects + n);
+		first += n * sizeof(Char);
+	}
+	while (first != last) { carry.storage[carry.size++] = *first++; }
+}
+
 /** @brief Validates and commits exactly the engine-produced destination prefix. */
-template <::fast_io::transcode_unit unit_type, typename output_ref>
+template <bool Secure, ::fast_io::transcode_unit unit_type, typename output_ref, typename Remainder>
 [[nodiscard]] inline unit_type *commit_transcode_destination(
 	output_ref &outref, basic_transcode_destination<unit_type> destination,
-	unit_type *next)
+	unit_type *next, [[maybe_unused]] Remainder &carry)
 {
 	// Direct output commits only the produced prefix. Scratch output is fully
 	// forwarded before the same allocation can be reused by the engine.
@@ -474,16 +543,13 @@ template <::fast_io::transcode_unit unit_type, typename output_ref>
 			::fast_io::transcode_stream_errc::protocol_violation);
 	}
 	next = validated_next.current;
-	if constexpr (::std::same_as<unit_type,
-								 typename output_ref::output_char_type> &&
-				  ::fast_io::operations::decay::defines::
-					  has_obuffer_basic_operations<output_ref>)
+	if constexpr (::fast_io::transcode_output_window<unit_type, output_ref>)
 	{
-		// Only exact-unit buffered outputs can carry a direct destination marker.
+		// A direct loan preserves both byte-channel semantics and unit boundaries.
 		if (destination.direct)
 		{
 			// Publish the produced prefix by advancing the underlying put cursor.
-			obuffer_set_curr(outref, next);
+			obuffer_set_curr(outref, reinterpret_cast<typename output_ref::output_char_type *>(next));
 			return next;
 		}
 	}
@@ -497,12 +563,16 @@ template <::fast_io::transcode_unit unit_type, typename output_ref>
 			::fast_io::operations::decay::write_all_decay_dispatch(
 				outref, destination.first, next);
 		}
-		else
+		else if constexpr (::fast_io::operations::decay::defines::bytes_writable<output_ref>)
 		{
 			// Forward a byte endpoint through explicit byte output dispatch.
 			static_assert(::std::same_as<unit_type, ::std::byte>);
 			::fast_io::operations::decay::write_all_bytes_decay_dispatch(
 				outref, destination.first, next);
+		}
+		else
+		{
+			publish_transcode_object_bytes<Secure>(outref, carry, destination.first, next);
 		}
 	}
 	return next;

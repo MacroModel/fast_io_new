@@ -1,5 +1,15 @@
 export namespace fast_io
 {
+    using ::fast_io::aes_ctx;
+    using ::fast_io::aes128;
+    using ::fast_io::aes192;
+    using ::fast_io::aes256;
+    namespace transcoders
+    {
+        using ::fast_io::transcoders::aes_ctr;
+    }
+    using ::fast_io::rapidhash64;
+    using ::fast_io::native_swiss_hasher;
     using ::fast_io::crc32_context;
     using ::fast_io::crc32c_context;
     using ::fast_io::md5_context;

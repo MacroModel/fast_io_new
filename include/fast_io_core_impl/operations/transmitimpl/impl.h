@@ -11,6 +11,7 @@
  */
 
 #include "common.h"
+#include "exact.h"
 
 #include "bytes_until_eof.h"
 #include "until_eof.h"

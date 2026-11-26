@@ -23,14 +23,12 @@ template <typename outstmtype, ::std::integral char_type>
 [[msvc::forceinline]]
 #endif
 inline constexpr ::fast_io::containers::span<char_type const> write_some_span(outstmtype &&outstm, ::fast_io::containers::span<char_type const> sp)
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, char_type>)
+#endif
 {
-	auto first{sp.data()};
-	auto last{first + sp.size()};
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		return ::fast_io::containers::span<char_type const>(
-			first, ::fast_io::details::write_some_impl(outsm, first, last));
-	});
+	auto last{::fast_io::operations::write_some(::std::forward<outstmtype>(outstm), sp.data(), sp.data() + sp.size())};
+	return ::fast_io::containers::span<char_type const>(sp.data(), last);
 }
 
 /** @brief Writes every element of a typed span. */
@@ -41,13 +39,11 @@ template <typename outstmtype, ::std::integral char_type>
 [[msvc::forceinline]]
 #endif
 inline constexpr void write_all_span(outstmtype &&outstm, ::fast_io::containers::span<char_type const> sp)
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, char_type>)
+#endif
 {
-	auto first{sp.data()};
-	auto last{first + sp.size()};
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		::fast_io::details::write_all_impl(outsm, first, last);
-	});
+	::fast_io::operations::write_all(::std::forward<outstmtype>(outstm), sp.data(), sp.data() + sp.size());
 }
 
 /**
@@ -63,14 +59,12 @@ template <typename outstmtype, ::std::integral legacy_char_type = char>
 [[msvc::forceinline]]
 #endif
 inline constexpr ::fast_io::containers::span<::std::byte const> write_some_bytes_span(outstmtype &&outstm, ::fast_io::containers::span<::std::byte const> sp)
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, ::std::byte>)
+#endif
 {
-	auto first{sp.data()};
-	auto last{first + sp.size()};
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		return ::fast_io::containers::span<::std::byte const>(
-			first, ::fast_io::details::write_some_bytes_impl(outsm, first, last));
-	});
+	auto last{::fast_io::operations::write_some_bytes(::std::forward<outstmtype>(outstm), sp.data(), sp.data() + sp.size())};
+	return ::fast_io::containers::span<::std::byte const>(sp.data(), last);
 }
 
 /** @brief Writes every byte of a span while retaining legacy template syntax. */
@@ -81,45 +75,31 @@ template <typename outstmtype, ::std::integral legacy_char_type = char>
 [[msvc::forceinline]]
 #endif
 inline constexpr void write_all_bytes_span(outstmtype &&outstm, ::fast_io::containers::span<::std::byte const> sp)
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, ::std::byte>)
+#endif
 {
-	auto first{sp.data()};
-	auto last{first + sp.size()};
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		::fast_io::details::write_all_bytes_impl(outsm, first, last);
-	});
+	::fast_io::operations::write_all_bytes(::std::forward<outstmtype>(outstm), sp.data(), sp.data() + sp.size());
 }
 
 /** @brief Partially writes a span of byte scatters and returns progress. */
 template <typename outstmtype>
 inline constexpr io_scatter_status_t scatter_write_some_bytes_span(outstmtype &&outstm, ::fast_io::containers::span<::fast_io::io_scatter_t const> sp)
-{
-	using io_scatter_may_alias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, ::std::byte>)
 #endif
-		= io_scatter_t const *;
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		return ::fast_io::details::scatter_write_some_bytes_impl(
-			outsm, reinterpret_cast<io_scatter_may_alias_const_ptr>(sp.data()), sp.size());
-	});
+{
+	return ::fast_io::operations::scatter_write_some_bytes(::std::forward<outstmtype>(outstm), sp.data(), sp.size());
 }
 
 /** @brief Writes every entry in a span of byte scatters. */
 template <typename outstmtype>
 inline constexpr void scatter_write_all_bytes_span(outstmtype &&outstm, ::fast_io::containers::span<::fast_io::io_scatter_t const> sp)
-{
-	using io_scatter_may_alias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, ::std::byte>)
 #endif
-		= io_scatter_t const *;
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		::fast_io::details::scatter_write_all_bytes_impl(
-			outsm, reinterpret_cast<io_scatter_may_alias_const_ptr>(sp.data()), sp.size());
-	});
+{
+	::fast_io::operations::scatter_write_all_bytes(::std::forward<outstmtype>(outstm), sp.data(), sp.size());
 }
 
 /** @brief Partially writes a span of typed scatters and returns progress. */
@@ -129,18 +109,11 @@ inline constexpr io_scatter_status_t scatter_write_some_span(
 	::fast_io::containers::span<::fast_io::basic_io_scatter_t<typename ::std::remove_cvref_t<
 		decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type> const>
 		sp)
-{
-	using io_scatter_may_alias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, typename ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type>)
 #endif
-		= basic_io_scatter_t<typename ::std::remove_cvref_t<
-			decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type> const *;
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		return ::fast_io::details::scatter_write_some_impl(
-			outsm, reinterpret_cast<io_scatter_may_alias_const_ptr>(sp.data()), sp.size());
-	});
+{
+	return ::fast_io::operations::scatter_write_some(::std::forward<outstmtype>(outstm), sp.data(), sp.size());
 }
 
 /** @brief Writes every entry in a span of typed scatters. */
@@ -150,18 +123,11 @@ inline constexpr void scatter_write_all_span(
 	::fast_io::containers::span<::fast_io::basic_io_scatter_t<typename ::std::remove_cvref_t<
 		decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type> const>
 		sp)
-{
-	using io_scatter_may_alias_const_ptr
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-		[[__gnu__::__may_alias__]]
+#if defined(__HERBCEPTIONS__)
+	throws(decay::borrowed_checked_write_throws<outstmtype, typename ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type>)
 #endif
-		= basic_io_scatter_t<typename ::std::remove_cvref_t<
-			decltype(::fast_io::operations::output_stream_ref(outstm))>::output_char_type> const *;
-	::fast_io::operations::basic_output_operation_guard<outstmtype &&> guard{outstm};
-	::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &outsm) {
-		::fast_io::details::scatter_write_all_impl(
-			outsm, reinterpret_cast<io_scatter_may_alias_const_ptr>(sp.data()), sp.size());
-	});
+{
+	::fast_io::operations::scatter_write_all(::std::forward<outstmtype>(outstm), sp.data(), sp.size());
 }
 
 /** @brief Partially writes a typed span at an explicit output offset. */

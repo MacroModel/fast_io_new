@@ -103,15 +103,10 @@ inline nt_shared_memory_state nt_family_create_shared_memory_impl(
 		throw_nt_error(status);
 	}
 
-	try
-	{
-		return nt_map_shared_memory_impl<family>(handle, mode);
-	}
-	catch (...)
-	{
-		::fast_io::win32::nt::nt_close<family == nt_family::zw>(handle);
-		throw;
-	}
+	::fast_io::nt_family_file_factory<family> owned{handle};
+	auto const mapped{nt_map_shared_memory_impl<family>(handle, mode)};
+	owned.handle = nullptr;
+	return mapped;
 }
 
 inline nt_shared_memory_internal_tlc_str nt_shared_memory_path(
@@ -180,16 +175,10 @@ template <nt_family family>
 	requires(family == nt_family::nt || family == nt_family::zw)
 inline nt_shared_memory_state nt_duplicate_shared_memory_impl(void *handle, ipc_mode mode)
 {
-	auto const duplicated_handle{::fast_io::win32::nt::details::nt_dup_impl<family == nt_family::zw>(handle)};
-	try
-	{
-		return nt_map_shared_memory_impl<family>(duplicated_handle, mode);
-	}
-	catch (...)
-	{
-		::fast_io::win32::nt::nt_close<family == nt_family::zw>(duplicated_handle);
-		throw;
-	}
+	::fast_io::nt_family_file_factory<family> owned{::fast_io::win32::nt::details::nt_dup_impl<family == nt_family::zw>(handle)};
+	auto const mapped{nt_map_shared_memory_impl<family>(owned.handle, mode)};
+	owned.handle = nullptr;
+	return mapped;
 }
 
 } // namespace win32::nt::details
@@ -239,18 +228,9 @@ public:
 		native_handle_type section_handle, ipc_mode mode = ipc_mode::in | ipc_mode::out)
 	{
 		::fast_io::win32::nt::details::nt_shared_memory_validate_mode(mode);
-		try
-		{
-			assign(::fast_io::win32::nt::details::nt_map_shared_memory_impl<family>(section_handle, mode), mode);
-		}
-		catch (...)
-		{
-			if (section_handle != nullptr) [[likely]]
-			{
-				::fast_io::win32::nt::nt_close<family == nt_family::zw>(section_handle);
-			}
-			throw;
-		}
+		::fast_io::nt_family_file_factory<family> owned{section_handle};
+		assign(::fast_io::win32::nt::details::nt_map_shared_memory_impl<family>(section_handle, mode), mode);
+		owned.handle = nullptr;
 	}
 
 	inline basic_nt_family_shared_memory(basic_nt_family_shared_memory const &other)

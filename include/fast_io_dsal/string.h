@@ -14,7 +14,7 @@
 #include <initializer_list>
 #include <bit>
 #include <compare>
-#include <algorithm>
+// The core supplies the classic search, comparison and copy algorithms used by the string implementation.
 #include "../fast_io_core.h"
 #include "impl/misc/push_warnings.h"
 #include "impl/misc/push_macros.h"
@@ -74,8 +74,11 @@ using u32ostring_ref_fast_io_tlc = ::fast_io::containers::basic_ostring_ref_fast
 // repeat status forwarding on the resulting object; probing a dummy stream also rejected valid destination-specific
 // print definitions. Direct perfect forwarding therefore aligns diagnostics, strategy admission, and CPO execution.
 template <::std::integral char_type, typename... Args>
-constexpr inline ::fast_io::basic_string<char_type>
+constexpr inline auto
 basic_concat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char_type, ::fast_io::basic_string<char_type>, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
 		false, char_type, ::fast_io::basic_string<char_type>>(::std::forward<Args>(args)...);
@@ -86,70 +89,100 @@ template <typename... Args>
 	(defined(__clang__) && 13 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-constexpr inline ::fast_io::string concat_fast_io(Args &&...args)
+constexpr inline auto concat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char, ::fast_io::string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::fast_io::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::wstring wconcat_fast_io(Args &&...args)
+constexpr inline auto wconcat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, wchar_t, ::fast_io::wstring, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, wchar_t, ::fast_io::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u8string u8concat_fast_io(Args &&...args)
+constexpr inline auto u8concat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char8_t, ::fast_io::u8string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char8_t, ::fast_io::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u16string u16concat_fast_io(Args &&...args)
+constexpr inline auto u16concat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char16_t, ::fast_io::u16string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char16_t, ::fast_io::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u32string u32concat_fast_io(Args &&...args)
+constexpr inline auto u32concat_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char32_t, ::fast_io::u32string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char32_t, ::fast_io::u32string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::string concatln_fast_io(Args &&...args)
+constexpr inline auto concatln_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char, ::fast_io::string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char, ::fast_io::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::wstring wconcatln_fast_io(Args &&...args)
+constexpr inline auto wconcatln_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, wchar_t, ::fast_io::wstring, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, wchar_t, ::fast_io::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u8string u8concatln_fast_io(Args &&...args)
+constexpr inline auto u8concatln_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char8_t, ::fast_io::u8string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char8_t, ::fast_io::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u16string u16concatln_fast_io(Args &&...args)
+constexpr inline auto u16concatln_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char16_t, ::fast_io::u16string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char16_t, ::fast_io::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::u32string u32concatln_fast_io(Args &&...args)
+constexpr inline auto u32concatln_fast_io(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char32_t, ::fast_io::u32string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char32_t, ::fast_io::u32string>(
 		::std::forward<Args>(args)...);
@@ -159,78 +192,111 @@ namespace tlc
 {
 
 template <::std::integral char_type, typename... Args>
-constexpr inline ::fast_io::tlc::basic_string<char_type>
+constexpr inline auto
 basic_concat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char_type, ::fast_io::tlc::basic_string<char_type>, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<
 		false, char_type, ::fast_io::tlc::basic_string<char_type>>(::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::string concat_fast_io_tlc(Args &&...args)
+constexpr inline auto concat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char, ::fast_io::tlc::string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char, ::fast_io::tlc::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::wstring wconcat_fast_io_tlc(Args &&...args)
+constexpr inline auto wconcat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, wchar_t, ::fast_io::tlc::wstring, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, wchar_t, ::fast_io::tlc::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u8string u8concat_fast_io_tlc(Args &&...args)
+constexpr inline auto u8concat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char8_t, ::fast_io::tlc::u8string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char8_t, ::fast_io::tlc::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u16string u16concat_fast_io_tlc(Args &&...args)
+constexpr inline auto u16concat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char16_t, ::fast_io::tlc::u16string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char16_t, ::fast_io::tlc::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u32string u32concat_fast_io_tlc(Args &&...args)
+constexpr inline auto u32concat_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<false, char32_t, ::fast_io::tlc::u32string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<false, char32_t, ::fast_io::tlc::u32string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::string concatln_fast_io_tlc(Args &&...args)
+constexpr inline auto concatln_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char, ::fast_io::tlc::string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char, ::fast_io::tlc::string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::wstring wconcatln_fast_io_tlc(Args &&...args)
+constexpr inline auto wconcatln_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, wchar_t, ::fast_io::tlc::wstring, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, wchar_t, ::fast_io::tlc::wstring>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u8string u8concatln_fast_io_tlc(Args &&...args)
+constexpr inline auto u8concatln_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char8_t, ::fast_io::tlc::u8string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char8_t, ::fast_io::tlc::u8string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u16string u16concatln_fast_io_tlc(Args &&...args)
+constexpr inline auto u16concatln_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char16_t, ::fast_io::tlc::u16string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char16_t, ::fast_io::tlc::u16string>(
 		::std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr inline ::fast_io::tlc::u32string u32concatln_fast_io_tlc(Args &&...args)
+constexpr inline auto u32concatln_fast_io_tlc(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::concat_range_has_hc<true, char32_t, ::fast_io::tlc::u32string, Args...>)
+#endif
 {
 	return ::fast_io::basic_general_concat_compiler_constant_checked_entry<true, char32_t, ::fast_io::tlc::u32string>(
 		::std::forward<Args>(args)...);

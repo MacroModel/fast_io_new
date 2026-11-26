@@ -746,6 +746,45 @@ floating_scalar_flags() noexcept
 	return flags;
 }
 
+// Decimal a/A has a base-ten significand and a cohort exponent. Its width
+// modifier selects the destination decimal interchange format at compile time.
+template <typename T>
+inline constexpr unsigned printf_decimal_width = []() consteval {
+	using traits = ::fast_io::details::interchange_floating_traits<::std::remove_cvref_t<T>>;
+	if constexpr (requires { traits::decimal_width; }) return traits::decimal_width;
+	else return 0u;
+}();
+
+/// @brief True for the standard binary32/64 carriers and their representation-identical aliases.
+template <typename T>
+inline constexpr bool brace_native_precision_carrier{
+	::std::same_as<T, float> || ::std::same_as<T, double> ||
+	::std::same_as<T, ::fast_io::details::float_alias_type<float>> ||
+	::std::same_as<T, ::fast_io::details::float_alias_type<double>>};
+
+/// @brief Share the native decimal precision writer across equivalent C++ operand types.
+/// The alias trait establishes representation identity. Bitwise transport keeps NaN
+/// diagnostics and signed zero intact. The size-oriented build uses the compact writer.
+template <::fast_io::manipulators::scalar_flags flags, typename T>
+[[nodiscard]] inline constexpr auto make_brace_precision_scalar(T const &value, ::std::size_t count) noexcept
+{
+#if !defined(__OPTIMIZE_SIZE__)
+	using value_type = ::std::remove_cvref_t<T>;
+	if constexpr (brace_native_precision_carrier<value_type> &&
+				  flags.floating != ::fast_io::manipulators::floating_format::hexfloat)
+	{
+		using carrier = ::std::conditional_t<::std::same_as<value_type, float> ||
+			::std::same_as<value_type, ::fast_io::details::float_alias_type<float>>, float, double>;
+		return ::fast_io::manipulators::scalar_manip_precision_t<flags, carrier>{
+			::fast_io::bit_cast<carrier>(value), count};
+	}
+	else
+#endif
+	{
+		return ::fast_io::details::make_floating_scalar_manip_precision<flags>(value, count);
+	}
+}
+
 template <format_specification specification, typename value_type>
 [[nodiscard]] inline constexpr auto make_brace_floating(
 	value_type &&value, resolved_format_parameter precision)
@@ -766,10 +805,58 @@ template <format_specification specification, typename value_type>
 		specification.presentation == presentation_type::general_upper};
 	constexpr bool use_precision{
 		specification.precision.kind != format_parameter_kind::none || presentation_has_default_six};
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
+	// A literal precision covering every fraction bit eliminates rounding.
+	// Capture only the fields needed by the reserve writer. In particular,
+	// an x87 operand then travels through the IO layer in integer registers.
+	if constexpr ((specification.presentation == presentation_type::hexfloat_lower ||
+				   specification.presentation == presentation_type::hexfloat_upper) &&
+				  specification.precision.kind == format_parameter_kind::literal &&
+				  specification.precision.value <= ::fast_io::details::compiler_constant_hex_precision_limit &&
+				  specification.width.kind == format_parameter_kind::none &&
+				  specification.sign != format_sign::space &&
+				  []() consteval {
+					  using T = ::std::remove_cvref_t<value_type>;
+					  if constexpr (brace_native_precision_carrier<T> || ::fast_io::details::fp_floating_point_is_float80<T>)
+					  {
+						  return specification.precision.value >= (::fast_io::details::iec559_traits<T>::mbits + 3u) / 4u;
+					  }
+					  else
+					  {
+						  return false;
+					  }
+				  }())
+	{
+		constexpr auto flags{floating_scalar_flags<specification, true>()};
+		return ::fast_io::manipulators::exact_hex_fraction_t<flags, ::std::remove_cvref_t<value_type>,
+			specification.precision.value>{::fast_io::details::get_punned_result(value)};
+	}
+	else
+#endif
 	if constexpr (use_precision)
 	{
 		auto count{precision.present ? precision.value : 6u};
-		if constexpr (specification.presentation == presentation_type::general_lower ||
+		if constexpr ((specification.presentation == presentation_type::general_lower ||
+					   specification.presentation == presentation_type::general_upper) &&
+					  !specification.alternate_form &&
+					  brace_native_precision_carrier<::std::remove_cvref_t<value_type>> &&
+					  (specification.precision.kind == format_parameter_kind::none ||
+					   (specification.precision.kind == format_parameter_kind::literal &&
+						specification.precision.value <= 9u)))
+		{
+			// Both grammars choose the notation from the rounded exponent X:
+			// fixed for -4 <= X < max(P, 1), scientific otherwise. A single
+			// coefficient supplies all digits and the carry across a decade.
+			constexpr auto flags = []() consteval {
+				auto result{floating_scalar_flags<specification, true>()};
+				result.precision = ::fast_io::manipulators::floating_precision::charconv_significant;
+				return result;
+			}();
+			auto scalar{make_brace_precision_scalar<flags>(value, count ? count : 1u)};
+			return ::fast_io::manipulators::format_scalar_t<
+				decltype(scalar), 0u, specification.sign == format_sign::space>{scalar};
+		}
+		else if constexpr (specification.presentation == presentation_type::general_lower ||
 					  specification.presentation == presentation_type::general_upper)
 		{
 			if (count == 0u)
@@ -793,10 +880,10 @@ template <format_specification specification, typename value_type>
 				return result;
 			}();
 			auto fixed_scalar{
-				::fast_io::details::make_floating_scalar_manip_precision<
+				make_brace_precision_scalar<
 					fixed_flags>(value, count)};
 			auto scientific_scalar{
-				::fast_io::details::make_floating_scalar_manip_precision<
+				make_brace_precision_scalar<
 					scientific_flags>(value, count)};
 			auto fixed{::fast_io::manipulators::format_scalar_t<
 				decltype(fixed_scalar), 0u, specification.sign == format_sign::space>{
@@ -811,10 +898,10 @@ template <format_specification specification, typename value_type>
 		{
 			constexpr auto flags{floating_scalar_flags<specification, true>()};
 			auto scalar{
-				::fast_io::details::make_floating_scalar_manip_precision<flags>(
+				make_brace_precision_scalar<flags>(
 					value, count)};
 			constexpr ::std::size_t prefix_size{
-				flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
+				flags.floating == ::fast_io::manipulators::floating_format::hexfloat && printf_decimal_width<value_type> == 0u ? 2u : 0u};
 			auto formatted{::fast_io::manipulators::format_scalar_t<
 				decltype(scalar), prefix_size, specification.sign == format_sign::space>{scalar}};
 			if constexpr (specification.alternate_form)
@@ -857,7 +944,7 @@ template <format_specification specification, typename value_type>
 		else
 		{
 			constexpr ::std::size_t prefix_size{
-				flags.floating == ::fast_io::manipulators::floating_format::hexfloat ? 2u : 0u};
+				flags.floating == ::fast_io::manipulators::floating_format::hexfloat && printf_decimal_width<value_type> == 0u ? 2u : 0u};
 			auto formatted{::fast_io::manipulators::format_scalar_t<
 				decltype(scalar), prefix_size, specification.sign == format_sign::space>{scalar}};
 			if constexpr (specification.alternate_form)
@@ -1024,7 +1111,7 @@ template <typename char_type, format_specification specification,
 		auto formatted{make_pointer_scalar<specification>(value)};
 		return apply_field_width<specification, true, false>(::std::move(formatted), width);
 	}
-	else if constexpr (::fast_io::details::my_floating_point<clean_type>)
+	else if constexpr (::fast_io::details::floating_io_value<clean_type>)
 	{
 		static_assert(specification.presentation == presentation_type::none ||
 						  specification.presentation == presentation_type::hexfloat_lower ||
@@ -1262,8 +1349,8 @@ template <bool signed_conversion, printf_length_modifier length, typename value_
 	static_assert(::fast_io::details::my_integral<clean_type> ||
 					  ::std::same_as<clean_type, ::std::byte> || ::std::is_enum_v<clean_type>,
 				  "fast_io format: printf integer conversion requires an integer argument");
-	static_assert(length != printf_length_modifier::long_double,
-				  "fast_io format: L is valid only for a floating printf conversion");
+	static_assert(length < printf_length_modifier::long_double,
+				  "fast_io format: floating length modifier used in an integer conversion");
 
 	if constexpr (::std::same_as<clean_type, ::std::byte>)
 	{
@@ -1561,11 +1648,14 @@ template <typename char_type, replacement_field field,
 	}
 	else
 	{
-		static_assert(::fast_io::details::my_floating_point<clean_type>,
+		static_assert(::fast_io::details::floating_io_value<clean_type>,
 					  "fast_io format: printf floating conversion requires a floating argument");
 		static_assert(field.printf_length == printf_length_modifier::none ||
-						  field.printf_length == printf_length_modifier::l ||
-						  field.printf_length == printf_length_modifier::long_double,
+						  (printf_decimal_width<clean_type> == 0u &&
+						   (field.printf_length == printf_length_modifier::l || field.printf_length == printf_length_modifier::long_double)) ||
+						  (printf_decimal_width<clean_type> == 32u && field.printf_length == printf_length_modifier::decimal32) ||
+						  (printf_decimal_width<clean_type> == 64u && field.printf_length == printf_length_modifier::decimal64) ||
+						  (printf_decimal_width<clean_type> == 128u && field.printf_length == printf_length_modifier::decimal128),
 					  "fast_io format: invalid printf floating length modifier");
 
 		auto emit = [&]<typename floating_type>(floating_type converted) constexpr {
@@ -1597,7 +1687,13 @@ template <typename char_type, replacement_field field,
 					::std::move(scalar), width);
 			}
 		};
-		if constexpr (field.printf_length == printf_length_modifier::long_double)
+		if constexpr (::fast_io::details::interchange_floating<clean_type>)
+		{
+			// Typed interchange arguments retain their radix and precision across
+			// the printf frontend's ordinary varargs-promotion boundary.
+			return emit(value);
+		}
+		else if constexpr (field.printf_length == printf_length_modifier::long_double)
 		{
 			return emit(static_cast<long double>(value));
 		}

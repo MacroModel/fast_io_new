@@ -352,6 +352,21 @@ template <::fast_io::fmt::basic_fixed_string format_string>
 			field.printf_length = printf_length_modifier::t;
 			++cursor;
 		}
+		else if (cursor != size && is_syntax_character<u8'H'>(format_string[cursor]))
+		{
+			++cursor;
+			field.printf_length = printf_length_modifier::decimal32;
+		}
+		else if (cursor != size && is_syntax_character<u8'D'>(format_string[cursor]))
+		{
+			++cursor;
+			field.printf_length = printf_length_modifier::decimal64;
+			if (cursor != size && is_syntax_character<u8'D'>(format_string[cursor]))
+			{
+				++cursor;
+				field.printf_length = printf_length_modifier::decimal128;
+			}
+		}
 		else if (cursor != size && is_syntax_character<u8'L'>(format_string[cursor]))
 		{
 			field.printf_length = printf_length_modifier::long_double;

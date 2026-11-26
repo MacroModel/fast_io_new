@@ -72,7 +72,6 @@ inline constexpr char_type *read_some_underflow_size_impl(instmtype &instm,
 														  char_type *first, char_type *last, ::std::size_t bfsz)
 {
 	using typed_allocator_type = ::fast_io::typed_generic_allocator_adapter<allocator_type, char_type>;
-	first = ::fast_io::details::non_overlapped_copy(pointers.buffer_curr, pointers.buffer_end, first);
 	if (pointers.buffer_begin == nullptr)
 	{
 		pointers.buffer_end = pointers.buffer_curr = pointers.buffer_begin = typed_allocator_type::allocate(bfsz);
@@ -134,10 +133,31 @@ inline constexpr char_type *read_some_underflow_impl(instmtype &instm,
 
 } // namespace details::io_buffer
 
+/**
+ * @brief Returns available buffered characters before refilling from the underlying device.
+ * @details A duplex peer may wait for a reply once its last record is in the get area.
+ * Delivering that prefix satisfies read_some even if the destination has room for more.
+ * A subsequent call can flush tied output and refill once the get area is exhausted.
+ */
 template <typename io_buffer_type, ::std::integral char_type>
 inline constexpr char_type *read_some_underflow_define(basic_io_buffer_ref<io_buffer_type> iobref,
 													   char_type *first, char_type *last)
 {
+	if (first == last)
+	{
+		return first;
+	}
+	auto &input = iobref.iobptr->input_buffer;
+	if (input.buffer_curr != input.buffer_end)
+	{
+		// A partial buffer hit is already progress. A blocking refill here can deadlock a duplex protocol.
+		auto const available{::fast_io::details::ibuffer_remaining_size(input.buffer_curr, input.buffer_end)};
+		auto const requested{::fast_io::details::input_pointer_range_size(first, last)};
+		auto const count{available < requested ? available : requested};
+		::fast_io::details::non_overlapped_copy_n(input.buffer_curr, count, first);
+		input.buffer_curr += count;
+		return first + count;
+	}
 	constexpr auto mode{io_buffer_type::traits_type::mode};
 	if constexpr ((mode & buffer_mode::out) == buffer_mode::out && (mode & buffer_mode::tie) == buffer_mode::tie)
 	{
@@ -259,6 +279,181 @@ inline constexpr void ibuffer_minimum_size_underflow_all_prepare_define(basic_io
 		io_buffer_type::traits_type::input_buffer_size, typename io_buffer_type::traits_type::input_char_type,
 		typename io_buffer_type::traits_type::allocator_type>(
 		inref, iobref.iobptr->input_buffer);
+}
+
+namespace details::io_buffer
+{
+/** @brief Proves a bounded decimal field and its delimiter reside in the current read area, without consuming them. */
+template <typename T, typename Char>
+inline constexpr bool buffered_decimal_field(Char const *&p, Char const *end) noexcept
+{
+	auto space = [](Char c) {
+		return c == ::fast_io::char_literal_v<u8' ', Char> || c == ::fast_io::char_literal_v<u8'\n', Char> ||
+			   c == ::fast_io::char_literal_v<u8'\r', Char> || c == ::fast_io::char_literal_v<u8'\t', Char>;
+	};
+	// Limit speculation to one short separator run. Whitespace of any length remains supported by the scanner.
+	for (unsigned skipped{}; p != end && space(*p); ++p)
+	{
+		if (++skipped == 8u)
+		{
+			return false;
+		}
+	}
+	if (p == end)
+	{
+		return false;
+	}
+	if constexpr (::std::is_signed_v<T>)
+	{
+		if (*p == ::fast_io::char_literal_v<u8'-', Char>)
+		{
+			++p;
+		}
+	}
+	auto begin{p};
+	while (p != end && *p >= ::fast_io::char_literal_v<u8'0', Char> && *p <= ::fast_io::char_literal_v<u8'9', Char>)
+	{
+		if (++p - begin > ::std::numeric_limits<T>::digits10 + 1)
+		{
+			return false;
+		}
+	}
+	return p != begin && p != end && space(*p);
+}
+
+} // namespace details::io_buffer
+
+/**
+ * @brief Proves a complete ordinary decimal scan can finish without a refill.
+ * @details The lookahead uses a private cursor, never mutates targets and never interprets a buffer boundary as EOF.
+ * Every unsupported spelling or incomplete final field goes through the original scanner and its refill protocol.
+ */
+template <typename Buffer, details::io_buffer::decimal_scan_integer... Targets>
+	requires details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, Targets...>
+inline constexpr bool input_stream_scan_ready_define(basic_io_buffer_ref<Buffer> input, io_type_t<Targets>...) noexcept
+{
+	auto p{ibuffer_curr(input)};
+	auto end{ibuffer_end(input)};
+	using Char = typename Buffer::input_char_type;
+	Char const *candidate{p};
+	return (::fast_io::details::io_buffer::buffered_decimal_field<Targets>(candidate, static_cast<Char const *>(end)) && ...);
+}
+
+/** @brief Tries the decimal tuple in a buffered device's current area before permitting a refill. */
+template <typename Buffer, details::io_buffer::decimal_scan_integer... Targets>
+	requires details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, Targets...>
+inline constexpr bool input_stream_try_scan_define(basic_io_buffer_ref<Buffer> input, Targets &...targets) noexcept
+{
+	return details::io_buffer::try_scan_integer_window(input, targets...);
+}
+
+/**
+ * @brief Commits a resident unsigned field before acquiring a suspending device operation.
+ * @details A short logical window may still contain a complete field. The canonical resident
+ * probe checks it before the caller can request a refill. Both trials leave an incomplete
+ * target untouched and leave the same byte available to the refilling state machine.
+ */
+template <typename Buffer>
+	requires (::std::numeric_limits<unsigned>::digits == 32 && details::io_buffer::builtin_decimal_window<basic_io_buffer_ref<Buffer>> &&
+			  details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, unsigned>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool input_stream_try_scan_define(basic_io_buffer_ref<Buffer> input,
+																			 unsigned &target) noexcept
+{
+	if (details::io_buffer::try_scan_resident_unsigned(input, target)) [[likely]]
+	{
+		return true;
+	}
+	return details::io_buffer::try_scan_integer_window<false>(input, target);
+}
+
+/** @brief Finishes a delimited integer locally before a buffered async scan can request a refill. */
+template <typename Buffer, details::io_buffer::bounded_decimal_target Target>
+	requires (details::io_buffer::builtin_decimal_window<basic_io_buffer_ref<Buffer>> &&
+			  details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, Target>)
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool input_stream_try_scan_define(basic_io_buffer_ref<Buffer> input,
+																			Target &target) noexcept
+{
+	if (details::io_buffer::try_scan_resident_integral(input, target))
+	{
+		return true;
+	}
+	// The get area can end before the maximum field width yet still contain a delimiter.
+	return details::io_buffer::try_scan_integer_window<false>(input, target);
+}
+
+/**
+ * @brief Parses a complete resident arithmetic field on the awaiting thread.
+ * @details A floating scanner with a transactional current-chunk operation can prove its own
+ * boundary, including punctuation. Its successful result commits exactly the returned prefix.
+ * A miss leaves the destination and cursor unchanged. For other spellings such as infinity,
+ * a nonempty field followed by C whitespace has a physical token boundary in the
+ * current get area. Extending that area cannot extend a decimal number across the delimiter.
+ * The ordinary contiguous scanner must accept the entire spelling. It writes a private scalar
+ * so underflow, overflow and an incomplete exponent retain the original target and cursor on
+ * a miss. The ordinary refilling scanner then owns the outcome, including its precise error
+ * position. Only the built-in unqualified arithmetic aliases participate in this transaction.
+ */
+template <typename Buffer, typename Target>
+	requires (::std::same_as<Target, ::std::remove_cv_t<Target>> &&
+			  !details::io_buffer::decimal_scan_integer<Target> &&
+			  !(details::io_buffer::builtin_decimal_window<basic_io_buffer_ref<Buffer>> && details::io_buffer::bounded_decimal_target<Target>) &&
+			  ((details::non_character_integral<Target> && !::std::same_as<Target, bool>) || details::my_floating_point<Target>) &&
+			  details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, Target> &&
+			  requires (Target &v, typename Buffer::input_char_type const *p) {
+				  { scan_contiguous_define(io_reserve_type<typename Buffer::input_char_type,
+					  decltype(scan_alias_define(io_alias, v))>, p, p, scan_alias_define(io_alias, v)) } noexcept
+					  -> ::std::same_as<parse_result<typename Buffer::input_char_type const *>>;
+			  })
+inline constexpr bool input_stream_try_scan_define(basic_io_buffer_ref<Buffer> input, Target &target) noexcept
+{
+	using Char = typename Buffer::input_char_type;
+	auto *current{ibuffer_curr(input)};
+	Char const *first{current};
+	Char const *last{ibuffer_end(input)};
+	if (first == last)
+	{
+		return false;
+	}
+	Target value{};
+	auto proxy{scan_alias_define(io_alias, value)};
+	auto tag{io_reserve_type<Char, decltype(proxy)>};
+	if constexpr (details::my_floating_point<Target> && current_chunk_context_scannable<Char, decltype(proxy)> &&
+				  requires { { scan_context_current_chunk_define(tag, first, last, proxy) } noexcept; })
+	{
+		constexpr auto minimum{scan_context_current_chunk_minimum_size(io_reserve_type<Char, decltype(proxy)>)};
+		if (minimum == 1u || static_cast<::std::size_t>(last - first) >= minimum)
+		{
+			auto const result{scan_context_current_chunk_define(tag, first, last, proxy)};
+			if (result.code == parse_code::ok)
+			{
+				target = value;
+				ibuffer_set_curr(input, current + (result.iter - first));
+				return true;
+			}
+		}
+	}
+	first = details::find_space_common_impl<false, true>(first, last);
+	auto const delimiter{details::find_space_common_impl<false, false>(first, last)};
+	if (delimiter == last)
+	{
+		return false;
+	}
+	auto result{scan_contiguous_define(tag, first, delimiter, proxy)};
+	if (result.code != parse_code::ok || result.iter != delimiter)
+	{
+		return false;
+	}
+	target = value;
+	ibuffer_set_curr(input, current + (delimiter - current));
+	return true;
+}
+
+/** @brief Uses the refilling integer state machine and returns the exact failure code after committed progress. */
+template <typename Buffer, details::io_buffer::decimal_scan_integer... Targets>
+	requires details::io_buffer::plain_integer_window<basic_io_buffer_ref<Buffer>, Targets...>
+inline constexpr parse_code input_stream_scan_code_define(basic_io_buffer_ref<Buffer> in, Targets &...targets) FAST_IO_HERBCEPTIONS_THROWS
+{
+	return details::io_buffer::scan_integer_codes(in, targets...);
 }
 
 } // namespace fast_io

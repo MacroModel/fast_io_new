@@ -13,6 +13,9 @@
  */
 
 #include "lower.h"
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+#include "async_conversion.h"
+#endif
 #include "../../fast_io_dsal/impl/misc/push_macros.h"
 
 #include <type_traits>
@@ -92,12 +95,28 @@ template <typename result_type, basic_fixed_string format_literal,
 template <typename expected_char_type, typename result_type,
 		  basic_fixed_string format_literal, format_grammar grammar_type,
 		  typename... argument_types>
-[[nodiscard]] FAST_IO_FMT_CONCAT_CONSTANT_INLINE inline constexpr result_type concat_builtin_with_rule(
+[[nodiscard]] FAST_IO_FMT_CONCAT_CONSTANT_INLINE inline constexpr auto concat_builtin_with_rule(
 	grammar_type grammar, argument_types &&...arguments)
 {
 	using literal_char_type = typename decltype(format_literal)::value_type;
 	static_assert(::std::same_as<literal_char_type, expected_char_type>,
 				  "fast_io format: the format literal character type does not match the selected concat function");
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+	if constexpr ((::fast_io::async::annotated_operand<argument_types> || ...))
+	{
+		namespace op = ::fast_io::async::details;
+		static_assert(async_literals<format_literal,grammar_type,sizeof...(argument_types)>.valid,
+			"async concat requires identity-preserving replacement fields");
+		static_assert((op::conversion_source<expected_char_type,argument_types> && ...),
+			"async concat requires a printable source in this character domain");
+		using graph = op::conversion_graph<decltype(op::describe_operand<false,expected_char_type,argument_types>())...>;
+		using request = op::conversion_request<argument_types...>;
+		static_assert(op::binds_points<request,graph>, "async concat selection is not available in this output role");
+		return convert_format<format_literal,grammar_type,result_type,graph,request>(
+			op::concat_destination<false>{},static_cast<argument_types &&>(arguments)...);
+	}
+	else
+#endif
 	return ::fast_io::fmt::details::concat_with_rule<
 		result_type, format_literal>(
 		grammar, ::std::forward<argument_types>(arguments)...);

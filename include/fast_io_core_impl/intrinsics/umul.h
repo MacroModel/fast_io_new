@@ -59,7 +59,8 @@ inline constexpr T pack_generic(U low, U high) noexcept
 	}
 	else
 	{
-		return static_cast<T>(high << ::std::numeric_limits<U>::digits) | low;
+		// Widen the high half before shifting on mixed-endian targets that use arithmetic packing.
+		return (static_cast<T>(high) << ::std::numeric_limits<U>::digits) | low;
 	}
 }
 

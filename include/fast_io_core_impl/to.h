@@ -7,8 +7,8 @@
  * consumers through bounded intermediate character fragments. This file owns
  * the operation-level choice between repeatable scatter, reserve storage,
  * dynamic materialization, and context scanning, including progress and EOF
- * validation. It introduces no format grammar and no new leaf representation:
- * both sides reuse the ordinary print/scan CPO vocabulary without a device.
+ * validation. A complete spelling can carry a static bound to a target-specific
+ * conversion scanner. The producer and target supply all formatting and parsing rules.
  */
 
 namespace fast_io
@@ -245,7 +245,7 @@ template <::std::integral char_type, typename state, typename T>
 [[msvc::forceinline]]
 #endif
 inline constexpr bool inplace_to_decay_context_consume(state &s, T &t, char_type const *first,
-												char_type const *last)
+												char_type const *last) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using scanner_type = ::std::remove_cvref_t<T>;
 	auto current{first};
@@ -260,7 +260,7 @@ inline constexpr bool inplace_to_decay_context_consume(state &s, T &t, char_type
 		{
 			if (!::fast_io::details::scan_iterator_in_current_chunk(current, last, it)) [[unlikely]]
 			{
-				::fast_io::throw_parse_code(::fast_io::parse_code::invalid);
+				::fast_io::details::raise_scan_error(::fast_io::parse_code::invalid);
 			}
 		}
 		if (ec == ::fast_io::parse_code::ok)
@@ -269,11 +269,11 @@ inline constexpr bool inplace_to_decay_context_consume(state &s, T &t, char_type
 		}
 		if (ec != ::fast_io::parse_code::partial)
 		{
-			::fast_io::throw_parse_code(ec);
+			::fast_io::details::raise_scan_error(ec);
 		}
 		if (it == current) [[unlikely]]
 		{
-			::fast_io::throw_parse_code(::fast_io::parse_code::invalid);
+			::fast_io::details::raise_scan_error(::fast_io::parse_code::invalid);
 		}
 		current = it;
 	}
@@ -286,7 +286,7 @@ inline constexpr bool inplace_to_decay_context_consume(state &s, T &t, char_type
 ///          Centralizing that boundary proves the EOF CPO is invoked once and normalizes `partial` to `invalid`, since
 ///          no future fragment exists that could make an unfinished state productive.
 template <::std::integral char_type, typename state, typename T>
-inline constexpr void inplace_to_decay_context_finish(state &s, T &t)
+inline constexpr void inplace_to_decay_context_finish(state &s, T &t) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using scanner_type = ::std::remove_cvref_t<T>;
 	auto const code{scan_context_eof_define(io_reserve_type<char_type, scanner_type>, s, t)};
@@ -294,7 +294,7 @@ inline constexpr void inplace_to_decay_context_finish(state &s, T &t)
 	{
 		return;
 	}
-	::fast_io::throw_parse_code(
+	::fast_io::details::raise_scan_error(
 		code == ::fast_io::parse_code::partial ? ::fast_io::parse_code::invalid : code);
 }
 
@@ -324,7 +324,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 ///          least output required by the context protocol; it reuses one dynamic buffer and stops immediately on `ok`.
 inline constexpr void
 inplace_to_decay_context_impl(basic_dynamic_output_buffer_ref<basic_dynamic_output_buffer<char_type>> buffer, state &s,
-							  T &t, Arg1 &arg, Args &...args)
+							  T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Keep this call single-argument. Combining `arg, args...` would erase the context scanner's early-completion and
 	// bounded-fragment properties even though it can look faster as an isolated print operation.
@@ -356,7 +356,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void inplace_to_decay_buffer_scatter_context_impl(state &s, T &t, Arg1 &arg, Args &...args)
+inline constexpr void inplace_to_decay_buffer_scatter_context_impl(state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	basic_io_scatter_t<char_type> scatter{print_scatter_define(io_reserve_type<char_type, Arg1>, arg)};
 	char_type const *buffer_begin{scatter.base};
@@ -382,7 +382,7 @@ template <::std::integral char_type, typename state, typename T, typename Arg1, 
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr void inplace_to_decay_buffer_context_impl(char_type *buffer, state &s, T &t, Arg1 &arg, Args &...args)
+inline constexpr void inplace_to_decay_buffer_context_impl(char_type *buffer, state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg1> &&
 				  ((::fast_io::details::to_named_scatter_printable_v<char_type, Args> && ...)))
@@ -565,7 +565,7 @@ template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, :
 #endif
 inline constexpr bool inplace_to_decay_bounded_buffer_context_one(
 	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
-	state &s, T &t, Arg &arg)
+	state &s, T &t, Arg &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	bool completed{};
 	if constexpr (::fast_io::details::to_named_scatter_printable_v<char_type, Arg>)
@@ -690,7 +690,7 @@ template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, :
 #endif
 inline constexpr void inplace_to_decay_bounded_buffer_context_walk(
 	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
-	state &s, T &t, Arg1 &arg, Args &...args)
+	state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	bool const completed{
 		::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
@@ -708,7 +708,7 @@ template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, :
 	requires(!gcc_inplace_to_large_pack_no_loop_vectorize<sizeof...(Args) + 1u>)
 inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
-	state &s, T &t, Arg1 &arg, Args &...args)
+	state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::details::inplace_to_decay_bounded_buffer_context_walk<
 		scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg, args...);
@@ -725,7 +725,7 @@ template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, :
 [[gnu::optimize("no-tree-loop-vectorize")]]
 inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
-	state &s, T &t, Arg1 &arg, Args &...args)
+	state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::details::inplace_to_decay_bounded_buffer_context_walk<
 		scratch_capacity, heap_initial_capacity, char_type>(scratch, heap_buffer, s, t, arg, args...);
@@ -737,7 +737,7 @@ template <::std::size_t scratch_capacity, ::std::size_t heap_initial_capacity, :
 		  typename state, typename T, typename Arg1, typename... Args>
 inline constexpr void inplace_to_decay_bounded_buffer_context_impl(
 	char_type *scratch, ::fast_io::details::local_operator_new_array_ptr<char_type> &heap_buffer,
-	state &s, T &t, Arg1 &arg, Args &...args)
+	state &s, T &t, Arg1 &arg, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	bool const completed{
 		::fast_io::details::inplace_to_decay_bounded_buffer_context_one<
@@ -826,15 +826,88 @@ calculate_print_normal_dynamic_maxium_main(::std::size_t mx_value, T &t, Args &.
 	}
 }
 
-template <::std::integral char_type, typename T>
-inline constexpr void deal_with_single_to(char_type const *buffer_begin, char_type const *buffer_end, T &t)
+/// @brief Sums independent upper bounds in code units, with SIZE_MAX denoting an unknown complete extent.
+/// @details A dynamic component or an unrepresentable total removes the proof for the pack. No source is evaluated.
+template <::std::size_t... Bounds>
+consteval ::std::size_t to_spelling_maximum() noexcept
 {
-	// The normalized scanner is deliberately borrowed. An alias CPO may return a noncopyable lvalue proxy, and the
-	// enclosing public call already guarantees that either its referenced storage or its prvalue temporary remains alive.
-	// Its cv-qualification is part of CPO overload resolution, while the reserve tag follows the public scanner concepts
-	// and names the unqualified proxy representation.
-	auto const result{scan_contiguous_define(
-		io_reserve_type<char_type, ::std::remove_cvref_t<T>>, buffer_begin, buffer_end, t)};
+	constexpr ::std::size_t bounds[]{Bounds..., 0u};
+	::std::size_t total{};
+	for (auto bound : bounds)
+	{
+		if (bound >= SIZE_MAX - total)
+		{
+			return SIZE_MAX;
+		}
+		total += bound;
+	}
+	return total;
+}
+
+/// @brief Obtains the maximum for the actual scatter representation that the conversion will observe.
+template <::std::integral Char, typename Source>
+consteval ::std::size_t to_scatter_maximum() noexcept
+{
+	using traits = ::fast_io::details::decay::print_static_scatter_traits<Char, ::std::remove_cvref_t<Source>>;
+	if constexpr (traits::available)
+	{
+		return traits::size;
+	}
+	else if constexpr (::fast_io::bounded_to_scatter_source<Char, Source>)
+	{
+		return to_scatter_max_size(io_reserve_type<Char, ::std::remove_cvref_t<Source>>);
+	}
+	else
+	{
+		return SIZE_MAX;
+	}
+}
+
+/// @brief Derives a fragment bound using the same scatter-first precedence as the terminal coalescer.
+template <::std::integral Char, typename Source>
+consteval ::std::size_t to_terminal_component_maximum() noexcept
+{
+	if constexpr (to_repeatable_named_scatter_v<Char, Source>)
+	{
+		return to_scatter_maximum<Char, Source>();
+	}
+	else if constexpr (reserve_printable<Char, Source>)
+	{
+		return print_reserve_size(io_reserve_type<Char, ::std::remove_cvref_t<Source>>);
+	}
+	else
+	{
+		return SIZE_MAX;
+	}
+}
+
+/// @brief Dispatches one complete spelling to the normalized target, preserving its exact lvalue qualification.
+/// @details The actual endpoint determines the readable range. The type-level upper bound may exceed its length.
+///          Check a producer's bound before authorizing a leaf to omit overflow handling under that contract.
+template <::std::integral Char, ::std::size_t Maximum, typename T>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr parse_result<Char const *>
+to_scan_complete(Char const *first, Char const *last, T &target) FAST_IO_HERBCEPTIONS_THROWS
+{
+	constexpr auto tag{io_reserve_type<Char, ::std::remove_cvref_t<T>>};
+	if constexpr (::fast_io::bounded_to_scannable<Char, T, Maximum>)
+	{
+		if (first != last && static_cast<::std::size_t>(last - first) > Maximum) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		return to_scan_bounded_define(tag, ::std::integral_constant<::std::size_t, Maximum>{}, first, last, target);
+	}
+	else
+	{
+		return scan_contiguous_define(tag, first, last, target);
+	}
+}
+
+/// @brief Applies the shared cursor and error contract after the chosen conversion scanner has run.
+template <::std::integral char_type, ::std::size_t Maximum = SIZE_MAX, typename T>
+inline constexpr void deal_with_single_to(char_type const *buffer_begin, char_type const *buffer_end, T &t) FAST_IO_HERBCEPTIONS_THROWS
+{
+	auto const result{to_scan_complete<char_type, Maximum>(buffer_begin, buffer_end, t)};
 	if constexpr (!::fast_io::contiguous_scanner_result_in_range<char_type, T>)
 	{
 		if (!::fast_io::details::scan_iterator_in_current_chunk(buffer_begin, buffer_end, result.iter)) [[unlikely]]
@@ -842,18 +915,19 @@ inline constexpr void deal_with_single_to(char_type const *buffer_begin, char_ty
 			// The conversion bridge owns only the materialized fragment. Validate before observing success so an escaped
 			// iterator cannot be accepted merely because this path intentionally permits an unconsumed suffix. A scanner
 			// that explicitly proves the closed-range contract has already discharged this check at its leaf boundary.
-			throw_parse_code(parse_code::invalid);
+			::fast_io::details::raise_scan_error(parse_code::invalid);
 		}
 	}
 	if (result.code != parse_code::ok)
 	{
-		throw_parse_code(result.code);
+		::fast_io::details::raise_scan_error(result.code);
 	}
 }
 
 template <::std::integral char_type, typename T, typename Arg>
-inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg &arg)
+inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
+	constexpr auto maximum{to_scatter_maximum<char_type, Arg>()};
 	basic_io_scatter_t<char_type> scatter{print_scatter_define(io_reserve_type<char_type, Arg>, arg)};
 	if (scatter.len == 0u)
 	{
@@ -862,12 +936,12 @@ inline constexpr void to_deal_with_contiguous_single_scatter(T &t, Arg &arg)
 		// receives an empty half-open range and therefore has no permission to inspect the dummy character.
 		char_type dummy{};
 		char_type const *const empty{__builtin_addressof(dummy)};
-		deal_with_single_to<char_type>(empty, empty, t);
+		deal_with_single_to<char_type, maximum>(empty, empty, t);
 	}
 	else
 	{
 		auto base{scatter.base};
-		deal_with_single_to<char_type>(base, base + scatter.len, t);
+		deal_with_single_to<char_type, maximum>(base, base + scatter.len, t);
 	}
 }
 
@@ -901,6 +975,9 @@ inline constexpr char_type *to_impl_with_reserve_recursive(char_type *p, T &t, A
 ///          because its measurement function uses that exact same priority.
 template <::std::integral char_type, typename T, typename... Args>
 inline constexpr char_type *to_impl_with_static_reserve_recursive(char_type *p, T &t, Args &...args)
+#if defined(__HERBCEPTIONS__)
+	throws((details::parameter_reserve_write_has_hc<char_type, T &> || ... || details::parameter_reserve_write_has_hc<char_type, Args &>))
+#endif
 {
 	p = print_reserve_define(io_reserve_type<char_type, T>, p, t);
 	if constexpr (sizeof...(Args) == 0u)
@@ -1009,7 +1086,7 @@ inline constexpr char_type *to_terminal_stack_emit_one(
 template <::std::size_t capacity, ::std::integral char_type, typename Target, typename... Sources>
 	requires ::fast_io::details::to_terminal_stack_candidate<char_type, Target, Sources...>
 inline constexpr bool try_to_terminal_stack_contiguous(
-	char_type (&buffer)[capacity], Target &target, Sources &...sources)
+	char_type (&buffer)[capacity], Target &target, Sources &...sources) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::std::size_t bounds[sizeof...(Sources)]{};
 	::fast_io::basic_io_scatter_t<char_type> scatters[sizeof...(Sources)]{};
@@ -1039,7 +1116,8 @@ inline constexpr bool try_to_terminal_stack_contiguous(
 	index = 0u;
 	((current = ::fast_io::details::to_terminal_stack_emit_one<char_type>(
 		  current, bounds[index], scatters[index], sources), ++index), ...);
-	::fast_io::details::deal_with_single_to<char_type>(buffer, current, target);
+	constexpr auto maximum{to_spelling_maximum<to_terminal_component_maximum<char_type, Sources>()...>()};
+	::fast_io::details::deal_with_single_to<char_type, maximum>(buffer, current, target);
 	return true;
 }
 
@@ -1168,7 +1246,7 @@ concept inplace_to_decay_detect =
 ///          `basic_to_decay`.  Keeping the body reference-only prevents either front door from reconstructing an admitted
 ///          move-only proxy and makes all strategy CPO expressions the same named lvalues used by availability proofs.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
+inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr bool available{::fast_io::details::inplace_to_decay_detect<char_type, T, Args...>};
 	// Instantiate execution only after the exact direct-or-dynamic strategy has been proved for the normalized pack.
@@ -1234,7 +1312,7 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 				if (!terminal_stack_completed)
 				{
 					using state_type = ::fast_io::details::scan_context_state_t<char_type, T>;
-					::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) {
+					::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) FAST_IO_HERBCEPTIONS_THROWS {
 						if constexpr (all_scatters)
 						{
 							::fast_io::details::inplace_to_decay_buffer_scatter_context_impl<char_type>(
@@ -1292,7 +1370,7 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 						char_type buffer[total_size == 0u ? 1u : total_size];
 						auto const ret{
 							::fast_io::details::to_impl_with_static_reserve_recursive(buffer, args...)};
-						::fast_io::details::deal_with_single_to<char_type>(buffer, ret, t);
+						::fast_io::details::deal_with_single_to<char_type, total_size>(buffer, ret, t);
 					}
 					else
 					{
@@ -1301,7 +1379,7 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 						::fast_io::details::local_operator_new_array_ptr<char_type> buffer(total_size);
 						auto const ret{::fast_io::details::to_impl_with_static_reserve_recursive(
 							buffer.ptr, args...)};
-						::fast_io::details::deal_with_single_to<char_type>(buffer.ptr, ret, t);
+						::fast_io::details::deal_with_single_to<char_type, total_size>(buffer.ptr, ret, t);
 					}
 				}
 				else
@@ -1310,7 +1388,10 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 						::fast_io::details::calculate_scatter_dynamic_reserve_size_with_scatter<char_type>(args...)};
 					::fast_io::details::local_operator_new_array_ptr<char_type> heap_buffer(maximum_reserve_size);
 					auto ret{::fast_io::details::to_impl_with_reserve_recursive(heap_buffer.ptr, args...)};
-					::fast_io::details::deal_with_single_to<char_type>(heap_buffer.ptr, ret, t);
+					// This emitter chooses a repeatable scatter before a reserve writer for each source.
+					constexpr auto maximum{::fast_io::details::to_spelling_maximum<
+						::fast_io::details::to_terminal_component_maximum<char_type, Args>()...>()};
+					::fast_io::details::deal_with_single_to<char_type, maximum>(heap_buffer.ptr, ret, t);
 				}
 			}
 		}
@@ -1326,7 +1407,7 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 						  (!(contiguous_scannable<char_type, T> && sizeof...(args) == 1)))
 			{
 				using state_type = ::fast_io::details::scan_context_state_t<char_type, T>;
-				::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) {
+				::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) FAST_IO_HERBCEPTIONS_THROWS {
 					::fast_io::details::inplace_to_decay_context_impl(ref, state, t, args...);
 				});
 			}
@@ -1359,7 +1440,7 @@ inline constexpr void basic_inplace_to_decay_borrowed(T &&t, Args &...args)
 ///          complete borrowed algorithm call. Value-returning `to` already owns its target locally and therefore enters
 ///          the borrowed body directly, avoiding an extra target construction and an extra source-pack copy layer.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr void basic_inplace_to_decay(T t, Args... args)
+inline constexpr void basic_inplace_to_decay(T t, Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to_decay_borrowed<char_type>(t, args...);
 }
@@ -1371,7 +1452,7 @@ inline constexpr void basic_inplace_to_decay(T t, Args... args)
 ///          reference ABI from replacing value transport for the common prvalue target while preserving the exact
 ///          lvalue selected by the alias CPO.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr void basic_inplace_to_decay_borrowed_target(T &t, Args... args)
+inline constexpr void basic_inplace_to_decay_borrowed_target(T &t, Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to_decay_borrowed<char_type>(t, args...);
 }
@@ -1817,7 +1898,7 @@ inplace_to_compiler_constant_emit_one(char_type *current, Arg &arg) noexcept
 ///          scanner into the caller, growing the `to<double>(3.125)` root to 1,890 and 1,627 instructions. This
 ///          26-instruction caller boundary affects only the already-selected true arm; the ordinary run-time `to` path
 ///          continues to call its historical scanner directly.
-template <::std::integral char_type, typename T>
+template <::std::integral char_type, ::std::size_t Maximum, typename T>
 #if defined(__GNUC__) && !defined(__clang__) && __GNUC__ <= 12
 #if __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
@@ -1826,9 +1907,9 @@ template <::std::integral char_type, typename T>
 #endif
 #endif
 inline constexpr void scan_contiguous_materialized_to(
-	char_type const *first, char_type const *last, T &target)
+	char_type const *first, char_type const *last, T &target) FAST_IO_HERBCEPTIONS_THROWS
 {
-	::fast_io::details::deal_with_single_to<char_type>(
+	::fast_io::details::deal_with_single_to<char_type, Maximum>(
 		first, last, target);
 }
 
@@ -1846,7 +1927,7 @@ template <::std::integral char_type, typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void inplace_to_compiler_constant_direct_materialized(
-	T &&target, Args &&...args)
+	T &&target, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr ::std::size_t capacity{
 		::fast_io::details::inplace_to_compiler_constant_reserve_capacity<
@@ -1859,7 +1940,7 @@ inline constexpr void inplace_to_compiler_constant_direct_materialized(
 	char_type *current{buffer};
 	((current = ::fast_io::details::
 		  inplace_to_compiler_constant_emit_one<char_type>(current, args)), ...);
-	::fast_io::details::scan_contiguous_materialized_to<char_type>(
+	::fast_io::details::scan_contiguous_materialized_to<char_type, capacity>(
 		buffer, current, target);
 }
 
@@ -1873,7 +1954,7 @@ template <::std::integral char_type, typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void inplace_to_compiler_constant_source_materialized(
-	T &&target, Args &&...args)
+	T &&target, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::details::inplace_to_compiler_constant_direct_materialized<
 		char_type>(
@@ -1893,7 +1974,7 @@ template <::std::integral char_type, typename T, typename... Args>
 	(defined(__clang__) && 21 <= __clang_major__)
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T to_compiler_constant_source_materialized(Args... args)
+inline constexpr T to_compiler_constant_source_materialized(Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (::std::is_scalar_v<T>)
 	{
@@ -1929,7 +2010,7 @@ template <::std::integral char_type, typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 inline constexpr void inplace_to_compiler_constant_checked_entry(
-	T &&target, Args &&...args)
+	T &&target, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	constexpr bool has_raw_source{
 		::fast_io::details::has_raw_print_arg<Args...>};
@@ -1996,12 +2077,13 @@ inline namespace io
 
 /// @brief Applies the shared compiler-constant source gate to an explicit character-domain inplace conversion.
 template <::std::integral char_type, typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // This character-domain forwarding edge is jointly required with the checked boundary below: leaving either outlined
 // hides the public source value from GCC's builtin query. It contains no formatting strategy or target-side mutation.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void basic_inplace_to(T &&t, Args &&...args)
+inline constexpr void basic_inplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::details::inplace_to_compiler_constant_checked_entry<char_type>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2009,12 +2091,13 @@ inline constexpr void basic_inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable narrow-character fragments into an existing scan target.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // Final narrow-character source-expression edge for GCC's inplace conversion query. The constant arm becomes
 // formatter-free on GCC 11--17, and the unknown arm retains the ordinary inplace conversion graph.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void inplace_to(T &&t, Args &&...args)
+inline constexpr void inplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to<char>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2022,12 +2105,13 @@ inline constexpr void inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable wide-character fragments into an existing scan target.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // This is the wchar_t instantiation of the same forwarding-only public edge proved for `inplace_to`; without forced
 // placement GCC 11--17 may move the builtin query below an opaque parameter boundary. No formatter is selected here.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void winplace_to(T &&t, Args &&...args)
+inline constexpr void winplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to<wchar_t>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2035,12 +2119,13 @@ inline constexpr void winplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-8 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // This is the char8_t instantiation of the measured public source edge. The attribute exposes the original expression
 // to the IO-level gate only; the successful and unknown-value formatting strategies remain owned by that gate.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void u8inplace_to(T &&t, Args &&...args)
+inline constexpr void u8inplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to<char8_t>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2048,12 +2133,13 @@ inline constexpr void u8inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-16 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // This char16_t facade has the same single forwarding expression as the narrow measured edge. Forced placement is
 // needed to prevent GCC's parameter boundary from making every source appear unknown to the builtin query.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void u16inplace_to(T &&t, Args &&...args)
+inline constexpr void u16inplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to<char16_t>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2061,12 +2147,13 @@ inline constexpr void u16inplace_to(T &&t, Args &&...args)
 
 /// @brief Converts printable UTF-32 code-unit fragments into an existing scan target.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<T>) && (!::fast_io::async::annotated_operand<Args> && ...)
 #if defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__
 // This char32_t facade is a type-domain projection of the measured edge and contains no algorithmic work. Inlining it
 // preserves the caller expression for the shared query while the false arm remains the ordinary runtime conversion.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr void u32inplace_to(T &&t, Args &&...args)
+inline constexpr void u32inplace_to(T &&t, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::basic_inplace_to<char32_t>(
 		::std::forward<T>(t), ::std::forward<Args>(args)...);
@@ -2079,7 +2166,7 @@ namespace decay
 
 /// @brief Constructs and scans a target from an already-normalized source pack without repeating alias normalization.
 template <::std::integral char_type, typename T, typename... Args>
-inline constexpr T basic_to_decay(Args... args)
+inline constexpr T basic_to_decay(Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (sizeof...(Args) == 0)
 	{
@@ -2153,7 +2240,7 @@ template <::std::integral char_type, typename T, typename... Args>
 // therefore required. The unknown-value continuation remains the unchanged `basic_to_decay` expression.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T to_compiler_constant_checked_entry(Args &&...args)
+inline constexpr T to_compiler_constant_checked_entry(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// An empty conversion has no source boundary and preserves the historical default-construction semantics directly.
 	if constexpr (sizeof...(Args) == 0u)
@@ -2211,7 +2298,13 @@ inline namespace io
 {
 
 /// @brief Constructs a target in the requested character domain through the shared compiler-constant source boundary.
+/// @details A nonempty source pack defines one logical input with a final boundary after its last spelling.
+///          A target can accept a prefix. A context target may consume several fragments before reaching its
+///          result. When the complete contiguous spelling has a static bound, the bounded conversion CPO
+///          can select a shorter parsing path at compile time. Empty argument packs use default construction.
+/// @see bounded_to_scannable
 template <::std::integral char_type, typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // Paired source-query facade edge. Deleting it after forcing the checked entry leaves GCC 15 callers as a two-
@@ -2219,7 +2312,7 @@ template <::std::integral char_type, typename T, typename... Args>
 // policy and only forwards the exact public expression into the IO-level availability/query boundary.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-inline constexpr T basic_to(Args &&...args)
+inline constexpr T basic_to(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::details::to_compiler_constant_checked_entry<char_type, T>(
 		::std::forward<Args>(args)...);
@@ -2227,6 +2320,7 @@ inline constexpr T basic_to(Args &&...args)
 
 /// @brief Constructs a target by formatting and scanning narrow-character source fragments.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // Final source-expression edge. Without it GCC 15 leaves the literal caller as a jump to `to`, so the paired IO
@@ -2234,63 +2328,107 @@ template <typename T, typename... Args>
 // no facade makes a formatting decision, and an unknown source continues into the unchanged false arm.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr T to(Args &&...args)
+[[nodiscard]] inline constexpr T to(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::basic_to<char, T>(::std::forward<Args>(args)...);
 }
 
 /// @brief Constructs a target by formatting and scanning wide-character source fragments.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // The wchar_t facade is the same forwarding-only edge as `to`; the character type changes only the downstream
 // instantiation. Forced placement preserves the public expression for the shared query and adds no format policy.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr T wto(Args &&...args)
+[[nodiscard]] inline constexpr T wto(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::basic_to<wchar_t, T>(::std::forward<Args>(args)...);
 }
 
 /// @brief Constructs a target by formatting and scanning UTF-8 code-unit source fragments.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // The char8_t facade contains only the measured forwarding expression. Keeping that expression in the caller prevents
 // the GCC 11--17 and Clang 21--23 query boundary from degrading a literal into an opaque function parameter.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr T u8to(Args &&...args)
+[[nodiscard]] inline constexpr T u8to(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::basic_to<char8_t, T>(::std::forward<Args>(args)...);
 }
 
 /// @brief Constructs a target by formatting and scanning UTF-16 code-unit source fragments.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // The char16_t facade is structurally identical to the measured narrow edge and performs no formatting itself. Forced
 // placement exposes only the original source expression; the IO-level gate still owns both result strategies.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr T u16to(Args &&...args)
+[[nodiscard]] inline constexpr T u16to(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::basic_to<char16_t, T>(::std::forward<Args>(args)...);
 }
 
 /// @brief Constructs a target by formatting and scanning UTF-32 code-unit source fragments.
 template <typename T, typename... Args>
+	requires (!::fast_io::async::annotated_operand<Args> && ...)
 #if (defined(__GNUC__) && !defined(__clang__) && 11 <= __GNUC__) || \
 	(defined(__clang__) && 21 <= __clang_major__)
 // The char32_t facade is the final forwarding-only projection of the measured source edge. Inlining avoids an opaque
 // parameter at the builtin query without duplicating or changing either the constant or runtime formatter graph.
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
-[[nodiscard]] inline constexpr T u32to(Args &&...args)
+[[nodiscard]] inline constexpr T u32to(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::basic_to<char32_t, T>(::std::forward<Args>(args)...);
 }
 
 } // namespace io
+
+namespace details
+{
+/// @brief Carries a complete captured spelling through normal target normalization with its static upper bound.
+/// @details The view lives entirely within the conversion driver. Its size member is the actual readable
+///          length. Maximum is type information and adds no storage to the descriptor.
+template <::std::integral Char, ::std::size_t Maximum>
+struct to_materialized_scatter
+{
+	basic_io_scatter_t<Char> spelling;
+
+	/// @brief Exposes the captured input as a single named scatter without copying its characters.
+	friend constexpr basic_io_scatter_t<Char> print_scatter_define(
+		io_reserve_type_t<Char, to_materialized_scatter>, to_materialized_scatter view) noexcept
+	{
+		return view.spelling;
+	}
+
+	/// @brief Recovers the aggregate bound supplied by the same operation that owns the characters.
+	friend consteval ::std::size_t to_scatter_max_size(io_reserve_type_t<Char, to_materialized_scatter>) noexcept
+	{
+		return Maximum;
+	}
+};
+
+/// @brief Retains the ordinary scatter type unless the normalized conversion target accepts this exact bound.
+template <typename Target, ::std::size_t Maximum, ::std::integral Char>
+inline constexpr auto to_materialized_source(basic_io_scatter_t<Char> spelling) noexcept
+{
+	if constexpr (Maximum != SIZE_MAX &&
+				  ::fast_io::bounded_to_scannable<Char, inplace_to_normalized_target_t<Char, Target>, Maximum>)
+	{
+		return to_materialized_scatter<Char, Maximum>{spelling};
+	}
+	else
+	{
+		return spelling;
+	}
+}
+} // namespace details
 
 } // namespace fast_io

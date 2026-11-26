@@ -14,10 +14,10 @@ namespace fast_io::details::da
 // reserve-print buffer, not a buffer sized to the returned character count.
 // This physical-store contract is stated again at each public local writer.
 
-// Up to sixteen ASCII digits in destination byte order.  low contains the first
-// eight bytes, high the next eight, and span is the logical digit count after
-// suppressing leading zeroes.  Bytes outside that span are initialized scratch
-// bytes and may still be written by a fixed-width store.
+// Up to sixteen ASCII digits packed from the least to the most significant
+// byte in each word.  low contains the first eight bytes, high the next eight,
+// and span ends at the last nonzero digit.  Bytes outside that span are
+// initialized scratch bytes and may still be written by a fixed-width store.
 struct ascii_digit_block
 {
 	::std::uint_least64_t low;
@@ -497,9 +497,9 @@ make_ascii_digit_block(::std::uint_least64_t value) noexcept
 }
 
 // Compile-time generated encodings for every finite binary64 scientific
-// exponent in [-324, 308].  Bytes 0..4 contain e[+-]dd[d] in destination order
-// and byte 7 contains the logical length.  The cache is ASCII-only; the writer
-// below loads and stores all eight bytes even when only four or five are logical.
+// exponent in [-324, 308].  The low bytes encode e[+-]dd[d] from least to most
+// significant, and the top byte stores the logical length.  The writer stores
+// all eight ASCII cache bytes even when only four or five are logical.
 struct ascii_exponent_cache
 {
 	inline static constexpr ::std::int_least32_t minimum{-324};
@@ -807,7 +807,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 {
 	if constexpr (sizeof(flt) <= sizeof(float))
 	{
-		auto const shifted{drop_leading_zero ? digits.low >> 8u : digits.low};
+		auto const shifted{::fast_io::little_endian(
+			drop_leading_zero ? digits.low >> 8u : digits.low)};
 		::fast_io::freestanding::my_memcpy(
 			destination, __builtin_addressof(shifted), sizeof(shifted));
 	}
@@ -820,6 +821,8 @@ FAST_IO_GNU_ALWAYS_INLINE inline void store_ascii_digits(
 			low = (low >> 8u) | (high << 56u);
 			high >>= 8u;
 		}
+		low = ::fast_io::little_endian(low);
+		high = ::fast_io::little_endian(high);
 		::fast_io::freestanding::my_memcpy(
 			destination, __builtin_addressof(low), sizeof(low));
 		::fast_io::freestanding::my_memcpy(
@@ -840,6 +843,7 @@ template <bool uppercase_e>
 	{
 		packed ^= static_cast<::std::uint_least64_t>(u8'e' ^ u8'E');
 	}
+	packed = ::fast_io::little_endian(packed);
 	::fast_io::freestanding::my_memcpy(
 		destination, __builtin_addressof(packed), sizeof(packed));
 	return destination + length;
@@ -986,12 +990,14 @@ template <typename flt, bool comma, bool json_float>
 			::std::uint_least64_t high_digits;
 			::fast_io::freestanding::my_memcpy(
 				__builtin_addressof(high_digits), destination + 8u, sizeof(high_digits));
+			high_digits = ::fast_io::little_endian(high_digits);
 			auto const last_high_digit{static_cast<char>(high_digits >> 56u)};
 			auto const shift{static_cast<::std::uint_least32_t>((point_position - 8u) * 8u)};
 			auto const lower_mask{(static_cast<::std::uint_least64_t>(1u) << shift) - 1u};
 			high_digits = (high_digits & lower_mask) |
 						  ((high_digits & ~lower_mask) << 8u) |
 						  (static_cast<::std::uint_least64_t>(static_cast<unsigned char>(decimal_point)) << shift);
+			high_digits = ::fast_io::little_endian(high_digits);
 			::fast_io::freestanding::my_memcpy(
 				destination + 8u, __builtin_addressof(high_digits), sizeof(high_digits));
 			if (digit_count == 17u)
@@ -1107,15 +1113,14 @@ print_ascii_scientific_aarch64_binary32(
 }
 #endif
 
-// x86 binary32 scientific emission consumes the unshuffled digit vector before
-// it becomes scalar words.  It emits one complete 16-byte pshufb result;
-// layout.shuffle[15] contains the shorter logical length and byte 15 is outside
-// every result.  The destination must nevertheless permit all sixteen bytes.
-// The ISA guard matches the producer and the generated shuffle table exactly.
+// The shuffle assembles the binary32 coefficient and punctuation.
+// layout.shuffle[15] holds the logical length. Ordinary reserve output stores
+// the whole vector. Exact output stores the coefficient within that length,
+// then writes the four exponent bytes into their final positions.
 #if (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-template <bool comma, bool uppercase_e>
+template <bool comma, bool uppercase_e, bool exact_bounds = false>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific_x86_binary32(
 	char *destination, ascii_x86_u8x16 unshuffled, ::std::uint_least32_t digit_span,
 	::std::int_least32_t exponent, bool has_extra_digit,
@@ -1130,7 +1135,9 @@ template <bool comma, bool uppercase_e>
 	auto source{__builtin_bit_cast(ascii_x86_u64x2,
 								   unshuffled + ascii_x86_u8x16{48, 48, 48, 48, 48, 48, 48, 48,
 																48, 48, 48, 48, 48, 48, 48, 48})};
-	source[1] = (exponent_data & static_cast<::std::uint_least64_t>(0xffffffffu)) |
+	// Exact emission writes the exponent separately, so the shuffle can execute
+	// independently of the exponent table load.
+	source[1] = (exact_bounds ? 0u : (exponent_data & static_cast<::std::uint_least64_t>(0xffffffffu))) |
 				(static_cast<::std::uint_least64_t>(u8'0' + last_digit) << 32u) |
 				(static_cast<::std::uint_least64_t>(comma ? u8',' : u8'.') << 40u);
 	auto const index{(digit_span - 1u) * 4u +
@@ -1143,9 +1150,35 @@ template <bool comma, bool uppercase_e>
 	auto const assembled{__builtin_bit_cast(
 		ascii_x86_u8x16,
 		__builtin_ia32_pshufb128(__builtin_bit_cast(ascii_x86_c8x16, source), shuffle))};
-	::fast_io::freestanding::my_memcpy(
-		destination, __builtin_addressof(assembled), sizeof(assembled));
-	return destination + layout.shuffle[15];
+	auto const length{static_cast<::std::uint_least32_t>(layout.shuffle[15])};
+	if constexpr (exact_bounds)
+	{
+		auto const words{__builtin_bit_cast(ascii_x86_u64x2, assembled)};
+		auto const first{words[0]};
+		// At most ten bytes precede the four-byte exponent. Use a wide store
+		// only when there is room in the field, then write the exponent in place.
+		if (10u <= length)
+		{
+			auto const more{static_cast<::std::uint_least16_t>(words[1])};
+			::fast_io::freestanding::my_memcpy(destination, __builtin_addressof(first), 8u);
+			::fast_io::freestanding::my_memcpy(destination + 8u, __builtin_addressof(more), 2u);
+		}
+		else if (8u <= length)
+		{
+			::fast_io::freestanding::my_memcpy(destination, __builtin_addressof(first), 8u);
+		}
+		else
+		{
+			::fast_io::freestanding::my_memcpy(destination, __builtin_addressof(first), 4u);
+		}
+		::fast_io::freestanding::my_memcpy(destination + length - 4u, __builtin_addressof(exponent_data), 4u);
+	}
+	else
+	{
+		::fast_io::freestanding::my_memcpy(
+			destination, __builtin_addressof(assembled), sizeof(assembled));
+	}
+	return destination + length;
 }
 #endif
 
@@ -1154,13 +1187,43 @@ template <bool comma, bool uppercase_e>
 // significant digit.  store_ascii_digits and print_ascii_exponent perform their
 // documented fixed-width scratch stores; the returned pointer is the logical
 // end after exponent punctuation.
-template <typename flt, bool comma, bool uppercase_e>
+template <typename flt, bool comma, bool uppercase_e, bool exact_bounds = false>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_scientific(
 	char *destination, ascii_digit_block digits,
 	::std::int_least32_t exponent, bool has_extra_digit,
 	::std::uint_least32_t last_digit, bool has_last_digit) noexcept
 {
 	constexpr ::std::uint_least32_t block_size{sizeof(flt) <= sizeof(float) ? 8u : 16u};
+	auto const extra{static_cast<::std::uint_least32_t>(has_extra_digit)};
+	auto const length{extra + (has_last_digit ? block_size + 1u : digits.span)};
+	if constexpr (exact_bounds)
+	{
+		auto packed{ascii_exponents.data[static_cast<::std::size_t>(exponent - ascii_exponent_cache::minimum)]};
+		auto const exponent_length{static_cast<::std::uint_least32_t>(packed >> 56u)};
+		auto const exponent_offset{length - static_cast<::std::uint_least32_t>(length == 2u)};
+		// The exponent overwrites the scratch within the complete field.
+		if (exponent_offset + exponent_length < extra + block_size + 1u) [[unlikely]]
+		{
+			return nullptr;
+		}
+		auto buffer{destination + extra};
+		::fast_io::details::da::store_ascii_digits<flt>(buffer, digits, false);
+		buffer[block_size] = static_cast<char>(u8'0' + last_digit);
+		destination[0] = destination[1];
+		destination[1] = static_cast<char>(comma ? u8',' : u8'.');
+		if constexpr (uppercase_e)
+		{
+			packed ^= static_cast<::std::uint_least64_t>(u8'e' ^ u8'E');
+		}
+		auto const exp_word{::fast_io::little_endian(static_cast<::std::uint_least32_t>(packed))};
+		auto exp_dest{destination + exponent_offset};
+		::fast_io::freestanding::my_memcpy(exp_dest, __builtin_addressof(exp_word), 4u);
+		if (exponent_length == 5u)
+		{
+			exp_dest[4] = static_cast<char>((packed >> 32u) & 0xffu);
+		}
+		return exp_dest + exponent_length;
+	}
 	auto buffer{destination + static_cast<::std::uint_least32_t>(has_extra_digit)};
 	::fast_io::details::da::store_ascii_digits<flt>(buffer, digits, false);
 	buffer[block_size] = static_cast<char>(u8'0' + last_digit);
@@ -1183,12 +1246,13 @@ template <typename flt, bool comma, bool uppercase_e>
 // The AArch64 and x86 forms preserve their audited SIMD instruction shapes; the
 // scalar form is the correctness reference for unsupported ISA feature sets.
 template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged_emission = false,
-	bool use_cached_constants = ascii_x86_cached_bcd_constants_default>
+	bool use_cached_constants = ascii_x86_cached_bcd_constants_default, bool exact_bounds = false>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline char *print_ascii_shortest_fields(
 	char *destination, ::std::uint_least64_t significand,
 	::std::int_least32_t converted_exponent, ::std::uint_least32_t last_digit,
 	bool has_last_digit) noexcept
 {
+	static_assert(!exact_bounds || flags.floating == ::fast_io::manipulators::floating_format::scientific);
 	constexpr bool binary32{sizeof(flt) <= sizeof(float)};
 	// SIMD x86 can insert a binary64 decimal point with one 16-byte shuffle
 	// through exponent 15.  Other implementations use the compact metadata
@@ -1280,8 +1344,24 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 #elif (defined(__x86_64__) || defined(_M_X64)) && defined(__SSE4_1__) && defined(__SSSE3__) && \
 	(defined(__GNUC__) || defined(__clang__)) && \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-	auto const digit_data{::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(
-		significand)};
+	auto const digit_data{[&]() noexcept {
+#if defined(__GNUC__) && !defined(__clang__) && 15 <= __GNUC__
+		if constexpr (binary32 && exact_bounds)
+		{
+			// The scalar reciprocal stages produce the same eight BCD bytes
+			// as the vector path. Reverse them for the existing shuffle tables.
+			auto const bcd{::fast_io::details::da::ascii_bcd8(significand)};
+			auto const raw{::fast_io::byte_swap(bcd)};
+			auto const span{8u - static_cast<::std::uint_least32_t>(::std::countr_zero(raw) >> 3u)};
+			return ascii_x86_digit_data{{bcd + ascii_zeroes, 0u, span},
+				__builtin_bit_cast(ascii_x86_u8x16, ascii_x86_u64x2{raw, 0u})};
+		}
+		else
+#endif
+		{
+			return ::fast_io::details::da::make_ascii_digit_data_x86<flt, use_cached_constants>(significand);
+		}
+	}()};
 	auto const digits{digit_data.digits};
 #else
 	auto const digits{::fast_io::details::da::make_ascii_digit_block<flt>(significand)};
@@ -1425,18 +1505,19 @@ template <typename flt, ::fast_io::manipulators::scalar_flags flags, bool staged
 		// compiler majors selected by these open family branches inherit the
 		// polarity as an unmeasured code-generation hypothesis.
 #if defined(__clang__)
-		if constexpr (!staged_emission)
+		if constexpr (!staged_emission || exact_bounds)
 #else
-		if constexpr (staged_emission)
+		if constexpr (staged_emission || exact_bounds)
 #endif
 		{
-			return ::fast_io::details::da::print_ascii_scientific_x86_binary32<flags.comma, flags.uppercase_e>(
+			return ::fast_io::details::da::print_ascii_scientific_x86_binary32<
+				flags.comma, flags.uppercase_e, exact_bounds>(
 				destination, digit_data.unshuffled, digits.span, exponent, has_extra_digit,
 				last_digit, has_last_digit);
 		}
 	}
 #endif
-	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e>(
+	return ::fast_io::details::da::print_ascii_scientific<flt, flags.comma, flags.uppercase_e, exact_bounds>(
 		destination, digits, exponent, has_extra_digit,
 		last_digit, has_last_digit);
 }

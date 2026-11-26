@@ -18,7 +18,12 @@
 
 #include <concepts>
 #include <cstddef>
+#if defined(__GLIBCXX__) && __has_include(<bits/ranges_base.h>)
+// These rules query range concepts and accessors. View adaptors have no role in format selection.
+#include <bits/ranges_base.h>
+#else
 #include <ranges>
+#endif
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -513,7 +518,7 @@ inline consteval bool brace_range_default_staging_safe_element() noexcept
 		// These built-in scalar categories lower to core semantic nodes whose
 		// spelling is independent of the eventual output observer.
 		return ::fast_io::details::my_integral<clean_type> ||
-			   ::fast_io::details::my_floating_point<clean_type> ||
+			   ::fast_io::details::floating_io_value<clean_type> ||
 			   ::std::is_pointer_v<clean_type> ||
 			   ::std::same_as<clean_type, ::std::nullptr_t>;
 	}

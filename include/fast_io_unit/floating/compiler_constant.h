@@ -758,7 +758,7 @@ compiler_constant_floating_special_size(
 	if constexpr (flags.nan_show_type)
 	{
 		constexpr mantissa_type quiet_bit{
-			::fast_io::details::fp_quiet_nan_mantissa_mask<
+			::fast_io::details::fp_native_nan_default_payload<
 				mantissa_type, mantissa_bits>()};
 		if (negative && mantissa == quiet_bit)
 		{
@@ -4109,7 +4109,7 @@ compiler_constant_floating_fragment_special(
 	if constexpr (flags.nan_show_type)
 	{
 		constexpr mantissa_type quiet_bit{
-			::fast_io::details::fp_quiet_nan_mantissa_mask<
+			::fast_io::details::fp_native_nan_default_payload<
 				mantissa_type, mantissa_bits>()};
 		if (negative && mantissa == quiet_bit)
 		{
@@ -4971,7 +4971,7 @@ print_compiler_constant_single_static_fragment(
 		if constexpr (flags.nan_show_type)
 		{
 			constexpr auto quiet_bit{
-				::fast_io::details::fp_quiet_nan_mantissa_mask<
+				::fast_io::details::fp_native_nan_default_payload<
 					mantissa_type, trait::mbits>()};
 			if ((value.negative && value.binary_mantissa == quiet_bit) ||
 				::fast_io::details::fp_nan_is_signaling<

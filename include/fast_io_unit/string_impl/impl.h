@@ -11,6 +11,7 @@
 #endif
 
 #if 1
+#include "string_view.h"
 #include "ostring_ref.h"
 #include "concat.h"
 #endif

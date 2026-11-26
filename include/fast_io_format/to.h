@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <utility>
 
+#include "../fast_io_dsal/impl/misc/push_macros.h"
+
 namespace fast_io::fmt
 {
 
@@ -16,7 +18,8 @@ namespace fast_io::fmt
 // `print` and `concat`; the target type follows it: `fmt::to<"{}", int>(v)`.
 template <basic_fixed_string format_literal, typename result_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char, result_type, format_literal>(
@@ -27,7 +30,8 @@ template <basic_fixed_string format_literal, typename result_type,
 // family: `fmt::to<int, "{}">(value)`.
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char, result_type, format_literal>(
@@ -36,7 +40,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type wto(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type wto(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		wchar_t, result_type, format_literal>(
@@ -45,7 +50,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <basic_fixed_string format_literal, typename result_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type wto(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type wto(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		wchar_t, result_type, format_literal>(
@@ -54,7 +60,8 @@ template <basic_fixed_string format_literal, typename result_type,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u8to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u8to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char8_t, result_type, format_literal>(
@@ -63,7 +70,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <basic_fixed_string format_literal, typename result_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u8to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u8to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char8_t, result_type, format_literal>(
@@ -72,7 +80,8 @@ template <basic_fixed_string format_literal, typename result_type,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u16to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u16to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char16_t, result_type, format_literal>(
@@ -81,7 +90,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <basic_fixed_string format_literal, typename result_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u16to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u16to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char16_t, result_type, format_literal>(
@@ -90,7 +100,8 @@ template <basic_fixed_string format_literal, typename result_type,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u32to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u32to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char32_t, result_type, format_literal>(
@@ -99,7 +110,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <basic_fixed_string format_literal, typename result_type,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u32to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u32to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char32_t, result_type, format_literal>(
@@ -109,7 +121,8 @@ template <basic_fixed_string format_literal, typename result_type,
 // Percent grammar aliases follow the existing `printf`/`concatf` naming.
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type printf_to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type printf_to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char, result_type, format_literal>(
@@ -118,7 +131,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type wprintf_to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type wprintf_to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		wchar_t, result_type, format_literal>(
@@ -127,7 +141,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u8printf_to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u8printf_to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char8_t, result_type, format_literal>(
@@ -136,7 +151,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u16printf_to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u16printf_to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char16_t, result_type, format_literal>(
@@ -145,7 +161,8 @@ template <typename result_type, basic_fixed_string format_literal,
 
 template <typename result_type, basic_fixed_string format_literal,
 		  typename... argument_types>
-[[nodiscard]] inline constexpr result_type u32printf_to(argument_types &&...arguments)
+	requires (!::fast_io::async::annotated_operand<argument_types> && ...)
+[[nodiscard]] inline constexpr result_type u32printf_to(argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::fmt::details::to_builtin_with_rule<
 		char32_t, result_type, format_literal>(
@@ -156,8 +173,9 @@ template <typename result_type, basic_fixed_string format_literal,
 // just as it is for `print` and `concat`.
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void inplace_to(target_type &&target,
-						 argument_types &&...arguments)
+						 argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		char, format_literal>(
@@ -167,8 +185,9 @@ inline constexpr void inplace_to(target_type &&target,
 
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void winplace_to(target_type &&target,
-						  argument_types &&...arguments)
+						  argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		wchar_t, format_literal>(
@@ -178,8 +197,9 @@ inline constexpr void winplace_to(target_type &&target,
 
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void u8inplace_to(target_type &&target,
-						   argument_types &&...arguments)
+						   argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		char8_t, format_literal>(
@@ -189,8 +209,9 @@ inline constexpr void u8inplace_to(target_type &&target,
 
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void u16inplace_to(target_type &&target,
-						    argument_types &&...arguments)
+						    argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		char16_t, format_literal>(
@@ -200,8 +221,9 @@ inline constexpr void u16inplace_to(target_type &&target,
 
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void u32inplace_to(target_type &&target,
-						    argument_types &&...arguments)
+						    argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		char32_t, format_literal>(
@@ -212,8 +234,9 @@ inline constexpr void u32inplace_to(target_type &&target,
 // Percent grammar variants.
 template <basic_fixed_string format_literal, typename target_type,
 		  typename... argument_types>
+	requires (!::fast_io::async::annotated_operand<target_type>) && (!::fast_io::async::annotated_operand<argument_types> && ...)
 inline constexpr void inplace_printf_to(target_type &&target,
-							argument_types &&...arguments)
+							argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	::fast_io::fmt::details::inplace_to_builtin_with_rule<
 		char, format_literal>(
@@ -225,3 +248,9 @@ template <typename char_type, ::std::size_t extent, typename... argument_types>
 auto inplace_to(char_type const (&)[extent], argument_types &&...) = delete;
 
 } // namespace fast_io::fmt
+
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+#include "async_to.h"
+#endif
+
+#include "../fast_io_dsal/impl/misc/pop_macros.h"

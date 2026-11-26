@@ -1,7 +1,12 @@
 ﻿#pragma once
 
 #include <concepts>
+#if defined(__GLIBCXX__) && __has_include(<bits/stl_construct.h>)
+// Thread launch destroys one constructed object. Smart-pointer and atomic ownership types are unnecessary here.
+#include <bits/stl_construct.h>
+#else
 #include <memory>
+#endif
 #include <type_traits>
 
 namespace fast_io::details

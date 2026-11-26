@@ -33,6 +33,34 @@ inline ::std::byte const *posix_pwrite_bytes_impl(int fd, ::std::byte const *fir
 }
 #endif
 
+#if defined(__linux__) && (defined(__NR_preadv) || defined(__NR_pwritev))
+/** @brief Completes one nonempty positional span when the kernel predates vectored positional I/O.
+ * @details A 'some' result may stop after any positive prefix. Skipping empty descriptors preserves
+ * the original offset and lets the existing scatter-all engine advance correctly after short reads and writes.
+ */
+template <bool Write>
+inline ::std::ptrdiff_t linux_positional_scatter_prefix(int fd, ::fast_io::io_scatter_t const *scatters,
+														::std::size_t n, ::fast_io::intfpos_t offset)
+{
+	for (::std::size_t i{}; i != n; ++i)
+	{
+		auto const [data, length]{scatters[i]};
+		if (length == 0)
+		{
+			continue;
+		}
+#if defined(__NR_pread64) && defined(__NR_pwrite64) && defined(__x86_64__) && !defined(__ILP32__)
+		return ::fast_io::system_call<Write ? __NR_pwrite64 : __NR_pread64, ::std::ptrdiff_t>(fd, data, length, offset);
+#else
+		// libc supplies the target ABI's off_t splitting and alignment conventions.
+		auto const result{Write ? ::pwrite(fd, data, length, offset) : ::pread(fd, const_cast<void *>(data), length, offset)};
+		return result < 0 ? -errno : result;
+#endif
+	}
+	return 0;
+}
+#endif
+
 inline ::fast_io::io_scatter_status_t posix_scatter_pread_bytes_impl(int fd, ::fast_io::io_scatter_t const *pscatter,
 																	 ::std::size_t n, ::fast_io::intfpos_t off)
 {
@@ -46,6 +74,10 @@ inline ::fast_io::io_scatter_status_t posix_scatter_pread_bytes_impl(int fd, ::f
 	n = ::std::min(n, ::fast_io::details::posix_scatter_maximum_count);
 #if defined(__linux__) && defined(__NR_preadv)
 	auto ret{system_call<__NR_preadv, ::std::ptrdiff_t>(fd, pscatter, n, off)};
+	if (ret == -ENOSYS) [[unlikely]]
+	{
+		ret = linux_positional_scatter_prefix<false>(fd, pscatter, n, off);
+	}
 	::fast_io::linux_system_call_throw_error(ret);
 #elif defined(__wasi__)
 	using iovec_may_alias_const_ptr
@@ -136,6 +168,10 @@ inline ::fast_io::io_scatter_status_t posix_scatter_pwrite_bytes_impl(int fd, ::
 	n = ::std::min(n, ::fast_io::details::posix_scatter_maximum_count);
 #if defined(__linux__) && defined(__NR_pwritev)
 	auto ret{system_call<__NR_pwritev, ::std::ptrdiff_t>(fd, pscatter, n, off)};
+	if (ret == -ENOSYS) [[unlikely]]
+	{
+		ret = linux_positional_scatter_prefix<true>(fd, pscatter, n, off);
+	}
 	::fast_io::linux_system_call_throw_error(ret);
 #elif defined(__wasi__)
 	using iovec_may_alias_const_ptr

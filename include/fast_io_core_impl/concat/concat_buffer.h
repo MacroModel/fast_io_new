@@ -17,6 +17,7 @@ template <::std::integral ch_type>
 struct basic_concat_buffer
 {
 	using char_type = ch_type;
+	using allocator_type = ::fast_io::native_thread_local_allocator;
 	static inline constexpr ::std::size_t buffer_size{2048u / sizeof(ch_type)};
 	char_type *buffer_begin, *buffer_curr, *buffer_end;
 	char_type stack_buffer[buffer_size];
@@ -48,8 +49,8 @@ struct basic_concat_buffer
 ///          output destination. Its later range construction reads an already bounded prefix directly; a future read
 ///          prefetch at that site should carry a dedicated source projection rather than widen the output adapter.
 template <::std::integral char_type>
-	requires(::fast_io::prfch_cacheable_allocator_provenance<
-			 ::fast_io::native_thread_local_allocator>)
+	requires(::fast_io::details::allocator_provider_available<typename basic_concat_buffer<char_type>::allocator_type> &&
+			 ::fast_io::prfch_cacheable_allocator_provenance<typename basic_concat_buffer<char_type>::allocator_type>)
 inline constexpr ::std::true_type prfch_cacheable_write_provenance_define(
 	::fast_io::io_type_t<basic_concat_buffer<char_type>>) noexcept
 {

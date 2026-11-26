@@ -58,6 +58,12 @@ enum class encoding_scheme
 	utf = ::std::endian::big == ::std::endian::native ? utf_be
 													  : (::std::endian::little == ::std::endian::native ? utf_le : 5)
 };
+} // namespace fast_io
+
+#include "unicode.h"
+
+namespace fast_io
+{
 /*
 CppCon 2018: Bob Steagall “Fast Conversion From UTF-8 with C++, DFAs, and SSE Intrinsics”
 
@@ -478,80 +484,12 @@ inline constexpr ::std::size_t get_utf_code_units(char32_t cdpt, T *dst) noexcep
 	}
 	else
 	{
-		if constexpr (sizeof(T) == sizeof(char32_t))
-		{
-			if constexpr (is_native_scheme(scheme))
-			{
-				*dst = static_cast<T>(cdpt);
-			}
-			else
-			{
-				*dst = byte_swap(static_cast<T>(cdpt));
-			}
-			return 1;
-		}
-		else if constexpr (sizeof(T) == sizeof(char16_t))
-		{
-			if (cdpt < 0x10000)
-			{
-				if constexpr (is_native_scheme(scheme))
-				{
-					*dst = static_cast<T>(cdpt);
-				}
-				else
-				{
-					*dst = byte_swap(static_cast<T>(cdpt));
-				}
-				return 1;
-			}
-			else
-			{
-				if constexpr (is_native_scheme(scheme))
-				{
-					*dst = static_cast<T>(0xD7C0 + (cdpt >> 10));
-					dst[1] = static_cast<T>(0xDC00 + (cdpt & 0x3FF));
-				}
-				else
-				{
-					*dst = byte_swap(static_cast<T>(0xD7C0 + (cdpt >> 10)));
-					dst[1] = byte_swap(static_cast<T>(0xDC00 + (cdpt & 0x3FF)));
-				}
-				return 2;
-			}
-		}
-		else
-		{
-			if (cdpt <= 0x7F) [[likely]]
-			{
-				*dst = static_cast<T>(cdpt);
-				return 1;
-			}
-			else if (cdpt <= 0x7FF)
-			{
-				*dst = static_cast<T>(0xC0 | ((cdpt >> 6) & 0x1F));
-				dst[1] = static_cast<T>(0x80 | (cdpt & 0x3F));
-				return 2;
-			}
-			else if (cdpt <= 0xFFFF)
-			{
-				*dst = static_cast<T>(0xE0 | ((cdpt >> 12) & 0x0F));
-				dst[1] = static_cast<T>(0x80 | ((cdpt >> 6) & 0x3F));
-				dst[2] = static_cast<T>(0x80 | (cdpt & 0x3F));
-				return 3;
-			}
-			else if (cdpt <= 0x10FFFF)
-			{
-				*dst = static_cast<T>(0xF0 | ((cdpt >> 18) & 0x07));
-				dst[1] = static_cast<T>(0x80 | ((cdpt >> 12) & 0x3F));
-				dst[2] = static_cast<T>(0x80 | ((cdpt >> 6) & 0x3F));
-				dst[3] = static_cast<T>(0x80 | (cdpt & 0x3F));
-				return 4;
-			}
-			else [[unlikely]]
-			{
-				return get_utf8_invalid_code_units(dst);
-			}
-		}
+		// Single-scalar print and decoder fallback share the bulk converter's wire-order and validity rules.
+		auto cp{static_cast<::std::uint_least32_t>(cdpt)};
+		if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu)) { cp = 0xfffdu; }
+		auto width{unicode_width<T>(cp)};
+		unicode_emit<scheme>(cp,width,dst);
+		return width;
 	}
 }
 inline constexpr bool is_utf16_surrogate(char16_t uc) noexcept
@@ -573,7 +511,7 @@ inline constexpr char32_t utf16_surrogate_to_utf32(char16_t high, char16_t low) 
 }
 
 #if (defined(_MSC_VER) && defined(_M_AMD64) && !defined(_M_ARM64EC) && !defined(__clang__)) ||                                             \
-	(defined(__SSE__) && defined(__SSE2__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+	(defined(__SSE2__) && defined(__x86_64__) && !defined(_M_ARM64EC) && FAST_IO_HAS_BUILTIN(__builtin_ia32_pmovmskb128))
 template <::std::integral T, ::std::integral U>
 	requires((sizeof(T) == 1) && (sizeof(U) == 1 || sizeof(U) == 2 || sizeof(U) == 4))
 inline code_cvt_result<T, U> convert_ascii_with_sse(T const *__restrict pSrc, U *__restrict pDst) noexcept
@@ -581,7 +519,7 @@ inline code_cvt_result<T, U> convert_ascii_with_sse(T const *__restrict pSrc, U 
 	// No internal buffer judgment, external calls need to be judged
 
 	::std::uint_least32_t mask;
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__INTEL_COMPILER)
+#if FAST_IO_HAS_BUILTIN(__builtin_ia32_pmovmskb128)
 	using namespace fast_io::intrinsics;
 	constexpr ::std::size_t m128i_size{16};
 	if constexpr (sizeof(U) == 1)
@@ -649,7 +587,7 @@ inline code_cvt_result<T, U> convert_ascii_with_sse(T const *__restrict pSrc, U 
 #endif
 		__builtin_memcpy(pDst + 12, __builtin_addressof(qrtr), m128i_size);
 	}
-#else
+#elif defined(_MSC_VER) && !defined(__clang__)
 	using x86_64_m128i = __m128i;
 	if constexpr (sizeof(U) == 1)
 	{

@@ -239,7 +239,7 @@ using transcode_engine_ref_lvalue_t = ::std::remove_reference_t<
 
 /** @brief Normalizes an engine once and performs one bounded process step. */
 template <typename T>
-	requires ::fast_io::transcoder<T>
+	requires ::fast_io::bounded_transcoder<T>
 inline constexpr auto transcode_process(
 	T &engine,
 	::fast_io::transcode_from_value_t<transcode_engine_ref_t<T>> const *from_first,
@@ -260,7 +260,7 @@ inline constexpr auto transcode_process(
 
 /** @brief Normalizes an engine once and performs one nonterminal sync-flush step. */
 template <typename T>
-	requires ::fast_io::transcoder<T>
+	requires ::fast_io::bounded_transcoder<T>
 inline constexpr auto transcode_sync_flush(
 	T &engine,
 	::fast_io::transcode_to_value_t<transcode_engine_ref_t<T>> *to_first,
@@ -273,7 +273,7 @@ inline constexpr auto transcode_sync_flush(
 
 /** @brief Normalizes an engine once and performs one terminal finish step. */
 template <typename T>
-	requires ::fast_io::transcoder<T>
+	requires ::fast_io::bounded_transcoder<T>
 inline constexpr auto transcode_finish(
 	T &engine,
 	::fast_io::transcode_to_value_t<transcode_engine_ref_t<T>> *to_first,
@@ -286,7 +286,7 @@ inline constexpr auto transcode_finish(
 
 /** @brief Queries the minimum legal destination capacity for a protocol phase. */
 template <typename T>
-	requires ::fast_io::transcoder<T>
+	requires ::fast_io::bounded_transcoder<T>
 inline constexpr ::std::size_t transcode_min_output_size(
 	::fast_io::transcode_reserve_t<T>, ::fast_io::transcode_phase phase)
 {
@@ -297,7 +297,7 @@ inline constexpr ::std::size_t transcode_min_output_size(
 
 /** @brief Queries an optional maximum output size for a bounded input count. */
 template <typename T>
-	requires(::fast_io::transcoder<T> &&
+	requires(::fast_io::bounded_transcoder<T> &&
 			 ::fast_io::operations::decay::defines::
 				 has_transcode_max_output_size_define<transcode_engine_ref_t<T>>)
 inline constexpr ::std::size_t transcode_max_output_size(

@@ -190,6 +190,13 @@ inline constexpr basic_general_io_lockable_ref<T, Mutex> io_stream_ref_define(::
 	return m;
 }
 
+/** @brief Authorizes a blocking request that acquires the mutex around the complete ordinary operation. */
+template <typename T, typename Mutex, bool Input>
+inline constexpr auto async_local_points_define(io_type_t<basic_general_io_lockable_ref<T, Mutex>>, ::std::bool_constant<Input>) noexcept
+{
+	return async::file_points<async::point_kind::opaque>{};
+}
+
 template <typename Mutex, typename Allocator>
 	requires ::std::default_initializable<Mutex>
 struct basic_general_mutex_movable

@@ -11,3 +11,5 @@
  */
 
 #include "print_freestanding.h"
+#include "transcode.h"
+#include "checked_fields.h"

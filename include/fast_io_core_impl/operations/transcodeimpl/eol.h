@@ -39,6 +39,13 @@ enum class eol_scheme
 template <::std::integral char_type, eol_scheme from_scheme, eol_scheme to_scheme>
 struct basic_eol
 {
+	/** @brief Permits the serial async driver to suspend between bounded steps while this engine retains its state. */
+	template <bool Input>
+	friend constexpr ::std::true_type async_transcode_step_define(::fast_io::transcode_reserve_t<basic_eol>, ::std::bool_constant<Input>) noexcept
+	{
+		return {};
+	}
+
 	using from_value_type = char_type;
 	using to_value_type = char_type;
 
@@ -612,6 +619,13 @@ inline constexpr ::std::size_t transcode_min_output_size_define(
 	::fast_io::transcode_phase) noexcept
 {
 	return 1u;
+}
+
+/** @brief A split CRLF pair retains its pending code unit until the next process range or final drain. */
+template <::std::integral Char, eol_scheme From, eol_scheme To>
+inline constexpr ::std::true_type transcode_output_prefixes_define(transcode_reserve_t<basic_eol<Char, From, To>>) noexcept
+{
+	return {};
 }
 
 using lf_to_crlf = basic_eol<char, eol_scheme::lf, eol_scheme::crlf>;

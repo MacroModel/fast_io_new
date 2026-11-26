@@ -146,6 +146,9 @@ template <auto format_literal, auto field, typename argument_pack>
 	::fast_io::fmt::details::compile_time_value<format_literal>,
 	::fast_io::fmt::details::compiled_replacement_t<field>,
 	argument_pack &arguments)
+#if defined(__HERBCEPTIONS__)
+	throws
+#endif
 {
 	return ::fast_io::fmt::details::make_rule_replacement<
 		printf_fmt_t, format_literal, field>(arguments);

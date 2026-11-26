@@ -17,7 +17,9 @@ namespace fast_io
 template <typename owner>
 struct basic_otranscoder_ref
 {
+	static constexpr bool output_secure_clear{owner::traits_type::secure_clear};
 	using owner_type = owner;
+	using decorated_stream_type = typename owner::decorated_stream_type;
 	using output_char_type = typename owner_type::output_char_type;
 
 	owner_type *ptr{};
@@ -27,7 +29,9 @@ struct basic_otranscoder_ref
 template <typename owner>
 struct basic_itranscoder_ref
 {
+	static constexpr bool input_secure_clear{owner::traits_type::secure_clear};
 	using owner_type = owner;
+	using decorated_stream_type = typename owner::decorated_stream_type;
 	using input_char_type = typename owner_type::input_char_type;
 
 	owner_type *ptr{};
@@ -37,12 +41,70 @@ struct basic_itranscoder_ref
 template <typename owner>
 struct basic_iotranscoder_ref
 {
+	static constexpr bool input_secure_clear{owner::input_traits_type::secure_clear};
+	static constexpr bool output_secure_clear{owner::output_traits_type::secure_clear};
 	using owner_type = owner;
+	using decorated_stream_type = typename owner::decorated_stream_type;
 	using input_char_type = typename owner_type::input_char_type;
 	using output_char_type = typename owner_type::output_char_type;
 
 	owner_type *ptr{};
 };
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <typename C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_itranscoder_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <typename C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_otranscoder_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <typename C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_iotranscoder_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Gives this decorator instance its own observable path component. */
+template <typename Owner>
+inline constexpr auto async_layer_kind_define(io_type_t<basic_itranscoder_ref<Owner>>) noexcept
+{ return ::fast_io::async::point_kind::decorator; }
+
+/** @brief Gives this decorator instance its own observable path component. */
+template <typename Owner>
+inline constexpr auto async_layer_kind_define(io_type_t<basic_otranscoder_ref<Owner>>) noexcept
+{ return ::fast_io::async::point_kind::decorator; }
+
+/** @brief Gives this decorator instance its own observable path component. */
+template <typename Owner>
+inline constexpr auto async_layer_kind_define(io_type_t<basic_iotranscoder_ref<Owner>>) noexcept
+{ return ::fast_io::async::point_kind::decorator; }
+
+/** @brief Obtains the common physical child without bypassing either of the duplex engines. */
+template <typename Owner>
+inline constexpr auto async_stage_child_define(io_type_t<basic_iotranscoder_ref<Owner>>) noexcept
+{ return ::std::type_identity<::std::remove_cvref_t<decltype(::std::declval<typename Owner::handle_storage_type &>().get())>>{}; }
+
+/** @brief Identifies the underlying output for stage introspection without exposing a bypass around the encoder. */
+template <typename Owner>
+inline constexpr auto async_stage_child_define(io_type_t<basic_otranscoder_ref<Owner>>) noexcept
+{
+	return ::std::type_identity<::std::remove_cvref_t<decltype(::std::declval<typename Owner::handle_storage_type &>().get())>>{};
+}
+
+/** @brief Identifies the underlying input for stage introspection while preserving all decoding work. */
+template <typename Owner>
+inline constexpr auto async_stage_child_define(io_type_t<basic_itranscoder_ref<Owner>>) noexcept
+{
+	return ::std::type_identity<::std::remove_cvref_t<decltype(::std::declval<typename Owner::handle_storage_type &>().get())>>{};
+}
 
 /** @brief Borrows an lvalue output adapter as its lightweight stream observer. */
 template <::std::integral public_char, typename handle_storage, typename engine,
@@ -131,6 +193,55 @@ inline void obuffer_set_curr(basic_otranscoder_ref<owner> ref,
 	ref.ptr->public_buffer.buffer_curr = validated.current;
 }
 
+/** @brief Reserves only already allocated public code units of an open, aligned encoder. */
+template <typename Owner>
+inline auto output_stream_try_reserve_define(basic_otranscoder_ref<Owner> ref, ::std::size_t n) noexcept -> typename Owner::output_char_type *
+{
+	auto &owner{*ref.ptr};
+	auto &put{owner.public_buffer};
+	if (owner.state != otranscoder_state::open || owner.source_remainder.size != 0u || put.buffer_curr == nullptr ||
+		static_cast<::std::size_t>(put.buffer_end - put.buffer_curr) < n)
+	{
+		return nullptr;
+	}
+	return put.buffer_curr;
+}
+
+/** @brief Publishes the prefix produced in a previously reserved typed encoder window. */
+template <typename Owner>
+inline void output_stream_commit_reserved_define(basic_otranscoder_ref<Owner> ref, typename Owner::output_char_type *last) noexcept
+{
+	ref.ptr->public_buffer.buffer_curr = last;
+}
+
+/**
+ * @brief Commits complete public code units to an open encoder without running the codec or flushing the sink.
+ * @details A closed direction, pending partial object, or full buffer declines the request before any change.
+ * The ordinary write protocol then supplies its original typed error or performs the required device work.
+ * Only the outermost put area is inspected, so every inner layer retains its own state and finish ordering.
+ */
+template <typename Owner>
+inline bool output_stream_try_write_define(basic_otranscoder_ref<Owner> ref,
+										   typename Owner::output_char_type const *first, typename Owner::output_char_type const *last) noexcept
+{
+	auto &adapter{*ref.ptr};
+	if (adapter.state != otranscoder_state::open || adapter.source_remainder.size != 0u)
+	{
+		return false;
+	}
+	if (first == last)
+	{
+		return true;
+	}
+	auto &put{adapter.public_buffer};
+	if (put.buffer_curr == nullptr || put.buffer_end - put.buffer_curr < last - first)
+	{
+		return false;
+	}
+	put.buffer_curr = ::fast_io::details::non_overlapped_copy(first, last, put.buffer_curr);
+	return true;
+}
+
 /** @brief Declares put-area pointer subtraction valid within one allocation. */
 template <typename owner>
 inline constexpr ::std::true_type obuffer_address_distance_safe_define(
@@ -138,6 +249,18 @@ inline constexpr ::std::true_type obuffer_address_distance_safe_define(
 					  basic_otranscoder_ref<owner>>) noexcept
 {
 	return {};
+}
+
+template <typename Owner>
+inline constexpr ::std::size_t output_stream_transcode_bytes_define(io_type_t<basic_otranscoder_ref<Owner>>) noexcept
+{
+	return Owner::traits_type::public_buffer_size * sizeof(typename Owner::output_char_type);
+}
+
+template <typename Owner>
+inline constexpr ::std::size_t input_stream_transcode_bytes_define(io_type_t<basic_itranscoder_ref<Owner>>) noexcept
+{
+	return Owner::traits_type::public_buffer_size * sizeof(typename Owner::input_char_type);
 }
 
 /** @brief Returns the configured minimum public put-area capacity. */
@@ -183,14 +306,14 @@ template <typename owner>
 inline void output_stream_buffer_flush_define(
 	basic_otranscoder_ref<owner> ref)
 {
-	ref.ptr->flush();
+	ref.ptr->flush_legacy();
 }
 
 /** @brief Performs checked terminal output finish through the adapter owner. */
 template <typename owner>
 inline void output_stream_finish_define(basic_otranscoder_ref<owner> ref)
 {
-	ref.ptr->finish();
+	ref.ptr->finish_legacy();
 }
 
 /** @brief Borrows an lvalue input adapter as its lightweight stream observer. */
@@ -288,6 +411,74 @@ template <typename owner>
 	basic_itranscoder_ref<owner> ref)
 {
 	return ref.ptr->underflow();
+}
+
+#if defined(__HERBCEPTIONS__)
+namespace details
+{
+/** @brief Admits a checked decoder when its engine or child supplies deterministic errors. */
+template <typename Owner>
+concept transcode_input_checked =
+	operations::decay::defines::has_transcode_process_checked_define<typename Owner::engine_ref_type> ||
+	operations::decay::defines::has_transcode_finish_checked_define<typename Owner::engine_ref_type> ||
+	requires(typename Owner::normalized_input_ref_type &child) {
+		{ ibuffer_underflow_checked_define(child, ::std::size_t{}) } -> ::std::same_as<bool>;
+	};
+
+/** @brief Delivers the first checked failure after the decoder and child release their guards. */
+template <typename Owner, typename Read>
+inline auto transcode_input_checked_step(basic_itranscoder_ref<Owner> ref, Read read) throws
+{
+	transcode_input_error_slot steps;
+	auto result{read(*ref.ptr, steps)};
+	if (steps.failure.domain != nullptr) [[unlikely]]
+	{
+		ref.ptr->state = itranscoder_state::failed;
+		throw throws steps.failure;
+	}
+	return result;
+}
+} // namespace details
+
+/**
+ * @brief Refills a scanner's get area and delivers the engine's native error after releasing the child lock.
+ * @details A false result means logical EOF only. A failing process or finish publishes no speculative bytes
+ * and poisons the affected input direction before control returns to the caller.
+ */
+template <typename Owner>
+	requires details::transcode_input_checked<Owner>
+[[nodiscard]] inline bool ibuffer_underflow_checked_define(basic_itranscoder_ref<Owner> ref, ::std::size_t reserve) throws
+{
+	return details::transcode_input_checked_step(ref, [reserve](Owner &input, auto &steps) {
+		return input.underflow(reserve, steps);
+	});
+}
+
+/** @brief Reads a typed or byte staging prefix while preserving checked decoder failures.
+ * @details Byte reads retain the adapter's partial-object cursor, including on a wide public stream.
+ * Returning the original destination means clean EOF only. An engine failure poisons the adapter.
+ */
+template <typename Owner, typename Unit>
+	requires details::transcode_input_checked<Owner> &&
+			 (::std::same_as<Unit, typename Owner::input_char_type> || ::std::same_as<Unit, ::std::byte>)
+inline Unit *transcode_read_some_checked_define(basic_itranscoder_ref<Owner> ref, Unit *first, Unit *last) throws
+{
+	return details::transcode_input_checked_step(ref, [first, last](Owner &input, auto &steps) {
+		if constexpr (::std::same_as<Unit, ::std::byte>)
+			return input.read_some_bytes_impl(first, last, steps);
+		else
+			return input.read_some_impl(first, last, steps);
+	});
+}
+#endif
+
+/** @brief A scanner or transfer may request room for a known extent on its next logical refill.
+ * @details Short reads remain valid. The published prefix stays live until the next refill.
+ */
+template <typename Owner>
+[[nodiscard]] inline bool ibuffer_underflow_reserve_define(basic_itranscoder_ref<Owner> ref, ::std::size_t n)
+{
+	return ref.ptr->underflow(n);
 }
 
 /** @brief Declares that this stateful input may require underflow work. */
@@ -520,6 +711,28 @@ inline ::std::byte *read_some_bytes_underflow_define(
 		iotranscoder_input_ref(ref), first, last);
 }
 
+/** @brief Reserves output through the encoder projection of a bidirectional adapter. */
+template <typename Owner>
+inline auto output_stream_try_reserve_define(basic_iotranscoder_ref<Owner> ref, ::std::size_t n) noexcept
+{
+	return output_stream_try_reserve_define(iotranscoder_output_ref(ref), n);
+}
+
+/** @brief Publishes a previously reserved output prefix without touching the decoder cursor. */
+template <typename Owner>
+inline void output_stream_commit_reserved_define(basic_iotranscoder_ref<Owner> ref, typename Owner::output_char_type *last) noexcept
+{
+	output_stream_commit_reserved_define(iotranscoder_output_ref(ref), last);
+}
+
+/** @brief Tests only the encoder's public put area when this duplex observer occupies an output position. */
+template <typename Owner>
+inline bool output_stream_try_write_define(basic_iotranscoder_ref<Owner> ref,
+										   typename Owner::output_char_type const *first, typename Owner::output_char_type const *last) noexcept
+{
+	return output_stream_try_write_define(iotranscoder_output_ref(ref), first, last);
+}
+
 /** @brief Delegates duplex put-area begin to the output child. */
 template <typename owner>
 inline typename owner::output_char_type *obuffer_begin(
@@ -603,7 +816,7 @@ template <typename owner>
 inline void output_stream_buffer_flush_define(
 	basic_iotranscoder_ref<owner> ref)
 {
-	ref.ptr->output.flush();
+	ref.ptr->output.flush_legacy();
 }
 
 /** @brief Terminally finishes only the duplex output child. */

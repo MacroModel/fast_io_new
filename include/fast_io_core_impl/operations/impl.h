@@ -21,6 +21,7 @@
  */
 
 #include "refs/impl.h"
+#include "async_device.h"
 #include "lockguard.h"
 #include "common.h"
 #include "seek.h"
@@ -31,6 +32,7 @@
 #include "readimpl/impl.h"
 #include "transcodeimpl/impl.h"
 #include "printimpl/impl.h"
+#include "scan_integer_window.h"
 #include "scan_freestanding.h"
 #include "transmitimpl/impl.h"
 #include "strlike_reference_wrapper.h"

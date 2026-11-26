@@ -15,6 +15,61 @@ struct wide_ryu_result
 	bool success{};
 };
 
+struct wide_ryu_x87_scaled
+{
+	__uint128_t lower;
+	__uint128_t center;
+	__uint128_t upper;
+};
+
+/*
+Multiply the 64-bit significand by the cached power once. After shifting the
+product left by two, add two powers for the upper bound and subtract one or
+two powers for the lower bound. Retain the carry and borrow from the low 128
+bits before extracting the shifted quotients. The cached power has at most
+250 bits, so even twice that value fits in the low and middle limbs.
+*/
+[[nodiscard]] inline wide_ryu_x87_scaled wide_ryu_x87_scale(
+	::std::uint_least64_t mantissa, ::std::uint_least64_t const *power,
+	unsigned shift, bool symmetric) noexcept
+{
+	auto const product0{static_cast<__uint128_t>(mantissa) * power[0]};
+	auto const product1{static_cast<__uint128_t>(mantissa) * power[1] + (product0 >> 64u)};
+	auto const product2{static_cast<__uint128_t>(mantissa) * power[2] + (product1 >> 64u)};
+	auto const product3{static_cast<__uint128_t>(mantissa) * power[3] + (product2 >> 64u)};
+	auto const product_low{(product1 << 64u) | static_cast<::std::uint_least64_t>(product0)};
+	auto const product_middle{(product3 << 64u) | static_cast<::std::uint_least64_t>(product2)};
+	auto const center_low{product_low << 2u};
+	auto const center_middle{(product_middle << 2u) | (product_low >> 126u)};
+	auto const center_high{product3 >> 62u};
+
+	auto const step_low{(static_cast<__uint128_t>(power[1]) << 64u) | power[0]};
+	auto const step_middle{(static_cast<__uint128_t>(power[3]) << 64u) | power[2]};
+	auto const two_low{step_low << 1u};
+	auto const two_middle{(step_middle << 1u) | (step_low >> 127u)};
+	auto const lower_step_low{symmetric ? two_low : step_low};
+	auto const lower_step_middle{symmetric ? two_middle : step_middle};
+
+	bool const borrow{center_low < lower_step_low};
+	auto const lower_middle_without_borrow{center_middle - lower_step_middle};
+	auto const lower_middle{lower_middle_without_borrow - static_cast<__uint128_t>(borrow)};
+	auto const lower_high{center_high - (lower_middle_without_borrow > center_middle) -
+		(lower_middle > lower_middle_without_borrow)};
+
+	bool const carry{center_low + two_low < center_low};
+	auto const upper_middle_without_carry{center_middle + two_middle};
+	auto const upper_middle{upper_middle_without_carry + static_cast<__uint128_t>(carry)};
+	auto const upper_high{center_high + (upper_middle_without_carry < center_middle) +
+		(upper_middle < upper_middle_without_carry)};
+
+	// The x87 cached-power scale puts shift in [242, 249].
+	auto const extract{[shift](__uint128_t middle, __uint128_t high) {
+		return (middle >> (shift - 128u)) | (high << (256u - shift));
+	}};
+	return {extract(lower_middle, lower_high), extract(center_middle, center_high),
+		extract(upper_middle, upper_high)};
+}
+
 /*
 Fixed-width nearest-even conversion for binary80 and binary128
 ==============================================================
@@ -46,9 +101,10 @@ The cache stores 249 significant bits of the required power.  Each split entry
 is reconstructed from a 56-step base and a small exact 5^r; the generated
 two-bit correction tables are the exhaustive error certificate for that
 reconstruction.  `mulShift` forms the high quotient of the complete 128x256
-product.  Therefore vr, vm, and vp below are the exact integer floors required
-by the scaled interval, not floating approximations.  The five tables occupy
-less than 10 KiB in total and each individual object is below 3 KiB.
+product.  For binary80, `wide_ryu_x87_scale` obtains the same quotients by
+sharing a single 64x256 product.  Both compute the exact integer floors for
+the scaled interval.  The five tables occupy less than 10 KiB in total and
+each individual object is below 3 KiB.
 
 After scaling, deleting a decimal digit maps (vm,vr,vp) to their floor
 quotients by ten.  The deletion is legal exactly while
@@ -135,6 +191,23 @@ wide_ryu_nearest_even(
 	__uint128_t vr{};
 	__uint128_t vp{};
 	__uint128_t vm{};
+	auto const scale_interval{[&](::std::uint_least64_t const *power, ::std::int_least32_t shift) {
+		if constexpr (trait::mbits == 63u)
+		{
+			auto const scaled{::fast_io::details::wide_ryu_x87_scale(
+				static_cast<::std::uint_least64_t>(m2), power,
+				static_cast<unsigned>(shift), mm_shift != 0u)};
+			vm = scaled.lower;
+			vr = scaled.center;
+			vp = scaled.upper;
+		}
+		else
+		{
+			vr = mulShift(mv, power, shift);
+			vp = mulShift(mv + 2u, power, shift);
+			vm = mulShift(mv - 1u - mm_shift, power, shift);
+		}
+	}};
 	::std::int_least32_t e10{};
 	bool vm_is_trailing_zeros{};
 	bool vr_is_trailing_zeros{};
@@ -159,10 +232,7 @@ wide_ryu_nearest_even(
 			-e2 + static_cast<::std::int_least32_t>(q) + k};
 		::std::uint_least64_t power[4];
 		generic_computeInvPow5(q, power);
-		vr = mulShift(mv, power, shift);
-		vp = mulShift(mv + 2u, power, shift);
-		vm = mulShift(
-			mv - 1u - mm_shift, power, shift);
+		scale_interval(power, shift);
 
 		if (q <= 55u)
 		{
@@ -214,10 +284,7 @@ wide_ryu_nearest_even(
 		::std::uint_least64_t power[4];
 		generic_computePow5(
 			static_cast<::std::uint_least32_t>(i), power);
-		vr = mulShift(mv, power, shift);
-		vp = mulShift(mv + 2u, power, shift);
-		vm = mulShift(
-			mv - 1u - mm_shift, power, shift);
+		scale_interval(power, shift);
 
 		if (q <= 1u)
 		{

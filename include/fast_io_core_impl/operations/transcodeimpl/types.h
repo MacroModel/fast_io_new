@@ -29,6 +29,17 @@ struct transcode_reserve_t
 template <typename T>
 inline constexpr transcode_reserve_t<T> transcode_reserve{};
 
+/** @brief Preferred contiguous batches in bytes of engine input and output. Zero leaves sizing to the caller.
+ * @details These are throughput hints. The step protocol still accepts short input and its phase-specific
+ * minimum output size is the capacity required for progress. A duplex protocol describes application
+ * writes in input_bytes and application reads in output_bytes.
+ */
+struct transcode_buffer_sizes
+{
+	::std::size_t input_bytes{};
+	::std::size_t output_bytes{};
+};
+
 /** @brief Describes why a bounded process call returned to its caller. */
 enum class transcode_step_status : ::std::uint_least8_t
 {

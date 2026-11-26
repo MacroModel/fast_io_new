@@ -16,6 +16,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "../../fast_io_dsal/impl/misc/push_macros.h"
+
 namespace fast_io::fmt::details
 {
 
@@ -25,7 +27,7 @@ struct to_lowered_components
 {
 	template <typename... component_types>
 	[[nodiscard]] inline constexpr result_type operator()(
-		component_types &&...components) const
+		component_types &&...components) const FAST_IO_HERBCEPTIONS_THROWS
 	{
 		return ::fast_io::basic_to<char_type, result_type>(
 			::std::forward<component_types>(components)...);
@@ -38,12 +40,12 @@ template <typename result_type, ::std::integral char_type,
 		  ::fast_io::fmt::format_grammar grammar_type,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr result_type to_with_rule(
-	[[maybe_unused]] grammar_type grammar, argument_types &&...arguments)
+	[[maybe_unused]] grammar_type grammar, argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Grammar objects are stateless type tags; lowering consumes their type so no run-time read or ABI-visible copy is
 	// required after the by-value front-door parameter has been formed.
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
-	return ::fast_io::fmt::details::lower_format_program<
+	return ::fast_io::fmt::details::lower_format_program_dispatch<
 		format_literal, rule_type>(
 		to_lowered_components<result_type, char_type>{},
 		arguments...);
@@ -56,7 +58,7 @@ struct inplace_to_lowered_components
 	target_type &&target;
 
 	template <typename... component_types>
-	inline constexpr void operator()(component_types &&...components) const
+	inline constexpr void operator()(component_types &&...components) const FAST_IO_HERBCEPTIONS_THROWS
 	{
 		if constexpr (sizeof...(component_types) == 0u)
 		{
@@ -82,11 +84,11 @@ template <::std::integral char_type,
 		  typename target_type, typename... argument_types>
 inline constexpr void inplace_to_with_rule(
 	[[maybe_unused]] grammar_type grammar, target_type &&target,
-	argument_types &&...arguments)
+	argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// As above, the grammar's type selects the rule while the object intentionally carries no run-time state.
 	using rule_type = ::std::remove_cvref_t<grammar_type>;
-	::fast_io::fmt::details::lower_format_program<format_literal, rule_type>(
+	::fast_io::fmt::details::lower_format_program_dispatch<format_literal, rule_type>(
 		inplace_to_lowered_components<char_type, target_type>{
 			::std::forward<target_type>(target)},
 		arguments...);
@@ -98,7 +100,7 @@ template <typename expected_char_type, typename result_type,
 		  ::fast_io::fmt::format_grammar grammar_type,
 		  typename... argument_types>
 [[nodiscard]] inline constexpr result_type to_builtin_with_rule(
-	grammar_type grammar, argument_types &&...arguments)
+	grammar_type grammar, argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using literal_char_type = typename decltype(format_literal)::value_type;
 	static_assert(::std::same_as<literal_char_type, expected_char_type>,
@@ -115,7 +117,7 @@ template <typename expected_char_type,
 		  typename target_type, typename... argument_types>
 inline constexpr void inplace_to_builtin_with_rule(
 	grammar_type grammar, target_type &&target,
-	argument_types &&...arguments)
+	argument_types &&...arguments) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using literal_char_type = typename decltype(format_literal)::value_type;
 	static_assert(::std::same_as<literal_char_type, expected_char_type>,
@@ -127,3 +129,5 @@ inline constexpr void inplace_to_builtin_with_rule(
 }
 
 } // namespace fast_io::fmt::details
+
+#include "../../fast_io_dsal/impl/misc/pop_macros.h"

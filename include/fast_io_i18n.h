@@ -31,7 +31,7 @@
 #endif
 #endif
 
-#ifndef FAST_IO_DISABLE_FLOATING_POINT
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 #include "fast_io_unit/floating/lc_impl.h"
 #endif
 

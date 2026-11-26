@@ -108,6 +108,14 @@ struct context_constructed_state_guard
 	context_constructed_state_guard(context_constructed_state_guard const &) = delete;
 	context_constructed_state_guard &operator=(context_constructed_state_guard const &) = delete;
 
+	/** @brief Allocates and value-initializes a state, releasing raw storage if construction fails. */
+	static constexpr context_constructed_state_guard create()
+	{
+		context_raw_state_guard<state_type> storage;
+		::std::construct_at(storage.pointer);
+		return context_constructed_state_guard{storage.release()};
+	}
+
 	inline constexpr ~context_constructed_state_guard()
 	{
 		::std::destroy_at(pointer);
@@ -134,9 +142,7 @@ inline constexpr decltype(auto) with_large_context_state(callback_type &&callbac
 	using result_type = decltype(::std::forward<callback_type>(callback)(::std::declval<state_type &>()));
 	static_assert(!::std::is_reference_v<result_type>,
 		"an incremental operation must not return a reference to its temporary state");
-	::fast_io::details::context_raw_state_guard<state_type> raw_guard;
-	::std::construct_at(raw_guard.pointer);
-	::fast_io::details::context_constructed_state_guard<state_type> state_guard{raw_guard.release()};
+	auto state_guard{context_constructed_state_guard<state_type>::create()};
 	if constexpr (::std::is_void_v<result_type>)
 	{
 		::std::forward<callback_type>(callback)(*state_guard.pointer);
@@ -182,21 +188,37 @@ inline constexpr decltype(auto) with_context_state(callback_type &&callback)
 	}
 }
 
-/// @brief Backward-compatible scan owner using the shared incremental-state policy.
-template <typename state_type, typename callback_type,
-		  typename stack_policy = ::fast_io::details::default_print_stack_policy>
-inline constexpr decltype(auto) with_scan_context_state(callback_type &&callback)
+/** @brief Runs a scanner with isolated heap storage and propagates either exception ABI across the callback. */
+template <typename state_type, typename callback_type>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+inline constexpr decltype(auto) with_large_scan_context_state(callback_type &&callback) FAST_IO_HERBCEPTIONS_THROWS
 {
-	return ::fast_io::details::with_context_state<state_type,
-		::fast_io::details::scan_context_state_storage_tag, stack_policy>(
-			::std::forward<callback_type>(callback));
+	static_assert(context_state_object<state_type>);
+	auto guard{context_constructed_state_guard<state_type>::create()};
+	static_assert(!::std::is_reference_v<decltype(::std::forward<callback_type>(callback)(*guard.pointer))>);
+	return ::std::forward<callback_type>(callback)(*guard.pointer);
 }
 
-template <typename state_type, typename callback_type>
-inline constexpr decltype(auto) with_large_scan_context_state(callback_type &&callback)
+/** @brief Gives each scan one value-initialized state whose lifetime includes the last callback invocation. */
+template <typename state_type, typename callback_type,
+		  typename stack_policy = ::fast_io::details::default_print_stack_policy>
+inline constexpr decltype(auto) with_scan_context_state(callback_type &&callback) FAST_IO_HERBCEPTIONS_THROWS
 {
-	return ::fast_io::details::with_large_context_state<state_type,
-		::fast_io::details::scan_context_state_storage_tag>(::std::forward<callback_type>(callback));
+	static_assert(context_state_object<state_type>);
+	if constexpr (scan_context_state_inline_v<state_type, stack_policy>)
+	{
+		state_type state{};
+		static_assert(!::std::is_reference_v<decltype(::std::forward<callback_type>(callback)(state))>);
+		return ::std::forward<callback_type>(callback)(state);
+	}
+	else
+	{
+		return with_large_scan_context_state<state_type>(::std::forward<callback_type>(callback));
+	}
 }
 
 /// @brief Print owner using the same lifetime, alignment, constant-evaluation, and stack-budget proof as scanning.

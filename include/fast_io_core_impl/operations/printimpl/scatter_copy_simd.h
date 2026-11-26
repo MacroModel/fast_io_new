@@ -37,29 +37,8 @@ inline value_type *put_area_scatter_copy_simd_impl(
 			constexpr ::std::size_t lanes{vector_bytes / sizeof(value_type)};
 			if (count >= lanes && count <= lanes * 2u)
 			{
-				if constexpr (!::fast_io::details::can_simd_vector_run_with_cpu_instruction<vector_bytes>)
-				{
-					::std::byte head[vector_bytes];
-					::fast_io::freestanding::my_memcpy(head, first, vector_bytes);
-					::std::byte tail[vector_bytes];
-					::fast_io::freestanding::my_memcpy(
-						tail, first + count - lanes, vector_bytes);
-					::fast_io::freestanding::my_memcpy(result, head, vector_bytes);
-					::fast_io::freestanding::my_memcpy(
-						result + count - lanes, tail, vector_bytes);
-				}
-				else
-				{
-					// Move object representations as bytes.  Besides avoiding needless vector element-type variants, this keeps the
-					// integral API valid for bool, which GCC and Clang reject as a native vector element type.
-					using vector_type = ::fast_io::intrinsics::simd_vector<unsigned char, vector_bytes>;
-					vector_type head;
-					head.load(first);
-					vector_type tail;
-					tail.load(first + count - lanes);
-					head.store(result);
-					tail.store(result + count - lanes);
-				}
+				auto const offset{count - lanes};
+				::fast_io::details::copy_head_tail_bytes<vector_bytes>(result, result + offset, first, first + offset);
 				return result + count;
 			}
 		}

@@ -22,38 +22,7 @@ template <typename optstmtype, typename instmtype, typename T>
 	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
 inline constexpr void transmit_until_eof_generic_main_impl(optstmtype &optstm, instmtype &instm, T &resultint)
 {
-	// Generic EOF transfer uses a fixed-size local element buffer while provider
-	// status CPOs remain free to supply a zero-copy implementation.
-	using input_char_type = typename instmtype::input_char_type;
-	using output_char_type = typename optstmtype::output_char_type;
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
-		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>);
-	input_char_type *buffer_start{newptr.ptr};
-	input_char_type *buffer_end{newptr.ptr + newptr.size};
-	for (input_char_type *iter;
-		 (iter = ::fast_io::operations::decay::read_some_decay_dispatch(instm, buffer_start, buffer_end)) != buffer_start;)
-	{
-		// Forward each nonempty input block and accumulate its element count.
-		::std::size_t off{static_cast<::std::size_t>(iter - buffer_start)};
-		if constexpr (::std::same_as<output_char_type, input_char_type>)
-		{
-			// Matching character types write directly from the input buffer.
-			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer_start, iter);
-		}
-		else
-		{
-			// Equal-width distinct types use an alias-safe output view.
-			using output_char_type_may_alias_const_ptrtp
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-				[[__gnu__::__may_alias__]]
-#endif
-				= output_char_type const *;
-			::fast_io::operations::decay::write_all_decay_dispatch(
-				optstm, reinterpret_cast<output_char_type_may_alias_const_ptrtp>(buffer_start),
-				reinterpret_cast<output_char_type_may_alias_const_ptrtp>(iter));
-		}
-		transmit_integer_add_define(resultint, off);
-	}
+	::fast_io::details::transmit_copy_available<false>(optstm, instm, resultint);
 }
 
 /** @brief Transfers elements to EOF and returns the standard result type. */
@@ -62,7 +31,21 @@ inline constexpr ::fast_io::transmit_result transmit_until_eof_main_impl(optstmt
 {
 	::fast_io::uintfpos_t transmitted{};
 	uintfpos_transmit_reference_wrapper wrapper{__builtin_addressof(transmitted)};
-	::fast_io::details::transmit_until_eof_generic_main_impl(optstm, instm, wrapper);
+	if constexpr (::fast_io::details::transmit_direct_terminal_window<false, optstmtype, instmtype>)
+	{
+		if (::fast_io::details::transmit_try_direct_terminal_window<false>(optstm, instm, transmitted) ==
+			transmit_terminal_window_result::complete) [[likely]]
+		{
+			return {transmitted};
+		}
+		::fast_io::details::transmit_terminal_window_miss<
+			::fast_io::details::transmit_until_eof_generic_main_impl<optstmtype, instmtype,
+				uintfpos_transmit_reference_wrapper>>(optstm, instm, wrapper);
+	}
+	else
+	{
+		::fast_io::details::transmit_until_eof_generic_main_impl(optstm, instm, wrapper);
+	}
 	return {transmitted};
 }
 
@@ -157,17 +140,6 @@ inline constexpr decltype(auto) transmit_until_eof_decay_borrowed(optstmtype &op
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
 	using input_observer_type = ::std::remove_cvref_t<instmtype>;
-#if 0
-	if constexpr(::fast_io::status_output_stream<optstmtype>)
-	{
-		return status_transmit_until_eof_define(optstm,instm);
-	}
-	else if constexpr(::fast_io::status_input_stream<instmtype>)
-	{
-		return status_transmit_until_eof_define(optstm,instm);
-	}
-	else
-#endif
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
 					  output_observer_type>)
 	{
@@ -187,6 +159,12 @@ inline constexpr decltype(auto) transmit_until_eof_decay_borrowed(optstmtype &op
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
 		return ::fast_io::operations::decay::transmit_until_eof_decay_borrowed(optstm, unlocked_input);
 	}
+	else if constexpr (::fast_io::details::has_transmit_eof_status<false, optstmtype, instmtype>)
+	{
+		// Both normalized and unlocked observers jointly prove the specialized EOF protocol.
+		return status_transmit_until_eof_define(optstm, instm);
+	}
+
 	else
 	{
 		// Execute standard-result EOF transfer on the unlocked observers.
@@ -218,9 +196,23 @@ transmit_until_eof_decay_dispatch(optstmtype &optstm, instmtype &instm)
 /** @brief Transfers elements to EOF with a caller-selected progress accumulator. */
 template <typename optstmtype, typename instmtype, typename T>
 inline constexpr decltype(auto) transmit_until_eof_generic(optstmtype &&optstm, instmtype &&instm, T resultint)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::uses_checked_transmit_eof<false, false, optstmtype, instmtype>)
+#endif
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::uses_checked_transmit_eof<false, false, optstmtype, instmtype>)
+	{
+		if constexpr (details::uses_checked_transmit_eof_loop<false, false, optstmtype, instmtype>)
+			details::transmit_checked_eof<false>(guard.ref(), input_observer, resultint);
+		else
+			decay::transmit_until_eof_generic_decay_dispatch(guard.ref(), input_observer, resultint);
+		details::finish_checked_transmit<optstmtype>(guard);
+	}
+	else
+#endif
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
 		return ::fast_io::operations::decay::transmit_until_eof_generic_decay_dispatch(
 			output_observer, input_observer, resultint);
@@ -230,9 +222,28 @@ inline constexpr decltype(auto) transmit_until_eof_generic(optstmtype &&optstm, 
 /** @brief Transfers elements to EOF and checked-finishes an eligible output. */
 template <typename optstmtype, typename instmtype>
 inline constexpr decltype(auto) transmit_until_eof(optstmtype &&optstm, instmtype &&instm)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::uses_checked_transmit_eof<false, true, optstmtype, instmtype>)
+#endif
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::uses_checked_transmit_eof<false, true, optstmtype, instmtype>)
+	{
+		::fast_io::transmit_result result;
+		if constexpr (details::uses_checked_transmit_eof_loop<false, true, optstmtype, instmtype>)
+		{
+			::fast_io::uintfpos_transmit_reference_wrapper progress{__builtin_addressof(result.transmitted)};
+			details::transmit_checked_eof<false>(guard.ref(), input_observer, progress);
+		}
+		else
+			result = decay::transmit_until_eof_decay_dispatch(guard.ref(), input_observer);
+		details::finish_checked_transmit<optstmtype>(guard);
+		return result;
+	}
+	else
+#endif
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
 		return ::fast_io::operations::decay::transmit_until_eof_decay_dispatch(output_observer, input_observer);
 	});

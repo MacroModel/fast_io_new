@@ -1,6 +1,7 @@
 export namespace fast_io
 {
 using ::fast_io::basic_io_scatter_t;
+using ::fast_io::borrowed_terminal_input;
 using ::fast_io::char_literal_v;
 using ::fast_io::pr_rsv_size;
 using ::fast_io::pr_rsv_to_iterator_unchecked;
@@ -48,6 +49,40 @@ using ::fast_io::open_mode;
 
 using ::fast_io::basic_io_lockable;
 using ::fast_io::basic_io_lockable_nonmovable;
+
+using ::fast_io::make_itranscoder;
+using ::fast_io::make_otranscoder;
+using ::fast_io::make_iotranscoder;
+using ::fast_io::transcoder;
+using ::fast_io::bounded_transcoder;
+using ::fast_io::transcode_input_window;
+using ::fast_io::transcode_output_window;
+using ::fast_io::duplex_protocol_engine;
+using ::fast_io::output_stream_publishable;
+using ::fast_io::transcode_phase;
+using ::fast_io::transcode_buffer_sizes;
+using ::fast_io::transcode_buffer_sizes_provider;
+using ::fast_io::transcode_reserve_t;
+using ::fast_io::transcode_step_status;
+using ::fast_io::transcode_drain_status;
+using ::fast_io::basic_transcode_process_result;
+using ::fast_io::basic_transcode_drain_result;
+
+namespace transcoders
+{
+using ::fast_io::transcoders::eol_scheme;
+using ::fast_io::transcoders::basic_eol;
+using ::fast_io::transcoders::lf_to_crlf;
+using ::fast_io::transcoders::crlf_to_lf;
+using ::fast_io::transcoders::wlf_to_crlf;
+using ::fast_io::transcoders::wcrlf_to_lf;
+using ::fast_io::transcoders::u8lf_to_crlf;
+using ::fast_io::transcoders::u8crlf_to_lf;
+using ::fast_io::transcoders::u16lf_to_crlf;
+using ::fast_io::transcoders::u16crlf_to_lf;
+using ::fast_io::transcoders::u32lf_to_crlf;
+using ::fast_io::transcoders::u32crlf_to_lf;
+}
 
 using ::fast_io::basic_ibuffer_view;
 using ::fast_io::basic_ibuffer_view_ref;

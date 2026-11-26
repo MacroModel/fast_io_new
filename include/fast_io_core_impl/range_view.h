@@ -231,13 +231,11 @@ print_reserve_static_stack_size(io_reserve_type_t<char_type, sized_range_view_t<
 ///          scatter copies and separator copies use `small_scatter_copy_n`, whose contract is unconditionally
 ///          `noexcept`.
 ///
-///          This body also sits behind the precise adapter and its delegated ordinary-writer call, both of which pass
-///          the view by value. Those copies are intentionally not hidden in this predicate: the nested conditional
-///          `noexcept` specifications test each complete call expression, so construction of every parameter is checked
-///          at the boundary where it occurs. A value-producing forwarding expression additionally creates a local
-///          object in the emitter lambda; its destructor must therefore be non-throwing. Reference results create no
-///          such owned object.
-template <::std::integral char_type, ::std::input_iterator It>
+///          Exact emission uses the same iterator and forwarded value. Its measured element branch must also prove
+///          that the named size query and the exact writer can both complete inside an overwrite callback. Its scatter
+///          branch passes a named lvalue. Each proof uses the expression category of the corresponding writer body.
+///          The enclosing by-value call additionally checks construction of its argument at the call site.
+template <::std::integral char_type, ::std::input_iterator It, bool exact = false>
 [[nodiscard]] inline consteval bool
 sized_range_view_nothrow_reserve_define() noexcept
 {
@@ -278,6 +276,10 @@ sized_range_view_nothrow_reserve_define() noexcept
 	}
 	else if constexpr (!requires(It &current) {
 						   { *current } noexcept;
+						   requires FAST_IO_HERBCEPTIONS_NOTHROWS(*current);
+						   requires FAST_IO_HERBCEPTIONS_NOTHROWS(++current);
+						   requires FAST_IO_HERBCEPTIONS_NOTHROWS(
+							   ::fast_io::io_print_forward<char_type>(::fast_io::io_print_alias(*current)));
 						   { ++current } noexcept -> ::std::same_as<It &>;
 						   {
 							   ::fast_io::io_print_forward<char_type>(
@@ -286,6 +288,26 @@ sized_range_view_nothrow_reserve_define() noexcept
 					   })
 	{
 		return false;
+	}
+	else if constexpr (exact && !::fast_io::static_precise_reserve_printable<char_type, forwarded_value_type>)
+	{
+		constexpr auto tag{::fast_io::io_reserve_type<char_type, forwarded_value_type>};
+		if constexpr (::fast_io::precise_reserve_printable<char_type, forwarded_value_type>)
+		{
+			// The exact range writer measures every variable-size element again inside the callback.
+			return requires(char_type *ptr, ::std::size_t size, forwarded_expression_type &value) {
+				requires FAST_IO_HERBCEPTIONS_NOEXCEPT(print_reserve_precise_size(tag, value));
+				requires FAST_IO_HERBCEPTIONS_NOEXCEPT(print_reserve_precise_define(
+					tag, ptr, size, ::std::forward<forwarded_expression_type>(value)));
+			};
+		}
+		else
+		{
+			// Exact scatter emission selects the named-lvalue overload, including for an owned proxy.
+			return requires(forwarded_expression_type &value) {
+				requires FAST_IO_HERBCEPTIONS_NOEXCEPT(print_scatter_define(tag, value));
+			};
+		}
 	}
 	else if constexpr (
 		::fast_io::reserve_printable<char_type, forwarded_value_type> ||
@@ -297,6 +319,9 @@ sized_range_view_nothrow_reserve_define() noexcept
 					::fast_io::io_reserve_type<char_type, forwarded_value_type>, ptr,
 					::std::forward<forwarded_expression_type>(value))
 			} noexcept -> ::std::same_as<char_type *>;
+			requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_reserve_define(
+				::fast_io::io_reserve_type<char_type, forwarded_value_type>, ptr,
+				::std::forward<forwarded_expression_type>(value)));
 		};
 	}
 	else
@@ -307,6 +332,9 @@ sized_range_view_nothrow_reserve_define() noexcept
 					::fast_io::io_reserve_type<char_type, forwarded_value_type>,
 					::std::forward<forwarded_expression_type>(value))
 			} noexcept -> ::std::same_as<::fast_io::basic_io_scatter_t<char_type>>;
+			requires FAST_IO_HERBCEPTIONS_NOTHROWS(print_scatter_define(
+				::fast_io::io_reserve_type<char_type, forwarded_value_type>,
+				::std::forward<forwarded_expression_type>(value)));
 		};
 	}
 }
@@ -489,7 +517,20 @@ template <::std::integral char_type, ::std::input_iterator It>
 			  ::std::forward_iterator<It>))
 inline constexpr ::std::size_t
 print_reserve_precise_size(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>>,
-						   sized_range_view_t<char_type, It> t)
+						   sized_range_view_t<char_type, It> t) noexcept([]() consteval {
+	using element = typename sized_range_view_t<char_type, It>::forwarded_value_type;
+	if constexpr (::fast_io::static_precise_reserve_printable<char_type, element>)
+	{
+		// The static size expression is the only provider call on the closed-form path.
+		return FAST_IO_HERBCEPTIONS_NOEXCEPT(print_reserve_static_precise_size(
+			io_reserve_type<char_type, element>));
+	}
+	else
+	{
+		// The exact writer proof covers every iterator, alias and named size/scatter call in this traversal.
+		return ::fast_io::sized_range_view_nothrow_reserve_define<char_type, It, true>();
+	}
+}())
 {
 	if (t.size == 0u)
 	{
@@ -553,7 +594,7 @@ template <::std::integral char_type, ::std::input_iterator It>
 inline constexpr char_type *
 print_reserve_precise_define(io_reserve_type_t<char_type, sized_range_view_t<char_type, It>>,
 							 char_type *__restrict ptr, [[maybe_unused]] ::std::size_t precise_size,
-							 sized_range_view_t<char_type, It> t)
+							 sized_range_view_t<char_type, It> t) noexcept(::fast_io::sized_range_view_nothrow_reserve_define<char_type, It, true>())
 {
 	using view_type = ::fast_io::sized_range_view_t<char_type, It>;
 	using value_type = typename view_type::forwarded_value_type;
@@ -824,7 +865,7 @@ concept sized_range_view_nothrow_put_area = ::std::integral<char_type> && requir
 // rather than a benchmark caller, makes that internal phase deterministic. It adds at most 63 bytes of padding per
 // admitted specialization, changes no call or loop operation, and measured 112 bytes (+0.0025%) for the complete
 // benchmark.
-[[__gnu__::__noinline__, __gnu__::__aligned__(64)]]
+[[__gnu__::__noinline__, __gnu__::__aligned__(::fast_io::details::hot_table_alignment)]]
 #elif __has_cpp_attribute(__gnu__::__noinline__)
 [[__gnu__::__noinline__]]
 #elif __has_cpp_attribute(msvc::noinline)

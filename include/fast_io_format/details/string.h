@@ -17,8 +17,12 @@
 
 #include <array>
 #include <cstddef>
-#include <iterator>
+#if defined(__GLIBCXX__) && __has_include(<bits/ranges_base.h>)
+// These rules query range concepts and accessors. View adaptors have no role in format selection.
+#include <bits/ranges_base.h>
+#else
 #include <ranges>
+#endif
 #include <type_traits>
 
 namespace fast_io::fmt::details

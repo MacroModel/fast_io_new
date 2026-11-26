@@ -119,33 +119,10 @@ template <typename T>
 inline constexpr bool scan_decfloat_compute_supported{
 	::fast_io::details::scan_decfloat_compute_supported_impl<T>::value};
 
-template <typename T, bool = ::fast_io::details::scan_decfloat_has_iec559_traits<T>>
-struct scan_decfloat_native_wide_supported_impl
-{
-	inline static constexpr bool value{};
-};
-
-template <typename T>
-struct scan_decfloat_native_wide_supported_impl<T, true>
-{
-	using no_cvref_t = ::std::remove_cvref_t<T>;
-	using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
-	inline static constexpr bool value{!::fast_io::details::scan_decfloat_compute_supported<no_cvref_t> &&
-									   (sizeof(typename trait::mantissa_type) > sizeof(::std::uint_least64_t) ||
-										trait::e10max > ::fast_io::details::iec559_traits<double>::e10max ||
-										::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)};
-};
-
-template <typename T>
-inline constexpr bool scan_decfloat_native_wide_supported{
-	::fast_io::details::scan_decfloat_native_wide_supported_impl<T>::value};
-
 template <typename T>
 concept scan_decfloat_supported_floating_point =
 	::fast_io::details::my_floating_point<::std::remove_cvref_t<T>> &&
-	::fast_io::details::scan_decfloat_layout_supported<T> &&
-	(::fast_io::details::scan_decfloat_compute_supported<T> ||
-	 ::fast_io::details::scan_decfloat_native_wide_supported<T>);
+	::fast_io::details::scan_decfloat_layout_supported<T>;
 
 template <typename T, bool = ::fast_io::details::scan_decfloat_has_iec559_traits<T>>
 struct scan_decfloat_binary32_like_impl
@@ -355,16 +332,18 @@ positions suffice.  IBM double-double shares binary64's minimum quantum
 2^-1074 but an adjacent-value midpoint can carry 107 numerator bits.  Its
 strict bound is
 
-  107*log10(2)+1075*log10(5)+1 < 785,
+  107*log10(2)+1075*log10(5)+1 < 785.
 
-so 832 positions retain every IBM midpoint with 47 guard digits.  Every format
+Sparse double-double sums can have 309 integer and 1074 fractional positions.
+Retain all of those digits, with room for the midpoint of the low component.
+Every format
 with ebits<=8 has p<=24 and k<=150, giving a bound below 114, so 128 positions
 suffice for binary32, bfloat16, binary16, and narrower encodings.  The four
 capacities below are therefore proved rather than empirical parser limits.
 */
 template <typename T>
 inline constexpr ::std::size_t scan_decfloat_exact_digit_capacity{
-	::fast_io::details::fp_floating_point_is_ibm_double_double<::std::remove_cvref_t<T>> ? 832u : ::fast_io::details::iec559_traits<::std::remove_cvref_t<T>>::ebits >= 15u ? 12000u : ::fast_io::details::iec559_traits<::std::remove_cvref_t<T>>::ebits >= 11u ? 768u
+	::fast_io::details::fp_floating_point_is_ibm_double_double<::std::remove_cvref_t<T>> ? 1400u : ::fast_io::details::iec559_traits<::std::remove_cvref_t<T>>::ebits >= 15u ? 12000u : ::fast_io::details::iec559_traits<::std::remove_cvref_t<T>>::ebits >= 11u ? 768u
 																															   : 128u};
 
 template <typename T>
@@ -385,6 +364,7 @@ struct scan_decfloat_significand_state
 template <::std::integral char_type>
 struct scan_decfloat_fast_result
 {
+	/// On a miss, only an over-capacity coefficient supplies its first excess digit.
 	char_type const *iter{};
 	::fast_io::parse_code code{};
 	bool handled{};
@@ -742,6 +722,161 @@ scan_decfloat_mul_64x128_high(::std::uint_least64_t value, ::fast_io::details::u
 	return {low, high};
 }
 
+/**
+ * @brief Converts a complete 64-bit decimal coefficient to the explicit x87 significand.
+ * @details Let M be the normalized coefficient and C the cached normalized power of ten.
+ * The cache differs from the exact power by at most one unit in its low word. Multiplication
+ * by M < 2^64 and dropping the bottom 64 product bits gives an absolute error below two
+ * units in the retained low word. Normalizing the product by one more bit keeps that error
+ * below four units. Accept an approximate product only when this interval stays strictly
+ * between consecutive integer and half-integer rounding boundaries. For exponents 0 to 27,
+ * 5^e fits in 64 bits, so the two-word product is exact and also resolves ties and carries.
+ * Every accepted exponent is in the normal x87 range. On a miss the destination is untouched.
+ */
+#if defined(__i386__) && defined(__ELF__)
+template <::fast_io::manipulators::floating_rounding rounding, typename T, bool short_i386_chunk = false>
+#else
+template <::fast_io::manipulators::floating_rounding rounding, typename T>
+#endif
+[[nodiscard]] inline constexpr bool scan_decfloat_try_x87_cached(T &value, bool negative,
+	::std::uint_least64_t coefficient, ::std::int_least64_t exponent) noexcept
+{
+	static_assert(::fast_io::details::fp_floating_point_is_float80<T>);
+	using word = ::std::uint_least64_t;
+	if (!coefficient || exponent < scan_decfloat_dragonbox_min_power10 ||
+		exponent > scan_decfloat_dragonbox_max_power10 ||
+		rounding == ::fast_io::manipulators::floating_rounding::current_environment)
+	{
+		return false;
+	}
+
+	// Every signed 64-bit integer is exactly representable in binary80.
+	if (!exponent && coefficient <= static_cast<word>((::std::numeric_limits<::std::int_least64_t>::max)()))
+	{
+		auto const exact_integer{static_cast<T>(static_cast<::std::int_least64_t>(coefficient))};
+		value = negative ? -exact_integer : exact_integer;
+		return true;
+	}
+	auto const leading{::std::countl_zero(coefficient)};
+	word const normalized{coefficient << leading};
+	auto const e{static_cast<::std::int_least32_t>(exponent)};
+	auto power{scan_decfloat_binary_power(e) - leading};
+	if (!e)
+	{
+		fp_assign_float80_bits(value, normalized, static_cast<::std::uint_least32_t>(power + 16383), negative);
+		return true;
+	}
+
+	auto const cache{compute_pow10_float64_scan(e)};
+	bool const exact{0 < e && e <= 27};
+#if defined(__i386__) && defined(__ELF__)
+	if constexpr (short_i386_chunk)
+	{
+		if (!exact)
+		{
+			using narrow = ::std::uint_least32_t;
+			auto const multiplier_low{static_cast<narrow>(normalized)};
+			auto const multiplier_high{static_cast<narrow>(normalized >> 32u)};
+			auto const cache_low{static_cast<narrow>(cache.lo >> 32u)};
+			auto const cache_middle{static_cast<narrow>(cache.hi)};
+			auto const cache_high{static_cast<narrow>(cache.hi >> 32u)};
+			auto const upper_left{word{multiplier_high} * cache_middle};
+			auto const lower_right{word{multiplier_low} * cache_high};
+			auto const low_sum{word{static_cast<narrow>(upper_left)} + static_cast<narrow>(lower_right) +
+				::fast_io::intrinsics::umulh(multiplier_low, cache_middle) +
+				::fast_io::intrinsics::umulh(multiplier_high, cache_low)};
+			auto high{word{multiplier_high} * cache_high + (upper_left >> 32u) + (lower_right >> 32u) +
+				(low_sum >> 32u)};
+			auto residue{static_cast<narrow>(low_sum)};
+			constexpr word top_bit{word{1u} << 63u};
+			constexpr narrow half{narrow{1u} << 31u};
+			if ((high & top_bit) != 0u)
+			{
+				++power;
+			}
+			else
+			{
+				high = (high << 1u) | (residue >> 31u);
+				residue <<= 1u;
+			}
+			// Keep the top 96 cache bits. At the retained product scale,
+			// omitting the bottom partial product costs less than one unit,
+			// and losing the two cross products' low limbs costs less than two.
+			// The cache contributes less than 1 + 2^-32 units more. A possible
+			// left shift doubles that bound, so decline within nine units of an
+			// integer or half-integer.
+			auto const distance{residue & (half - 1u)};
+			if (distance <= 9u || distance >= half - 9u)
+			{
+				return false;
+			}
+			bool increment;
+			if constexpr (scan_decfloat_nearest_rounding<rounding>)
+			{
+				increment = (residue & half) != 0u;
+			}
+			else
+			{
+				increment = scan_decfloat_directed_round_up<rounding>(negative);
+			}
+			if (increment && !++high)
+			{
+				high = top_bit;
+				++power;
+			}
+			fp_assign_float80_bits(value, high, static_cast<::std::uint_least32_t>(power + 16383), negative);
+			return true;
+		}
+	}
+#endif
+	scan_decfloat_uint128 product;
+	if (exact)
+	{
+		product.low = ::fast_io::intrinsics::umul(normalized, cache.hi, product.high);
+	}
+	else
+	{
+		product = scan_decfloat_mul_64x128_high(normalized, cache);
+	}
+
+	constexpr word half{word{1u} << 63u};
+	if (product.high & half)
+	{
+		++power;
+	}
+	else
+	{
+		product.high = (product.high << 1u) | (product.low >> 63u);
+		product.low <<= 1u;
+	}
+	auto const residue{product.low};
+	if (!exact)
+	{
+		auto const distance{residue & (half - 1u)};
+		if (distance <= 4u || distance >= half - 4u)
+		{
+			return false;
+		}
+	}
+	bool increment;
+	if constexpr (scan_decfloat_nearest_rounding<rounding>)
+	{
+		increment = residue > half || (residue == half &&
+			scan_decfloat_nearest_tie_round_up<rounding>(negative, product.high << 1u));
+	}
+	else
+	{
+		increment = residue != 0u && scan_decfloat_directed_round_up<rounding>(negative);
+	}
+	if (increment && !++product.high)
+	{
+		product.high = half;
+		++power;
+	}
+	fp_assign_float80_bits(value, product.high, static_cast<::std::uint_least32_t>(power + 16383), negative);
+	return true;
+}
+
 template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 						  ::fast_io::manipulators::floating_rounding::nearest_to_even>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -814,6 +949,25 @@ template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 			::fast_io::details::scan_decfloat_binary_power(exponent32) + upperbit - leading_zeroes - minimum_exponent)};
 		if (power2 <= 0)
 		{
+			if constexpr (::fast_io::details::scan_decfloat_nearest_rounding<rounding>)
+			{
+				// Half a subnormal quantum has binary exponent -bias-mbits. A midpoint is an
+				// odd multiple of that quantum. For C*10^q with q<0 this requires 5^(-q)
+				// to divide C and q+v2(C) to equal the half-quantum exponent. A nonzero
+				// 64-bit coefficient cannot contain 5^28. Only binary16 can satisfy both
+				// conditions among the supported formats. Let the exact quotient/remainder
+				// parser settle these possible ties before the cached shift loses the tail.
+				constexpr auto half_quantum_exponent{minimum_exponent - mantissa_explicit_bits};
+				if constexpr (half_quantum_exponent >= -27)
+				{
+					if (exponent32 >= -27 && exponent32 <= half_quantum_exponent &&
+						exponent32 + ::std::countr_zero(significand >> static_cast<unsigned>(leading_zeroes)) ==
+							half_quantum_exponent)
+					{
+						return false;
+					}
+				}
+			}
 			if (-power2 + 1 >= 64)
 			{
 				answer = {};
@@ -933,72 +1087,100 @@ scan_decfloat_adjusted_exponent(scan_decfloat_significand_state<T> const &state,
 		static_cast<::std::int_least64_t>(state.significant_digits - state.stored_digits));
 }
 
-template <typename T, ::fast_io::manipulators::floating_rounding rounding =
-						  ::fast_io::manipulators::floating_rounding::nearest_to_even>
-[[nodiscard]] inline constexpr ::fast_io::parse_code
-scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t significand,
-								 ::std::int_least64_t adjusted_exponent) noexcept
+/**
+ * @brief Rounds a long decimal prefix to binary80 when its entire uncertainty interval rounds alike.
+ * @details Append up to eight more stored digits to the scanner's 19-digit coefficient P. After
+ * adjusting the decimal exponent, the full positive coefficient is P if complete, or lies in
+ * [P,P+1) otherwise. Left-normalizing P by s bits scales that uncertainty to less than 2^s.
+ * The top half of its 128-by-128 product uses the high-limb product and the top halves of both
+ * cross products. Discarding their two low halves and the low-limb product costs less than three
+ * units. The normalized power-of-ten cache contributes at most one more. A final one-bit shift
+ * doubles the bound. Decline at either side of an integer or half-integer boundary within that
+ * radius. Outside it the retained integer, midpoint comparison and nonzero remainder are all
+ * determined, including for directed rounding. An ambiguous prefix leaves the exact parser its
+ * original digits, sign and exponent. No hardware floating-point operation participates.
+ */
+template <::fast_io::manipulators::floating_rounding rounding, typename T>
+[[nodiscard]] inline constexpr bool scan_decfloat_try_x87_long(T &value, bool negative,
+	scan_decfloat_significand_state<T> const &state, ::std::int_least64_t decimal_exponent) noexcept
 {
-	using no_cvref_t = ::std::remove_cvref_t<T>;
-	using trait = ::fast_io::details::iec559_traits<no_cvref_t>;
-	if (!significand)
+	using word = ::std::uint_least64_t;
+	constexpr auto prefix_size{scan_decfloat_uint64_significand_digit_limit};
+	if (state.stored_digits != prefix_size || state.exact_stored_digits <= prefix_size)
 	{
-		value = negative ? -static_cast<no_cvref_t>(0.0) : static_cast<no_cvref_t>(0.0);
-		return ::fast_io::parse_code::ok;
+		return false;
 	}
-	constexpr auto e10max{static_cast<::std::int_least64_t>(trait::e10max)};
-	constexpr auto underflow_guard{
-		static_cast<::std::int_least64_t>(trait::e10max + trait::m10digits + 8u)};
-	if (adjusted_exponent > e10max)
+	auto const available{static_cast<unsigned>(state.exact_stored_digits - prefix_size)};
+	auto const extra{available < 8u ? available : 8u};
+	auto const e{scan_decfloat_saturating_add(decimal_exponent, available - extra)};
+	if (e < scan_decfloat_dragonbox_min_power10 || e > scan_decfloat_dragonbox_max_power10)
 	{
-		::fast_io::details::fp_assign_infinity(value, negative);
-		return ::fast_io::parse_code::overflow;
+		return false;
 	}
-	if (adjusted_exponent < -underflow_guard)
+	::std::uint_least32_t suffix{};
+	for (unsigned i{}; i != extra; ++i)
 	{
-		value = negative ? -static_cast<no_cvref_t>(0.0) : static_cast<no_cvref_t>(0.0);
-		return ::fast_io::parse_code::overflow;
+		suffix = suffix * 10u + state.exact_digits[prefix_size + i];
 	}
-	no_cvref_t result{static_cast<no_cvref_t>(significand)};
-	auto const &table{::fast_io::details::scan_decfloat_power10_table<no_cvref_t, 20u>};
-	constexpr ::std::int_least64_t chunk{19};
-	if (adjusted_exponent < 0)
+	word upper{};
+	auto lower{::fast_io::intrinsics::umul(state.significand, scan_decfloat_pow10_0_to_8_table[extra], upper)};
+	lower += suffix;
+	upper += static_cast<word>(lower < suffix);
+	bool const omitted{available > extra || state.exact_truncated_nonzero};
+	if (!upper)
 	{
-		auto exponent{-adjusted_exponent};
-		for (; exponent >= chunk; exponent -= chunk)
-		{
-			result /= table.index_unchecked(static_cast<::std::size_t>(chunk));
-		}
-		if (exponent)
-		{
-			result /= table.index_unchecked(static_cast<::std::size_t>(exponent));
-		}
+		return !omitted && scan_decfloat_try_x87_cached<rounding>(value, negative, lower, e);
+	}
+	auto const shift{::std::countl_zero(upper)};
+	// A wide interval cannot prove the residue on this scale. This guard also bounds the shift below.
+	if (omitted && shift >= 60)
+	{
+		return false;
+	}
+	word const radius{8u + (omitted ? word{1u} << (shift + 1) : 0u)};
+	if (shift)
+	{
+		upper = (upper << shift) | (lower >> (64 - shift));
+		lower <<= shift;
+	}
+	auto const exponent{static_cast<::std::int_least32_t>(e)};
+	auto const cache{compute_pow10_float64_scan(exponent)};
+	auto product{scan_decfloat_mul_64x128_high(upper, cache)};
+	auto const cross{::fast_io::intrinsics::umulh(lower, cache.hi)};
+	product.low += cross;
+	product.high += static_cast<word>(product.low < cross);
+	constexpr word half{word{1u} << 63u};
+	auto power{scan_decfloat_binary_power(exponent) + 64 - shift};
+	if (product.high & half)
+	{
+		++power;
 	}
 	else
 	{
-		for (; adjusted_exponent >= chunk; adjusted_exponent -= chunk)
-		{
-			result *= table.index_unchecked(static_cast<::std::size_t>(chunk));
-		}
-		if (adjusted_exponent)
-		{
-			result *= table.index_unchecked(static_cast<::std::size_t>(adjusted_exponent));
-		}
+		product.high = (product.high << 1u) | (product.low >> 63u);
+		product.low <<= 1u;
 	}
-	value = negative ? -result : result;
-	if (result == static_cast<no_cvref_t>(0.0))
+	auto const distance{product.low & (half - 1u)};
+	if (distance <= radius || distance >= half - radius)
 	{
-		return ::fast_io::parse_code::overflow;
+		return false;
 	}
-	return ::fast_io::parse_code::ok;
+	bool const up{scan_decfloat_nearest_rounding<rounding> ? (product.low & half) != 0u :
+		scan_decfloat_directed_round_up<rounding>(negative)};
+	if (up && !++product.high)
+	{
+		product.high = half;
+		++power;
+	}
+	fp_assign_float80_bits(value, product.high, static_cast<::std::uint_least32_t>(power + 16383), negative);
+	return true;
 }
 
 	// The exact midpoint comparator needs arbitrary-precision multiplication but
 	// not a native 128-bit scalar.  Keep its limb layer available on every target:
 	// intrinsics::umul supplies the complete 64-by-64 product as two words, and
 	// the explicit carry recurrence below is mathematically identical to adding
-	// the incoming carry to a native-u128 product.  Only the quotient materializer,
-	// which actually stores a 128-bit quotient, remains capability-gated below.
+	// the incoming carry to a native-u128 product.
 /*
 12000 decimal digits occupy at most
 
@@ -1008,13 +1190,10 @@ scan_decfloat_assign_native_wide(T &value, bool negative, ::std::uint_least64_t 
 retained significand.  At a binary128 rounding boundary the alternative
 power-of-five construction is smaller: 5^16495 times a 114-bit midpoint
 uses at most 601 limbs.  The decimal top-exponent guards reject values
-outside the destination range before any larger scaling is attempted.  A
-target without native 128-bit integers can instantiate this quotient only
-through binary64: 768 decimal digits and 5^1075 times a 54-bit midpoint each
-need fewer than 41 limbs.  Its 288-limb bound retains generous room for the
-guarded shifts.  Selecting 288 limbs for narrow types and 640 only for
-binary80/binary128 prevents a cold exact fallback from imposing wide-format
-stack cost on binary32/binary64 or MSVC.
+outside the destination range before any larger scaling is attempted.
+Binary64's 768 digits and 5^1075 times a 54-bit midpoint each need fewer
+than 41 limbs.  Selecting 288 limbs for narrow types and 640 for
+binary80/binary128 keeps the wide-format stack cost out of the narrow formats.
 */
 template <typename T>
 inline constexpr ::std::size_t scan_decfloat_bigint_limb_capacity{
@@ -1468,6 +1647,12 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 	inline constexpr auto scan_decfloat_pow5_0_to_27_table{
 		::fast_io::details::scan_decfloat_generate_pow5_0_to_27_table()};
 
+	// As in Dragonbox, d^-1*m mod 2^64 is the exact quotient precisely
+	// when it does not exceed floor((2^64-1)/d). This same limit proves
+	// that multiplying a coefficient by d cannot overflow.
+	inline constexpr dragonbox_mod5_table_type<::std::uint_least64_t, uint64x2, 28u>
+		scan_decfloat_mod5_table{};
+
 	template <typename T>
 	[[nodiscard]] inline constexpr bool
 	scan_decfloat_try_exact_dyadic(T &value, bool negative,
@@ -1515,40 +1700,62 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 			::std::uint_least64_t coefficient{significand};
 			auto binary_exponent{static_cast<::std::int_least32_t>(
 				decimal_exponent)};
-			if (decimal_exponent < 0)
+			if constexpr (scan_decfloat_binary64_like<T>)
 			{
-				auto const power5{
-					::fast_io::details::scan_decfloat_pow5_0_to_27_table[
-						static_cast<::std::size_t>(-decimal_exponent)]};
-				if (coefficient % power5 != 0u)
+				auto const scale{static_cast<::std::size_t>(
+					decimal_exponent < 0 ? -decimal_exponent : decimal_exponent)};
+				auto const mod5{scan_decfloat_mod5_table.values[scale]};
+				if (decimal_exponent < 0)
 				{
-					/*
-					An uncancelled factor 5 remains in the denominator, so the
-					rational is not dyadic and cannot be materialized by an
-					exact binary shift.  The cached/exact rounding pipeline must
-					decide between adjacent target values.
-					*/
+					coefficient = static_cast<::std::uint_least64_t>(
+						static_cast<::std::uintmax_t>(coefficient) * static_cast<::std::uintmax_t>(mod5.hi));
+				}
+				if (mod5.lo < coefficient)
+				{
 					return false;
 				}
-				coefficient /= power5;
+				if (decimal_exponent > 0)
+				{
+					coefficient *= scan_decfloat_pow5_0_to_27_table[scale];
+				}
 			}
 			else
 			{
-				auto const power5{
-					::fast_io::details::scan_decfloat_pow5_0_to_27_table[
-						static_cast<::std::size_t>(decimal_exponent)]};
-				constexpr auto uint64_max{
-					(::std::numeric_limits<::std::uint_least64_t>::max)()};
-				if (coefficient > uint64_max / power5)
+				if (decimal_exponent < 0)
 				{
-					/*
-					The exact coefficient does not fit the shortcut's carrier.
-					Falling through preserves it in the existing 64x128 cached
-					product rather than accepting a wrapped integer.
-					*/
-					return false;
+					auto const power5{
+						::fast_io::details::scan_decfloat_pow5_0_to_27_table[
+							static_cast<::std::size_t>(-decimal_exponent)]};
+					if (coefficient % power5 != 0u)
+					{
+						/*
+						An uncancelled factor 5 remains in the denominator, so the
+						rational is not dyadic and cannot be materialized by an
+						exact binary shift.  The cached/exact rounding pipeline must
+						decide between adjacent target values.
+						*/
+						return false;
+					}
+					coefficient /= power5;
 				}
-				coefficient *= power5;
+				else
+				{
+					auto const power5{
+						::fast_io::details::scan_decfloat_pow5_0_to_27_table[
+							static_cast<::std::size_t>(decimal_exponent)]};
+					constexpr auto uint64_max{
+						(::std::numeric_limits<::std::uint_least64_t>::max)()};
+					if (coefficient > uint64_max / power5)
+					{
+						/*
+						The exact coefficient does not fit the shortcut's carrier.
+						Falling through preserves it in the existing 64x128 cached
+						product rather than accepting a wrapped integer.
+						*/
+						return false;
+					}
+					coefficient *= power5;
+				}
 			}
 
 			if (coefficient == 0u)
@@ -1654,6 +1861,27 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		scan_decfloat_pow5_anchor_maximum_exponent{
 			limb_capacity >= 640u ? 5095u : 1075u};
 
+	// Give each anchor its own constant evaluation. A frontend emulating 64x64
+	// multiplication can exceed its default step budget if all six binary128
+	// anchors are generated in a single evaluation.
+	template <::std::size_t limb_capacity, ::std::size_t index>
+	inline constexpr scan_decfloat_bigint<limb_capacity> scan_decfloat_pow5_anchor = []() constexpr {
+		scan_decfloat_bigint<limb_capacity> value{};
+		if constexpr (index == 0u)
+		{
+			scan_decfloat_bigint_set_u64(value, 1u);
+		}
+		else
+		{
+			scan_decfloat_bigint_copy(value, scan_decfloat_pow5_anchor<limb_capacity, index - 1u>);
+			for (::std::size_t chunk{}; chunk != scan_decfloat_pow5_anchor_chunk_count; ++chunk)
+			{
+				(void)scan_decfloat_bigint_mul_u64(value, scan_decfloat_pow5_0_to_27_table[27u]);
+			}
+		}
+		return value;
+	}();
+
 	template <::std::size_t limb_capacity>
 	struct scan_decfloat_pow5_anchor_table
 	{
@@ -1662,24 +1890,16 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 				scan_decfloat_pow5_anchor_maximum_exponent<limb_capacity> /
 				scan_decfloat_pow5_anchor_exponent) +
 			1u};
-		scan_decfloat_bigint<limb_capacity> values[extent]{};
+		scan_decfloat_bigint<limb_capacity> values[extent];
 
-		inline constexpr scan_decfloat_pow5_anchor_table() noexcept
-		{
-			::fast_io::details::scan_decfloat_bigint_set_u64(values[0u], 1u);
-			for (::std::size_t entry{1u}; entry != extent; ++entry)
-			{
-				::fast_io::details::scan_decfloat_bigint_copy(
-					values[entry], values[entry - 1u]);
-				for (::std::uint_least64_t chunk{};
-					 chunk != scan_decfloat_pow5_anchor_chunk_count; ++chunk)
-				{
-					(void)::fast_io::details::scan_decfloat_bigint_mul_u64(
-						values[entry],
-						::fast_io::details::scan_decfloat_pow5_0_to_27_table[27u]);
-				}
-			}
-		}
+		template <::std::size_t... indices>
+		constexpr scan_decfloat_pow5_anchor_table(::std::index_sequence<indices...>) noexcept
+			: values{scan_decfloat_pow5_anchor<limb_capacity, indices>...}
+		{}
+
+		constexpr scan_decfloat_pow5_anchor_table() noexcept
+			: scan_decfloat_pow5_anchor_table(::std::make_index_sequence<extent>{})
+		{}
 	};
 
 	template <::std::size_t limb_capacity>
@@ -1795,13 +2015,10 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 	}
 
 	/*
-	The full exact materializer accumulates p+1 bits: p target significand bits
-	plus the possible carry created by rounding.  Native-u128 targets use that
-	carrier for binary80/binary128.  A target without native u128 admits only the
-	compute-supported formats at this entry; their largest p is binary64's 53,
-	so a uint_least64_t contains the complete quotient and its carry.  The exact
-	division below explicitly rejects any set quotient bit outside the selected
-	carrier, making this a proved width substitution rather than truncation.
+	Exact division returns at most p target significand bits.  Binary128 and
+	IBM double-double need the native 128-bit carrier.  For binary80 a 64-bit
+	carrier holds the complete quotient.  If rounding a normal result produces
+	2^64, the resulting zero indicates a carry into the next binade.
 	*/
 #if defined(__SIZEOF_INT128__)
 	using scan_decfloat_quotient_type = __uint128_t;
@@ -1818,6 +2035,125 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		bool remainder_nonzero{};
 		bool quotient_overflow{};
 	};
+
+#if defined(__SIZEOF_INT128__)
+	/**
+	 * @brief Divides a scaled nonnegative numerator by a nonzero denominator one radix-2^64 digit at a time.
+	 * @details Both operands have one spare limb. Shifting them together until the divisor's high bit is set
+	 * preserves the quotient and the ordering of twice the remainder against the divisor. Before each digit
+	 * the high n words of the active n+1 word window represent a remainder smaller than the divisor.
+	 * Dividing its leading pair by the high divisor word yields an upper estimate, capped at B-1 for B=2^64.
+	 * Normalization bounds the estimate error by two. Testing the next divisor word removes every excess
+	 * except a possible one. A borrow after the full subtraction detects that last case and a single
+	 * add-back yields the exact remainder. Each iteration appends one exact digit to the quotient.
+	 * @param dividend Scratch numerator with initialized low limbs and one spare word.
+	 * @param divisor Scratch positive divisor with initialized low limbs and one spare word.
+	 * @return Low quotient bits, overflow status, midpoint comparison and an exact nonzero-remainder flag.
+	 */
+	template <::std::size_t capacity>
+	[[nodiscard]] inline constexpr scan_decfloat_bigint_div_result
+	scan_decfloat_divide_words(scan_decfloat_bigint<capacity> &dividend, scan_decfloat_bigint<capacity> &divisor) noexcept
+	{
+		using word = ::std::uint_least64_t;
+		using full = scan_decfloat_quotient_type;
+		auto const n{divisor.size};
+		auto const length{dividend.size};
+		scan_decfloat_bigint_div_result result{};
+		if (length >= n)
+		{
+			if (n == 1u)
+			{
+				// A one-word divisor needs only the remainder from the preceding digit.
+				word rest{};
+				for (auto i{length}; i--;)
+				{
+					auto const part{::fast_io::intrinsics::udivbigbysmalltosmalldefault(rest, dividend.limb[i], divisor.limb[0])};
+					rest = part.remainder;
+					if (i < 2u)
+					{
+						result.quotient |= static_cast<full>(part.quotient) << (i * 64u);
+					}
+					else if (part.quotient)
+					{
+						result.quotient_overflow = true;
+					}
+				}
+				auto const other{divisor.limb[0] - rest};
+				result.twice_remainder_compare = (rest > other) - (rest < other);
+				result.remainder_nonzero = rest != 0u;
+				return result;
+			}
+			auto const shift{static_cast<unsigned>(::std::countl_zero(divisor.limb[n - 1u]))};
+			dividend.limb[length] = 0u;
+			if (shift)
+			{
+				// The divisor's width stays n. The extra dividend word absorbs its top carry.
+				(void)scan_decfloat_bigint_shift_left_inplace(divisor, shift);
+				(void)scan_decfloat_bigint_shift_left_inplace(dividend, shift);
+			}
+			auto const v1{divisor.limb[n - 1u]}, v0{divisor.limb[n - 2u]};
+			for (auto windows{length - n + 1u}; windows--;)
+			{
+				auto *u{dividend.limb + windows};
+				auto const top{u[n]}, second{u[n - 1u]};
+				word digit, rest;
+				bool rest_carry{};
+				if (top == v1)
+				{
+					// The trial digit would reach B. Saturating it adds v1 to the trial remainder.
+					digit = (::std::numeric_limits<word>::max)();
+					rest = second + v1;
+					rest_carry = rest < second;
+				}
+				else
+				{
+					auto const part{::fast_io::intrinsics::udivbigbysmalltosmalldefault(top, second, v1)};
+					digit = part.quotient;
+					rest = part.remainder;
+				}
+				while (!rest_carry && static_cast<full>(digit) * v0 > ((static_cast<full>(rest) << 64u) | u[n - 2u]))
+				{
+					--digit;
+					rest += v1;
+					rest_carry = rest < v1;
+				}
+				word borrow{};
+				for (::std::size_t i{}; i != n; ++i)
+				{
+					auto const product{static_cast<full>(digit) * divisor.limb[i] + borrow};
+					auto const low{static_cast<word>(product)}, old{u[i]};
+					u[i] = old - low;
+					borrow = static_cast<word>(product >> 64u) + (old < low);
+				}
+				if (top < borrow)
+				{
+					// The low n words represent a negative residual modulo B^n.
+					--digit;
+					bool carry{};
+					for (::std::size_t i{}; i != n; ++i)
+					{
+						u[i] = ::fast_io::intrinsics::addc(u[i], divisor.limb[i], carry, carry);
+					}
+				}
+				if (windows < 2u)
+				{
+					result.quotient |= static_cast<full>(digit) << (windows * 64u);
+				}
+				else if (digit)
+				{
+					result.quotient_overflow = true;
+				}
+			}
+			dividend.size = n;
+			scan_decfloat_bigint_normalize(dividend);
+		}
+		result.remainder_nonzero = dividend.size != 0u;
+		// The spare limb holds a carry from doubling even for a high-bit remainder.
+		(void)scan_decfloat_bigint_shl1_add_bit(dividend, false);
+		result.twice_remainder_compare = scan_decfloat_bigint_compare(dividend, divisor);
+		return result;
+	}
+#endif
 
 	template <::std::size_t limb_capacity>
 	[[nodiscard]] inline constexpr scan_decfloat_bigint_div_result
@@ -1855,26 +2191,23 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 			bool quotient_overflow{};
 			if (binary_shift >= 0)
 			{
-				auto const left_shift{static_cast<::std::size_t>(binary_shift)};
-				if (numerator_bits &&
-					(numerator_bits > ::fast_io::details::scan_decfloat_quotient_bits ||
-					 left_shift >
-						 ::fast_io::details::scan_decfloat_quotient_bits - numerator_bits))
+				// A fitting nonzero result uses at most one carrier's worth of source words.
+				auto const left_shift{static_cast<::std::uint_least64_t>(binary_shift)};
+				if (numerator_bits > ::fast_io::details::scan_decfloat_quotient_bits ||
+					(numerator_bits && left_shift > ::fast_io::details::scan_decfloat_quotient_bits - numerator_bits))
 				{
 					quotient_overflow = true;
 				}
-				else
+				else if (numerator_bits)
 				{
-					for (::std::size_t bit{}; bit != numerator_bits; ++bit)
+					quotient = numerator.limb[0];
+#if defined(__SIZEOF_INT128__)
+					if (numerator.size > 1u)
 					{
-						if (::fast_io::details::scan_decfloat_bigint_get_bit(
-								numerator, bit))
-						{
-							quotient |=
-								static_cast<scan_decfloat_quotient_type>(1u)
-								<< (bit + left_shift);
-						}
+						quotient |= static_cast<scan_decfloat_quotient_type>(numerator.limb[1]) << 64u;
 					}
+#endif
+					quotient <<= left_shift;
 				}
 				return {.quotient = quotient,
 						.twice_remainder_compare = -1,
@@ -1882,24 +2215,38 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 						.quotient_overflow = quotient_overflow};
 			}
 
-			auto const right_shift{static_cast<::std::size_t>(-binary_shift)};
-			auto const quotient_width{
-				numerator_bits > right_shift ? numerator_bits - right_shift : 0u};
-			if (quotient_width >
-				::fast_io::details::scan_decfloat_quotient_bits)
+			// Unsigned subtraction also represents the magnitude of the most negative shift.
+			auto const magnitude{::std::uint_least64_t{} - static_cast<::std::uint_least64_t>(binary_shift)};
+			if (magnitude > numerator_bits)
+			{
+				// N < 2^(magnitude-1), hence the quotient is zero and the residual is below half.
+				return {.twice_remainder_compare = -1, .remainder_nonzero = numerator_bits != 0u};
+			}
+			auto const right_shift{static_cast<::std::size_t>(magnitude)};
+			auto const quotient_width{numerator_bits - right_shift};
+			if (quotient_width > scan_decfloat_quotient_bits)
 			{
 				quotient_overflow = true;
 			}
-			else
+			else if (quotient_width)
 			{
-				for (::std::size_t bit{}; bit != quotient_width; ++bit)
+				// The result is the carrier-width bit window starting at right_shift in N.
+				auto const first{right_shift / 64u};
+				auto const offset{static_cast<unsigned>(right_shift % 64u)};
+				quotient = numerator.limb[first];
+#if defined(__SIZEOF_INT128__)
+				if (first + 1u < numerator.size)
 				{
-					if (::fast_io::details::scan_decfloat_bigint_get_bit(
-							numerator, bit + right_shift))
-					{
-						quotient |=
-							static_cast<scan_decfloat_quotient_type>(1u) << bit;
-					}
+					quotient |= static_cast<scan_decfloat_quotient_type>(numerator.limb[first + 1u]) << 64u;
+				}
+#endif
+				quotient >>= offset;
+				// An unaligned window may take its top bits from one additional source limb.
+				auto const next{first + scan_decfloat_quotient_bits / 64u};
+				if (offset && next < numerator.size)
+				{
+					quotient |= static_cast<scan_decfloat_quotient_type>(numerator.limb[next]) <<
+						(scan_decfloat_quotient_bits - offset);
 				}
 			}
 			bool const remainder_nonzero{
@@ -1948,6 +2295,34 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		{
 			::fast_io::details::scan_decfloat_bigint_copy(divisor, denominator);
 		}
+
+#if defined(__SIZEOF_INT128__)
+		// Two initialized limbs fit the quotient carrier exactly. The scaled operands
+		// already include binary_shift, so Euclidean division gives the same quotient
+		// and remainder as the aligned subtraction below. Comparing R with D - R
+		// orders 2R against D without overflowing, including an exact midpoint.
+		if (remainder.size <= 2u && divisor.size && divisor.size <= 2u)
+		{
+			auto const dividend_low{remainder.size ? remainder.limb[0] : 0u};
+			auto const dividend_high{remainder.size == 2u ? remainder.limb[1] : 0u};
+			auto const divisor_high{divisor.size == 2u ? divisor.limb[1] : 0u};
+			auto const parts{::fast_io::intrinsics::udivmod(dividend_low, dividend_high, divisor.limb[0], divisor_high)};
+			auto const join = [](::std::uint_least64_t low, ::std::uint_least64_t high) constexpr noexcept {
+				return (static_cast<scan_decfloat_quotient_type>(high) << 64u) | low;
+			};
+			auto const residue{join(parts.remainderlow, parts.remainderhigh)};
+			auto const complement{join(divisor.limb[0], divisor_high) - residue};
+			return {.quotient = join(parts.quotientlow, parts.quotienthigh),
+					.twice_remainder_compare = (residue > complement) - (residue < complement),
+					.remainder_nonzero = residue != 0u};
+		}
+
+		// Normalized word division needs one scratch limb above each occupied range.
+		if (remainder.size < limb_capacity && divisor.size && divisor.size < limb_capacity)
+		{
+			return scan_decfloat_divide_words(remainder, divisor);
+		}
+#endif
 
 		scan_decfloat_quotient_type quotient{};
 		bool quotient_overflow{};
@@ -2350,16 +2725,235 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		return ::fast_io::parse_code::overflow;
 	}
 
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+	// Round the high binary64 component to nearest even. Then form and round
+	// the signed residual with the full exact decimal numerator and denominator.
+	template <::fast_io::manipulators::floating_rounding rounding, typename T, ::std::size_t capacity>
+	[[nodiscard]] inline constexpr bool scan_decfloat_try_ibm_components(
+		T &value, bool negative, scan_decfloat_bigint<capacity> const &numerator,
+		scan_decfloat_bigint<capacity> const &denominator,
+		::std::int_least64_t adjustment, ::std::int_least64_t top_exponent, bool sticky) noexcept
+	{
+		using mode = ::fast_io::manipulators::floating_rounding;
+		// Here the low component always rounds on the binary64 subnormal grid.
+		if (top_exponent < -968 || 1023 < top_exponent)
+		{
+			return false;
+		}
+		auto const high_scale{top_exponent - 52};
+		auto const high_division{scan_decfloat_bigint_div_shifted_to_quotient(
+			numerator, denominator, adjustment - high_scale)};
+		auto const high{static_cast<::std::uint_least64_t>(high_division.quotient) +
+			static_cast<::std::uint_least64_t>(scan_decfloat_big_round_up<mode::nearest_to_even>(
+				false, high_division.quotient, high_division.twice_remainder_compare,
+				high_division.remainder_nonzero, sticky))};
+		if (high_division.quotient_overflow || (top_exponent == 1023 && high == (UINT64_C(1) << 53u)))
+		{
+			return false;
+		}
+		// Express the input and the rounded high part on the same scale.
+		scan_decfloat_bigint<capacity> scaled_numerator;
+		scan_decfloat_bigint<capacity> scaled_denominator;
+		auto const shift{adjustment - high_scale};
+		if (!scan_decfloat_bigint_shift_left(scaled_numerator, numerator,
+				static_cast<::std::size_t>(0 < shift ? shift : 0)) ||
+			!scan_decfloat_bigint_shift_left(scaled_denominator, denominator,
+				static_cast<::std::size_t>(shift < 0 ? -shift : 0)))
+		{
+			return false;
+		}
+		scan_decfloat_bigint<capacity> high_numerator;
+		scan_decfloat_bigint_copy(high_numerator, scaled_denominator);
+		if (!scan_decfloat_bigint_mul_u64(high_numerator, high))
+		{
+			return false;
+		}
+		auto const order{scan_decfloat_bigint_compare(scaled_numerator, high_numerator)};
+		auto const high_part{::fast_io::details::ibm_double_double_make_binary64(
+			high, static_cast<::std::int_least32_t>(high_scale), negative)};
+		scan_decfloat_bigint_div_result low{};
+		::std::int_least64_t low_scale{-1074};
+		if (0 < order)
+		{
+			scan_decfloat_bigint_sub_assign(scaled_numerator, high_numerator);
+		}
+		else if (order < 0)
+		{
+			scan_decfloat_bigint_sub_assign(high_numerator, scaled_numerator);
+		}
+		if (order)
+		{
+			auto const &residual{0 < order ? scaled_numerator : high_numerator};
+			auto const low_top{scan_decfloat_bigint_floor_log2_ratio(residual, scaled_denominator) + high_scale};
+			low_scale = low_top < -1022 ? -1074 : low_top - 52;
+			low = scan_decfloat_bigint_div_shifted_to_quotient(
+				residual, scaled_denominator, high_scale - low_scale);
+			if (low.quotient_overflow)
+			{
+				return false;
+			}
+		}
+		else
+		{
+			// The omitted decimal tail is smaller than half the smallest
+			// binary64 quantum because 1400 positions retain every midpoint.
+			low.twice_remainder_compare = -1;
+		}
+		auto const opposite{order < 0};
+		if (opposite && sticky)
+		{
+			// The omitted suffix reduces the magnitude of a negative residual.
+			if (!low.remainder_nonzero)
+			{
+				// Below an exact power of two the grid may be one bit finer.
+				if (low.quotient == (UINT64_C(1) << 52u) && -1074 < low_scale)
+				{
+					low.quotient <<= 1u;
+					--low_scale;
+				}
+				--low.quotient;
+				low.remainder_nonzero = true;
+				low.twice_remainder_compare = 1;
+			}
+			else if (!low.twice_remainder_compare)
+			{
+				low.twice_remainder_compare = -1;
+			}
+		}
+		auto const low_negative{negative != opposite};
+		auto const tail_increases_magnitude{sticky && !opposite};
+		auto round_residual = [&]<mode selected>() constexpr noexcept {
+			return scan_decfloat_big_round_up<selected>(low_negative, low.quotient,
+				low.twice_remainder_compare, low.remainder_nonzero, tail_increases_magnitude);
+		};
+		bool increment{};
+		if constexpr (rounding == mode::toward_zero || rounding == mode::away_from_zero ||
+					  rounding == mode::nearest_toward_zero || rounding == mode::nearest_away_from_zero)
+		{
+			// Toward and away from zero refer to the whole value. An
+			// opposite-sign residual reverses those magnitude directions.
+			constexpr mode opposite_rounding{
+				rounding == mode::toward_zero ? mode::away_from_zero :
+				rounding == mode::away_from_zero ? mode::toward_zero :
+				rounding == mode::nearest_toward_zero ? mode::nearest_away_from_zero : mode::nearest_toward_zero};
+			increment = opposite ? round_residual.template operator()<opposite_rounding>() :
+								   round_residual.template operator()<rounding>();
+		}
+		else
+		{
+			increment = round_residual.template operator()<rounding>();
+		}
+		auto const low_significand{static_cast<::std::uint_least64_t>(low.quotient) +
+			static_cast<::std::uint_least64_t>(increment)};
+		auto const low_part{::fast_io::details::ibm_double_double_make_binary64(
+			low_significand, static_cast<::std::int_least32_t>(low_scale), low_significand && low_negative)};
+		if (top_exponent == 1023 && 0 < order && high == (UINT64_C(1) << 53u) - 1u)
+		{
+			auto const maximum{::fast_io::bit_cast<::fast_io::details::ibm_double_double_storage>(
+				(::std::numeric_limits<T>::max)())};
+			constexpr auto magnitude_mask{UINT64_C(0x7fffffffffffffff)};
+			if (::fast_io::bit_cast<::std::uint_least64_t>(maximum.low) <
+				(::fast_io::bit_cast<::std::uint_least64_t>(low_part) & magnitude_mask))
+			{
+				return false;
+			}
+		}
+		::fast_io::details::fp_assign_ibm_double_double_components(value, high_part, low_part);
+		return true;
+	}
+
+	template <::fast_io::manipulators::floating_rounding rounding, typename T>
+	inline constexpr ::fast_io::parse_code scan_hexfloat_assign_ibm_result(
+		T &value, bool negative, scan_hexfloat_significand_state<scan_hexfloat_ibm_storage> const &state,
+		::std::int_least64_t binary_exponent) noexcept
+	{
+		using mode = ::fast_io::manipulators::floating_rounding;
+		if constexpr (rounding == mode::current_environment)
+		{
+			switch (::fast_io::details::current_floating_rounding())
+			{
+			case mode::toward_plus_infinity:
+				return scan_hexfloat_assign_ibm_result<mode::toward_plus_infinity>(
+					value, negative, state, binary_exponent);
+			case mode::toward_minus_infinity:
+				return scan_hexfloat_assign_ibm_result<mode::toward_minus_infinity>(
+					value, negative, state, binary_exponent);
+			case mode::toward_zero:
+				return scan_hexfloat_assign_ibm_result<mode::toward_zero>(
+					value, negative, state, binary_exponent);
+			default:
+				return scan_hexfloat_assign_ibm_result<mode::nearest_to_even>(
+					value, negative, state, binary_exponent);
+			}
+		}
+		else
+		{
+			// One spare limb covers alignment of the rounded high part.
+			constexpr auto capacity{scan_hexfloat_ibm_storage::word_count + 1u};
+			scan_decfloat_bigint<capacity> numerator;
+			auto const &words{state.stored.words};
+			auto const word_count{(state.stored_hex_digits + 15u) / 16u};
+			auto const padding{(word_count * 16u - state.stored_hex_digits) * 4u};
+			numerator.size = word_count;
+			for (::std::size_t i{}; i != word_count; ++i)
+			{
+				auto const word{word_count - 1u - i};
+				numerator.limb[i] = words[word] >> padding;
+				if (padding && word)
+				{
+					numerator.limb[i] |= words[word - 1u] << (64u - padding);
+				}
+			}
+			scan_decfloat_bigint_normalize(numerator);
+			auto scale_for = [&, binary_exponent](::std::size_t digits) constexpr noexcept {
+				constexpr auto maximum{(::std::numeric_limits<::std::int_least64_t>::max)()};
+				auto const omitted{state.significant_hex_digits - static_cast<::std::int_least64_t>(digits)};
+				return ::fast_io::details::scan_decfloat_saturating_add(
+					binary_exponent, omitted < maximum / 4 ? omitted * 4 : maximum);
+			};
+			auto const scale{scale_for(state.stored_hex_digits)};
+			auto const top{::fast_io::details::scan_decfloat_saturating_add(
+				scale, static_cast<::std::int_least64_t>(scan_decfloat_bigint_bit_width(numerator)) - 1)};
+			if (-968 <= top && top <= 1023)
+			{
+				scan_decfloat_bigint<capacity> denominator;
+				scan_decfloat_bigint_set_u64(denominator, 1u);
+				if (scan_decfloat_try_ibm_components<rounding>(
+						value, negative, numerator, denominator, scale, top, state.truncated_nonzero))
+				{
+					return ::fast_io::parse_code::ok;
+				}
+			}
+
+			// On the subnormal grid and at the range endpoints the compact
+			// converter needs only the original prefix and a sticky bit.
+			constexpr auto compact_capacity{
+				::fast_io::details::scan_hexfloat_storage_type<
+					::fast_io::details::iec559_traits<T>::mbits + 1u>::stored_hex_digits_limit};
+			auto const compact_digits{state.stored_hex_digits < compact_capacity
+										  ? state.stored_hex_digits : compact_capacity};
+			auto const prefix{(static_cast<__uint128_t>(words[0]) << 64u) | words[1]};
+			auto const discard{128u - compact_digits * 4u};
+			bool sticky{state.truncated_nonzero ||
+						(prefix & ::fast_io::details::scan_hexfloat_low_mask<__uint128_t>(discard)) != 0u};
+			for (::std::size_t word{2u}; !sticky && word < word_count; ++word)
+			{
+				sticky = words[word] != 0u;
+			}
+			return ::fast_io::details::scan_hexfloat_assign_ieee_result<T, __uint128_t, rounding>(
+				value, negative, prefix >> discard, compact_digits,
+				static_cast<::std::int_least64_t>(compact_digits), sticky, scale_for(compact_digits));
+		}
+	}
+#endif
+
 	/*
 	Assigning an arbitrary decimal uses the exact limb numerator/denominator of
 	its retained lower endpoint and the midpoint-capacity theorem proved at the
 	state definition to classify any omitted suffix.  The resulting endpoint
 	quotient/remainder plus sticky bit is therefore sufficient for the exact
-	rounding decision.  On no-u128 targets this path is instantiated only for
-	compute-supported formats, for which p+1<=54<=64; native wide targets retain
-	scan_decfloat_assign_native_wide.  Consequently an arithmetic ambiguity never
-	escapes as lexical `partial`, and every explicit rounding policy reaches the
-	same decision on MSVC.
+	rounding decision.  The 64-bit quotient also supports binary80 on targets
+	such as IA-32, with normal carry handled after rounding.
 	*/
 	template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 							  ::fast_io::manipulators::floating_rounding::nearest_to_even>
@@ -2373,12 +2967,7 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 		constexpr ::std::size_t mbits{trait::mbits};
 		constexpr ::std::size_t ebits{trait::ebits};
 		constexpr ::std::size_t precision_bits{mbits + 1u};
-#if !defined(__SIZEOF_INT128__)
-		static_assert(
-			::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>);
-		static_assert(precision_bits + 1u <=
-					  ::fast_io::details::scan_decfloat_quotient_bits);
-#endif
+		static_assert(precision_bits <= ::fast_io::details::scan_decfloat_quotient_bits);
 		constexpr auto bias{
 			static_cast<::std::int_least64_t>((static_cast<::std::uint_least32_t>(1u) << ebits) >> 1u) - 1};
 		constexpr auto min_exponent{[]() constexpr noexcept
@@ -2458,6 +3047,13 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 			decimal_exponent = ::fast_io::details::scan_decfloat_saturating_add(
 				decimal_exponent,
 				static_cast<::std::int_least64_t>(state.significant_digits - state.exact_stored_digits));
+			if constexpr (::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)
+			{
+				if (scan_decfloat_try_x87_long<rounding>(value, negative, state, decimal_exponent))
+				{
+					return ::fast_io::parse_code::ok;
+				}
+			}
 			auto const decimal_top_exponent{::fast_io::details::scan_decfloat_saturating_add(
 				decimal_exponent, static_cast<::std::int_least64_t>(state.exact_stored_digits - 1u))};
 			constexpr auto high_guard{static_cast<::std::int_least64_t>(trait::e10max + 2u)};
@@ -2523,6 +3119,17 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 					binary_exponent_adjust;
 			}
 
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+			if constexpr (::fast_io::details::fp_floating_point_is_ibm_double_double<no_cvref_t>)
+			{
+				if (scan_decfloat_try_ibm_components<rounding>(value, negative,
+						numerator, denominator, binary_exponent_adjust, binary_exponent,
+						state.exact_truncated_nonzero))
+				{
+					return ::fast_io::parse_code::ok;
+				}
+			}
+#endif
 			bool subnormal{};
 			::std::int_least64_t target_exponent{binary_exponent};
 			::std::int_least64_t scale_exponent{};
@@ -2554,10 +3161,18 @@ inline constexpr void scan_decfloat_bigint_copy(scan_decfloat_bigint<limb_capaci
 			auto const hidden_bit{
 				static_cast<::fast_io::details::scan_decfloat_quotient_type>(1u)
 				<< mbits};
-			auto const carry_bit{hidden_bit << 1u};
 			if (!subnormal)
 			{
-				if (significand >= carry_bit)
+				if constexpr (precision_bits == ::fast_io::details::scan_decfloat_quotient_bits)
+				{
+					// A normal quotient is nonzero before rounding. Only a carry can wrap it to zero.
+					if (!significand)
+					{
+						significand = hidden_bit;
+						++target_exponent;
+					}
+				}
+				else if (significand >= (hidden_bit << 1u))
 				{
 					significand >>= 1u;
 					++target_exponent;
@@ -3611,6 +4226,14 @@ template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 			return ::fast_io::parse_code::ok;
 		}
 	}
+	if constexpr (::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)
+	{
+		if (!state.truncated_nonzero && ::fast_io::details::scan_decfloat_try_x87_cached<rounding>(
+				value, negative, state.significand, adjusted_exponent))
+		{
+			return ::fast_io::parse_code::ok;
+		}
+	}
 	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
 	{
 		::fast_io::details::scan_decfloat_adjusted_mantissa adjusted;
@@ -3652,26 +4275,26 @@ template <typename T, ::fast_io::manipulators::floating_rounding rounding =
 			}
 		}
 	}
-#ifdef __SIZEOF_INT128__
 	return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(value, negative, state, exponent);
-#else
-	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
-	{
-		/*
-		The cached interval could not prove one endpoint.  The portable exact
-		quotient has p+1<=54 bits here, so it is the arithmetic continuation;
-		`partial` is reserved for genuinely extensible lexical state.
-		*/
-		return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(
-			value, negative, state, exponent);
-	}
-	else if constexpr (::fast_io::details::scan_decfloat_native_wide_supported<no_cvref_t>)
-	{
-		return ::fast_io::details::scan_decfloat_assign_native_wide<T, rounding>(
-			value, negative, state.significand, adjusted_exponent);
-	}
-	return ::fast_io::parse_code::partial;
+}
+
+/** @brief Materializes the exact coefficient only after the bounded conversion has declined it.
+ * @details Wide formats retain up to 12,000 decimal digits. Allocate that context in the fallback
+ * frame so a complete short field can return without probing stack pages for an unused context.
+ */
+template <typename T, ::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
 #endif
+[[nodiscard]] inline constexpr ::fast_io::parse_code
+scan_decfloat_assign_wide_short_exact(T &value, bool negative, ::std::uint_least64_t significand,
+									  ::std::int_least64_t adjusted_exponent) noexcept
+{
+	scan_decfloat_significand_state<T> state;
+	scan_decfloat_state_from_u64(state, significand);
+	return scan_decfloat_assign_big<T, rounding>(value, negative, state, adjusted_exponent);
 }
 
 template <typename T, ::fast_io::manipulators::floating_rounding rounding =
@@ -3700,6 +4323,16 @@ scan_decfloat_assign_significand(T &value, bool negative, ::std::uint_least64_t 
 			return ::fast_io::parse_code::ok;
 		}
 	}
+	if constexpr (::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)
+	{
+		if (::fast_io::details::scan_decfloat_try_x87_cached<rounding>(
+				value, negative, significand, adjusted_exponent))
+		{
+			return ::fast_io::parse_code::ok;
+		}
+		return ::fast_io::details::scan_decfloat_assign_wide_short_exact<T, rounding>(
+			value, negative, significand, adjusted_exponent);
+	}
 	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
 	{
 		::fast_io::details::scan_decfloat_adjusted_mantissa adjusted;
@@ -3709,30 +4342,18 @@ scan_decfloat_assign_significand(T &value, bool negative, ::std::uint_least64_t 
 			return ::fast_io::details::scan_decfloat_assign_adjusted(value, negative, significand, adjusted);
 		}
 	}
-#ifdef __SIZEOF_INT128__
 	::fast_io::details::scan_decfloat_significand_state<T> state;
 	::fast_io::details::scan_decfloat_state_from_u64(state, significand);
 	return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(value, negative, state, adjusted_exponent);
-#else
-	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
-	{
-		::fast_io::details::scan_decfloat_significand_state<T> state;
-		::fast_io::details::scan_decfloat_state_from_u64(state, significand);
-		return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(
-			value, negative, state, adjusted_exponent);
-	}
-	else if constexpr (::fast_io::details::scan_decfloat_native_wide_supported<no_cvref_t>)
-	{
-		return ::fast_io::details::scan_decfloat_assign_native_wide<T, rounding>(
-			value, negative, significand, adjusted_exponent);
-	}
-	return ::fast_io::parse_code::partial;
-#endif
 }
 
+/// @brief Rounds the decimal coefficient to the requested decimal grid, then converts to a binary value.
+/// @details Ordinary scans use the same rounding for both steps. A narrower interchange destination
+/// can request directed binary bounds on the same quantized decimal to resolve an exact halfway case.
 template <typename T, ::fast_io::manipulators::floating_precision precision_mode,
 		  ::fast_io::manipulators::floating_rounding rounding =
-			  ::fast_io::manipulators::floating_rounding::nearest_to_even>
+			  ::fast_io::manipulators::floating_rounding::nearest_to_even,
+		  ::fast_io::manipulators::floating_rounding binary_rounding = rounding>
 [[nodiscard]] inline constexpr ::fast_io::parse_code
 scan_decfloat_assign_precision(T &value, bool negative, scan_decfloat_significand_state<T> const &state,
 							   ::std::int_least64_t exponent, ::std::size_t precision) noexcept
@@ -3743,19 +4364,23 @@ scan_decfloat_assign_precision(T &value, bool negative, scan_decfloat_significan
 		{
 		case ::fast_io::manipulators::floating_rounding::toward_plus_infinity:
 			return ::fast_io::details::scan_decfloat_assign_precision<
-				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_plus_infinity>(
+				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_plus_infinity,
+				(binary_rounding == ::fast_io::manipulators::floating_rounding::current_environment ? ::fast_io::manipulators::floating_rounding::toward_plus_infinity : binary_rounding)>(
 				value, negative, state, exponent, precision);
 		case ::fast_io::manipulators::floating_rounding::toward_minus_infinity:
 			return ::fast_io::details::scan_decfloat_assign_precision<
-				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_minus_infinity>(
+				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_minus_infinity,
+				(binary_rounding == ::fast_io::manipulators::floating_rounding::current_environment ? ::fast_io::manipulators::floating_rounding::toward_minus_infinity : binary_rounding)>(
 				value, negative, state, exponent, precision);
 		case ::fast_io::manipulators::floating_rounding::toward_zero:
 			return ::fast_io::details::scan_decfloat_assign_precision<
-				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_zero>(
+				T, precision_mode, ::fast_io::manipulators::floating_rounding::toward_zero,
+				(binary_rounding == ::fast_io::manipulators::floating_rounding::current_environment ? ::fast_io::manipulators::floating_rounding::toward_zero : binary_rounding)>(
 				value, negative, state, exponent, precision);
 		default:
 			return ::fast_io::details::scan_decfloat_assign_precision<
-				T, precision_mode, ::fast_io::manipulators::floating_rounding::nearest_to_even>(
+				T, precision_mode, ::fast_io::manipulators::floating_rounding::nearest_to_even,
+				(binary_rounding == ::fast_io::manipulators::floating_rounding::current_environment ? ::fast_io::manipulators::floating_rounding::nearest_to_even : binary_rounding)>(
 				value, negative, state, exponent, precision);
 		}
 	}
@@ -3771,7 +4396,7 @@ scan_decfloat_assign_precision(T &value, bool negative, scan_decfloat_significan
 			}
 			if (state.significant_digits <= precision || state.stored_digits <= precision)
 			{
-				return ::fast_io::details::scan_decfloat_assign<T, rounding>(value, negative, state, exponent);
+				return ::fast_io::details::scan_decfloat_assign<T, binary_rounding>(value, negative, state, exponent);
 			}
 			auto const cut{static_cast<::std::uint_least32_t>(state.stored_digits - precision)};
 			auto const divisor{::fast_io::details::print_rsv_fp_pow10_0_to_19_table[cut]};
@@ -3798,12 +4423,12 @@ scan_decfloat_assign_precision(T &value, bool negative, scan_decfloat_significan
 			if (static_cast<::std::uintmax_t>(precision) >
 				static_cast<::std::uintmax_t>(int64_max))
 			{
-				return ::fast_io::details::scan_decfloat_assign<T, rounding>(value, negative, state, exponent);
+				return ::fast_io::details::scan_decfloat_assign<T, binary_rounding>(value, negative, state, exponent);
 			}
 			auto const target_exponent{-static_cast<::std::int_least64_t>(precision)};
 			if (target_exponent <= adjusted_exponent)
 			{
-				return ::fast_io::details::scan_decfloat_assign<T, rounding>(value, negative, state, exponent);
+				return ::fast_io::details::scan_decfloat_assign<T, binary_rounding>(value, negative, state, exponent);
 			}
 			auto const cut64{static_cast<::std::uint_least64_t>(target_exponent) -
 							 static_cast<::std::uint_least64_t>(adjusted_exponent)};
@@ -3834,7 +4459,7 @@ scan_decfloat_assign_precision(T &value, bool negative, scan_decfloat_significan
 			}
 			adjusted_exponent = target_exponent;
 		}
-		return ::fast_io::details::scan_decfloat_assign_significand<T, rounding>(
+		return ::fast_io::details::scan_decfloat_assign_significand<T, binary_rounding>(
 			value, negative, significand, adjusted_exponent);
 	}
 }
@@ -3881,6 +4506,16 @@ scan_decfloat_assign_short(T &value, bool negative, ::std::uint_least64_t signif
 		*/
 		return ::fast_io::parse_code::ok;
 	}
+	if constexpr (::fast_io::details::fp_floating_point_is_float80<no_cvref_t>)
+	{
+		if (::fast_io::details::scan_decfloat_try_x87_cached<rounding>(
+				value, negative, significand, adjusted_exponent))
+		{
+			return ::fast_io::parse_code::ok;
+		}
+		return ::fast_io::details::scan_decfloat_assign_wide_short_exact<T, rounding>(
+			value, negative, significand, adjusted_exponent);
+	}
 	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
 	{
 		::fast_io::details::scan_decfloat_adjusted_mantissa adjusted;
@@ -3890,25 +4525,9 @@ scan_decfloat_assign_short(T &value, bool negative, ::std::uint_least64_t signif
 			return ::fast_io::details::scan_decfloat_assign_adjusted(value, negative, significand, adjusted);
 		}
 	}
-#ifdef __SIZEOF_INT128__
 	::fast_io::details::scan_decfloat_significand_state<T> state;
 	::fast_io::details::scan_decfloat_state_from_u64(state, significand);
 	return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(value, negative, state, adjusted_exponent);
-#else
-	if constexpr (::fast_io::details::scan_decfloat_compute_supported<no_cvref_t>)
-	{
-		::fast_io::details::scan_decfloat_significand_state<T> state;
-		::fast_io::details::scan_decfloat_state_from_u64(state, significand);
-		return ::fast_io::details::scan_decfloat_assign_big<T, rounding>(
-			value, negative, state, adjusted_exponent);
-	}
-	else if constexpr (::fast_io::details::scan_decfloat_native_wide_supported<no_cvref_t>)
-	{
-		return ::fast_io::details::scan_decfloat_assign_native_wide<T, rounding>(
-			value, negative, significand, adjusted_exponent);
-	}
-	return ::fast_io::parse_code::partial;
-#endif
 }
 
 template <typename T>
@@ -3965,8 +4584,17 @@ scan_decfloat_assign_short_current_environment(T &value, bool negative, ::std::u
 	}
 }
 
+/// @brief Identifies which boundary can commit a numeric token after its optional exponent.
+enum class scan_decfloat_short_completion : unsigned char
+{
+	contiguous,
+	chunk,
+	terminal
+};
+
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
-		  scan_decfloat_supported_floating_point T>
+		  scan_decfloat_supported_floating_point T,
+		  scan_decfloat_short_completion completion = scan_decfloat_short_completion::contiguous>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -3999,6 +4627,24 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 				::fast_io::char_literal_v<u8'0', char_type>};
 			constexpr ::std::uint_least64_t ascii_zeroes{
 				0x3030303030303030ULL};
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__) && \
+	!defined(__arm64ec__) && !defined(_M_ARM64EC)
+			[[maybe_unused]] auto scan_short_digit_blocks = [&]() noexcept {
+				// The caller selects a remaining span shorter than two eight-byte words.
+				// Each block requires four readable characters and room for four more coefficient digits.
+				for (; digit_count + 4u <= digit_limit && end - first >= 4; first += 4)
+				{
+					::std::uint_least64_t block;
+					if (!scan_int_contiguous_x86_parse_four_digits<10u>(first, block))
+					{
+						break;
+					}
+					significand = significand * 10000u + block;
+					digit_count += 4u;
+					has_digit = true;
+				}
+			};
+#endif
 			/*
 			If z leading integer zeroes precede the first nonzero digit, replacing
 			the digit sequence 0^z D by D leaves both M*10^q and q unchanged:
@@ -4031,25 +4677,36 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 			{
 				has_digit = true;
 			}
-			for (; digit_count + 8u <= digit_limit &&
-				   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__) && \
+	!defined(__arm64ec__) && !defined(_M_ARM64EC)
+			constexpr bool resident_binary32{completion != scan_decfloat_short_completion::contiguous && scan_decfloat_binary32_like<T>};
+			if (resident_binary32 && end - first < 2 * static_cast<::std::ptrdiff_t>(sizeof(::std::uint_least64_t)))
 			{
-				::std::uint_least64_t val;
-				::fast_io::freestanding::my_memcpy(__builtin_addressof(val), first, sizeof(::std::uint_least64_t));
-				if constexpr (::std::endian::little != ::std::endian::native)
+				scan_short_digit_blocks();
+			}
+			else
+#endif
+			{
+				for (; digit_count + 8u <= digit_limit &&
+					   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
 				{
-					val = ::fast_io::little_endian(val);
+					::std::uint_least64_t val;
+					::fast_io::freestanding::my_memcpy(__builtin_addressof(val), first, sizeof(::std::uint_least64_t));
+					if constexpr (::std::endian::little != ::std::endian::native)
+					{
+						val = ::fast_io::little_endian(val);
+					}
+					if (!::fast_io::details::scan_decfloat_ascii8_is_digits(val))
+					{
+						break;
+					}
+					significand = significand * 100000000u +
+								  static_cast<::std::uint_least64_t>(
+									  ::fast_io::details::scan_decfloat_ascii8_parse(val));
+					digit_count += 8u;
+					first += sizeof(::std::uint_least64_t);
+					has_digit = true;
 				}
-				if (!::fast_io::details::scan_decfloat_ascii8_is_digits(val))
-				{
-					break;
-				}
-				significand = significand * 100000000u +
-							  static_cast<::std::uint_least64_t>(
-								  ::fast_io::details::scan_decfloat_ascii8_parse(val));
-				digit_count += 8u;
-				first += sizeof(::std::uint_least64_t);
-				has_digit = true;
 			}
 			/*
 			Peel a compiler-selected short scalar prefix without changing the
@@ -4107,7 +4764,8 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 			}
 			if (digit_limit_reached)
 			{
-				return {};
+				// A decimal digit beyond capacity proves that the exact accumulator is necessary.
+				return {first, ::fast_io::parse_code::partial, false};
 			}
 
 			constexpr auto dot{::fast_io::char_literal_v<
@@ -4156,25 +4814,35 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 						has_digit = true;
 					}
 				}
-				for (; digit_count + 8u <= digit_limit &&
-					   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__) && \
+	!defined(__arm64ec__) && !defined(_M_ARM64EC)
+				if (resident_binary32 && end - first < 2 * static_cast<::std::ptrdiff_t>(sizeof(::std::uint_least64_t)))
 				{
-					::std::uint_least64_t val;
-					::fast_io::freestanding::my_memcpy(__builtin_addressof(val), first, sizeof(::std::uint_least64_t));
-					if constexpr (::std::endian::little != ::std::endian::native)
+					scan_short_digit_blocks();
+				}
+				else
+#endif
+				{
+					for (; digit_count + 8u <= digit_limit &&
+						   static_cast<::std::size_t>(end - first) >= sizeof(::std::uint_least64_t);)
 					{
-						val = ::fast_io::little_endian(val);
+						::std::uint_least64_t val;
+						::fast_io::freestanding::my_memcpy(__builtin_addressof(val), first, sizeof(::std::uint_least64_t));
+						if constexpr (::std::endian::little != ::std::endian::native)
+						{
+							val = ::fast_io::little_endian(val);
+						}
+						if (!::fast_io::details::scan_decfloat_ascii8_is_digits(val))
+						{
+							break;
+						}
+						significand = significand * 100000000u +
+									  static_cast<::std::uint_least64_t>(
+										  ::fast_io::details::scan_decfloat_ascii8_parse(val));
+						digit_count += 8u;
+						first += sizeof(::std::uint_least64_t);
+						has_digit = true;
 					}
-					if (!::fast_io::details::scan_decfloat_ascii8_is_digits(val))
-					{
-						break;
-					}
-					significand = significand * 100000000u +
-								  static_cast<::std::uint_least64_t>(
-									  ::fast_io::details::scan_decfloat_ascii8_parse(val));
-					digit_count += 8u;
-					first += sizeof(::std::uint_least64_t);
-					has_digit = true;
 				}
 				/*
 				This is the same compiler-selected recurrence prefix proved for
@@ -4220,7 +4888,8 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 				}
 				if (fractional_digit_limit_reached)
 				{
-					return {};
+					// A decimal digit beyond capacity proves that the exact accumulator is necessary.
+					return {first, ::fast_io::parse_code::partial, false};
 				}
 				fractional_digits = static_cast<::std::uint_least64_t>(first - fraction_begin);
 			}
@@ -4264,6 +4933,10 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 				{
 					first = exponent_result.iter;
 				}
+				else if constexpr (completion != scan_decfloat_short_completion::contiguous)
+				{
+					return {};
+				}
 				else if (::fast_io::details::scan_decfloat_exponent_prefix_may_extend(exponent_begin, end))
 				{
 					return {end, ::fast_io::parse_code::partial, true};
@@ -4282,10 +4955,44 @@ scan_decfloat_contiguous_short_define_impl(char_type const *first,
 				return {first, ::fast_io::parse_code::invalid, true};
 			}
 
+			if constexpr (completion == scan_decfloat_short_completion::chunk)
+			{
+				if (first == end)
+				{
+					return {};
+				}
+			}
+
 			if (significand == 0)
 			{
 				value = negative ? -static_cast<T>(0.0) : static_cast<T>(0.0);
 				return {first, ::fast_io::parse_code::ok, true};
+			}
+
+			if constexpr (completion != scan_decfloat_short_completion::contiguous && ::std::same_as<T, float> &&
+						  scan_decfloat_binary32_like<T>)
+			{
+				// Integers in this range convert exactly in every rounding mode.
+				if (exponent == static_cast<::std::int_least64_t>(fractional_digits) &&
+					significand <= (UINT64_C(1) << 24u))
+				{
+					auto const magnitude{static_cast<float>(static_cast<::std::int_least32_t>(significand))};
+					value = negative ? -magnitude : magnitude;
+					return {first, ::fast_io::parse_code::ok, true};
+				}
+			}
+
+			if constexpr (completion != scan_decfloat_short_completion::contiguous && ::std::same_as<T, double> &&
+						  scan_decfloat_binary64_like<T>)
+			{
+				// Every integer in this range converts exactly in every rounding mode.
+				if (exponent == static_cast<::std::int_least64_t>(fractional_digits) &&
+					significand <= (UINT64_C(1) << 53u))
+				{
+					auto const magnitude{static_cast<double>(static_cast<::std::int_least64_t>(significand))};
+					value = negative ? -magnitude : magnitude;
+					return {first, ::fast_io::parse_code::ok, true};
+				}
 			}
 
 			if constexpr (flags.rounding == ::fast_io::manipulators::floating_rounding::current_environment)
@@ -4454,7 +5161,7 @@ scan_decfloat_contiguous_padding_define_impl(
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
-		  scan_decfloat_supported_floating_point T, bool use_precision = false>
+		  scan_decfloat_supported_floating_point T, bool use_precision = false, bool try_short = true>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -4481,7 +5188,7 @@ scan_decfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 		}
 	}
 
-	if constexpr (!use_precision)
+	if constexpr (!use_precision && try_short)
 	{
 		/*
 		The short scanner is a transactional classifier: `handled` proves that
@@ -4805,6 +5512,26 @@ struct scan_decfloat_context
 	bool exponent_has_digit{};
 	bool exponent_overflow{};
 	bool special_sign_prefixed{};
+
+	/**
+	 * @brief Starts an x87 refill without clearing the 12,000-byte decimal digit array.
+	 * @details Each append writes a digit before advancing exact_stored_digits. The converter
+	 * reads only that prefix, including when a later refill supplies the digit after a midpoint.
+	 * Default member initializers reset the counters and flags. Value-initialize the special
+	 * token buffer and retain fully initialized storage during constant evaluation.
+	 */
+	constexpr scan_decfloat_context() noexcept requires fp_floating_point_is_float80<T>
+		: special_buffer{}
+	{
+		if (::std::is_constant_evaluated())
+		{
+			for (auto &digit : significand_state.exact_digits)
+			{
+				digit = 0;
+			}
+		}
+	}
+	constexpr scan_decfloat_context() noexcept requires (!fp_floating_point_is_float80<T>) = default;
 };
 
 template <::std::integral char_type, typename T>
@@ -4942,7 +5669,7 @@ scan_decfloat_context_special_define(::fast_io::details::scan_decfloat_context<c
 				}
 				return {end, ::fast_io::parse_code::partial};
 			}
-			value = parsed_value;
+			::fast_io::details::scan_floating_commit_special(value, parsed_value);
 			return {::fast_io::details::scan_floating_context_map_iter(
 						state.special_buffer, old_size, begin, append_result.iter, parse_result.iter),
 					::fast_io::parse_code::ok};
@@ -4952,7 +5679,7 @@ scan_decfloat_context_special_define(::fast_io::details::scan_decfloat_context<c
 		{
 			return {end, ::fast_io::parse_code::partial};
 		}
-		value = parsed_value;
+		::fast_io::details::scan_floating_commit_special(value, parsed_value);
 		return {::fast_io::details::scan_floating_context_map_iter(
 					state.special_buffer, old_size, begin, end, parse_result.iter),
 				::fast_io::parse_code::ok};
@@ -5239,7 +5966,7 @@ scan_decfloat_context_eof(::fast_io::details::scan_decfloat_context<char_type, T
 		}
 		if (parse_result.code == ::fast_io::parse_code::ok)
 		{
-			value = parsed_value;
+			::fast_io::details::scan_floating_commit_special(value, parsed_value);
 		}
 		return parse_result.code;
 	}
@@ -5297,6 +6024,479 @@ inline constexpr ::std::true_type scan_contiguous_result_in_range(
 		::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
 {
 	return {};
+}
+
+#if defined(__i386__) && defined(__ELF__)
+namespace details
+{
+/**
+ * @brief Accumulates up to nine single-byte ASCII digits on little-endian i386.
+ * @details Four-byte loads stay within the span. A word containing a nondigit
+ * falls back to bounded byte steps from the same cursor. The accumulator fits
+ * in 32 bits and the first nondigit remains unconsumed.
+ */
+template <unsigned max_digits, ::std::integral Char>
+	requires(sizeof(Char) == 1 && ::fast_io::details::is_ascii<Char>)
+[[nodiscard]] inline constexpr unsigned scan_x87_chunk_digits(
+	Char const *&first, Char const *end) noexcept
+{
+	static_assert(max_digits <= 9u && sizeof(unsigned) == 4 &&
+				  ::std::endian::native == ::std::endian::little);
+	unsigned value{};
+	unsigned limit{max_digits};
+	if constexpr (max_digits >= 4u)
+	{
+		for (; limit >= 4u && end - first >= 4; limit -= 4u, first += 4)
+		{
+			unsigned packed;
+			::fast_io::freestanding::my_memcpy(__builtin_addressof(packed), first, sizeof(packed));
+			auto const digits{packed - 0x30303030u};
+			if (((digits | (packed + 0x46464646u)) & 0x80808080u) != 0u)
+			{
+				break;
+			}
+			auto const pairs{(digits * 10u + (digits >> 8u)) & 0x00ff00ffu};
+			value = 10000u * value + (pairs & 255u) * 100u + (pairs >> 16u);
+		}
+	}
+	for (; limit && first != end; --limit, ++first)
+	{
+		auto const digit{static_cast<unsigned>(static_cast<unsigned char>(*first)) - u8'0'};
+		if (digit > 9u)
+		{
+			break;
+		}
+		value = value * 10u + digit;
+	}
+	return value;
+}
+
+/** @brief Continues a bounded coefficient from the first digit beyond its native prefix. */
+template <::std::integral Char>
+	requires(sizeof(Char) == 1 && ::fast_io::details::is_ascii<Char>)
+[[nodiscard]] inline constexpr bool scan_x87_extend_chunk_coefficient(Char const *&first, Char const *end,
+	::std::uint_least64_t &coefficient, unsigned &digits) noexcept
+{
+	constexpr unsigned capacity{static_cast<unsigned>(scan_decfloat_uint64_significand_digit_limit)};
+	if (coefficient == 0u)
+	{
+		digits = 0u;
+	}
+	while (coefficient != 0u && capacity - digits >= 4u && end - first >= 4)
+	{
+		auto const *const previous{first};
+		auto const suffix{scan_x87_chunk_digits<4>(first, end)};
+		auto const added{static_cast<unsigned>(first - previous)};
+		if (added == 0u)
+		{
+			return true;
+		}
+		coefficient = coefficient * static_cast<unsigned>(scan_decfloat_pow10_0_to_8_table[added]) + suffix;
+		digits += added;
+		if (added != 4u)
+		{
+			return true;
+		}
+	}
+	while (first != end)
+	{
+		auto const digit{static_cast<unsigned>(static_cast<unsigned char>(*first)) - u8'0'};
+		if (digit > 9u)
+		{
+			break;
+		}
+		if (digits == capacity && coefficient != 0u)
+		{
+			return false;
+		}
+		coefficient = coefficient * 10u + digit;
+		digits = coefficient == 0u ? 0u : digits + 1u;
+		++first;
+	}
+	return true;
+}
+
+/**
+ * @brief Resolves a complete i386 x87 coefficient after the cached converter declines it.
+ */
+template <typename T, ::fast_io::manipulators::floating_rounding rounding>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+#if __has_cpp_attribute(__gnu__::__cold__)
+[[__gnu__::__cold__]]
+#endif
+[[nodiscard]] inline constexpr ::fast_io::parse_code
+scan_x87_assign_chunk_exact(T &value, bool negative, ::std::uint_least64_t coefficient,
+							::std::int_least64_t exponent) noexcept
+{
+	// Recover the exact dyadic that can land on a cached-product boundary.
+	// A nonzero 64-bit coefficient can contain at most 27 factors of five.
+	if (-27 <= exponent && exponent < 0)
+	{
+		auto const divisor{scan_decfloat_pow5_0_to_27_table[static_cast<unsigned>(-exponent)]};
+		auto const quotient{coefficient / divisor};
+		if (quotient * divisor == coefficient)
+		{
+			auto const leading{::std::countl_zero(quotient)};
+			auto const encoded{static_cast<::std::uint_least32_t>(exponent + 16383 + 63 - leading)};
+			fp_assign_float80_bits(value, quotient << leading, encoded, negative);
+			return ::fast_io::parse_code::ok;
+		}
+	}
+	return scan_decfloat_assign_wide_short_exact<T, rounding>(value, negative, coefficient, exponent);
+}
+
+/**
+ * @brief Commits a resident ordinary decimal field to x87 on little-endian i386.
+ * @details The caller handles whitespace and the leading sign. Single-byte
+ * ASCII input and a known terminal code unit give the same grammar as the full
+ * scanner. The radix character follows flags.comma. The 32-bit prefixes
+ * accumulate in groups of up to nine digits. A longer coefficient continues
+ * from the saved cursor in 64 bits. A longer exponent also resumes at its
+ * saved cursor, with saturation beyond the representable x87 range.
+ * A miss returns nullptr and leaves the destination untouched.
+ */
+template <::std::integral Char, ::fast_io::manipulators::scalar_flags flags, typename T>
+	requires(sizeof(Char) == 1 && ::fast_io::details::is_ascii<Char>)
+[[nodiscard]] inline constexpr Char const *scan_x87_short_chunk(
+	Char const *first, Char const *end, bool negative, T &value) noexcept
+{
+	constexpr auto radix{char_literal_v<(flags.comma ? u8',' : u8'.'), Char>};
+	constexpr auto e_lower{char_literal_v<u8'e', Char>};
+	constexpr auto e_upper{char_literal_v<u8'E', Char>};
+	constexpr auto is_digit{[](Char ch) {
+		return static_cast<unsigned>(static_cast<unsigned char>(ch)) - u8'0' <= 9u;
+	}};
+	auto const *const integer_begin{first};
+	::std::uint_least64_t coefficient{scan_x87_chunk_digits<9>(first, end)};
+	auto has_digit{first != integer_begin};
+	auto coefficient_digits{static_cast<unsigned>(first - integer_begin)};
+	if (first == end)
+	{
+		return nullptr;
+	}
+	if (is_digit(*first))
+	{
+		auto const *first_nonzero{integer_begin};
+		while (first_nonzero != first && *first_nonzero == char_literal_v<u8'0', Char>)
+		{
+			++first_nonzero;
+		}
+		coefficient_digits = static_cast<unsigned>(first - first_nonzero);
+		if (!scan_x87_extend_chunk_coefficient(first, end, coefficient, coefficient_digits) || first == end)
+		{
+			return nullptr;
+		}
+	}
+	::std::uint_least32_t fraction_digits{};
+	if (*first == radix)
+	{
+		auto const *const fraction_begin{++first};
+		auto const fraction{scan_x87_chunk_digits<8>(first, end)};
+		auto const initial_fraction_digits{static_cast<unsigned>(first - fraction_begin)};
+		if (first == end || (coefficient != 0u && coefficient_digits + initial_fraction_digits >
+			scan_decfloat_uint64_significand_digit_limit))
+		{
+			return nullptr;
+		}
+		if (coefficient == 0u && fraction != 0u)
+		{
+			auto const *first_nonzero{fraction_begin};
+			while (*first_nonzero == char_literal_v<u8'0', Char>)
+			{
+				++first_nonzero;
+			}
+			coefficient_digits = static_cast<unsigned>(first - first_nonzero);
+		}
+		else if (coefficient != 0u)
+		{
+			coefficient_digits += initial_fraction_digits;
+		}
+		coefficient = coefficient * static_cast<unsigned>(scan_decfloat_pow10_0_to_8_table[initial_fraction_digits]) + fraction;
+		if (is_digit(*first) &&
+			(!scan_x87_extend_chunk_coefficient(first, end, coefficient, coefficient_digits) || first == end))
+		{
+			return nullptr;
+		}
+		fraction_digits = static_cast<::std::uint_least32_t>(first - fraction_begin);
+		has_digit |= fraction_digits != 0u;
+	}
+	if (!has_digit)
+	{
+		return nullptr;
+	}
+	::std::int_least64_t exponent{-static_cast<::std::int_least64_t>(fraction_digits)};
+	if (*first == e_lower || *first == e_upper)
+	{
+		if (++first == end)
+		{
+			return nullptr;
+		}
+		constexpr auto minus{char_literal_v<u8'-', Char>};
+		constexpr auto plus{char_literal_v<u8'+', Char>};
+		auto const negative_exponent{*first == minus};
+		if (negative_exponent || *first == plus)
+		{
+			++first;
+		}
+		auto const *const exponent_begin{first};
+		auto magnitude{scan_x87_chunk_digits<3>(first, end)};
+		if (first == exponent_begin || first == end)
+		{
+			return nullptr;
+		}
+		// A 32-bit span limits the number of fractional digits to
+		// PTRDIFF_MAX. A saturated exponent still stays outside the
+		// supported x87 range after removing that many decimal places.
+		constexpr ::std::uint_least64_t magnitude_limit{1ULL << 32u};
+		::std::uint_least64_t extended_magnitude{magnitude};
+		if (is_digit(*first))
+		{
+			do
+			{
+				auto const digit{static_cast<unsigned>(static_cast<unsigned char>(*first)) - u8'0'};
+				if (digit > 9u)
+				{
+					break;
+				}
+				if (extended_magnitude < magnitude_limit)
+				{
+					extended_magnitude = extended_magnitude * 10u + digit;
+				}
+			} while (++first != end);
+			if (first == end)
+			{
+				return nullptr;
+			}
+		}
+		auto const signed_magnitude{static_cast<::std::int_least64_t>(extended_magnitude)};
+		exponent += negative_exponent ? -signed_magnitude : signed_magnitude;
+	}
+	if (*first == e_lower || *first == e_upper)
+	{
+		return nullptr;
+	}
+	if (!coefficient || (!exponent && coefficient <= static_cast<::std::uint_least64_t>(
+		(::std::numeric_limits<::std::int_least64_t>::max)())))
+	{
+		auto const integer_value{static_cast<T>(static_cast<::std::int_least64_t>(coefficient))};
+		value = negative ? -integer_value : integer_value;
+		return first;
+	}
+	if (0 < exponent && exponent <= 13)
+	{
+		auto const power5{static_cast<::std::uint_least32_t>(scan_decfloat_pow5_0_to_27_table[static_cast<unsigned>(exponent)])};
+		::std::uint_least32_t high{};
+		auto const product{::fast_io::intrinsics::umul(power5, coefficient, high)};
+		if (high == 0u)
+		{
+			auto const leading{::std::countl_zero(product)};
+			auto const power{static_cast<::std::uint_least32_t>(exponent + 16383 + 63 - leading)};
+			fp_assign_float80_bits(value, product << leading, power, negative);
+			return first;
+		}
+	}
+	if (scan_decfloat_try_x87_cached<flags.rounding, T, true>(value, negative, coefficient, exponent))
+	{
+		return first;
+	}
+	T converted;
+	if (scan_x87_assign_chunk_exact<T, flags.rounding>(converted, negative, coefficient, exponent) ==
+		::fast_io::parse_code::ok)
+	{
+		value = converted;
+		return first;
+	}
+	return nullptr;
+}
+}
+#endif
+
+/** @brief Offers an ordinary decimal spelling to the contiguous short scanner as soon as a chunk contains input. */
+template <::std::integral Char, ::fast_io::manipulators::scalar_flags flags, details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+			 sizeof(Char) == sizeof(char8_t) && details::is_ascii<Char>)
+inline constexpr ::std::size_t scan_context_current_chunk_minimum_size(
+	io_reserve_type_t<Char, manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return 1u;
+}
+
+namespace details
+{
+/**
+ * @brief Completes a short Infinity or NaN spelling directly in borrowed terminal storage.
+ * @details The same special-value parser produces the sign and payload bits for decimal and
+ * hexadecimal input. A matching word requires its real delimiter or EOF. Restrict lookahead
+ * to the context's inline capacity so a long malformed suffix cannot be traversed twice.
+ * An unfinished payload may have been consumed through EOF by the state machine. Delegate
+ * an unconsumed opening parenthesis to preserve that cursor and the public error semantics.
+ */
+template <manipulators::scalar_flags flags, ::std::integral Char, typename T>
+[[nodiscard]] inline constexpr Char const *scan_decfloat_terminal_special(
+	Char const *first, Char const *end, bool negative, T &target) noexcept
+{
+	if (first == end || !scan_decfloat_special_start_char(*first))
+	{
+		return nullptr;
+	}
+	constexpr auto capacity{scan_floating_context<Char>::inline_capacity};
+	auto const last{static_cast<::std::size_t>(end - first) > capacity ? first + capacity : end};
+	T value{};
+	auto const result{scan_hexfloat_special_value<flags.nan_parse_sign, flags.nan_payload_scan>(first, last, negative, value)};
+	if (!result.matched || result.code != parse_code::ok || (result.iter == last && last != end))
+	{
+		return nullptr;
+	}
+	if constexpr (flags.nan_payload_scan != manipulators::floating_nan_payload_scan::none)
+	{
+		if (result.iter != last && *result.iter == char_literal_v<u8'(', Char>)
+		{
+			return nullptr;
+		}
+	}
+	scan_floating_commit_special(target, value);
+	return result.iter;
+}
+
+/**
+ * @brief Restarts a proven over-capacity terminal coefficient directly in the exact contiguous scanner.
+ * @details The short lexer has already observed a digit beyond its capacity. The original
+ * sign and all digits are available in this borrowed span. Skipping a second short probe
+ * leaves the exact rounding decision to the existing long accumulator. On a rolled-back
+ * exponent or range error the streaming context still owns the error cursor and target.
+ */
+template <manipulators::scalar_flags flags, ::std::integral Char, typename T>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#elif __has_cpp_attribute(msvc::noinline)
+[[msvc::noinline]]
+#endif
+[[nodiscard]] inline constexpr Char const *scan_decfloat_terminal_long(
+	Char const *number_begin, Char const *end, T &target) noexcept
+{
+	T value{};
+	auto const result{scan_decfloat_contiguous_define_impl<Char, flags, T, false, false>(number_begin, end, value)};
+	if (result.code != parse_code::ok)
+	{
+		return nullptr;
+	}
+	if constexpr (flags.floating != manipulators::floating_format::fixed)
+	{
+		if (result.iter != end && scan_hexfloat_caseless_equal<u8'e', u8'E'>(*result.iter))
+		{
+			return nullptr;
+		}
+	}
+	target = value;
+	return result.iter;
+}
+
+/**
+ * @brief Attempts one ordinary decimal field in a borrowed or refillable span.
+ * @details The bounded short scanner parses the configured sign, radix and exponent
+ * into a private value. An unconsumed code unit proves the end of a completed field.
+ * For fixed notation an exponent marker is itself a delimiter. For optional
+ * exponents a rolled-back marker must go to the context scanner, which owns the
+ * error cursor. At the end of the span only a terminal provider proves EOF.
+ * A terminal span can also resolve a complete special word or retain all digits of
+ * a long coefficient. Every miss leaves the original cursor and target for the state machine.
+ */
+template <bool terminal_span, ::std::integral Char, manipulators::scalar_flags flags, typename T>
+FAST_IO_GNU_ALWAYS_INLINE [[nodiscard]] inline constexpr Char const *scan_decfloat_resident_prefix(
+	Char const *begin, Char const *end, T &target) noexcept
+{
+	auto *first{begin};
+	if constexpr (!flags.noskipws)
+	{
+		if (first != end && static_cast<unsigned char>(*first) <= u8' ')
+		{
+			first = details::find_space_common_impl<false, true>(first, end);
+		}
+	}
+	[[maybe_unused]] auto const number_begin{first};
+	bool const negative{first != end && *first == char_literal_v<u8'-', Char>};
+	if (negative || (flags.allow_leading_plus && first != end && *first == char_literal_v<u8'+', Char>))
+	{
+		++first;
+	}
+#if defined(__i386__) && defined(__ELF__)
+	if constexpr (details::fp_floating_point_is_float80<T> &&
+				  flags.floating == manipulators::floating_format::decimal &&
+				  flags.base == 10u &&
+				  flags.rounding != manipulators::floating_rounding::current_environment)
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			if (auto const *terminal{details::scan_x87_short_chunk<Char, flags>(first, end, negative, target)})
+			{
+				return terminal;
+			}
+			return nullptr;
+		}
+	}
+#endif
+	constexpr auto completion{terminal_span ? scan_decfloat_short_completion::terminal : scan_decfloat_short_completion::chunk};
+	T value{};
+	auto const result{scan_decfloat_contiguous_short_define_impl<Char, flags, T, completion>(first, end, negative, value)};
+	if (!result.handled)
+	{
+		if constexpr (terminal_span)
+		{
+			if (result.iter != nullptr)
+			{
+				return scan_decfloat_terminal_long<flags>(number_begin, end, target);
+			}
+			return scan_decfloat_terminal_special<flags>(first, end, negative, target);
+		}
+		return nullptr;
+	}
+	if (result.code != parse_code::ok)
+	{
+		return nullptr;
+	}
+	target = value;
+	return result.iter;
+}
+
+}
+
+/** @brief Completes a refillable decimal field only when its delimiter is resident. */
+template <::std::integral Char, ::fast_io::manipulators::scalar_flags flags, details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != ::fast_io::manipulators::floating_format::hexfloat &&
+			 sizeof(Char) == sizeof(char8_t) && details::is_ascii<Char>)
+inline constexpr parse_result<Char const *> scan_context_current_chunk_define(
+	io_reserve_type_t<Char, manipulators::scalar_manip_t<flags, T &>>, Char const *begin, Char const *end,
+	manipulators::scalar_manip_t<flags, T &> target) noexcept
+{
+	if (auto const next{details::scan_decfloat_resident_prefix<false, Char, flags>(begin, end, target.reference)})
+	{
+		return {next, parse_code::ok};
+	}
+	return {begin, parse_code::partial};
+}
+
+/** @brief Certifies the provenance of every committed ordinary decimal chunk cursor.
+ * @details The scanner advances from begin with bounded loads and commits only before end.
+ * A declined probe returns begin. The i386 x87 leaf uses the same cursor rule. */
+template <::std::integral Char, manipulators::scalar_flags flags, details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != manipulators::floating_format::hexfloat && sizeof(Char) == 1 && details::is_ascii<Char>)
+inline constexpr ::std::true_type scan_context_current_chunk_result_in_range(
+	io_reserve_type_t<Char, manipulators::scalar_manip_t<flags, T &>>) noexcept
+{
+	return {};
+}
+
+/** @brief Accepts true EOF as the delimiter of a complete short binary32 or binary64 decimal. */
+template <::std::integral Char, manipulators::scalar_flags flags, details::scan_decfloat_supported_floating_point T>
+	requires(flags.floating != manipulators::floating_format::hexfloat && sizeof(Char) == 1 && details::is_ascii<Char> &&
+			 (details::iec559_traits<T>::mbits == 23u || details::iec559_traits<T>::mbits == 52u))
+inline constexpr Char const *scan_context_try_terminal_define(
+	io_reserve_type_t<Char, manipulators::scalar_manip_t<flags, T &>>, Char const *begin, Char const *end,
+	manipulators::scalar_manip_t<flags, T &> target) noexcept
+{
+	return details::scan_decfloat_resident_prefix<true, Char, flags>(begin, end, target.reference);
 }
 
 /// @brief Scans a decimal floating value with a provider-proved readable tail.

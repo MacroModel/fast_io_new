@@ -50,6 +50,12 @@
 
 #endif
 #include "systemcall_details.h"
+#if defined(__linux__) && defined(__NR_fstat) && ((defined(__x86_64__) && !defined(__ILP32__)) || defined(__i386__))
+#include "posix/linux_fstat.h"
+#endif
+#if defined(__linux__) && defined(__NR_close) && defined(O_CLOEXEC)
+#include "posix/linux_legacy.h"
+#endif
 
 #if ((!defined(_WIN32) || defined(__WINE__)) || defined(__CYGWIN__)) && \
 	__has_include(<sys/socket.h>) && __has_include(<netinet/in.h>) && !defined(__wasi__)
@@ -908,7 +914,9 @@ inline constexpr posix_file_status struct_stat_to_posix_file_status(stat_model &
 			timespec_to_unix_timestamp(st.st_atimespec),
 			timespec_to_unix_timestamp(st.st_mtimespec),
 			timespec_to_unix_timestamp(st.st_ctimespec),
-#if defined(__DARWIN_C_LEVEL)
+#if defined(__OpenBSD__)
+			timespec_to_unix_timestamp(st.__st_birthtim)
+#elif defined(__DARWIN_C_LEVEL)
 			{0, 0}
 #else
 			timespec_to_unix_timestamp(st.st_birthtimespec)
@@ -1212,6 +1220,15 @@ inline int my_posix_openat(int dirfd, char const *pathname, int flags, mode_t mo
 		(dirfd, pathname, flags, mode)};
 
 #if defined(__linux__) && defined(__NR_openat)
+#if defined(__NR_open) && defined(O_CLOEXEC)
+	if (fd == -ENOSYS) [[unlikely]]
+	{
+		fd = ::fast_io::details::linux_legacy_openat(dirfd, pathname, flags, mode);
+	}
+#endif
+#if defined(__NR_close) && defined(O_CLOEXEC)
+	fd = ::fast_io::details::linux_finish_open(fd, flags);
+#endif
 	system_call_throw_error<always_terminate>(fd);
 #else
 	if (fd == -1) [[unlikely]]
@@ -1393,11 +1410,72 @@ inline int my_open_posix_fd_temp_file()
 	}
 	wf.release();
 	return fd;
-#elif defined(O_TMPFILE) && defined(__linux__) && defined(__NR_openat)
-	int fd{system_call<__NR_openat, int>(AT_FDCWD, u8"/tmp", O_EXCL | O_RDWR | O_TMPFILE | O_APPEND | O_NOATIME,
+#elif defined(__linux__) && defined(__NR_openat) && defined(__NR_close) && defined(O_CLOEXEC)
+#if defined(O_TMPFILE)
+	// Filesystems and kernels decide independently whether unnamed temporary files are available.
+	int fd{system_call<__NR_openat, int>(AT_FDCWD, "/tmp", O_EXCL | O_RDWR | O_TMPFILE | O_APPEND | O_CLOEXEC,
 										 S_IRUSR | S_IWUSR)};
-	system_call_throw_error(fd);
-	return fd;
+	if (fd >= 0)
+	{
+		return fd;
+	}
+	if (fd != -ENOSYS && fd != -EOPNOTSUPP && fd != -EINVAL && fd != -EISDIR && fd != -ENOENT)
+	{
+		system_call_throw_error(fd);
+	}
+#endif
+	// An exclusive 0600 file is removed before its descriptor leaves this function.
+	char name[]{"/tmp/fast_io_XXXXXXXXXXXXXXXX"};
+	constexpr char hex[]{"0123456789abcdef"};
+	int random{my_posix_openat(AT_FDCWD, "/dev/urandom", O_RDONLY | O_CLOEXEC, 0)};
+	::std::uint_least64_t bits;
+	for (;;)
+	{
+		auto *bytes{reinterpret_cast<unsigned char *>(__builtin_addressof(bits))};
+		for (::std::size_t done{}; done != sizeof(bits);)
+		{
+			auto n{system_call<__NR_read, ::std::ptrdiff_t>(random, bytes + done, sizeof(bits) - done)};
+			if (n == -EINTR)
+			{
+				continue;
+			}
+			if (n <= 0)
+			{
+				::fast_io::details::sys_close(random);
+				throw_posix_error(n == 0 ? EIO : static_cast<int>(-n));
+			}
+			done += static_cast<::std::size_t>(n);
+		}
+		for (unsigned pos{}; pos != 16; ++pos)
+		{
+			name[sizeof("/tmp/fast_io_") - 1 + pos] = hex[bits & 15u];
+			bits >>= 4u;
+		}
+		constexpr int flags{O_CREAT | O_EXCL | O_APPEND | O_RDWR | O_CLOEXEC};
+		int created{system_call<__NR_openat, int>(AT_FDCWD, name, flags, S_IRUSR | S_IWUSR)};
+#if defined(__NR_open)
+		if (created == -ENOSYS)
+		{
+			created = linux_legacy_openat(AT_FDCWD, name, flags, S_IRUSR | S_IWUSR);
+		}
+#endif
+		if (created == -EEXIST)
+		{
+			continue;
+		}
+		::fast_io::details::sys_close(random);
+		system_call_throw_error(created);
+		if (::unlink(name) < 0)
+		{
+			int const error{errno};
+			::fast_io::details::sys_close(created);
+			throw_posix_error(error);
+		}
+		auto const result{linux_finish_open(created, flags)};
+		system_call_throw_error(result);
+		return result;
+	}
+
 #else
 	throw_posix_error(EINVAL);
 #endif
@@ -1812,11 +1890,8 @@ public:
 		{
 			throw_posix_error();
 		}
-#elif defined(__linux__)
-		if (noexcept_call(::pipe2, a2, O_CLOEXEC) == -1)
-		{
-			throw_posix_error();
-		}
+#elif defined(__linux__) && defined(__NR_close) && defined(O_CLOEXEC)
+		::fast_io::system_call_throw_error(::fast_io::details::linux_private_pipe(a2, false));
 #elif (defined(__MSDOS__) || defined(__DJGPP__)) || (defined(__NEWLIB__) && !defined(__CYGWIN__))
 		if (noexcept_call(::pipe, a2) == -1)
 		{
@@ -2017,3 +2092,7 @@ struct is_trivially_copyable_or_relocatable<posix_file_factory>
 #endif
 
 #include "posix/impl.h"
+
+#if defined(__linux__) && defined(__x86_64__) && !defined(__ILP32__) && defined(__NR_fstat) && defined(__NR_read) && defined(__NR_write)
+#include "posix/linux_file_copy.h"
+#endif

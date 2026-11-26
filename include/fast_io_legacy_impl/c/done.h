@@ -104,7 +104,7 @@ inline ::std::size_t c_fwrite_unlocked_impl(void const *__restrict begin, ::std:
 #endif
 #elif defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_PLATFORM_SUPPORTS_FWRITE_UNLOCKED 1
-#elif defined(__USE_MISC) || defined(__BSD_VISIBLE)
+#elif defined(__USE_MISC) || (defined(__BSD_VISIBLE) && !defined(__OpenBSD__))
 #define FAST_IO_PLATFORM_SUPPORTS_FWRITE_UNLOCKED 1
 #endif
 
@@ -207,7 +207,7 @@ inline ::std::size_t c_fread_unlocked_impl(void *__restrict begin, ::std::size_t
 #endif
 #elif defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_PLATFORM_SUPPORTS_FREAD_UNLOCKED 1
-#elif defined(__USE_MISC) || defined(__BSD_VISIBLE)
+#elif defined(__USE_MISC) || (defined(__BSD_VISIBLE) && !defined(__OpenBSD__))
 #define FAST_IO_PLATFORM_SUPPORTS_FREAD_UNLOCKED 1
 #endif
 
@@ -231,7 +231,7 @@ inline ::std::size_t c_fread_unlocked_impl(void *__restrict begin, ::std::size_t
 		if (
 #if defined(__CYGWIN__)
 			__sferror(fp)
-#elif defined(__USE_MISC) || defined(__BSD_VISIBLE) || defined(__DARWIN_C_LEVEL)
+#elif defined(__USE_MISC) || (defined(__BSD_VISIBLE) && !defined(__OpenBSD__)) || defined(__DARWIN_C_LEVEL)
 #if FAST_IO_HAS_BUILTIN(__builtin_ferror_unlocked)
 			__builtin_ferror_unlocked(fp)
 #else

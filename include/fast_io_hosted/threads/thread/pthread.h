@@ -1,11 +1,24 @@
 ﻿#pragma once
 
 // std
+// libstdc++ defines duration, time_point and duration_cast here. Its public chrono
+// header additionally instantiates calendar I/O and std::format in native I/O callers.
+#if defined(__GLIBCXX__) && __has_include(<bits/chrono.h>)
+#include <bits/chrono.h>
+#else
 #include <chrono>
-#include <ranges>
+#endif
+#include <concepts>
 #include <cstdint>
 #include <utility>
+#if defined(__GLIBCXX__) && __has_include(<bits/invoke.h>) && __has_include(<bits/refwrap.h>)
+// libstdc++ implements std::invoke with this primitive. Launch needs INVOKE and reference_wrapper,
+// without the function wrappers, searchers and hash tables supplied by the functional umbrella.
+#include <bits/invoke.h>
+#include <bits/refwrap.h>
+#else
 #include <functional>
+#endif
 #include <type_traits>
 // system
 #include <errno.h>
@@ -72,7 +85,11 @@ inline constexpr void *thread_start_routine(void *args) noexcept
 		// A thread consumes its decay-copied launch state exactly once. Selecting every element from an xvalue tuple
 		// therefore preserves `operator() &&` and transfers move-only by-value arguments; the guard subsequently destroys
 		// the valid moved-from storage without extending any caller-side reference category.
+#if defined(__GLIBCXX__) && __has_include(<bits/invoke.h>) && __has_include(<bits/refwrap.h>)
+		::std::__invoke(::fast_io::containers::get<Is>(::std::move(stored))...);
+#else
 		::std::invoke(::fast_io::containers::get<Is>(::std::move(stored))...);
+#endif
 	}
 #ifdef FAST_IO_CPP_EXCEPTIONS
 	catch (...)
@@ -153,7 +170,7 @@ public:
 
 	inline constexpr pthread_thread(pthread_thread &&other) noexcept : id_{other.id_}, joinable_{other.joinable_}
 	{
-		other.id_ = 0;
+		other.id_ = {};
 		other.joinable_ = false;
 	}
 
@@ -331,7 +348,7 @@ inline
 		::timespec delta{};
 		delta.tv_sec = static_cast<::time_t>(ns64 / 1'000'000'000LL);
 		delta.tv_nsec = static_cast<long>(ns64 % 1'000'000'000LL);
-#if defined(CLOCK_REALTIME) && defined(TIMER_ABSTIME)
+#if defined(CLOCK_REALTIME) && defined(TIMER_ABSTIME) && !defined(__OpenBSD__)
 #if defined(TARGET_OS_VISION) && TARGET_OS_VISION
 		::fast_io::noexcept_call(::nanosleep, __builtin_addressof(delta), nullptr);
 #elif (defined(__APPLE__) || defined(__DARWIN_C_LEVEL)) && FAST_IO_HAS_BUILTIN(__builtin_available)
@@ -418,7 +435,7 @@ inline
 	constexpr ::std::uint_least64_t mul_factor{::fast_io::uint_least64_subseconds_per_second / 1000000000u};
 	ts.tv_nsec = static_cast<long>(unix_ts.subseconds / mul_factor);
 
-#if defined(CLOCK_REALTIME) && defined(TIMER_ABSTIME)
+#if defined(CLOCK_REALTIME) && defined(TIMER_ABSTIME) && !defined(__OpenBSD__)
 #if defined(TARGET_OS_VISION) && TARGET_OS_VISION
 	::timespec now{};
 	now.tv_sec = ::fast_io::noexcept_call(::time, nullptr);

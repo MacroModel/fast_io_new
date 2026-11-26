@@ -149,12 +149,7 @@ inline constexpr auto cond(bool pred, T1 &&t1, T2 &&t2) noexcept(::fast_io::deta
 	// Initialize final aggregate members from `cond_store`'s one alias evaluation and explicit conversion. This keeps
 	// lifetime flow visible to the optimizer and introduces no additional semantic transport type after normalization.
 
-	if constexpr (::std::same_as<t1aliastype, ::fast_io::io_null_t> &&
-				  ::std::same_as<t2aliastype, ::fast_io::io_null_t>)
-	{
-		return ::fast_io::io_null;
-	}
-	else if constexpr (
+	if constexpr (
 		::std::same_as<t1aliastype, t2aliastype> &&
 		!::std::is_reference_v<t1aliastype> &&
 		::std::is_trivially_copyable_v<t1aliastype> &&
@@ -202,7 +197,8 @@ inline constexpr auto cond(bool pred, T1 &&t1) noexcept(::fast_io::details::cond
 	constexpr bool type_match{::std::same_as<t1aliastype, ::fast_io::io_null_t>};
 	if constexpr (type_match)
 	{
-		return ::fast_io::io_null;
+		// Normalization may invoke a user alias even when its result has zero output extent.
+		return ::fast_io::details::cond_store(::std::forward<T1>(t1));
 	}
 	else
 	{

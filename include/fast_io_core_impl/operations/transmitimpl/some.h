@@ -17,28 +17,18 @@ namespace fast_io
 namespace details
 {
 
-/** @brief Copies up to a requested element count and reports actual progress. */
+/** @brief Transfers a positive count through bounded staging storage. */
 template <typename optstmtype, typename instmtype>
 	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
-inline constexpr ::fast_io::uintfpos_t transmit_some_main_impl(optstmtype &optstm, instmtype &instm,
+inline constexpr ::fast_io::uintfpos_t transmit_some_staged_impl(optstmtype &optstm, instmtype &instm,
 															   ::fast_io::uintfpos_t needtransmit)
 {
-	if (needtransmit == 0u)
-	{
-		/*
-		A zero upper bound admits exactly one result: zero transferred elements.
-		Keeping the identity shortcut in the terminal implementation preserves all
-		outer normalization, locking, and checked-finish semantics while proving
-		that allocation and primitive I/O cannot contribute to the result.
-		*/
-		return 0u;
-	}
 	// Generic partial transfer stages through one bounded local element buffer
 	// and reports only units that have also reached the output.
 	using input_char_type = typename instmtype::input_char_type;
 	using output_char_type = typename optstmtype::output_char_type;
 	constexpr ::std::size_t default_buffer_elements{
-		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
+		::fast_io::details::transmit_batch_size<input_char_type, optstmtype, instmtype>};
 	::std::size_t buffer_elements{default_buffer_elements};
 	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
 	{
@@ -51,8 +41,11 @@ inline constexpr ::fast_io::uintfpos_t transmit_some_main_impl(optstmtype &optst
 		*/
 		buffer_elements = static_cast<::std::size_t>(needtransmit);
 	}
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
+	::fast_io::details::transmit_batch_storage<input_char_type, default_buffer_elements> newptr(
 		buffer_elements);
+	::fast_io::conditional_secure_clear_guard<input_char_type,
+		::fast_io::details::transcode_stream_sensitive<true,instmtype>() ||
+		::fast_io::details::transcode_stream_sensitive<false,optstmtype>()> erase{newptr.ptr,newptr.size};
 	input_char_type *buffer_start{newptr.ptr};
 	::fast_io::uintfpos_t totransmit{needtransmit};
 	while (totransmit)
@@ -91,6 +84,45 @@ inline constexpr ::fast_io::uintfpos_t transmit_some_main_impl(optstmtype &optst
 		totransmit -= static_cast<::std::size_t>(iter - buffer_start);
 	}
 	return needtransmit - totransmit;
+}
+
+/** @brief Selects direct access or bounded staging for a counted transfer. */
+template <typename optstmtype, typename instmtype>
+	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
+inline constexpr ::fast_io::uintfpos_t transmit_some_main_impl(optstmtype &optstm, instmtype &instm,
+															   ::fast_io::uintfpos_t needtransmit)
+{
+	if (needtransmit == 0u)
+	{
+		/*
+		A zero upper bound admits exactly one result: zero transferred elements.
+		Keeping the identity shortcut in the terminal implementation preserves all
+		outer normalization, locking, and checked-finish semantics while proving
+		that allocation and primitive I/O cannot contribute to the result.
+		*/
+		return 0u;
+	}
+	if constexpr (::fast_io::details::transmit_borrowable_window<false, optstmtype, instmtype>)
+	{
+		::fast_io::uintfpos_t transferred{};
+		::fast_io::details::transmit_from_window<false, false>(optstm, instm, needtransmit,
+			[&](::std::size_t n) { transferred += n; });
+		return transferred;
+	}
+	else if constexpr (::fast_io::details::transmit_direct_terminal_window<false, optstmtype, instmtype>)
+	{
+		::fast_io::uintfpos_t transferred{};
+		if (::fast_io::details::transmit_try_direct_terminal_window<false, false>(
+				optstm, instm, transferred, needtransmit) == transmit_terminal_window_result::complete) [[likely]]
+		{
+			return transferred;
+		}
+		return ::fast_io::details::transmit_terminal_window_miss<
+			::fast_io::details::transmit_some_staged_impl<optstmtype, instmtype>>(
+				optstm, instm, needtransmit);
+	}
+
+	return ::fast_io::details::transmit_some_staged_impl(optstm, instm, needtransmit);
 }
 
 } // namespace details
@@ -173,6 +205,9 @@ transmit_some_decay_dispatch(optstmtype &optstm, instmtype &instm,
 
 /** @brief Partially transfers elements and checked-finishes an eligible output. */
 template <typename optstmtype, typename instmtype>
+#if defined(__HERBCEPTIONS__)
+	requires (!::fast_io::details::uses_checked_transmit_some<false, optstmtype, instmtype>)
+#endif
 inline constexpr decltype(auto) transmit_some(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit)
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
@@ -181,6 +216,21 @@ inline constexpr decltype(auto) transmit_some(optstmtype &&optstm, instmtype &&i
 		return ::fast_io::operations::decay::transmit_some_decay_dispatch(output_observer, input_observer, totransmit);
 	});
 }
+
+#if defined(__HERBCEPTIONS__)
+/** @brief Partially transfers the requested prefix while preserving the selected checked engine effects. */
+template <typename optstmtype, typename instmtype>
+	requires ::fast_io::details::uses_checked_transmit_some<false, optstmtype, instmtype>
+inline constexpr ::fast_io::uintfpos_t transmit_some(
+	optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit) throws
+{
+	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	auto const transferred{::fast_io::details::transmit_checked_some<false>(guard.ref(), input_observer, totransmit)};
+	::fast_io::details::finish_checked_transmit<optstmtype>(guard);
+	return transferred;
+}
+#endif
 
 } // namespace operations
 

@@ -430,22 +430,13 @@ inline constexpr void debug_print_after_source_pre_normalization(Args &&...args)
 ///          scanning retained the same proxy by reference. Forwarding references preserve both stable references and
 ///          owned prvalues for the duration of this complete call; the downstream dispatcher names each target as an
 ///          lvalue while scanning, so no scanner CPO observes an accidental rvalue category.
-template <bool report, typename... Args>
-inline constexpr ::std::conditional_t<report, bool, void> scan_after_io_scan_forward(Args &&...args)
+template <typename... Args>
+inline constexpr void scan_after_io_scan_forward(Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 #if __has_include(<stdio.h>)
-	if constexpr (report)
+	if (!::fast_io::operations::decay::scan_freestanding_decay(c_stdin(), ::std::forward<Args>(args)...)) [[unlikely]]
 	{
-		return ::fast_io::operations::decay::scan_freestanding_decay(
-			c_stdin(), ::std::forward<Args>(args)...);
-	}
-	else
-	{
-		if (!::fast_io::operations::decay::scan_freestanding_decay(
-				c_stdin(), ::std::forward<Args>(args)...))
-		{
-			::fast_io::throw_parse_code(fast_io::parse_code::end_of_file);
-		}
+		::fast_io::details::raise_scan_error(::fast_io::parse_code::end_of_file);
 	}
 #endif
 }

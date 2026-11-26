@@ -169,7 +169,7 @@ struct
 		{
 			FAST_IO_IF_NOT_CONSTEVAL
 			{
-#if ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86)) && !defined(_M_ARM64EC)
 				if constexpr (sizeof(vec_type) == 16 && ::fast_io::details::cpu_flags::sse2_supported)
 				{
 					if constexpr (::fast_io::details::cpu_flags::sse3_supported)

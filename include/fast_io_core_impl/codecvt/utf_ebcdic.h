@@ -64,8 +64,10 @@ inline constexpr ::std::size_t get_utf_ebcdic_invalid_code_units(T *dst) noexcep
 
 template <::std::integral T>
 	requires(sizeof(T) == 1)
-inline constexpr ::std::size_t get_utf_ebcdic_code_units(char32_t code, T *dst) noexcept
+inline constexpr ::std::size_t get_utf_ebcdic_code_units(char32_t code_point, T *dst) noexcept
 {
+	// The UTF-EBCDIC bit layout requires arithmetic at least 21 bits wide.
+	auto const code{static_cast<::std::uint_least32_t>(code_point)};
 	if (code < 0xA0)
 	{
 		*dst = static_cast<T>(bm_i8_to_ebcdic[code]);
@@ -120,6 +122,21 @@ struct from_ebcdic_result
 	char8_t len;
 };
 
+/// @brief Publishes a decoded value in the character ABI.
+/// @details Some embedded compilers use a narrow char32_t. Preserve the consumed
+///          extent and emit the replacement character when that type cannot hold the value.
+inline constexpr from_ebcdic_result utf_ebcdic_publish(::std::uint_least32_t code, char8_t len) noexcept
+{
+	if constexpr (::std::numeric_limits<char32_t>::digits < 21)
+	{
+		if (::std::numeric_limits<char32_t>::max() < code)
+		{
+			return {0xFFFD, len};
+		}
+	}
+	return {static_cast<char32_t>(code), len};
+}
+
 template <::std::integral T>
 	requires(sizeof(T) == 1)
 inline constexpr from_ebcdic_result utf_ebcdic_advance(T *src_first, ::std::size_t sz) noexcept
@@ -138,7 +155,7 @@ inline constexpr from_ebcdic_result utf_ebcdic_advance(T *src_first, ::std::size
 	{
 		return {0, static_cast<char8_t>(static_cast<::std::uint_least8_t>(-1))};
 	}
-	char32_t res{};
+	::std::uint_least32_t res{};
 	for (char8_t i{1}; i != shadow; ++i)
 	{
 		char8_t code(bm_ebcdic_to_i8[static_cast<char8_t>(static_cast<::std::uint_least8_t>(src_first[i]))]);
@@ -152,13 +169,13 @@ inline constexpr from_ebcdic_result utf_ebcdic_advance(T *src_first, ::std::size
 	switch (shadow)
 	{
 	case 2:
-		return {((static_cast<char32_t>(static_cast<::std::uint_least32_t>(src0i18 & 0b11111))) << 5) | res, 2};
+		return utf_ebcdic_publish((static_cast<::std::uint_least32_t>(src0i18 & 0b11111) << 5) | res, 2);
 	case 3:
-		return {((static_cast<char32_t>(static_cast<::std::uint_least32_t>(src0i18 & 0b1111))) << 10) | res, 3};
+		return utf_ebcdic_publish((static_cast<::std::uint_least32_t>(src0i18 & 0b1111) << 10) | res, 3);
 	case 4:
-		return {((static_cast<char32_t>(static_cast<::std::uint_least32_t>(src0i18 & 0b111))) << 15) | res, 4};
+		return utf_ebcdic_publish((static_cast<::std::uint_least32_t>(src0i18 & 0b111) << 15) | res, 4);
 	case 5:
-		return {((static_cast<char32_t>(static_cast<::std::uint_least32_t>(src0i18 & 0b1))) << 20) | res, 5};
+		return utf_ebcdic_publish((static_cast<::std::uint_least32_t>(src0i18 & 0b1) << 20) | res, 5);
 	default:
 		return {0xFFFD, shadow};
 	};

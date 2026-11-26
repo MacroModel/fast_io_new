@@ -28,7 +28,7 @@
 #include "fast_io_freestanding_impl/exception.h"
 // #include"fast_io_freestanding_impl/posix_error.h"
 // compile floating point is slow since it requires algorithms like ryu
-#ifndef FAST_IO_DISABLE_FLOATING_POINT
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 #include "fast_io_unit/floating/impl.h"
 #endif
 #include "fast_io_freestanding_impl/io_buffer/impl.h"
@@ -39,6 +39,10 @@
 #include "fast_io_freestanding_impl/space_reserve.h"
 #if 0
 #include "fast_io_freestanding_impl/scanners/impl.h"
+#endif
+
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+#include "fast_io_freestanding_impl/async/impl.h"
 #endif
 
 #if defined(_GLIBCXX_BITSET)

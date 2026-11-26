@@ -22,23 +22,16 @@ rapidhash_mix_fio(::std::uint_least64_t a, ::std::uint_least64_t b) noexcept
 	return low ^ high;
 }
 
+/** @brief Reconstructs the same native word as the runtime byte copy, including on mixed-endian targets. */
 template <typename T>
 inline constexpr T rapidhash_generic_fio(::std::byte const *p) noexcept
 {
-	constexpr unsigned digits{::std::numeric_limits<char unsigned>::digits};
-	T v{};
-	for (::std::size_t i{}; i != sizeof(v); ++i)
+	::fast_io::freestanding::array<::std::byte, sizeof(T)> bytes{};
+	for (::std::size_t i{}; i != sizeof(T); ++i)
 	{
-		if constexpr (::std::endian::native == ::std::endian::little)
-		{
-			v |= static_cast<T>(static_cast<char unsigned>(p[i])) << (i * digits);
-		}
-		else
-		{
-			v = (v << digits) + static_cast<char unsigned>(p[i]);
-		}
+		bytes[i] = p[i];
 	}
-	return v;
+	return ::fast_io::bit_cast<T>(bytes);
 }
 
 inline constexpr ::std::uint_least64_t

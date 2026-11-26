@@ -16,7 +16,11 @@
 // The output front door is the only format component that needs hosted stream
 // adapters and the default standard-output objects. Lowering itself remains
 // reusable by the freestanding concat front doors.
+#if (__STDC_HOSTED__ && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED) && !defined(_LIBCPP_FREESTANDING)) || defined(FAST_IO_ENABLE_HOSTED_FEATURES)
 #include "../fast_io.h"
+#else
+#include "../fast_io_freestanding.h"
+#endif
 #include "details/brace_rule.h"
 #include "details/lower.h"
 #include "details/printf_rule.h"
@@ -194,6 +198,7 @@ inline constexpr void print_with_rule(
 template <typename char_type>
 [[nodiscard]] inline constexpr auto default_format_output() noexcept
 {
+#if (__STDC_HOSTED__ && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED) && !defined(_LIBCPP_FREESTANDING)) || defined(FAST_IO_ENABLE_HOSTED_FEATURES)
 #if __has_include(<stdio.h>)
 	// Match io::print's C-stdout boundary where fast_io exposes a portable C
 	// observer. char16_t/char32_t have no such portable C stream and therefore
@@ -213,6 +218,9 @@ template <typename char_type>
 	else
 #endif
 		return ::fast_io::native_stdout<char_type>();
+#else
+	static_assert(sizeof(char_type) == 0, "freestanding formatted output requires an explicit output device");
+#endif
 }
 
 /**
@@ -320,7 +328,7 @@ inline constexpr void print_primary_with_rule(
 		{
 			::fast_io::fmt::details::print_with_rule<format_literal>(
 				grammar,
-				::fast_io::fmt::details::default_format_output<char>(),
+				::fast_io::fmt::details::default_format_output<char_type>(),
 				::std::forward<first_type>(first),
 				::std::forward<argument_types>(arguments)...);
 		}
@@ -337,11 +345,15 @@ inline constexpr void print_primary_with_rule(grammar_type grammar)
 	{
 		::fast_io::fmt::details::print_with_rule<format_literal>(
 			grammar,
-			::fast_io::fmt::details::default_format_output<char>());
+			::fast_io::fmt::details::default_format_output<typename decltype(format_literal)::value_type>());
 	}
 }
 
 } // namespace fast_io::fmt::details
+
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+#include "details/async_fields.h"
+#endif
 
 namespace fast_io::fmt
 {
@@ -358,6 +370,7 @@ namespace fast_io::fmt
 // otherwise share the same implementation; no device or materialization policy
 // is duplicated here.
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GCC_PRIMARY_FACADE_INLINE
 inline constexpr void print(argument_types &&...arguments)
 {
@@ -366,6 +379,7 @@ inline constexpr void print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void wprint(argument_types &&...arguments)
 {
@@ -374,6 +388,7 @@ inline constexpr void wprint(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u8print(argument_types &&...arguments)
 {
@@ -382,6 +397,7 @@ inline constexpr void u8print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u16print(argument_types &&...arguments)
 {
@@ -390,6 +406,7 @@ inline constexpr void u16print(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u32print(argument_types &&...arguments)
 {
@@ -401,6 +418,7 @@ inline constexpr void u32print(argument_types &&...arguments)
 // runtime-formatting mode. These value-carrying facades need the same bridge as
 // their brace counterparts; the grammar owns no materialization policy.
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GCC_PRIMARY_FACADE_INLINE
 inline constexpr void printf(argument_types &&...arguments)
 {
@@ -409,6 +427,7 @@ inline constexpr void printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void wprintf(argument_types &&...arguments)
 {
@@ -417,6 +436,7 @@ inline constexpr void wprintf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u8printf(argument_types &&...arguments)
 {
@@ -425,6 +445,7 @@ inline constexpr void u8printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u16printf(argument_types &&...arguments)
 {
@@ -433,12 +454,17 @@ inline constexpr void u16printf(argument_types &&...arguments)
 }
 
 template <basic_fixed_string format_literal, typename... argument_types>
+	requires (!::fast_io::async::details::contains_annotation<argument_types>() && ...)
 FAST_IO_FMT_GNU_CONSTANT_INNER_INLINE
 inline constexpr void u32printf(argument_types &&...arguments)
 {
 	::fast_io::fmt::details::print_builtin_with_rule<char32_t, format_literal>(
 		printf_fmt_t{}, ::std::forward<argument_types>(arguments)...);
 }
+
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>)
+#include "async_print.h"
+#endif
 
 // Ordinary array format arguments cannot expose their contents as a template
 // specialization. Every runtime-array spelling is therefore deleted instead

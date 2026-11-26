@@ -13,7 +13,12 @@
 #if defined(FAST_IO_ENABLE_FLOATING_POINT_ENVIRONMENT)
 #if __has_include(<cfenv>)
 #include <cfenv>
+// Some embedded C++ libraries ship the header even when their C library has no
+// floating-point environment. Only advertise modes the implementation exposes.
+#if (defined(FE_TONEAREST) || defined(FE_TOWARDZERO) || defined(FE_UPWARD) || defined(FE_DOWNWARD)) && \
+	(!defined(__GLIBCXX__) || defined(_GLIBCXX_USE_C99_FENV))
 #define FAST_IO_HAS_FLOATING_POINT_ENVIRONMENT 1
+#endif
 #endif
 #endif
 
@@ -387,6 +392,13 @@ struct scalar_manip_t
 #endif
 	T reference;
 };
+
+/** @brief Captures the complete state of an integer base/sign manipulator whose payload is owned by value. */
+template <::std::integral Char, scalar_flags Flags, ::std::integral T>
+inline constexpr ::std::true_type print_async_snapshot_safe(io_reserve_type_t<Char, scalar_manip_t<Flags, T>>) noexcept
+{
+	return {};
+}
 
 /// @brief Declares fundamental scalar carriers transparent to optional-scatter semantic planning.
 /// @details This hidden customization does not change output. It proves that grouping adjacent semantic nodes cannot
@@ -845,17 +857,17 @@ inline constexpr bool long_double_alias_is_ibm_double_double{
 	::std::numeric_limits<long double>::digits == 106 &&
 	::std::numeric_limits<long double>::max_exponent == 1024};
 
-#if defined(__SIZEOF_INT128__) && defined(__STDCPP_FLOAT128_T__)
+// Some ABIs expose IEEE binary128 only as long double.
 inline constexpr bool long_double_alias_is_float128{
-	sizeof(long double) == sizeof(_Float128) && ::std::numeric_limits<long double>::digits == 113 &&
-	::std::numeric_limits<long double>::max_exponent == 16384};
-#elif defined(__SIZEOF_INT128__) && defined(__FLOAT128__)
-inline constexpr bool long_double_alias_is_float128{
-	sizeof(long double) == sizeof(__float128) && ::std::numeric_limits<long double>::digits == 113 &&
-	::std::numeric_limits<long double>::max_exponent == 16384};
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+	sizeof(long double) == sizeof(__uint128_t) &&
+	::std::numeric_limits<long double>::radix == 2 &&
+	::std::numeric_limits<long double>::digits == 113 &&
+	::std::numeric_limits<long double>::max_exponent == 16384
 #else
-inline constexpr bool long_double_alias_is_float128{};
+	false
 #endif
+};
 
 template <bool is_double, bool is_float80, bool is_float128>
 struct long_double_alias_type_traits
@@ -869,19 +881,17 @@ struct long_double_alias_type_traits<false, true, is_float128>
 	using alias_type = long double;
 };
 
-#if defined(__SIZEOF_INT128__) && defined(__STDCPP_FLOAT128_T__)
 template <>
 struct long_double_alias_type_traits<false, false, true>
 {
+#if defined(__STDCPP_FLOAT128_T__)
 	using alias_type = _Float128;
-};
-#elif defined(__SIZEOF_INT128__) && defined(__FLOAT128__)
-template <>
-struct long_double_alias_type_traits<false, false, true>
-{
+#elif defined(__FLOAT128__)
 	using alias_type = __float128;
-};
+#else
+	using alias_type = long double;
 #endif
+};
 
 template <>
 struct float_alias_type_traits<long double>
@@ -906,6 +916,27 @@ struct float_alias_type_traits<__float16>
 
 template <typename flt>
 using float_alias_type = typename float_alias_type_traits<::std::remove_cvref_t<flt>>::alias_type;
+
+/// @brief Identifies native values whose ABI may quiet a signaling NaN during transport.
+/// @details IA-32 and m68k may move binary32 or binary64 objects through an
+///          extended-precision floating register. A load can change the stored
+///          NaN kind before the formatter observes it. IA-32 can still return
+///          floating values through x87 in an SSE arithmetic build.
+template <typename T>
+inline constexpr bool native_floating_requires_integer_capture{
+#if defined(__i386__) || defined(__m68k__)
+	::std::same_as<::std::remove_cvref_t<T>, double> ||
+	::std::same_as<::std::remove_cvref_t<T>, float_alias_type<double>> ||
+	::std::same_as<::std::remove_cvref_t<T>, float> ||
+	::std::same_as<::std::remove_cvref_t<T>, float_alias_type<float>> ||
+#endif
+	false};
+
+template <typename T>
+using floating_scalar_representation_t =
+	::std::conditional_t<sizeof(T) == sizeof(::std::uint_least16_t), ::std::uint_least16_t,
+		::std::conditional_t<sizeof(T) == sizeof(::std::uint_least32_t), ::std::uint_least32_t,
+			::std::uint_least64_t>>;
 
 inline constexpr ::fast_io::manipulators::scalar_flags
 compute_bool_scalar_flags_cache(::fast_io::manipulators::scalar_flags flags) noexcept
@@ -1043,9 +1074,7 @@ struct scalar_manip_precision_t
 	::std::size_t precision;
 };
 
-/// @brief Integer-owned floating carrier for the Clang/x86 narrow-float ABI exception.
-/// @details Scalar-to-aggregate construction can otherwise perform a second bfloat16 conversion. `floating_type`
-///          remains the semantic format domain while `representation` preserves the original two-byte object bits.
+/// @brief Owns floating object bits when value transport could change them.
 template <scalar_flags flags, typename floating_type>
 struct floating_scalar_field_manip_t
 {
@@ -1053,12 +1082,10 @@ struct floating_scalar_field_manip_t
 	using scalar_flags_type = scalar_flags;
 	using manip_tag = manip_tag_t;
 	using scalar_manip_detail_tag = ::fast_io::details::scalar_manip_detail_tag;
-	::std::uint_least16_t representation;
+	::fast_io::details::floating_scalar_representation_t<floating_type> representation;
 };
 
-/// @brief Precision-bearing form of the integer-owned narrow-float carrier.
-/// @details It preserves the original bfloat16 representation and carries the same run-time precision semantics as
-///          `scalar_manip_precision_t`, avoiding a native floating reconstruction at the manipulator boundary.
+/// @brief Owns the original floating object bits and carries a run-time precision count.
 template <scalar_flags flags, typename floating_type>
 struct floating_scalar_field_manip_precision_t
 {
@@ -1066,7 +1093,7 @@ struct floating_scalar_field_manip_precision_t
 	using scalar_flags_type = scalar_flags;
 	using manip_tag = manip_tag_t;
 	using scalar_manip_detail_tag = ::fast_io::details::scalar_manip_detail_tag;
-	::std::uint_least16_t representation;
+	::fast_io::details::floating_scalar_representation_t<floating_type> representation;
 	::std::size_t precision;
 };
 
@@ -1085,16 +1112,14 @@ struct floating_scalar_precision_range_manip_t
 	::std::size_t maximum_precision;
 };
 
-/// @brief Integer-owned narrow-float form of `floating_scalar_precision_range_manip_t`.
-/// @details The interval has the same significant-digit semantics, while `representation` avoids a potentially
-///          lossy or exception-raising bfloat16 reconstruction on the affected ABI.
+/// @brief Carries a significant-digit interval and the original floating object bits.
 template <scalar_flags flags, typename floating_type>
 struct floating_scalar_field_precision_range_manip_t
 {
 	using value_type = floating_type;
 	using scalar_flags_type = scalar_flags;
 	using manip_tag = manip_tag_t;
-	::std::uint_least16_t representation;
+	::fast_io::details::floating_scalar_representation_t<floating_type> representation;
 	::std::size_t minimum_precision;
 	::std::size_t maximum_precision;
 };
@@ -1138,16 +1163,14 @@ struct exact_decimal_manip_t
 	floating_type reference;
 };
 
-/// @brief Integer-owned narrow-float form of the exact-decimal request.
-/// @details It preserves bfloat16 object bits on the Clang/x86 ABI where forming another native aggregate can silently
-///          retruncate the value; presentation semantics are otherwise identical to `exact_decimal_manip_t`.
+/// @brief Owns the original floating object bits for exact decimal presentation.
 template <scalar_flags flags, typename floating_type>
 struct exact_decimal_field_manip_t
 {
 	using value_type = floating_type;
 	using scalar_flags_type = scalar_flags;
 	using manip_tag = manip_tag_t;
-	::std::uint_least16_t representation;
+	::fast_io::details::floating_scalar_representation_t<floating_type> representation;
 };
 
 /// @brief Marks native exact-decimal carriers transparent to optional-scatter semantic grouping.
@@ -1183,51 +1206,68 @@ namespace details
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
 template <typename T>
 inline constexpr bool floating_scalar_requires_integer_proxy{
-	::std::same_as<::std::remove_cvref_t<T>, __bf16>};
+	::std::same_as<::std::remove_cvref_t<T>, __bf16> || native_floating_requires_integer_capture<T>};
 
 #else
 template <typename T>
-inline constexpr bool floating_scalar_requires_integer_proxy{};
+inline constexpr bool floating_scalar_requires_integer_proxy{native_floating_requires_integer_capture<T>};
 #endif
 
 template <typename T>
 concept floating_scalar_integer_proxy_source =
 	::fast_io::details::floating_scalar_requires_integer_proxy<T>;
 
-/// Copies the bfloat16 object representation before scalar proxy ownership.
-/// On Clang/x86 without native AVX512BF16 transport, the integer read/write
-/// constraint freezes the representation at this first owning boundary.
-/// Without it, the frontend may retain binary32 SSA and later rebuild bfloat16
-/// with an exception-raising retruncation. AVX512BF16 deliberately bypasses
-/// this workaround so public floating manipulators keep their native XMM
-/// calling convention. The empty statement emits no instruction and requests
-/// a general register only; constant evaluation bypasses it entirely.
+/// @brief Captures the source object before creating an integer-owned proxy.
+/// @details Integer loads preserve the NaN kind of ordinary storage. On ABIs that
+///          require an integer snapshot, a volatile operand keeps its native read.
+///          The Clang/x86 bfloat16 path uses an integer register constraint to
+///          prevent the frontend from retruncating a cached binary32 representation.
 template <typename scalar_type>
-[[nodiscard]] inline constexpr ::std::uint_least16_t
-capture_bfloat16_representation(scalar_type &&value) noexcept
+[[nodiscard]] inline constexpr auto
+capture_floating_scalar_representation(scalar_type const &value) noexcept
 {
 	static_assert(
 		::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>);
-	auto representation{
-		::fast_io::bit_cast<::std::uint_least16_t>(value)};
+	if constexpr (::std::is_volatile_v<scalar_type> && native_floating_requires_integer_capture<scalar_type>)
+	{
+		auto const snapshot{value};
+		return ::fast_io::details::capture_floating_scalar_representation(snapshot);
+	}
+	else
+	{
+		using storage_type = floating_scalar_representation_t<scalar_type>;
+		if constexpr (native_floating_requires_integer_capture<scalar_type>)
+		{
+			FAST_IO_IF_NOT_CONSTEVAL
+			{
+				storage_type representation;
+				auto address{__builtin_addressof(value)};
+#if defined(__GNUC__) || defined(__clang__)
+				// Hide the source type from register selection after inlining.
+				// Otherwise the compiler can replace the byte copy with a floating load.
+				__asm__("" : "+r"(address));
+#endif
+				::fast_io::freestanding::my_memcpy(__builtin_addressof(representation), address, sizeof(storage_type));
+				return representation;
+			}
+		}
+		auto representation{::fast_io::bit_cast<storage_type>(value)};
 #if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
 	(defined(__x86_64__) || defined(_M_X64)) &&                       \
 	!defined(__AVX512BF16__) &&                                       \
 	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-	FAST_IO_IF_NOT_CONSTEVAL
-	{
-		__asm__("" : "+r"(representation));
-	}
+		FAST_IO_IF_NOT_CONSTEVAL
+		{
+			__asm__("" : "+r"(representation));
+		}
 #endif
-	return representation;
+		return representation;
+	}
 }
 
-/// Forms the ordinary by-value floating manipulator or the Clang/x86 bfloat16
-/// integer proxy selected by the public capture boundary. Public constructors
-/// for every other floating type remain by-value and retain their native
-/// floating-register calling convention.
+/// Forms the native value or integer-owned manipulator selected by the source ABI.
 template <::fast_io::manipulators::scalar_flags flags, typename scalar_type>
-	requires ::fast_io::details::my_floating_point<
+	requires ::fast_io::details::floating_io_value<
 		::std::remove_cvref_t<scalar_type>>
 [[nodiscard]] inline constexpr auto
 make_floating_scalar_manip(scalar_type &&value) noexcept
@@ -1236,10 +1276,8 @@ make_floating_scalar_manip(scalar_type &&value) noexcept
 	if constexpr (
 		::fast_io::details::floating_scalar_requires_integer_proxy<floating_type>)
 	{
-		static_assert(sizeof(floating_type) == sizeof(::std::uint_least16_t));
 		auto const representation{
-			::fast_io::details::capture_bfloat16_representation(
-				::std::forward<scalar_type>(value))};
+			::fast_io::details::capture_floating_scalar_representation(value)};
 		return ::fast_io::manipulators::floating_scalar_field_manip_t<
 			flags, floating_type>{
 			representation};
@@ -1252,7 +1290,7 @@ make_floating_scalar_manip(scalar_type &&value) noexcept
 }
 
 template <::fast_io::manipulators::scalar_flags flags, typename scalar_type>
-	requires ::fast_io::details::my_floating_point<
+	requires ::fast_io::details::floating_io_value<
 		::std::remove_cvref_t<scalar_type>>
 [[nodiscard]] inline constexpr auto
 make_floating_scalar_manip_precision(
@@ -1262,10 +1300,8 @@ make_floating_scalar_manip_precision(
 	if constexpr (
 		::fast_io::details::floating_scalar_requires_integer_proxy<floating_type>)
 	{
-		static_assert(sizeof(floating_type) == sizeof(::std::uint_least16_t));
 		auto const representation{
-			::fast_io::details::capture_bfloat16_representation(
-				::std::forward<scalar_type>(value))};
+			::fast_io::details::capture_floating_scalar_representation(value)};
 		return ::fast_io::manipulators::floating_scalar_field_manip_precision_t<
 			flags, floating_type>{
 			representation, precision};
@@ -1427,7 +1463,7 @@ json_float(floating_scalar_field_precision_range_manip_t<flags, T> value) noexce
 ///          outside the manipulator's semantic contract.
 template <scalar_flags flags, typename T>
 	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
-			 ::fast_io::details::my_floating_point<T>)
+			 ::fast_io::details::floating_io_value<T>)
 [[nodiscard]] inline constexpr auto precision_range(
 	scalar_manip_t<flags, T> value, ::std::size_t minimum_precision,
 	::std::size_t maximum_precision) noexcept
@@ -1440,7 +1476,7 @@ template <scalar_flags flags, typename T>
 /// @details Semantics match the ordinary overload while preserving the original narrow-float representation bits.
 template <scalar_flags flags, typename T>
 	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
-			 ::fast_io::details::my_floating_point<T>)
+			 ::fast_io::details::floating_io_value<T>)
 [[nodiscard]] inline constexpr auto precision_range(
 	floating_scalar_field_manip_t<flags, T> value,
 	::std::size_t minimum_precision,
@@ -1454,7 +1490,7 @@ template <scalar_flags flags, typename T>
 /// @details This convenience overload first applies the default decimal policy, then the same inclusive interval rules
 ///          as the carrier overloads.
 template <typename T>
-	requires ::fast_io::details::my_floating_point<::std::remove_cvref_t<T>>
+	requires ::fast_io::details::floating_io_value<::std::remove_cvref_t<T>>
 [[nodiscard]] inline constexpr auto precision_range(
 	T &&value, ::std::size_t minimum_precision,
 	::std::size_t maximum_precision) noexcept
@@ -1470,7 +1506,7 @@ template <typename T>
 template <scalar_flags flags, typename T>
 	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
 			 flags.rounding == floating_rounding::nearest_to_even &&
-			 ::fast_io::details::my_floating_point<T>)
+			 ::fast_io::details::floating_io_value<T>)
 [[nodiscard]] inline constexpr auto
 exact_decimal(scalar_manip_t<flags, T> value) noexcept
 {
@@ -1482,7 +1518,7 @@ exact_decimal(scalar_manip_t<flags, T> value) noexcept
 template <scalar_flags flags, typename T>
 	requires(flags.base == 10 && flags.floating != floating_format::hexfloat &&
 			 flags.rounding == floating_rounding::nearest_to_even &&
-			 ::fast_io::details::my_floating_point<T>)
+			 ::fast_io::details::floating_io_value<T>)
 [[nodiscard]] inline constexpr auto
 exact_decimal(floating_scalar_field_manip_t<flags, T> value) noexcept
 {
@@ -1493,7 +1529,7 @@ exact_decimal(floating_scalar_field_manip_t<flags, T> value) noexcept
 /// @details The default shortest-decimal presentation flags are used as the starting policy; unlike `decimal`, this
 ///          adapter never shortens a finite value merely because it round-trips to the same binary value.
 template <typename T>
-	requires ::fast_io::details::my_floating_point<::std::remove_cvref_t<T>>
+	requires ::fast_io::details::floating_io_value<::std::remove_cvref_t<T>>
 [[nodiscard]] inline constexpr auto exact_decimal(T &&value) noexcept
 {
 	return exact_decimal(::fast_io::details::make_floating_scalar_manip<
@@ -1527,7 +1563,7 @@ json_float(exact_decimal_field_manip_t<flags, T> value) noexcept
 /// @details The destination is updated through its lvalue reference. A leading `+` is accepted only when
 ///          `allow_leading_plus` is true; exponent signs remain part of the decimal grammar independently.
 template <floating_rounding rounding_policy, bool allow_leading_plus = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto rounding_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -2017,11 +2053,11 @@ inline constexpr auto bin0b(scalar_type t) noexcept
 template <scalar_flags flags, typename scalar_type>
 	requires(((2 <= flags.base && flags.base <= 36 && (::fast_io::details::scalar_integrals<scalar_type>)) ||
 			  (flags.base == 10 &&
-			   ::fast_io::details::my_floating_point<scalar_type> &&
+			   ::fast_io::details::floating_io_value<scalar_type> &&
 			   !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)))
 inline constexpr auto scalar_generic(scalar_type t) noexcept
 {
-	if constexpr (::fast_io::details::my_floating_point<scalar_type>)
+	if constexpr (::fast_io::details::floating_io_value<scalar_type>)
 	{
 		// scalar_generic is the public escape hatch for a complete scalar_flags
 		// policy.  Preserve that NTTP for floating inputs just as the integral arm
@@ -2048,7 +2084,7 @@ inline constexpr scalar_manip_t<::fast_io::details::boolalpha_mani_flags_cache<u
 /// @details The result uses a hexadecimal significand and binary `p` exponent. `uppercase` selects `A-F`, `P`, and
 ///          uppercase special-value spellings. The shortest form round-trips to the original floating value.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t) noexcept
 {
@@ -2059,7 +2095,7 @@ inline constexpr auto hexfloat(scalar_type t) noexcept
 /// @brief Formats a floating value in normalized hexadecimal notation with a `0x` prefix.
 /// @details Apart from the prefix, case and shortest-round-trip semantics match `hexfloat`.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t) noexcept
 {
@@ -2074,7 +2110,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2090,7 +2126,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2103,7 +2139,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2119,7 +2155,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2130,7 +2166,7 @@ inline constexpr auto hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 /// @details The grammar is otherwise the unprefixed `hexfloat` grammar; a period is not emitted as the fractional
 ///          separator.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t) noexcept
 {
@@ -2141,7 +2177,7 @@ inline constexpr auto comma_hexfloat(scalar_type t) noexcept
 /// @brief Formats a shortest prefixed hexadecimal floating value using comma as the radix separator.
 /// @details The representation includes `0x`/`0X`; all other semantics match `comma_hexfloat`.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t) noexcept
 {
@@ -2155,7 +2191,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2170,7 +2206,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2183,7 +2219,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2198,7 +2234,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2209,7 +2245,7 @@ inline constexpr auto comma_hexfloat0x(scalar_type t, ::std::size_t n) noexcept
 /// @details Fixed and scientific spellings are compared after complete construction; ties favor fixed notation.
 ///          `uppercase` controls the exponent marker and special-value case but not the notation decision.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t) noexcept
 {
@@ -2222,7 +2258,7 @@ inline constexpr auto decimal(scalar_type t) noexcept
 /// @details Notation selection matches `decimal`: the shorter complete fixed/scientific spelling wins, with fixed on
 ///          ties. Comma replaces period rather than being accepted in addition to it.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t) noexcept
 {
@@ -2238,7 +2274,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2254,7 +2290,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto decimal(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2267,7 +2303,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2283,7 +2319,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2294,7 +2330,7 @@ inline constexpr auto comma_decimal(scalar_type t, ::std::size_t n) noexcept
 /// @details Unlike `decimal`, notation is not chosen by total string length: shortest general output uses fixed for
 ///          scientific exponents in `[-4, 6)` and scientific notation outside that interval.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t) noexcept
 {
@@ -2306,7 +2342,7 @@ inline constexpr auto general(scalar_type t) noexcept
 /// @brief Formats shortest general output with comma as the radix separator.
 /// @details The general exponent threshold is unchanged; only the fractional separator differs.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t) noexcept
 {
@@ -2322,7 +2358,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2338,7 +2374,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto general(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2351,7 +2387,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2367,7 +2403,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2378,7 +2414,7 @@ inline constexpr auto comma_general(scalar_type t, ::std::size_t n) noexcept
 /// @details No decimal exponent is emitted, even when the result is very long. `uppercase` affects special values but
 ///          normally has no effect on finite fixed notation.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t) noexcept
 {
@@ -2390,7 +2426,7 @@ inline constexpr auto fixed(scalar_type t) noexcept
 /// @brief Formats shortest fixed notation using comma as the radix separator.
 /// @details No exponent is emitted; comma replaces period rather than supplementing it.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t) noexcept
 {
@@ -2408,7 +2444,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2424,7 +2460,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto fixed(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2437,7 +2473,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2453,7 +2489,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2464,7 +2500,7 @@ inline constexpr auto comma_fixed(scalar_type t, ::std::size_t n) noexcept
 /// @details The output always contains a decimal `e`/`E` exponent, including values that fixed notation could spell
 ///          more compactly. `uppercase` controls the exponent marker and special-value case.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t) noexcept
 {
@@ -2476,7 +2512,7 @@ inline constexpr auto scientific(scalar_type t) noexcept
 /// @brief Formats shortest scientific notation using comma as the radix separator.
 /// @details A decimal exponent remains mandatory; comma replaces period in the significand.
 template <bool uppercase = false, typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t) noexcept
 {
@@ -2492,7 +2528,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2508,7 +2544,7 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto scientific(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2522,7 +2558,7 @@ template <bool uppercase = false,
 		  floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t, ::std::size_t n) noexcept
 {
@@ -2538,22 +2574,14 @@ template <floating_precision precision_mode,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool uppercase = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<scalar_type> &&
+	requires(::fast_io::details::floating_io_value<scalar_type> &&
 			 !::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto comma_scientific(scalar_type t, ::std::size_t n) noexcept
 {
 	return comma_scientific<uppercase, precision_mode, rounding_policy>(t, n);
 }
 
-#if defined(FAST_IO_CLANG_HAS_BFLOAT16_TYPE) && defined(__clang__) && \
-	(defined(__x86_64__) || defined(_M_X64)) &&                       \
-	!defined(__AVX512BF16__) &&                                       \
-	!(defined(__arm64ec__) || defined(_M_ARM64EC))
-// Clang/x86 without AVX512BF16 may retain a bfloat16 object as its exact
-// binary32 extension and retruncate it at a by-value inline boundary. These
-// source-only overloads win over the generic by-value templates and capture
-// the original expression directly into the integer-owned transport. Native
-// AVX512BF16 and every other floating type keep the by-value ABI above.
+// These source overloads capture types whose arithmetic ABI can change object bits.
 /// @brief Hidden ABI-preserving overload for shortest unprefixed hexadecimal bfloat16 output.
 /// @details It has the same result as public `hexfloat`; only integer-owned capture differs to prevent retruncation.
 template <bool uppercase = false>
@@ -3036,8 +3064,6 @@ inline constexpr auto comma_scientific(
 	return comma_scientific<uppercase, precision_mode, rounding_policy>(
 		::std::forward<decltype(value)>(value), precision);
 }
-#endif
-
 /// @brief Scans a decimal floating token whose exponent is optional.
 /// @details Both fixed text such as `1.25` and scientific text such as `1.25e2` are accepted and fully consumed when
 ///          valid. This is a grammar choice, not the inverse of one particular ftoa notation. A leading `+` is rejected
@@ -3045,7 +3071,7 @@ inline constexpr auto comma_scientific(
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto decimal_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3064,7 +3090,7 @@ template <floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto decimal_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3081,7 +3107,7 @@ inline constexpr auto decimal_get(scalar_type &value, ::std::size_t n) noexcept
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_decimal_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3100,7 +3126,7 @@ template <floating_precision precision_mode = floating_precision::significant,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_decimal_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<
@@ -3119,7 +3145,7 @@ inline constexpr auto comma_decimal_get(scalar_type &value, ::std::size_t n) noe
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto fixed_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3137,7 +3163,7 @@ template <floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto fixed_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3153,7 +3179,7 @@ inline constexpr auto fixed_get(scalar_type &value, ::std::size_t n) noexcept
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_fixed_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3171,7 +3197,7 @@ template <floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_fixed_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<
@@ -3190,7 +3216,7 @@ inline constexpr auto comma_fixed_get(scalar_type &value, ::std::size_t n) noexc
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto scientific_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3208,7 +3234,7 @@ template <floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto scientific_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3224,7 +3250,7 @@ inline constexpr auto scientific_get(scalar_type &value, ::std::size_t n) noexce
 template <floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_scientific_get(scalar_type &value) noexcept
 {
 	return scalar_manip_t<::fast_io::details::allow_leading_plus_mani_flags_cache<
@@ -3243,7 +3269,7 @@ template <floating_precision precision_mode = floating_precision::fractional,
 		  floating_rounding rounding_policy = floating_rounding::nearest_to_even,
 		  bool allow_leading_plus = false,
 		  typename scalar_type>
-	requires(::fast_io::details::my_floating_point<::std::remove_cvref_t<scalar_type>>)
+	requires(::fast_io::details::floating_io_value<::std::remove_cvref_t<scalar_type>>)
 inline constexpr auto comma_scientific_get(scalar_type &value, ::std::size_t n) noexcept
 {
 	return scalar_manip_precision_t<
@@ -3319,7 +3345,7 @@ consteval auto generate_power_of_two_digits_table() noexcept
 }
 
 template <::std::integral char_type, ::std::size_t base, ::std::size_t digits, bool uppercase = false>
-alignas(64) static constexpr auto power_of_two_digits_table{
+alignas(::fast_io::details::hot_table_alignment) static constexpr auto power_of_two_digits_table{
 	generate_power_of_two_digits_table<char_type, base, digits, uppercase>()};
 
 template <typename result_type, ::std::integral char_type>
@@ -4671,24 +4697,6 @@ inline constexpr char_type *print_reserve_integral_define(char_type *first, int_
 	}
 }
 
-/// @brief Fixed-view decimal emitter with an isolated inlining contract.
-/// @details The ordinary integer reserve CPO remains cost-model controlled for owners, concat, and dynamic buffers.
-///          Only the stronger fixed external-view destination asks for this force-inlined leaf; keeping the wrapper
-///          separate prevents that code-generation choice from propagating through every integer formatting caller.
-template <::std::integral char_type, ::fast_io::details::my_unsigned_integral T>
-#if __has_cpp_attribute(__gnu__::__always_inline__)
-[[__gnu__::__always_inline__]]
-#if defined(__GNUC__) && !defined(__clang__) && __has_cpp_attribute(__gnu__::__flatten__)
-[[__gnu__::__flatten__]]
-#endif
-#elif __has_cpp_attribute(msvc::forceinline)
-[[msvc::forceinline]]
-#endif
-inline constexpr char_type *print_fixed_decimal_integral_define(char_type *first, T value) noexcept
-{
-	return print_reserve_integral_define<10u, false, false, false, false, false, false>(first, value);
-}
-
 /// Selects one explicitly converted execution character without assuming that
 /// the lowercase and uppercase alphabets are arithmetically related.
 template <bool uppercase, char8_t lowercase_character,
@@ -4792,8 +4800,8 @@ inline constexpr char_type *print_compiler_constant_boolalpha_define(
 
 /// @brief Emits one optimizer-proven constant integer without entering the run-time decimal algorithm.
 /// @details This is intentionally a sibling of `print_reserve_integral_define`, not a branch inside it.  The public
-///          print/concat strategy reaches this helper only through `compiler_constant_scalar_manip_t`; an unknown value
-///          therefore instantiates and executes the original formatter with no extra test or altered inlining body.
+///          print/concat strategy and the fixed-view decimal emitter use it when a source is known to the optimizer.
+///          A run-time value uses the ordinary formatter.
 template <::std::size_t base, bool showbase = false, bool uppercase_showbase = false, bool showpos = false,
 		  bool uppercase = false, bool full = false, bool oct_c2y = false, typename int_type, ::std::integral char_type>
 inline constexpr char_type *
@@ -4892,6 +4900,29 @@ print_reserve_integral_compiler_constant_define(char_type *first, int_type t)
 			return last;
 		}
 	}
+}
+
+/// @brief Emits an unsigned decimal magnitude into an already reserved fixed-view field.
+/// @details The optimizer can turn a known magnitude into literal stores using the existing constant formatter.
+///          For a run-time magnitude the builtin folds to false and the ordinary decimal algorithm takes over.
+template <::std::integral char_type, ::fast_io::details::my_unsigned_integral T>
+#if __has_cpp_attribute(__gnu__::__always_inline__)
+[[__gnu__::__always_inline__]]
+#if defined(__GNUC__) && !defined(__clang__) && __has_cpp_attribute(__gnu__::__flatten__)
+[[__gnu__::__flatten__]]
+#endif
+#elif __has_cpp_attribute(msvc::forceinline)
+[[msvc::forceinline]]
+#endif
+inline constexpr char_type *print_fixed_decimal_integral_define(char_type *first, T value) noexcept
+{
+#if FAST_IO_HAS_BUILTIN(__builtin_constant_p)
+	if (__builtin_constant_p(value))
+	{
+		return print_reserve_integral_compiler_constant_define<10u>(first, value);
+	}
+#endif
+	return print_reserve_integral_define<10u, false, false, false, false, false, false>(first, value);
 }
 
 template <::std::size_t base, bool showbase = false, bool uppercase_showbase = false, bool showpos = false,
@@ -5424,7 +5455,7 @@ generation, while ordinary inline lets future optimizers make their own cost
 decision.
 */
 template <typename scalar_type>
-	requires(details::non_character_integral<scalar_type> || ::fast_io::details::my_floating_point<scalar_type> ||
+	requires(details::non_character_integral<scalar_type> || ::fast_io::details::floating_io_value<scalar_type> ||
 			 ::std::same_as<::std::nullptr_t, ::std::remove_cvref_t<scalar_type>>) &&
 			(!::fast_io::details::floating_scalar_requires_integer_proxy<scalar_type>)
 inline constexpr auto print_alias_define(io_alias_t, scalar_type t) noexcept
@@ -5435,7 +5466,7 @@ inline constexpr auto print_alias_define(io_alias_t, scalar_type t) noexcept
 		return manipulators::scalar_manip_t<manipulators::integral_default_scalar_flags, int_alias_type>{
 			static_cast<int_alias_type>(t)};
 	}
-	else if constexpr (details::my_floating_point<scalar_type>)
+	else if constexpr (details::floating_io_value<scalar_type>)
 	{
 		return ::fast_io::details::make_floating_scalar_manip<
 			manipulators::floating_point_default_scalar_flags>(t);
@@ -5446,11 +5477,7 @@ inline constexpr auto print_alias_define(io_alias_t, scalar_type t) noexcept
 	}
 }
 
-/// Captures Clang/x86 bfloat16 at the original expression boundary before a
-/// by-value scalar copy can be lowered as a float-to-bfloat16 retruncation.
-/// The returned leaf owns only integer fields, so downstream print and concat
-/// boundaries retain cheap by-value transport without changing other floating
-/// ABIs.
+/// Captures representation-sensitive scalars before a floating copy can alter their object bits.
 template <::fast_io::details::floating_scalar_integer_proxy_source scalar_type>
 inline constexpr auto
 print_alias_define(io_alias_t, scalar_type &&value) noexcept
@@ -5459,6 +5486,45 @@ print_alias_define(io_alias_t, scalar_type &&value) noexcept
 		manipulators::floating_point_default_scalar_flags>(
 		::std::forward<scalar_type>(value));
 }
+
+namespace manipulators
+{
+
+/// Captures explicit native fields before the public print dispatcher copies its normalized operands.
+template <scalar_flags flags, typename T>
+	requires ::fast_io::details::native_floating_requires_integer_capture<T>
+inline constexpr auto print_alias_define(::fast_io::io_alias_t, scalar_manip_t<flags, T> const &value) noexcept
+{
+	return floating_scalar_field_manip_t<flags, ::std::remove_cvref_t<T>>{
+		::fast_io::details::capture_floating_scalar_representation(value.reference)};
+}
+
+template <scalar_flags flags, typename T>
+	requires ::fast_io::details::native_floating_requires_integer_capture<T>
+inline constexpr auto print_alias_define(::fast_io::io_alias_t, scalar_manip_precision_t<flags, T> const &value) noexcept
+{
+	return floating_scalar_field_manip_precision_t<flags, ::std::remove_cvref_t<T>>{
+		::fast_io::details::capture_floating_scalar_representation(value.reference), value.precision};
+}
+
+template <scalar_flags flags, typename T>
+	requires ::fast_io::details::native_floating_requires_integer_capture<T>
+inline constexpr auto print_alias_define(::fast_io::io_alias_t, exact_decimal_manip_t<flags, T> const &value) noexcept
+{
+	return exact_decimal_field_manip_t<flags, ::std::remove_cvref_t<T>>{
+		::fast_io::details::capture_floating_scalar_representation(value.reference)};
+}
+
+template <scalar_flags flags, typename T>
+	requires ::fast_io::details::native_floating_requires_integer_capture<T>
+inline constexpr auto print_alias_define(::fast_io::io_alias_t, floating_scalar_precision_range_manip_t<flags, T> const &value) noexcept
+{
+	return floating_scalar_field_precision_range_manip_t<flags, T>{
+		::fast_io::details::capture_floating_scalar_representation(value.reference),
+		value.minimum_precision, value.maximum_precision};
+}
+
+} // namespace manipulators
 
 template <::std::integral char_type, typename T>
 	requires(details::non_character_integral<T> || ::std::same_as<::std::remove_cv_t<T>, ::std::byte>)

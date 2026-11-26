@@ -91,15 +91,25 @@ template <typename value_type>
 inline constexpr value_type *small_scatter_copy_n(
 	value_type const *first, ::std::size_t count, value_type *result) noexcept
 {
-	if (count <= 16u)
+	if (!count)
 	{
-		for (::std::size_t i{}; i != count; ++i)
-		{
-			result[i] = first[i];
-		}
-		return result + count;
+		// Empty scatter descriptors may carry null pointers.
+		return result;
 	}
-	return ::fast_io::details::non_overlapped_copy_n(first, count, result);
+	if constexpr (::std::is_trivially_copyable_v<value_type> && !::std::is_volatile_v<value_type>)
+	{
+		if (!__builtin_is_constant_evaluated() && count > 16u)
+		{
+			// The typed pointer pair already proves contiguity and identical element representation.
+			::fast_io::freestanding::my_memcpy(result, first, count * sizeof(value_type));
+			return result + count;
+		}
+	}
+	for (::std::size_t i{}; i != count; ++i)
+	{
+		result[i] = first[i];
+	}
+	return result + count;
 }
 
 } // namespace fast_io::details::decay

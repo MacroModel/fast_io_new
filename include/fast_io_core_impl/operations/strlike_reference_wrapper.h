@@ -308,6 +308,16 @@ inline constexpr ::std::size_t cal_new_cap_io_strlike(::std::size_t cap) noexcep
 
 } // namespace details
 
+/**
+ * @brief Publishes the string's committed logical prefix without allocating.
+ * @details obuffer_set_curr already synchronizes the size and terminator. Growth belongs to a
+ * subsequent reserve or refill. Repeated flush and finish calls therefore preserve spare capacity.
+ */
+template <::std::integral Char, typename T>
+	requires output_buffer_strlike<Char, T>
+inline constexpr void output_stream_publish_define(io_strlike_reference_wrapper<Char, T>) noexcept
+{}
+
 /// @brief Refills a string-backed output area while preserving its ordinary-versus-runtime growth protocol.
 template <::std::integral ch_type, typename T>
 	requires output_buffer_strlike<ch_type, T>

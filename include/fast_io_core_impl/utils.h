@@ -9,7 +9,8 @@
 // reference behind the target and feature combinations verified by the compiler driver. Before Clang 17, the targets
 // that exposed __bf16 only provided its storage-only form, which cannot perform the float conversions fast_io needs.
 // ARM64EC uses its own target macro instead of __aarch64__. RISC-V, LoongArch, and SPIR/SPIR-V gain the usable type in
-// Clang 18, 21, and 22 respectively. x86 and 32-bit Arm additionally require the features that make the type available.
+// Clang 18, 21, and 22 respectively. Arm soft-float drivers may still advertise CPU capability in __ARM_FP.
+// __SOFTFP__ distinguishes that configuration from hard-float and softfp with hardware instructions.
 // SPIR and SPIR-V expose LLVM's native `bfloat` scalar directly, including by-value scalar/aggregate transport, even
 // though they do not define a CPU feature macro.
 #if defined(__clang__) && !defined(__STDCPP_BFLOAT16_T__) &&                                      \
@@ -20,7 +21,7 @@
 	 ((defined(__SPIR__) || defined(__SPIRV__)) && __clang_major__ >= 22) ||                      \
 	 ((defined(__x86_64__) || defined(__i386__)) && defined(__SSE2__) && __clang_major__ >= 17 && \
 	  !(defined(__arm64ec__) || defined(_M_ARM64EC))) ||                                          \
-	 (defined(__arm__) && defined(__ARM_FP) && __clang_major__ >= 17) ||                          \
+	 (defined(__arm__) && defined(__ARM_FP) && !defined(__SOFTFP__) && __clang_major__ >= 17) ||                          \
 	 (defined(__loongarch__) && __clang_major__ >= 21))
 #define FAST_IO_CLANG_HAS_BFLOAT16_TYPE 1
 #endif
@@ -39,6 +40,30 @@
 	 defined(__FLT64_MAX_EXP__) && __FLT64_MAX_EXP__ == 1024)
 #define FAST_IO_HAS_FLOAT64_TYPE 1
 #endif
+
+// The optional IEEE binary32/64 conversion tables assume IEEE exponent encodings.
+// DEC F/D has a different exponent bias, a 56-bit double significand and no infinities.
+#if defined(__FLT_MANT_DIG__) && defined(__FLT_MAX_EXP__) && defined(__DBL_MANT_DIG__) && defined(__DBL_MAX_EXP__) && \
+	__FLT_MANT_DIG__ == 24 && __FLT_MAX_EXP__ == 127 && __DBL_MANT_DIG__ == 56 && __DBL_MAX_EXP__ == 127
+#define FAST_IO_DETAIL_DEC_F_D_FLOAT
+#endif
+
+namespace fast_io::details
+{
+/** @brief Aligns hot static tables and entry points within the target object format's alignment limit.
+ * @details A 64-byte placement is a layout optimization. DJGPP COFF represents alignments up to 16 bytes;
+ * PDP-11 a.out uses its natural data alignment. The stored values and formatter concepts are identical.
+ */
+inline constexpr ::std::size_t hot_table_alignment{
+#if defined(__DJGPP__)
+	16u
+#elif defined(__pdp11__) || defined(pdp11)
+	alignof(::std::max_align_t)
+#else
+	64u
+#endif
+};
+} // namespace fast_io::details
 
 namespace fast_io
 {
@@ -238,6 +263,32 @@ concept my_floating_point = ::std::floating_point<T>
 #endif
 	;
 
+/**
+ * Opt-in floating interchange formats provide their own I/O algorithms. Format
+ * frontends need only classify the sign, finiteness and adjusted decimal exponent.
+ * The binary arithmetic and IEC 60559 field algorithms keep their narrower concept.
+ */
+template <typename T>
+struct interchange_floating_traits
+{};
+
+template <typename T>
+concept interchange_floating = requires(::std::remove_cvref_t<T> value) {
+	{ interchange_floating_traits<::std::remove_cvref_t<T>>::negative(value) } -> ::std::same_as<bool>;
+	{ interchange_floating_traits<::std::remove_cvref_t<T>>::finite(value) } -> ::std::same_as<bool>;
+	{ interchange_floating_traits<::std::remove_cvref_t<T>>::adjusted_exponent(value) } -> ::std::convertible_to<int>;
+};
+
+template <typename T>
+concept floating_io_value = my_floating_point<T> || interchange_floating<T>;
+
+/// @brief Selects floating I/O values that opt into a hexadecimal significand with a binary exponent.
+template <typename T>
+concept binary_floating_io_value = my_floating_point<T> ||
+	(interchange_floating<T> && requires {
+		requires interchange_floating_traits<::std::remove_cvref_t<T>>::radix == 2;
+	});
+
 #ifdef __SIZEOF_INT128__
 inline constexpr __uint128_t calculate_byteswap_ff(::std::size_t v) noexcept
 {
@@ -357,39 +408,40 @@ inline constexpr U byte_swap(U a) noexcept
 	}
 }
 
-template <details::my_unsigned_integral U>
-inline constexpr U big_endian(U u) noexcept
+namespace details
 {
-	if constexpr (sizeof(U) == 1 || ::std::endian::big == ::std::endian::native)
-	{
-		return u;
-	}
-	else if constexpr (::std::endian::little == ::std::endian::native)
-	{
-		return byte_swap(u);
-	}
+/**
+ * @brief Places an unsigned value into native storage with each byte in the requested wire order.
+ * @details Uniform-endian machines need at most a byte-swap instruction. On a mixed-endian machine
+ * an explicit representation also handles two-byte units whose byte order differs from the word order.
+ * On PDP-11 both wire permutations are involutions, so the same operation also decodes a loaded word.
+ */
+template <::std::endian Order, my_unsigned_integral U>
+inline constexpr U ordered_integer(U value) noexcept
+{
+	if constexpr (sizeof(U) == 1 || Order == ::std::endian::native) { return value; }
+	else if constexpr (::std::endian::native == ::std::endian::little || ::std::endian::native == ::std::endian::big)
+	{ return ::fast_io::byte_swap(value); }
 	else
 	{
-		return details::byte_swap_naive_impl(u); // support architectures like PDP11
+		::fast_io::freestanding::array<unsigned char,sizeof(U)> bytes{};
+		for (::std::size_t i{}; i != sizeof(U); ++i)
+		{
+			bytes[Order == ::std::endian::little ? i : sizeof(U)-1-i] = static_cast<unsigned char>(value);
+			value >>= ::std::numeric_limits<unsigned char>::digits;
+		}
+		return ::std::bit_cast<U>(bytes);
 	}
 }
+} // namespace details
 
+/** @brief Converts between native unsigned representation and most-significant-byte-first wire order. */
 template <details::my_unsigned_integral U>
-inline constexpr U little_endian(U u) noexcept
-{
-	if constexpr (sizeof(U) == 1 || ::std::endian::little == ::std::endian::native)
-	{
-		return u;
-	}
-	else if constexpr (::std::endian::big == ::std::endian::native)
-	{
-		return byte_swap(u);
-	}
-	else
-	{
-		return details::byte_swap_naive_impl(u); // support architectures like PDP11
-	}
-}
+inline constexpr U big_endian(U u) noexcept { return details::ordered_integer<::std::endian::big>(u); }
+
+/** @brief Converts between native unsigned representation and least-significant-byte-first wire order. */
+template <details::my_unsigned_integral U>
+inline constexpr U little_endian(U u) noexcept { return details::ordered_integer<::std::endian::little>(u); }
 
 namespace details
 {

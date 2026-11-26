@@ -328,7 +328,13 @@ inline posix_named_pipe_handle_state posix_create_named_pipe_ipc_server_impl(
 	{
 		throw_posix_error();
 	}
-	if (::fast_io::noexcept_call(::listen, listener.native_handle(), SOMAXCONN) == -1) [[unlikely]]
+#if defined(SOMAXCONN)
+	constexpr int backlog{SOMAXCONN};
+#else
+	// Let the kernel clamp the requested backlog when libc omits its implementation limit.
+	constexpr int backlog{::std::numeric_limits<int>::max()};
+#endif
+	if (::fast_io::noexcept_call(::listen, listener.native_handle(), backlog) == -1) [[unlikely]]
 	{
 		throw_posix_error();
 	}

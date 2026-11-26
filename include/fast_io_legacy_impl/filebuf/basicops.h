@@ -140,6 +140,13 @@ inline typename T::char_type *read_some_underflow_define(::fast_io::basic_genera
 	return ::fast_io::details::streambuf_read_report_eh_impl(fb.fb, first, last);
 }
 
+/** @brief Keeps virtual streambuf operations and their cursor effects inside one blocking request. */
+template <typename T, bool Input>
+inline constexpr auto async_local_points_define(io_type_t<basic_general_streambuf_io_observer<T>>, ::std::bool_constant<Input>) noexcept
+{
+	return async::file_points<async::point_kind::opaque>{};
+}
+
 template <typename T>
 inline constexpr ::fast_io::basic_general_streambuf_io_observer<T>
 io_stream_ref_define(::fast_io::basic_general_streambuf_io_observer<T> other) noexcept

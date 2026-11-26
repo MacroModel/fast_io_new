@@ -247,7 +247,10 @@ concept static_provider_recipe = requires(
  * every syntax front end share the same compile-shape contract.
  */
 inline constexpr ::std::size_t static_provider_materialization_code_unit_limit{
-	1u << 16u};
+	// Clamp the common limit when a code-unit count has fewer than 17 bits.
+	static_cast<::std::size_t>(::std::numeric_limits<::std::size_t>::max() < 65536ul
+								   ? ::std::numeric_limits<::std::size_t>::max()
+								   : 65536ul)};
 
 /// @brief Materializes one provider recipe in a namespace-scope immediate context.
 /// @details The returned array owns exactly `provider_type::size` logical code units (one physical element for an empty
@@ -440,6 +443,15 @@ inline constexpr bool is_static_provider_node_v{
 
 namespace syntax_transport_details
 {
+
+/** @brief Authorizes deferred copies of a stateless syntax node backed by immutable static code units. */
+template <::std::integral Char, static_provider_recipe Provider, ::std::size_t Offset, ::std::size_t Extent>
+	requires ::std::same_as<Char, typename Provider::char_type>
+inline constexpr ::std::true_type print_async_snapshot_safe(
+	::fast_io::io_reserve_type_t<Char, static_provider_scatter_node<Provider, Offset, Extent>>) noexcept
+{
+	return {};
+}
 
 /// @brief Returns the exact reserve extent of an internal syntax-owned provider scatter node.
 /// @details The result is the type-level subrange extent and requires matching source/output code-unit types.

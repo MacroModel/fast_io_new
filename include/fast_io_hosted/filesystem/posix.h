@@ -351,7 +351,7 @@ struct posix_directory_iterator
 
 struct posix_directory_generator
 {
-	posix_directory_file dir_fl;
+	mutable posix_directory_file dir_fl;
 };
 
 inline posix_directory_entry operator*(posix_directory_iterator pdit) noexcept
@@ -387,10 +387,37 @@ inline posix_directory_iterator &operator++(posix_directory_iterator &pdit)
 	return pdit;
 }
 
+namespace details
+{
+/**
+ * @brief Restarts a single-pass directory range, including on libcs with an opaque DIR and no rewinddir.
+ * @details Rebuilding the DIR discards buffered entries. Its duplicate refers to the same open file
+ * description, so this also works after the original directory has been renamed or unlinked.
+ */
+template <typename Owner>
+inline DIR *rewind_directory(Owner &owner)
+{
+	auto dir{owner.dirp};
+	if constexpr (requires { rewinddir(dir); })
+	{
+		rewinddir(dir);
+	}
+	else
+	{
+		posix_directory_file fresh{sys_dup_dir(dir)};
+		if (::lseek(dirp_to_fd(fresh.dirp), 0, SEEK_SET) == -1) [[unlikely]]
+		{
+			throw_posix_error();
+		}
+		owner = static_cast<posix_directory_file &&>(fresh);
+	}
+	return owner.dirp;
+}
+} // namespace details
+
 inline posix_directory_iterator begin(posix_directory_generator const &pdg)
 {
-	auto dirp{pdg.dir_fl.dirp};
-	::fast_io::noexcept_call(::rewinddir, dirp);
+	auto dirp{details::rewind_directory(pdg.dir_fl)};
 	posix_directory_iterator pdit{dirp};
 	++pdit;
 	return pdit;
@@ -445,7 +472,7 @@ template <typename StackType>
 struct basic_posix_recursive_directory_generator
 {
 	using stack_type = StackType;
-	posix_directory_file dir_fl;
+	mutable posix_directory_file dir_fl;
 };
 
 using posix_recursive_directory_generator = basic_posix_recursive_directory_generator<
@@ -547,8 +574,7 @@ template <typename StackType>
 inline basic_posix_recursive_directory_iterator<StackType>
 begin(basic_posix_recursive_directory_generator<StackType> const &pdg)
 {
-	auto dirp{pdg.dir_fl.dirp};
-	::fast_io::noexcept_call(::rewinddir, dirp);
+	auto dirp{details::rewind_directory(pdg.dir_fl)};
 	basic_posix_recursive_directory_iterator<StackType> pdit{dirp};
 	++pdit;
 	return pdit;

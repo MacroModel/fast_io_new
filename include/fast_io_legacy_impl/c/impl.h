@@ -715,6 +715,13 @@ public:
 	}
 };
 
+/** @brief Authorizes a blocking operation that retains the C stream's buffer, position and locking rules. */
+template <c_family Family, ::std::integral Char, bool Input>
+inline constexpr auto async_local_points_define(io_type_t<basic_c_family_io_observer<Family, Char>>, ::std::bool_constant<Input>) noexcept
+{
+	return async::file_points<async::point_kind::opaque>{};
+}
+
 template <c_family family, ::std::integral ch_type>
 inline constexpr basic_c_family_io_observer<family, ch_type>
 io_stream_ref_define(basic_c_family_io_observer<family, ch_type> other) noexcept
@@ -1091,7 +1098,7 @@ struct is_zero_default_constructible<basic_c_family_file<fm, char_type>>
 #include "musl.h"
 #elif defined(__serenity__)
 #include "serenity.h"
-#elif defined(__BSD_VISIBLE) || defined(__DARWIN_C_LEVEL) || (defined(__NEWLIB__) && !defined(__CUSTOM_FILE_IO__)) || \
+#elif (defined(__BSD_VISIBLE) && !defined(__OpenBSD__)) || defined(__DARWIN_C_LEVEL) || (defined(__NEWLIB__) && !defined(__CUSTOM_FILE_IO__)) || \
 	defined(__BIONIC__) || defined(__MSDOS__)
 #include "unix.h"
 #elif defined(FAST_IO_LIBC_CUSTOM_BUFFER_PTRS)

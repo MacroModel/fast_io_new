@@ -36,7 +36,26 @@ inline namespace io
 // This applies uniformly to print/println, diagnostic output, and debug output.
 
 /** @brief Prints arguments to an explicit stream or the default output fallback. */
+#if defined(__HERBCEPTIONS__)
 template <typename T, typename... Args>
+	requires ((::fast_io::details::has_sync_transcode_print<T> || ::fast_io::details::checked_print_record<false, T, Args...>) &&
+		!::fast_io::async::details::marked_device<T> && !::fast_io::async::details::contains_annotation<T>() &&
+		(!::fast_io::async::annotated_operand<Args> && ...))
+inline void print(T &&t, Args &&...args) throws
+{
+	if constexpr (::fast_io::details::has_sync_transcode_print<T>)
+		::fast_io::details::sync_print_transcode<false>(::std::forward<T>(t), ::std::forward<Args>(args)...);
+	else
+		::fast_io::details::print_checked_record<false>(::std::forward<T>(t), ::std::forward<Args>(args)...);
+}
+#endif
+
+template <typename T, typename... Args>
+	requires (
+#if defined(__HERBCEPTIONS__)
+		!::fast_io::details::has_sync_transcode_print<T> && !::fast_io::details::checked_print_record<false, T, Args...> &&
+#endif
+		!::fast_io::async::details::marked_device<T> && !::fast_io::async::details::contains_annotation<T>() && (!::fast_io::async::annotated_operand<Args> && ...))
 // GCC 11--16 leave this facade outlined at -O3. That boundary hides source-expression constants from the core
 // __builtin_constant_p gate and adds a public-wrapper call to the unknown-value path. Removing only this marker makes
 // every tested constant int/double obuffer wrapper call the runtime formatter; on GCC 11 and 12 it also slows a runtime
@@ -139,7 +158,26 @@ static_assert(device_and_type_ok, "some types are not printable for print");
 }
 
 /** @brief Prints arguments followed by a newline with guarded output lifetime. */
+#if defined(__HERBCEPTIONS__)
 template <typename T, typename... Args>
+	requires ((::fast_io::details::has_sync_transcode_print<T> || ::fast_io::details::checked_print_record<true, T, Args...>) &&
+		!::fast_io::async::details::marked_device<T> && !::fast_io::async::details::contains_annotation<T>() &&
+		(!::fast_io::async::annotated_operand<Args> && ...))
+inline void println(T &&t, Args &&...args) throws
+{
+	if constexpr (::fast_io::details::has_sync_transcode_print<T>)
+		::fast_io::details::sync_print_transcode<true>(::std::forward<T>(t), ::std::forward<Args>(args)...);
+	else
+		::fast_io::details::print_checked_record<true>(::std::forward<T>(t), ::std::forward<Args>(args)...);
+}
+#endif
+
+template <typename T, typename... Args>
+	requires (
+#if defined(__HERBCEPTIONS__)
+		!::fast_io::details::has_sync_transcode_print<T> && !::fast_io::details::checked_print_record<true, T, Args...> &&
+#endif
+		!::fast_io::async::details::marked_device<T> && !::fast_io::async::details::contains_annotation<T>() && (!::fast_io::async::annotated_operand<Args> && ...))
 // Keep the line-terminating facade on the same measured GCC policy as print. GCC 11--16 otherwise outline it and lose
 // both caller-expression constant discovery and the small unknown-value hot path, whereas Clang 17--23 needs no
 // override. The lower continuation remains compiler-shareable, which bounds text growth at larger call-site counts.
@@ -706,12 +744,12 @@ inline constexpr void debug_perrln(Args &&...args)
 Clang 23 assigns the native uint64 decimal scalar controller a cost above its
 ordinary caller-inline threshold after the SSE parser is instantiated.  Keep
 only the library-owned terminal view spelling at the public scalar boundary:
-the named proxy still enters scan_single_impl, so cursor validation, report
-mode, and parse errors have one implementation.  Signed targets (including
+the named proxy still enters scan_single_impl, so cursor validation
+and parse errors have one implementation.  Signed targets (including
 the historical terminal '-' rule), padded views, custom sources, status CPOs,
 mutex streams, and multi-target packs remain on the general dispatcher.
 */
-template <bool report = false, ::std::integral char_type,
+template <::std::integral char_type,
 		  ::fast_io::details::my_unsigned_integral T>
 	requires(sizeof(char_type) == sizeof(char8_t) &&
 			 ::fast_io::details::is_ascii<char_type> &&
@@ -719,25 +757,23 @@ template <bool report = false, ::std::integral char_type,
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
-inline constexpr ::std::conditional_t<report, bool, void>
-scan(::fast_io::basic_ibuffer_view<char_type> &in, T &value)
+inline constexpr void
+scan(::fast_io::basic_ibuffer_view<char_type> &in, T &value) FAST_IO_HERBCEPTIONS_THROWS
 {
 	auto inref{::fast_io::operations::input_stream_ref(in)};
 	auto arg{::fast_io::io_scan_forward<char_type>(
 		::fast_io::io_scan_alias(value))};
-	if constexpr (report)
+	if (!::fast_io::details::scan_single_impl<>(inref, arg))
 	{
-		return ::fast_io::details::scan_single_impl<>(inref, arg);
-	}
-	else if (!::fast_io::details::scan_single_impl<>(inref, arg))
-	{
-		::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
+		::fast_io::details::raise_scan_error(::fast_io::parse_code::end_of_file);
 	}
 }
 #endif
 
-template <bool report = false, typename input, typename... Args>
-inline constexpr ::std::conditional_t<report, bool, void> scan(input &&in, Args &&...args)
+/** @brief Scans each field in order. Exhaustion before the next required field raises end_of_file. */
+template <typename input, typename... Args>
+	requires (!::fast_io::async::details::marked_device<input> && !::fast_io::async::details::contains_annotation<input>() && (!::fast_io::async::annotated_operand<Args> && ...))
+inline constexpr void scan(input &&in, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Normalization observes the named input as an lvalue, including when the
 	// caller supplied a temporary whose full-expression lifetime covers scan.
@@ -747,23 +783,7 @@ inline constexpr ::std::conditional_t<report, bool, void> scan(input &&in, Args 
 		::std::remove_reference_t<input> &>};
 	if constexpr (device_error)
 	{
-		decltype(auto) inref = ::fast_io::operations::input_stream_ref(in);
-		using char_type = typename ::std::remove_cvref_t<decltype(inref)>::input_char_type;
-		if constexpr (report)
-		{
-			return ::fast_io::operations::decay::scan_freestanding_decay_borrowed_input(
-				inref,
-				::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(args))...);
-		}
-		else
-		{
-			if (!::fast_io::operations::decay::scan_freestanding_decay_borrowed_input(
-					inref,
-					::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(args))...))
-			{
-				::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
-			}
-		}
+		return ::fast_io::operations::scan_explicit(in, args...);
 	}
 	else
 	{
@@ -771,7 +791,7 @@ inline constexpr ::std::conditional_t<report, bool, void> scan(input &&in, Args 
 	  !defined(_LIBCPP_FREESTANDING)) ||                                             \
 	 defined(FAST_IO_ENABLE_HOSTED_FEATURES)) &&                                     \
 	__has_include(<stdio.h>)
-		return ::fast_io::details::scan_after_io_scan_forward<report>(
+		return ::fast_io::details::scan_after_io_scan_forward(
 			::fast_io::io_scan_forward<char>(::fast_io::io_scan_alias(in)),
 			::fast_io::io_scan_forward<char>(::fast_io::io_scan_alias(args))...);
 #else
@@ -781,6 +801,33 @@ static_assert(device_error, "freestanding environment must provide IO device");
 #endif
 	}
 }
+
+#if defined(__linux__) && defined(__x86_64__) && defined(__clang__) && \
+	(__clang_major__ >= 24 || (__clang_major__ == 22 && !defined(__cpp_exceptions))) && \
+	!defined(__HERBCEPTIONS__) && !defined(__arm64ec__) && !defined(_ARM64EC)
+/** @brief Inlines the resident unsigned transaction for this specialization of the public scanner. */
+template <>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+scan<::fast_io::basic_ibuffer_view<char> &, unsigned &>(::fast_io::basic_ibuffer_view<char> &input, unsigned &target)
+{
+	using Ref = ::fast_io::basic_ibuffer_view_ref<char>;
+	if constexpr (::std::numeric_limits<unsigned>::digits == 32 &&
+				  ::fast_io::details::io_buffer::plain_integer_window<Ref, unsigned &>)
+	{
+		auto ref{::fast_io::operations::input_stream_ref(input)};
+		if (!::std::is_constant_evaluated() &&
+			::fast_io::details::io_buffer::try_scan_resident_unsigned(ref, target)) [[likely]]
+		{
+			return;
+		}
+		[[clang::noinline]] return ::fast_io::operations::scan_explicit_ref(ref, target);
+	}
+	else
+	{
+		return ::fast_io::operations::scan_explicit(input, target);
+	}
+}
+#endif
 
 } // namespace io
 

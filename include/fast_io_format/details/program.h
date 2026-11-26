@@ -142,7 +142,10 @@ enum class printf_length_modifier : unsigned char
 	j,
 	z,
 	t,
-	long_double
+	long_double,
+	decimal32,
+	decimal64,
+	decimal128
 };
 
 /** Tracks the one indexing domain shared by a brace replacement and its nested fields. */

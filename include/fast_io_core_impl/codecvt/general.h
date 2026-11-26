@@ -39,7 +39,7 @@ inline constexpr ::std::size_t get_general_invalid_code_units(T *dst) noexcept
 		{
 			if constexpr (encoding_is_utf(encoding) && !is_native_scheme(encoding))
 			{
-				constexpr T val{byte_swap(static_cast<T>(0xFFFD))};
+				constexpr T val{unicode_unit<encoding,T>(0xfffdu)};
 				*dst = val;
 			}
 			else
@@ -90,24 +90,21 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 		non_overlapped_copy_n(src_first, diff, dst);
 		return {src_last, dst + diff};
 	}
-	else if constexpr (sizeof(src_char_type) == sizeof(dest_char_type) &&
-					   ((src_encoding == encoding_scheme::utf_le && encoding == encoding_scheme::utf_be) ||
-						(src_encoding == encoding_scheme::utf_be && encoding == encoding_scheme::utf_le)))
+	else if constexpr (encoding_is_utf(src_encoding) && encoding_is_utf(encoding))
 	{
-		if constexpr (sizeof(src_char_type) == 1)
+		if constexpr (sizeof(src_char_type) == sizeof(dest_char_type))
 		{
-			return general_code_cvt<encoding_scheme::utf, encoding_scheme::utf>(src_first, src_last, dst);
+			// An endian-only conversion preserves every code unit, including an unpaired surrogate.
+			for (; src_first != src_last; ++src_first, ++dst)
+			{
+				*dst = unicode_unit<encoding,dest_char_type>(unicode_load<src_encoding>(*src_first));
+			}
+			return {src_first, dst};
 		}
 		else
 		{
-			using unsigned_src_char_type = ::std::make_unsigned_t<src_char_type>;
-			for (; src_first != src_last; ++src_first)
-			{
-				*dst = static_cast<dest_char_type>(byte_swap(
-					static_cast<unsigned_src_char_type>(*src_first)));
-				++dst;
-			}
-			return {src_first, dst};
+			auto result{unicode_convert<src_encoding,encoding,true>(src_first,src_last,dst,SIZE_MAX)};
+			return {result.input,result.output};
 		}
 	}
 	else if constexpr (src_encoding == encoding_scheme::execution_sbcs)
@@ -123,103 +120,24 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 		}
 		return {src_first, dst};
 	}
-	else if constexpr (sizeof(src_char_type) == 4)
+	else if constexpr (sizeof(src_char_type) > 1)
 	{
-		static_assert(src_encoding == encoding_scheme::utf_be || src_encoding == encoding_scheme::utf_le);
-		for (; src_first != src_last; ++src_first)
+		static_assert(encoding_is_utf(src_encoding));
+		// Decode wire order before handing a scalar to the legacy destination encoding.
+		while (src_first != src_last)
 		{
-			dst += get_utf_code_units<encoding>(static_cast<char32_t>(static_cast<::std::uint_least32_t>(*src_first)), dst);
+			auto scalar{unicode_decode<src_encoding>(src_first,static_cast<::std::size_t>(src_last-src_first))};
+			if (scalar.status == unicode_status::incomplete) { break; }
+			dst += get_utf_code_units<encoding>(static_cast<char32_t>(scalar.status == unicode_status::invalid ?
+				0xfffdu : scalar.value),dst);
+			src_first += scalar.units;
 		}
-		return {src_last, dst};
-	}
-	else if constexpr (sizeof(src_char_type) == 2)
-	{
-		static_assert(src_encoding == encoding_scheme::utf_be || src_encoding == encoding_scheme::utf_le);
-		/*
-		Referenced from
-		https://stackoverflow.com/questions/23919515/how-to-convert-from-utf-16-to-utf-32-on-linux-with-std-library
-		*/
-		for (; src_first != src_last; ++src_first)
-		{
-			char16_t code{static_cast<char16_t>(*src_first)};
-			if constexpr (!is_native_scheme(src_encoding))
-			{
-				code = byte_swap(code);
-			}
-			if (is_utf16_surrogate(code)) [[unlikely]]
-			{
-				if (is_utf16_high_surrogate(code))
-				{
-					if (src_first + 1 == src_last)
-					{
-						break;
-					}
-					char16_t code1{static_cast<char16_t>(*++src_first)};
-					if constexpr (!is_native_scheme(src_encoding))
-					{
-						code1 = byte_swap(code1);
-					}
-					if (is_utf16_low_surrogate(code1))
-					{
-						if constexpr (sizeof(dest_char_type) == 4 &&
-									  encoding != encoding_scheme::execution_sbcs)
-						{
-							*dst = utf16_surrogate_to_utf32(code, code1);
-							++dst;
-						}
-						else
-						{
-							dst += get_utf_code_units<encoding>(utf16_surrogate_to_utf32(code, code1), dst);
-						}
-						continue;
-					}
-				}
-				if constexpr (sizeof(dest_char_type) == 4 &&
-							  encoding != encoding_scheme::execution_sbcs)
-				{
-					if constexpr (is_native_scheme(encoding))
-					{
-						*dst = static_cast<dest_char_type>(0xFFFD);
-					}
-					else
-					{
-						constexpr dest_char_type val{byte_swap(static_cast<dest_char_type>(0xFFFD))};
-						*dst = val; 
-					}
-					++dst;
-				}
-				else
-				{
-					dst += get_general_invalid_code_units<encoding>(dst);
-				}
-			}
-			else [[likely]]
-			{
-				if constexpr (sizeof(dest_char_type) == 4 &&
-							  encoding != encoding_scheme::execution_sbcs)
-				{
-					if constexpr (src_encoding == encoding)
-					{
-						*dst = static_cast<dest_char_type>(code);
-					}
-					else
-					{
-						*dst = byte_swap(static_cast<dest_char_type>(code));
-					}
-					++dst;
-				}
-				else
-				{
-					dst += get_utf_code_units<encoding>(static_cast<char32_t>(static_cast<::std::uint_least32_t>(code)), dst);
-				}
-			}
-		}
-		return {src_first, dst};
+		return {src_first,dst};
 	}
 	else
 	{
 #if (defined(_MSC_VER) && defined(_M_AMD64) && !defined(_M_ARM64EC) && !defined(__clang__)) ||                                             \
-		(defined(__SSE__) && defined(__SSE2__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC)) &&                 \
+		(defined(__SSE2__) && defined(__x86_64__) && !defined(_M_ARM64EC) && FAST_IO_HAS_BUILTIN(__builtin_ia32_pmovmskb128) &&                 \
          __cpp_lib_is_constant_evaluated >= 201811L)
 		if constexpr (src_encoding != encoding_scheme::utf_ebcdic && encoding != encoding_scheme::utf_ebcdic &&
 					  encoding != encoding_scheme::execution_sbcs &&
@@ -242,9 +160,9 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 						{
 							auto [code, adv] = gb18030::gb18030_advance_unchecked(src_first);
 							src_first += adv;
-							if constexpr (sizeof(dest_char_type) == 4)
+							if constexpr (sizeof(dest_char_type) == 4 && encoding_is_utf(encoding))
 							{
-								*dst = code;
+								*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(code));
 								++dst;
 							}
 							else
@@ -256,9 +174,9 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 						{
 							auto [src, code] = advance_with_big_table_unchecked(src_first);
 							src_first = src;
-							if constexpr (sizeof(dest_char_type) == 4)
+							if constexpr (sizeof(dest_char_type) == 4 && encoding_is_utf(encoding))
 							{
-								*dst = code;
+								*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(code));
 								++dst;
 							}
 							else
@@ -288,7 +206,7 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 					*dst = code;
 					if constexpr (encoding_is_utf(encoding) && !is_native_scheme(encoding))
 					{
-						*dst = byte_swap(*dst);
+						*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 					}
 					++dst;
 				}
@@ -317,7 +235,7 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 					if constexpr (sizeof(dest_char_type) != 1 && encoding_is_utf(encoding) &&
 								  !is_native_scheme(encoding))
 					{
-						*dst = byte_swap(*dst);
+						*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 					}
 					++src_first;
 					if constexpr (encoding_scheme::execution_sbcs != encoding)
@@ -341,7 +259,7 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 							*dst = code;
 							if constexpr (encoding_is_utf(encoding) && !is_native_scheme(encoding))
 							{
-								*dst = byte_swap(*dst);
+								*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 							}
 							++dst;
 						}
@@ -364,7 +282,7 @@ general_code_cvt(src_char_type const *src_first, src_char_type const *src_last, 
 							*dst = code;
 							if constexpr (encoding_is_utf(encoding) && !is_native_scheme(encoding))
 							{
-								*dst = byte_swap(*dst);
+								*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 							}
 							++dst;
 						}
@@ -398,6 +316,70 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 		return general_code_cvt<src_encoding, get_execution_charset_encoding_scheme<dest_char_type>(encoding)>(
 			state, src_first, src_last, dst);
 	}
+	else if constexpr (encoding_is_utf(src_encoding) && encoding_is_utf(encoding))
+	{
+		if constexpr (sizeof(src_char_type) == sizeof(dest_char_type) || sizeof(src_char_type) == 4)
+		{
+			return general_code_cvt<src_encoding,encoding>(src_first,src_last,dst).dst;
+		}
+		else
+		{
+			if (src_first == src_last) { return dst; }
+			if constexpr (sizeof(src_char_type) == 1)
+			{
+				// An incomplete UTF-8 scalar carries at most three bytes.
+				if (state.size > 3u) [[unlikely]]
+				{
+					state.size = {};
+					dst += get_general_invalid_code_units<encoding>(dst);
+				}
+			}
+			if (state)
+			{
+				// Complete one carried prefix without stealing a noncontinuation from the next scalar.
+				src_char_type pending[4]{};
+				unsigned old{};
+				if constexpr (sizeof(src_char_type) == 1)
+				{
+					old = static_cast<unsigned>(state.size);
+					for (unsigned i{}; i != old; ++i) { pending[i] = static_cast<src_char_type>(state.bytes[i]); }
+				}
+				else { old = 1; pending[0] = static_cast<src_char_type>(state.value); }
+				unsigned count{old};
+				while (count < 4u && static_cast<::std::size_t>(count - old) < static_cast<::std::size_t>(src_last - src_first))
+				{ pending[count] = src_first[count-old]; ++count; }
+				auto scalar{unicode_decode<src_encoding>(pending,count)};
+				if (scalar.status == unicode_status::incomplete)
+				{
+					if constexpr (sizeof(src_char_type) == 1)
+					{
+						for (unsigned i{old}; i != count; ++i) { state.bytes[i] = static_cast<char8_t>(pending[i]); }
+						state.size = static_cast<char8_t>(count);
+					}
+					return dst;
+				}
+				if (scalar.status == unicode_status::invalid) { scalar.value = 0xfffdu; }
+				auto width{unicode_width<dest_char_type>(scalar.value)};
+				unicode_emit<encoding>(scalar.value,width,dst);
+				dst += width;
+				src_first += scalar.units-old;
+				if constexpr (sizeof(src_char_type) == 1) { state.size = {}; } else { state.state = false; }
+			}
+			if (src_first == src_last) { return dst; }
+			auto result{unicode_convert<src_encoding,encoding,true>(src_first,src_last,dst,SIZE_MAX)};
+			if (result.input != src_last)
+			{
+				if constexpr (sizeof(src_char_type) == 1)
+				{
+					auto n{static_cast<unsigned>(src_last-result.input)};
+					for (unsigned i{}; i != n; ++i) { state.bytes[i] = static_cast<char8_t>(result.input[i]); }
+					state.size = static_cast<char8_t>(n);
+				}
+				else { state.value = static_cast<char16_t>(*result.input); state.state = true; }
+			}
+			return result.output;
+		}
+	}
 	else if constexpr (src_encoding == encoding_scheme::execution_sbcs)
 	{
 		// An ordinary execution code unit cannot be split across calls.  Use the
@@ -412,12 +394,12 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 	}
 	else if constexpr (sizeof(src_char_type) == 4)
 	{
-		static_assert(src_encoding == encoding_scheme::utf);
+		static_assert(encoding_is_utf(src_encoding));
 		return general_code_cvt<src_encoding, encoding>(src_first, src_last, dst).dst;
 	}
 	else if constexpr (sizeof(src_char_type) == 2)
 	{
-		static_assert(src_encoding == encoding_scheme::utf);
+		static_assert(encoding_is_utf(src_encoding));
 		if (state.state)
 		{
 			if (src_first == src_last)
@@ -427,12 +409,12 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 			char16_t low{state.value};
 			if constexpr (!is_native_scheme(src_encoding))
 			{
-				low = byte_swap(low);
+				low = static_cast<char16_t>(unicode_load<src_encoding>(low));
 			}
 			char16_t v{static_cast<char16_t>(*src_first)};
 			if constexpr (!is_native_scheme(src_encoding))
 			{
-				v = byte_swap(v);
+				v = static_cast<char16_t>(unicode_load<src_encoding>(v));
 			}
 			if (is_utf16_low_surrogate(v))
 			{
@@ -442,7 +424,7 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 					*dst = utf16_surrogate_to_utf32(low, v);
 					if constexpr (!is_native_scheme(encoding))
 					{
-						*dst = byte_swap(*dst);
+						*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 					}
 					++dst;
 				}
@@ -463,7 +445,7 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 					}
 					else
 					{
-						constexpr dest_char_type val{byte_swap(static_cast<dest_char_type>(0xFFFD))};
+						constexpr dest_char_type val{unicode_unit<encoding,dest_char_type>(0xfffdu)};
 						*dst = val; 
 					}
 					++dst;
@@ -517,7 +499,7 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 					*dst = code;
 					if constexpr (!is_native_scheme(encoding))
 					{
-						*dst = byte_swap(*dst);
+						*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 					}
 					++dst;
 				}
@@ -542,7 +524,7 @@ inline constexpr dest_char_type *general_code_cvt(state_type &__restrict state, 
 					*dst = code;
 					if constexpr (!is_native_scheme(encoding))
 					{
-						*dst = byte_swap(*dst);
+						*dst = unicode_unit<encoding,dest_char_type>(static_cast<::std::uint_least32_t>(*dst));
 					}
 					++dst;
 				}
@@ -585,7 +567,13 @@ inline constexpr dest_char_type *general_code_cvt_full(src_char_type const *src_
 		auto [src, new_dst] = general_code_cvt<src_encoding, encoding>(src_first, src_last, dst);
 		if (src != src_last)
 		{
-			if constexpr (encoding == encoding_scheme::execution_sbcs)
+			if constexpr (encoding_is_utf(encoding))
+			{
+				constexpr auto width{unicode_width<dest_char_type>(0xfffdu)};
+				unicode_emit<encoding>(0xfffdu,width,new_dst);
+				new_dst += width;
+			}
+			else if constexpr (encoding == encoding_scheme::execution_sbcs)
 			{
 				new_dst += get_general_invalid_code_units<encoding>(new_dst);
 			}
@@ -597,7 +585,7 @@ inline constexpr dest_char_type *general_code_cvt_full(src_char_type const *src_
 				}
 				else
 				{
-					constexpr dest_char_type val{byte_swap(static_cast<dest_char_type>(0xFFFD))};
+					constexpr dest_char_type val{unicode_unit<encoding,dest_char_type>(0xfffdu)};
 					*new_dst = val; 
 				}
 				++new_dst;

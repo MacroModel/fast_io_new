@@ -91,21 +91,20 @@ struct md5_sha_common_impl
 			ct += val;
 			ct *= 8u;
 		}
-		if constexpr (::std::endian::native != hash_endian)
-		{
-			if constexpr (::std::same_as<counter_type, ::fast_io::details::pesudo_uint_least128_t>)
-			{
-				auto t{::fast_io::byte_swap(ct.low)};
-				ct.low = ::fast_io::byte_swap(ct.high);
-				ct.high = t;
-			}
-			else
-			{
-				ct = ::fast_io::byte_swap(ct);
-			}
-		}
 		constexpr ::std::size_t start_pos{block_size - sizeof(counter_type)};
-		::fast_io::freestanding::type_punning_to_bytes(ct, buffer + start_pos);
+		if constexpr (::std::same_as<counter_type, ::fast_io::details::pesudo_uint_least128_t>)
+		{
+			// The wire order selects the limb order independently of the platform's byte order within each limb.
+			auto first{hash_endian == ::std::endian::big ? ct.high : ct.low};
+			auto second{hash_endian == ::std::endian::big ? ct.low : ct.high};
+			::fast_io::freestanding::type_punning_to_bytes(ordered_integer<hash_endian>(first), buffer + start_pos);
+			::fast_io::freestanding::type_punning_to_bytes(
+				ordered_integer<hash_endian>(second), buffer + start_pos + sizeof(first));
+		}
+		else
+		{
+			::fast_io::freestanding::type_punning_to_bytes(ordered_integer<hash_endian>(ct), buffer + start_pos);
+		}
 		this->hasher.update_blocks(buffer, buffer + block_size);
 	}
 	inline constexpr void update(::std::byte const *block_first, ::std::byte const *block_last) noexcept
@@ -207,11 +206,7 @@ inline
 	{
 		for (::std::size_t i{}; i != n; ++i)
 		{
-			U v{digest[i]};
-			if constexpr (::std::endian::native != end)
-			{
-				v = ::fast_io::byte_swap(v);
-			}
+			U v{::fast_io::details::ordered_integer<end>(digest[i])};
 			::fast_io::freestanding::array<::std::byte, usz> va{
 				::fast_io::bit_cast<::fast_io::freestanding::array<::std::byte, usz>>(v)};
 			ptr = ::fast_io::freestanding::nonoverlapped_bytes_copy_n(va.data(), usz, ptr);
@@ -227,7 +222,7 @@ inline
 		{
 			for (::std::size_t i{}; i != n; ++i)
 			{
-				auto v{::fast_io::byte_swap(digest[i])};
+				auto v{::fast_io::details::ordered_integer<end>(digest[i])};
 				::fast_io::details::my_memcpy(ptr, __builtin_addressof(v), usz);
 				ptr += usz;
 			}
@@ -291,11 +286,7 @@ inline constexpr void hash_digest_to_byte_ptr_common(digest_value_type const *di
 	{
 		constexpr ::std::size_t szmul{sz * sizeof(digest_value_type)};
 		ptr += szmul;
-		digest_value_type v{digest[sz]};
-		if constexpr (end != ::std::endian::native)
-		{
-			v = ::fast_io::byte_swap(v);
-		}
+		auto v{ordered_integer<end>(digest[sz])};
 		::fast_io::freestanding::type_punning_to_bytes_n<remainder>(v, ptr);
 	}
 }

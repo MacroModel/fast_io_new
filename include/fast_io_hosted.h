@@ -96,6 +96,10 @@ freestanding ones.
 
 #include "fast_io_hosted/io_file.h"
 
+#if defined(__cpp_impl_coroutine) && __has_include(<coroutine>) && !defined(__AVR__)
+#include "fast_io_hosted/async/impl.h"
+#endif
+
 #if defined(_MSVC_EXECUTION_CHARACTER_SET)
 #if _MSVC_EXECUTION_CHARACTER_SET == 936 || _MSVC_EXECUTION_CHARACTER_SET == 54936
 #include "fast_io_unit/gb18030.h"
@@ -108,6 +112,8 @@ freestanding ones.
 
 #if defined(_GLIBCXX_STRING) || defined(_LIBCPP_STRING) || defined(_STRING_)
 #include "fast_io_unit/string.h"
+#elif defined(_GLIBCXX_STRING_VIEW) || defined(_LIBCPP_STRING_VIEW) || defined(_STRING_VIEW_)
+#include "fast_io_unit/string_impl/string_view.h"
 #endif
 
 #if defined(_GLIBCXX_CHRONO) || defined(_LIBCPP_CHRONO) || defined(_CHRONO_)

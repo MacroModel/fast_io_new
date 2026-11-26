@@ -27,24 +27,26 @@ template <
 	typename handle_storage,
 	typename input_engine,
 	typename output_engine,
-	typename input_traits = ::fast_io::basic_itranscoder_traits<
+	typename input_traits = ::fast_io::details::transcode_input_traits_for<input_engine, ::fast_io::basic_itranscoder_traits<
 		input_public_char,
 		::fast_io::transcode_from_value_t<
 			::fast_io::operations::transcode_engine_ref_t<input_engine>>,
 		::fast_io::transcode_to_value_t<
-			::fast_io::operations::transcode_engine_ref_t<input_engine>>>,
-	typename output_traits = ::fast_io::basic_otranscoder_traits<
+			::fast_io::operations::transcode_engine_ref_t<input_engine>>>, handle_storage>,
+	typename output_traits = ::fast_io::details::transcode_output_traits_for<output_engine, ::fast_io::basic_otranscoder_traits<
 		output_public_char,
 		::fast_io::transcode_to_value_t<
-			::fast_io::operations::transcode_engine_ref_t<output_engine>>>>
-	requires(::fast_io::transcoder<input_engine> &&
-			 ::fast_io::transcoder<output_engine>)
+			::fast_io::operations::transcode_engine_ref_t<output_engine>>>, handle_storage>>
+	requires(::fast_io::bounded_transcoder<input_engine> &&
+			 ::fast_io::bounded_transcoder<output_engine>)
 class basic_iotranscoder
 {
 public:
 	using input_char_type = input_public_char;
 	using output_char_type = output_public_char;
 	using handle_storage_type = handle_storage;
+	/** @brief Original child operand retained for operation-level decorator traversal. */
+	using decorated_stream_type = ::std::remove_reference_t<decltype(::std::declval<handle_storage &>().get())>;
 	using input_engine_type = input_engine;
 	using output_engine_type = output_engine;
 	using input_traits_type = input_traits;
@@ -100,13 +102,42 @@ public:
 	/** @brief Terminally finishes only the output direction. */
 	inline void finish_output()
 	{
-		output.finish();
+		output.finish_legacy();
 	}
 
 	/** @brief Discards remaining input and terminally validates its engine. */
 	inline void drain_and_finish_input()
 	{
 		input.drain_and_finish();
+	}
+
+	/** @brief Proves the stock tie on this child has no stream or engine work. */
+	inline bool input_tie_has_effect(input_adapter_type const &child) const noexcept
+	{
+		if (__builtin_addressof(child) != __builtin_addressof(input) ||
+			child.handle.tie_ptr != this || child.handle.tie_flush != &flush_tied_output) return true;
+		if (output.state != ::fast_io::otranscoder_state::open) return false;
+		namespace decay = ::fast_io::operations::decay;
+		using leaf = ::std::remove_cvref_t<decltype(::std::declval<handle_storage_type &>().get())>;
+		// Only the factory's own storage guarantees that fetching the leaf has no side effects.
+		using handle_type = ::std::remove_reference_t<decltype(::std::declval<handle_storage_type &>().get())>;
+		if constexpr (!(::std::same_as<handle_storage_type, details::borrowed_otranscoder_handle<handle_type>> ||
+						::std::same_as<handle_storage_type, details::owned_otranscoder_handle<handle_type>>)) return true;
+		using output_ref = ::std::remove_cvref_t<decltype(::fast_io::operations::output_stream_ref(
+			::std::declval<handle_storage_type &>().get()))>;
+		if constexpr (requires {
+			{ async_empty_output_tie_define(::fast_io::io_type<leaf>) } noexcept -> ::std::same_as<::std::true_type>;
+			{ transcode_inert_sync_flush_define(::fast_io::transcode_reserve<output_engine>) }
+				noexcept -> ::std::same_as<::std::true_type>;
+		} && noexcept(::fast_io::operations::output_stream_ref(::std::declval<handle_storage_type &>().get())) &&
+			!decay::defines::has_output_or_io_stream_mutex_ref_define<output_ref> &&
+			!::fast_io::output_stream_publishable<output_ref> &&
+			!decay::defines::output_stream_buffer_flush_dispatchable<output_ref> &&
+			!decay::defines::has_transcode_sync_flush_define<typename output_adapter_type::engine_ref_type>)
+		{
+			return output.public_buffer.buffer_begin != output.public_buffer.buffer_curr;
+		}
+		return true;
 	}
 
 private:
@@ -120,7 +151,7 @@ private:
 		if (self->output.state == ::fast_io::otranscoder_state::open)
 		{
 			// An open encoder may hold bytes that the peer must see before replying.
-			self->output.flush();
+			self->output.flush_legacy();
 		}
 	}
 

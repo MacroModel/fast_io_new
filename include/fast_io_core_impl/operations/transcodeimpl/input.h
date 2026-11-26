@@ -15,6 +15,49 @@
 namespace fast_io
 {
 
+namespace details
+{
+/** @brief Holds the first checked engine error across the synchronous buffer and lock protocol. */
+#if defined(__HERBCEPTIONS__)
+struct transcode_input_error_slot
+{
+	// The owner delivers this error immediately after unwinding the current refill and its lock.
+	::std::cxx_std_error failure{};
+
+	/** @brief Runs one deterministic step inside the synchronous cursor machinery. */
+	template <typename Result, typename Operation>
+	inline bool checked_step(Result &result, Operation operation)
+	{
+		try { result = operation(); }
+		catch throws(::std::error error)
+		{
+			failure = error.release();
+			return false;
+		}
+		return true;
+	}
+};
+#endif
+
+/** @brief Identifies an already supplied source range. The asynchronous driver refills it after suspension. */
+struct supplied_transcode_input
+#if defined(__HERBCEPTIONS__)
+	: transcode_input_error_slot
+#endif
+{};
+
+/** @brief Selects the source-owned or scanner-owned error channel at compile time. */
+template <typename Input>
+inline constexpr Input &transcode_input_steps(Input &source) noexcept { return source; }
+#if defined(__HERBCEPTIONS__)
+template <typename Input>
+inline constexpr transcode_input_error_slot &transcode_input_steps(Input &, transcode_input_error_slot &steps) noexcept
+{
+	return steps;
+}
+#endif
+} // namespace details
+
 /** @brief Tracks input decoding, terminal validation, and abandonment state. */
 enum class itranscoder_state : ::std::uint_least8_t
 {
@@ -37,13 +80,13 @@ enum class itranscoder_state : ::std::uint_least8_t
  */
 template <::std::integral public_char, typename handle_storage,
 		  typename engine,
-		  typename traits = ::fast_io::basic_itranscoder_traits<
+		  typename traits = ::fast_io::details::transcode_input_traits_for<engine, ::fast_io::basic_itranscoder_traits<
 			  public_char,
 			  ::fast_io::transcode_from_value_t<
 				  ::fast_io::operations::transcode_engine_ref_t<engine>>,
 			  ::fast_io::transcode_to_value_t<
-				  ::fast_io::operations::transcode_engine_ref_t<engine>>>>
-	requires(::fast_io::transcoder<engine> &&
+				  ::fast_io::operations::transcode_engine_ref_t<engine>>>, handle_storage>>
+	requires(::fast_io::bounded_transcoder<engine> &&
 			 ::fast_io::transcode_automatically_bindable<
 				 ::fast_io::transcode_to_value_t<
 					 ::fast_io::operations::transcode_engine_ref_t<engine>>,
@@ -53,6 +96,8 @@ class basic_itranscoder
 public:
 	using input_char_type = public_char;
 	using handle_storage_type = handle_storage;
+	/** @brief Original child operand retained for operation-level decorator traversal. */
+	using decorated_stream_type = ::std::remove_reference_t<decltype(::std::declval<handle_storage &>().get())>;
 	using engine_type = engine;
 	using traits_type = traits;
 	using allocator_type = typename traits_type::allocator_type;
@@ -62,8 +107,8 @@ public:
 		::fast_io::transcode_from_value_t<engine_ref_type>;
 	using transformed_unit_type =
 		::fast_io::transcode_to_value_t<engine_ref_type>;
-	using normalized_input_ref_type = ::std::remove_cvref_t<decltype(::fast_io::operations::input_stream_ref(
-		::std::declval<handle_storage_type &>().get()))>;
+	using normalized_input_ref_type = ::fast_io::details::transcode_endpoint_ref_t<true, ::std::remove_cvref_t<decltype(::fast_io::operations::input_stream_ref(
+		::std::declval<handle_storage_type &>().get()))>>;
 
 	static_assert(::fast_io::transcode_automatically_bindable<
 					  source_unit_type,
@@ -89,6 +134,9 @@ public:
 	static inline constexpr transcode_unit_binding target_binding{
 		::fast_io::transcode_unit_binding_for<transformed_unit_type,
 											  input_char_type>()};
+	static inline constexpr bool direct_public_units{
+		target_binding == transcode_unit_binding::exact_units ||
+		(sizeof(input_char_type) == 1 && ::fast_io::transcode_wire_character<input_char_type>)};
 
 	static_assert([]() consteval {
 		if constexpr (source_binding == transcode_unit_binding::exact_units)
@@ -104,6 +152,7 @@ public:
 			// Byte binding accepts byte reads or representation-copyable get areas.
 			return ::fast_io::operations::decay::defines::
 					   bytes_readable<normalized_input_ref_type> ||
+				   ::fast_io::operations::decay::defines::readable<normalized_input_ref_type> ||
 				   ::fast_io::operations::decay::defines::
 					   has_ibuffer_basic_operations<normalized_input_ref_type>;
 		}
@@ -113,8 +162,10 @@ public:
 	static_assert(traits_type::transform_buffer_size != 0u);
 	static_assert(
 		traits_type::publication_mode ==
-			::fast_io::transcode_input_publication_mode::streaming_unverified,
-		"hold_until_authenticated requires an authenticated-message storage policy");
+			::fast_io::transcode_input_publication_mode::streaming_unverified ||
+		(traits_type::publication_mode == ::fast_io::transcode_input_publication_mode::authenticated_records &&
+		 ::fast_io::authenticated_record_transcoder<engine>),
+		"verified record publication requires an authenticated engine; whole-message storage is a separate policy");
 
 	// public_buffer is the caller-visible get area. source_buffer owns raw input
 	// when a direct underlying ibuffer cannot be borrowed. transform_buffer is
@@ -283,24 +334,48 @@ public:
 	}
 
 	/** @brief Prepares the next bounded source range through the cursor bridge. */
-	template <typename input_ref>
-	inline auto prepare_source(input_ref &inref)
+	template <typename input_ref, typename... Errors>
+	inline auto prepare_source(input_ref &inref, [[maybe_unused]] Errors &...errors)
 	{
-		return ::fast_io::details::prepare_transcode_source<
+		if constexpr (::std::same_as<input_ref, ::fast_io::details::supplied_transcode_input>)
+			return ::fast_io::details::basic_transcode_source<source_unit_type>{
+				source_buffer.buffer_curr, source_buffer.buffer_end, false};
+		else return ::fast_io::details::prepare_transcode_source<
 			allocator_type, traits_type::secure_clear>(
 			inref, source_buffer, source_eof,
-			traits_type::source_buffer_size);
+			::fast_io::details::transcode_buffer_units<source_unit_type>(
+				::fast_io::details::input_transcode_bytes<input_ref>, traits_type::source_buffer_size),
+			[&](auto &child, bool &eof) {
+				bool ready;
+#if defined(__HERBCEPTIONS__)
+				auto &steps{details::transcode_input_steps(child, errors...)};
+				if constexpr (::std::is_base_of_v<details::transcode_input_error_slot, ::std::remove_reference_t<decltype(steps)>> &&
+					requires { ibuffer_underflow_checked_define(child, ::std::size_t{}); })
+				{
+					// A child failure cannot finish its parent or commit its speculative result.
+					if (!steps.checked_step(ready, [&]() throws { return ibuffer_underflow_checked_define(child, 0u); }))
+						return false;
+				}
+				else
+#endif
+					ready = ibuffer_underflow(child);
+				eof = !ready;
+				return ready;
+			});
 	}
 
-	/** @brief Produces one caller-visible block for an exact-unit engine target. */
-	template <typename input_ref>
-	inline bool refill_exact(engine_ref_type &engine_ref, input_ref &inref)
+	/** @brief Decodes into same-width storage. Byte engines may write complete one-byte public characters in place. */
+	template <typename input_ref, typename Unit, typename... Errors>
+	inline bool refill_block(engine_ref_type &engine_ref, input_ref &inref,
+		::fast_io::details::basic_transcode_input_buffer_pointers<Unit> &buffer, ::std::size_t preferred, Errors &...errors)
 	{
-		// Exact-unit engines produce directly into the public get area. Return as
-		// soon as any output is publishable; otherwise continue through source
-		// refills and finally the terminal drain at physical EOF.
-		public_buffer.buffer_curr = public_buffer.buffer_end =
-			public_buffer.buffer_begin;
+#if defined(__HERBCEPTIONS__)
+		auto &steps{details::transcode_input_steps(inref, errors...)};
+		constexpr bool checked{::std::is_base_of_v<details::transcode_input_error_slot, ::std::remove_reference_t<decltype(steps)>>};
+#endif
+		static_assert(sizeof(Unit) == sizeof(transformed_unit_type));
+		buffer.buffer_curr = buffer.buffer_end =
+			buffer.buffer_begin;
 		for (;;)
 		{
 			// Alternate bounded processing and terminal drain until data or EOF.
@@ -313,7 +388,13 @@ public:
 			if (!source_eof)
 			{
 				// Process physical input until EOF has been observed.
-				auto source{prepare_source(inref)};
+				auto source{prepare_source(inref, errors...)};
+#if defined(__HERBCEPTIONS__)
+				if constexpr (checked && requires { ibuffer_underflow_checked_define(inref, ::std::size_t{}); })
+					if (steps.failure.domain != nullptr) return false;
+#endif
+				if constexpr (::std::same_as<input_ref, ::fast_io::details::supplied_transcode_input>)
+					if (source.first == source.last) return false;
 				if (source.first != source.last)
 				{
 					// Supply the prepared nonempty source to one bounded process step.
@@ -324,13 +405,24 @@ public:
 								::fast_io::transcode_phase::process)};
 					::fast_io::details::ensure_transcode_input_buffer<
 						allocator_type, traits_type::secure_clear>(
-						public_buffer, minimum,
-						traits_type::public_buffer_size);
-					auto result{
-						::fast_io::operations::decay::transcode_process_decay_dispatch(
-							engine_ref, source.first, source.last,
-							public_buffer.buffer_begin,
-							public_buffer.buffer_capacity_end)};
+						buffer, minimum,
+						preferred);
+					auto first{reinterpret_cast<transformed_unit_type *>(buffer.buffer_begin)};
+					auto last{reinterpret_cast<transformed_unit_type *>(buffer.buffer_capacity_end)};
+					basic_transcode_process_result<source_unit_type, transformed_unit_type> result;
+#if defined(__HERBCEPTIONS__)
+					if constexpr (checked &&
+						operations::decay::defines::has_transcode_process_checked_define<engine_ref_type>)
+					{
+						// An invalid range must not publish the engine's speculative output.
+						if (!steps.checked_step(result, [&]() throws {
+							return transcode_process_checked_define(engine_ref, source.first, source.last, first, last);
+						})) return false;
+					}
+					else
+#endif
+						result = operations::decay::transcode_process_decay_dispatch(
+							engine_ref, source.first, source.last, first, last);
 					if (result.status !=
 							::fast_io::transcode_step_status::need_input &&
 						result.status !=
@@ -342,8 +434,7 @@ public:
 					}
 					auto const validated_to{
 						::fast_io::details::validate_transcode_closed_range_offsets(
-							public_buffer.buffer_begin,
-							public_buffer.buffer_capacity_end, result.to_next)};
+							first, last, result.to_next)};
 					if (!validated_to.valid) [[unlikely]]
 					{
 						// Prove the provider cursor's integer offset before any progress
@@ -357,8 +448,8 @@ public:
 					bool const made_progress{
 						validated_from != source.first ||
 						validated_to.current_offset != 0u};
-					public_buffer.buffer_curr = public_buffer.buffer_begin;
-					public_buffer.buffer_end = validated_to.current;
+					buffer.buffer_curr = buffer.buffer_begin;
+					buffer.buffer_end = buffer.buffer_begin + validated_to.current_offset;
 					if (result.status ==
 							::fast_io::transcode_step_status::need_input &&
 						validated_from != source.last)
@@ -375,13 +466,36 @@ public:
 						::fast_io::throw_transcode_stream_error(
 							::fast_io::transcode_stream_errc::protocol_violation);
 					}
-					if (public_buffer.buffer_curr != public_buffer.buffer_end)
+					if (buffer.buffer_curr != buffer.buffer_end)
 					{
 						// Publish produced units immediately for streaming latency.
 						return true;
 					}
 					continue;
 				}
+			}
+
+			if constexpr (::fast_io::outputless_transcode_drain<engine_ref_type, ::fast_io::transcode_phase::finish>)
+			{
+				// Physical EOF has been established. Validate before publishing logical EOF.
+#if defined(__HERBCEPTIONS__)
+				if constexpr (checked &&
+					operations::decay::defines::has_transcode_finish_checked_define<engine_ref_type>)
+				{
+					transformed_unit_type scratch;
+					basic_transcode_drain_result<transformed_unit_type> result;
+					if (!steps.checked_step(result, [&]() throws {
+						return transcode_finish_checked_define(engine_ref, &scratch, &scratch);
+					})) return false;
+					if (result.to_next != &scratch || result.status != transcode_drain_status::complete)
+						throw_transcode_stream_error(transcode_stream_errc::protocol_violation);
+				}
+				else
+#endif
+					::fast_io::operations::decay::transcode_drain_empty<::fast_io::transcode_phase::finish>(engine_ref);
+				engine_finished = true;
+				state = itranscoder_state::finished;
+				return false;
 			}
 
 			::std::size_t const minimum{
@@ -391,11 +505,21 @@ public:
 						::fast_io::transcode_phase::finish)};
 			::fast_io::details::ensure_transcode_input_buffer<
 				allocator_type, traits_type::secure_clear>(
-				public_buffer, minimum, traits_type::public_buffer_size);
-			auto result{
-				::fast_io::operations::decay::transcode_finish_decay_dispatch(
-					engine_ref, public_buffer.buffer_begin,
-					public_buffer.buffer_capacity_end)};
+				buffer, minimum, preferred);
+			auto first{reinterpret_cast<transformed_unit_type *>(buffer.buffer_begin)};
+			auto last{reinterpret_cast<transformed_unit_type *>(buffer.buffer_capacity_end)};
+			basic_transcode_drain_result<transformed_unit_type> result;
+#if defined(__HERBCEPTIONS__)
+			if constexpr (checked &&
+				operations::decay::defines::has_transcode_finish_checked_define<engine_ref_type>)
+			{
+				if (!steps.checked_step(result, [&]() throws {
+					return transcode_finish_checked_define(engine_ref, first, last);
+				})) return false;
+			}
+			else
+#endif
+				result = operations::decay::transcode_finish_decay_dispatch(engine_ref, first, last);
 			if (result.status != ::fast_io::transcode_drain_status::complete &&
 				result.status !=
 					::fast_io::transcode_drain_status::need_output)
@@ -406,8 +530,7 @@ public:
 			}
 			auto const validated_to{
 				::fast_io::details::validate_transcode_closed_range_offsets(
-					public_buffer.buffer_begin,
-					public_buffer.buffer_capacity_end, result.to_next)};
+					first, last, result.to_next)};
 			if (!validated_to.valid) [[unlikely]]
 			{
 				// Terminal output crosses the same untrusted engine boundary and
@@ -416,8 +539,8 @@ public:
 					::fast_io::transcode_stream_errc::protocol_violation);
 			}
 			bool const made_progress{validated_to.current_offset != 0u};
-			public_buffer.buffer_curr = public_buffer.buffer_begin;
-			public_buffer.buffer_end = validated_to.current;
+			buffer.buffer_curr = buffer.buffer_begin;
+			buffer.buffer_end = buffer.buffer_begin + validated_to.current_offset;
 			if (result.status == ::fast_io::transcode_drain_status::complete)
 			{
 				// Record terminal engine completion even if output still awaits reading.
@@ -439,161 +562,26 @@ public:
 		}
 	}
 
-	/** @brief Produces one raw transformed block for an object-byte target. */
-	template <typename input_ref>
-	inline bool refill_transformed(engine_ref_type &engine_ref,
-								   input_ref &inref)
+	template <typename Input, typename... Errors>
+	inline bool refill_exact(engine_ref_type &ref, Input &in, Errors &...errors)
 	{
-		// This is the raw-byte counterpart of refill_exact. It intentionally does
-		// not impose PublicChar alignment, because byte reads and explicit drain
-		// must be able to consume a terminal partial object representation.
-		transform_buffer.buffer_curr = transform_buffer.buffer_end =
-			transform_buffer.buffer_begin;
-		for (;;)
-		{
-			// Alternate bounded processing and terminal drain until raw output or EOF.
-			if (engine_finished)
-			{
-				// No raw output remains after the terminal drain has completed.
-				state = itranscoder_state::finished;
-				return false;
-			}
-			if (!source_eof)
-			{
-				// Continue bounded processing while physical source may remain.
-				auto source{prepare_source(inref)};
-				if (source.first != source.last)
-				{
-					// Process a prepared nonempty source into raw transformed scratch.
-					::std::size_t const minimum{
-						::fast_io::operations::decay::
-							transcode_min_output_size_decay(
-								::fast_io::transcode_reserve<engine_ref_type>,
-								::fast_io::transcode_phase::process)};
-					::fast_io::details::ensure_transcode_input_buffer<
-						allocator_type, traits_type::secure_clear>(
-						transform_buffer, minimum,
-						traits_type::transform_buffer_size);
-					auto result{
-						::fast_io::operations::decay::transcode_process_decay_dispatch(
-							engine_ref, source.first, source.last,
-							transform_buffer.buffer_begin,
-							transform_buffer.buffer_capacity_end)};
-					if (result.status !=
-							::fast_io::transcode_step_status::need_input &&
-						result.status !=
-							::fast_io::transcode_step_status::need_output)
-					{
-						// Reject statuses outside the two-state process protocol.
-						::fast_io::throw_transcode_stream_error(
-							::fast_io::transcode_stream_errc::protocol_violation);
-					}
-					auto const validated_to{
-						::fast_io::details::validate_transcode_closed_range_offsets(
-							transform_buffer.buffer_begin,
-							transform_buffer.buffer_capacity_end, result.to_next)};
-					if (!validated_to.valid) [[unlikely]]
-					{
-						// Validate the raw destination cursor without evaluating an
-						// unrelated-pointer comparison supplied by the engine.
-						::fast_io::throw_transcode_stream_error(
-							::fast_io::transcode_stream_errc::protocol_violation);
-					}
-					auto const validated_from{
-						::fast_io::details::commit_transcode_source(
-							inref, source_buffer, source, result.from_next)};
-					bool const made_progress{
-						validated_from != source.first ||
-						validated_to.current_offset != 0u};
-					transform_buffer.buffer_curr =
-						transform_buffer.buffer_begin;
-					transform_buffer.buffer_end = validated_to.current;
-					if (result.status ==
-							::fast_io::transcode_step_status::need_input &&
-						validated_from != source.last)
-					{
-						// Need-input is valid only after consuming the supplied source.
-						::fast_io::throw_transcode_stream_error(
-							::fast_io::transcode_stream_errc::protocol_violation);
-					}
-					if (result.status ==
-							::fast_io::transcode_step_status::need_output &&
-						!made_progress)
-					{
-						// Need-output must make progress with guaranteed destination space.
-						::fast_io::throw_transcode_stream_error(
-							::fast_io::transcode_stream_errc::protocol_violation);
-					}
-					if (transform_buffer.buffer_curr !=
-						transform_buffer.buffer_end)
-					{
-						// Expose raw output to byte copying or typed-object assembly.
-						return true;
-					}
-					continue;
-				}
-			}
+		return details::with_transcode_endpoint<true>(in,[&](auto &child) {
+			return refill_block(ref, child, public_buffer, traits_type::public_buffer_size, errors...);
+		});
+	}
 
-			::std::size_t const minimum{
-				::fast_io::operations::decay::
-					transcode_min_output_size_decay(
-						::fast_io::transcode_reserve<engine_ref_type>,
-						::fast_io::transcode_phase::finish)};
-			::fast_io::details::ensure_transcode_input_buffer<
-				allocator_type, traits_type::secure_clear>(
-				transform_buffer, minimum,
-				traits_type::transform_buffer_size);
-			auto result{
-				::fast_io::operations::decay::transcode_finish_decay_dispatch(
-					engine_ref, transform_buffer.buffer_begin,
-					transform_buffer.buffer_capacity_end)};
-			if (result.status != ::fast_io::transcode_drain_status::complete &&
-				result.status !=
-					::fast_io::transcode_drain_status::need_output)
-			{
-				// Terminal drain accepts only complete or need-output status.
-				::fast_io::throw_transcode_stream_error(
-					::fast_io::transcode_stream_errc::protocol_violation);
-			}
-			auto const validated_to{
-				::fast_io::details::validate_transcode_closed_range_offsets(
-					transform_buffer.buffer_begin,
-					transform_buffer.buffer_capacity_end, result.to_next)};
-			if (!validated_to.valid) [[unlikely]]
-			{
-				// Reject terminal cursors before they become persistent adapter
-				// state; successful cursors are rebuilt from the owned base.
-				::fast_io::throw_transcode_stream_error(
-					::fast_io::transcode_stream_errc::protocol_violation);
-			}
-			bool const made_progress{validated_to.current_offset != 0u};
-			transform_buffer.buffer_curr = transform_buffer.buffer_begin;
-			transform_buffer.buffer_end = validated_to.current;
-			if (result.status == ::fast_io::transcode_drain_status::complete)
-			{
-				// Remember finish completion while preserving any produced raw bytes.
-				engine_finished = true;
-			}
-			else if (!made_progress)
-			{
-				// Need-output without output would repeat forever on fresh scratch.
-				::fast_io::throw_transcode_stream_error(
-					::fast_io::transcode_stream_errc::protocol_violation);
-			}
-			if (made_progress)
-			{
-				// Return terminal output before marking the public stream exhausted.
-				return true;
-			}
-			state = itranscoder_state::finished;
-			return false;
-		}
+	template <typename Input, typename... Errors>
+	inline bool refill_transformed(engine_ref_type &ref, Input &in, Errors &...errors)
+	{
+		return details::with_transcode_endpoint<true>(in,[&](auto &child) {
+			return refill_block(ref, child, transform_buffer, traits_type::transform_buffer_size, errors...);
+		});
 	}
 
 	/** @brief Assembles transformed bytes into complete public input objects. */
-	template <typename input_ref>
+	template <typename input_ref, typename... Errors>
 	inline bool refill_typed_from_bytes(engine_ref_type &engine_ref,
-										input_ref &inref)
+										input_ref &inref, Errors &...errors)
 	{
 		// Assemble only complete PublicChar objects with memcpy. If at least one
 		// object is ready, publish it before requesting more raw output; this
@@ -629,8 +617,16 @@ public:
 							public_buffer.buffer_end = destination;
 							return true;
 						}
-						if (!refill_transformed(engine_ref, inref))
+						if (!refill_transformed(engine_ref, inref, errors...))
 						{
+#if defined(__HERBCEPTIONS__)
+							auto &steps{details::transcode_input_steps(inref, errors...)};
+							if constexpr (::std::is_base_of_v<details::transcode_input_error_slot, ::std::remove_reference_t<decltype(steps)>>)
+								if (steps.failure.domain != nullptr) return false;
+#endif
+							// An exhausted supplied window preserves the partial object for the next refill.
+							if constexpr (::std::same_as<input_ref, ::fast_io::details::supplied_transcode_input>)
+								if (!source_eof) return false;
 							// Logical EOF with a partial object is a typed-input error.
 							::fast_io::throw_transcode_stream_error(
 								::fast_io::transcode_stream_errc::incomplete_unit);
@@ -654,8 +650,9 @@ public:
 			}
 			if (transform_buffer.buffer_curr == transform_buffer.buffer_end)
 			{
-				// Acquire another transformed block after consuming the current one.
-				if (!refill_transformed(engine_ref, inref))
+				// Return completed public units before a new record can block or fail.
+				if (destination != public_buffer.buffer_begin) break;
+				if (!refill_transformed(engine_ref, inref, errors...))
 				{
 					// Terminal exhaustion ends assembly when no partial object exists.
 					break;
@@ -694,8 +691,8 @@ public:
 	}
 
 	/** @brief Refills the public get area and performs the duplex tie exactly once. */
-	template <typename input_ref>
-	inline bool underflow_impl(engine_ref_type &engine_ref, input_ref &inref)
+	template <typename input_ref, typename... Errors>
+	inline bool underflow_impl(engine_ref_type &engine_ref, input_ref &inref, Errors &...errors)
 	{
 		// Duplex tie semantics are attached to logical input underflow, not every
 		// low-level source read performed while producing one public buffer.
@@ -710,20 +707,21 @@ public:
 			return false;
 		}
 		before_source_refill();
-		if constexpr (target_binding == transcode_unit_binding::exact_units)
+		if constexpr (direct_public_units)
 		{
 			// Exact transformed units publish directly as public input objects.
-			return refill_exact(engine_ref, inref);
+			return refill_exact(engine_ref, inref, errors...);
 		}
 		else
 		{
 			// Byte output must be assembled into complete public input objects.
-			return refill_typed_from_bytes(engine_ref, inref);
+			return refill_typed_from_bytes(engine_ref, inref, errors...);
 		}
 	}
 
 	/** @brief Implements buffered underflow for typed read and scan operations. */
-	inline bool underflow()
+	template <typename... Errors>
+	inline bool underflow(::std::size_t reserve = 0u, Errors &...errors)
 	{
 		require_typed_read_boundary();
 		if (public_buffer.buffer_curr != public_buffer.buffer_end)
@@ -736,18 +734,48 @@ public:
 			// Report stable EOF after successful terminal validation.
 			return false;
 		}
-		return guarded([this] {
+		return guarded([this, reserve, &errors...] {
+			auto requested{reserve};
+			if constexpr (::fast_io::transcode_buffer_sizes_provider<engine_ref_type> &&
+						  traits_type::publication_mode == transcode_input_publication_mode::streaming_unverified)
+			{
+				// Once a scanner consumes a full SIMD-sized window, amortize subsequent refills.
+				// A fragmented source still publishes its first available prefix immediately.
+				constexpr auto ceiling{::fast_io::details::transcode_buffer_units<input_char_type>(
+					4096u, ::fast_io::details::default_transcode_buffer_size<input_char_type>())};
+				if (public_buffer.buffer_begin)
+				{
+					auto const capacity{static_cast<::std::size_t>(
+						public_buffer.buffer_capacity_end - public_buffer.buffer_begin)};
+					auto const unused{static_cast<::std::size_t>(
+						public_buffer.buffer_capacity_end - public_buffer.buffer_end)};
+					if (capacity < ceiling && unused <= capacity / 4u)
+					{
+						auto const next{capacity <= ceiling / 2u ? capacity * 2u : ceiling};
+						if (requested < next)
+						{
+							requested = next;
+						}
+					}
+				}
+			}
+			if (requested)
+			{
+				::fast_io::details::ensure_transcode_input_buffer<allocator_type, traits_type::secure_clear>(
+					public_buffer, requested, traits_type::public_buffer_size);
+			}
 			decltype(auto) engine_ref{
 				::fast_io::transcode_ref(transcode_engine)};
 			decltype(auto) inref{
 				::fast_io::operations::input_stream_ref(handle.get())};
-			return underflow_impl(engine_ref, inref);
+			return underflow_impl(engine_ref, inref, errors...);
 		});
 	}
 
-	/** @brief Copies at most one currently available block to a typed destination. */
-	inline input_char_type *read_some(input_char_type *first,
-									  input_char_type *last)
+	/** @brief Copies the next typed prefix using the caller's selected engine error channel. */
+	template <typename... Errors>
+	inline input_char_type *read_some_impl(input_char_type *first,
+										   input_char_type *last, Errors &...errors)
 	{
 		// Match ordinary read_some semantics: publish at most the currently
 		// available transformed block and let read_all own any retry loop.
@@ -757,13 +785,13 @@ public:
 			// Empty requests and stable EOF complete without touching the engine.
 			return first;
 		}
-		return guarded([this, first, last] {
+		return guarded([this, first, last, &errors...] {
 			decltype(auto) engine_ref{
 				::fast_io::transcode_ref(transcode_engine)};
 			decltype(auto) inref{
 				::fast_io::operations::input_stream_ref(handle.get())};
 			if (public_buffer.buffer_curr == public_buffer.buffer_end &&
-				!underflow_impl(engine_ref, inref))
+				!underflow_impl(engine_ref, inref, errors...))
 			{
 				// A failed refill is validated logical EOF for this read_some call.
 				return first;
@@ -783,6 +811,12 @@ public:
 			public_buffer.buffer_curr += available;
 			return first + available;
 		});
+	}
+
+	/** @brief Copies at most one currently available block to a typed destination. */
+	inline input_char_type *read_some(input_char_type *first, input_char_type *last)
+	{
+		return read_some_impl(first, last);
 	}
 
 	/** @brief Advances and wraps the byte cursor within a public input object. */
@@ -880,9 +914,13 @@ public:
 		return first + count;
 	}
 
-	/** @brief Reads one byte-domain block without requiring object alignment. */
-	inline ::std::byte *read_some_bytes(::std::byte *first,
-										::std::byte *last)
+	/** @brief Reads a byte-domain block through the caller's selected engine error channel.
+	 * @details A byte request can start or end inside a public object. Both exception ABIs
+	 * must use the same remainder and alignment state before requesting another engine step.
+	 */
+	template <typename... Errors>
+	inline ::std::byte *read_some_bytes_impl(::std::byte *first,
+											 ::std::byte *last, Errors &...errors)
 	{
 		// Preserve stream order across three possible stores: already published
 		// PublicChar objects, a typed-assembly remainder, and raw transformed
@@ -899,7 +937,7 @@ public:
 			// Empty requests and validated EOF return without additional work.
 			return first;
 		}
-		return guarded([this, first, last] {
+		return guarded([this, first, last, &errors...] {
 			decltype(auto) engine_ref{
 				::fast_io::transcode_ref(transcode_engine)};
 			decltype(auto) inref{
@@ -915,8 +953,7 @@ public:
 					// Satisfy the request entirely from already published public data.
 					return current;
 				}
-				if constexpr (target_binding ==
-							  transcode_unit_binding::exact_units)
+				if constexpr (direct_public_units)
 				{
 					// Exact targets refill public units and expose their representations.
 					if (!tied_flushed)
@@ -925,7 +962,7 @@ public:
 						before_source_refill();
 						tied_flushed = true;
 					}
-					if (!refill_exact(engine_ref, inref))
+					if (!refill_exact(engine_ref, inref, errors...))
 					{
 						// Return the prefix already copied when validated EOF is reached.
 						return current;
@@ -933,8 +970,11 @@ public:
 				}
 				else
 				{
-					// Byte targets drain assembly remainder and raw scratch in order.
-					current = copy_remainder_bytes(current, last);
+					if constexpr (sizeof(input_char_type) > 1u)
+					{
+						// Only a multibyte public unit can leave an incomplete representation between reads.
+						current = copy_remainder_bytes(current, last);
+					}
 					current = copy_transformed_bytes(current, last);
 					if (current == last)
 					{
@@ -947,7 +987,7 @@ public:
 						before_source_refill();
 						tied_flushed = true;
 					}
-					if (!refill_transformed(engine_ref, inref))
+					if (!refill_transformed(engine_ref, inref, errors...))
 					{
 						// Return a short byte read after validated logical EOF.
 						return current;
@@ -955,6 +995,12 @@ public:
 				}
 			}
 		});
+	}
+
+	/** @brief Reads one byte-domain block without requiring object alignment. */
+	inline ::std::byte *read_some_bytes(::std::byte *first, ::std::byte *last)
+	{
+		return read_some_bytes_impl(first, last);
 	}
 
 	/** @brief Explicitly discards unread output and drives input validation to EOF. */
@@ -979,8 +1025,7 @@ public:
 			decltype(auto) inref{
 				::fast_io::operations::input_stream_ref(handle.get())};
 			before_source_refill();
-			if constexpr (target_binding ==
-						  transcode_unit_binding::exact_units)
+			if constexpr (direct_public_units)
 			{
 				// Discard each exact-unit public block until terminal completion.
 				while (refill_exact(engine_ref, inref))

@@ -10,12 +10,14 @@
  * `fast_io::io::print`, while materialization goes to the IO concat engine.
  */
 
-// Include the standard string declaration before the fast_io string adapter.  This ordering
-// makes the umbrella reliable even when a consumer has not included <string> previously.
+#if (__STDC_HOSTED__ && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED) && !defined(_LIBCPP_FREESTANDING)) || defined(FAST_IO_ENABLE_HOSTED_FEATURES)
+// Only standard-string destinations require the hosted library's complete string definition.
 #include <string>
-
+#endif
 #include "types.h"
 #include "print.h"
 #include "to.h"
+#if (__STDC_HOSTED__ && (!defined(_GLIBCXX_HOSTED) || _GLIBCXX_HOSTED) && !defined(_LIBCPP_FREESTANDING)) || defined(FAST_IO_ENABLE_HOSTED_FEATURES)
 #include "concat_std.h"
 #include "concat_fast_io.h"
+#endif

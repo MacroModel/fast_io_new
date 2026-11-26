@@ -14,82 +14,6 @@
 namespace fast_io
 {
 
-namespace details
-{
-
-/** @brief Copies an exact element count through a bounded temporary buffer. */
-template <typename optstmtype, typename instmtype>
-	requires(sizeof(typename optstmtype::output_char_type) == sizeof(typename instmtype::input_char_type))
-inline constexpr void transmit_all_main_impl(optstmtype &optstm, instmtype &instm,
-											 ::fast_io::uintfpos_t totransmit)
-{
-	if (totransmit == 0u)
-	{
-		/*
-		Zero payload is the identity element of exact transfer.  This terminal
-		shortcut deliberately follows observer normalization, mutex recursion,
-		and the public output guard: those outer protocols still execute, while
-		the zero-count postcondition proves that no staging allocation or primitive
-		read/write is observable here.
-		*/
-		return;
-	}
-	// Generic transfer intentionally stages through a bounded local buffer;
-	// provider-specific zero-copy strategies belong to status transmit CPOs.
-	using input_char_type = typename instmtype::input_char_type;
-	using output_char_type = typename optstmtype::output_char_type;
-	constexpr ::std::size_t default_buffer_elements{
-		::fast_io::details::transmit_buffer_size_cache<sizeof(input_char_type)>};
-	::std::size_t buffer_elements{default_buffer_elements};
-	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_elements))
-	{
-		/*
-		Both operands denote elements. sizeof(input_char_type) participates only
-		in translating the byte-budget policy to an element capacity; it never
-		scales the caller's element count. The comparison occurs in uintfpos_t,
-		and this branch proves the request is below a size_t constant before the
-		narrowing conversion. Consequently the allocation is exactly
-		min(default_buffer_elements, remaining_request) elements.
-		*/
-		buffer_elements = static_cast<::std::size_t>(totransmit);
-	}
-	::fast_io::details::local_operator_new_array_ptr<input_char_type> newptr(
-		buffer_elements);
-	input_char_type *buffer_start{newptr.ptr};
-	while (totransmit)
-	{
-		// Move one bounded block while preserving the exact remaining count.
-		::std::size_t this_round{buffer_elements};
-		if (totransmit < this_round)
-		{
-			// Limit the final iteration to the exact remaining element count.
-			this_round = static_cast<::std::size_t>(totransmit);
-		}
-		auto iter{buffer_start + this_round};
-		::fast_io::operations::decay::read_all_decay_dispatch(instm, buffer_start, iter);
-		if constexpr (::std::same_as<output_char_type, input_char_type>)
-		{
-			// Matching character types can reuse the input buffer directly.
-			::fast_io::operations::decay::write_all_decay_dispatch(optstm, buffer_start, iter);
-		}
-		else
-		{
-			// Equal-width distinct character types require an alias-safe view.
-			using output_char_type_may_alias_const_ptrtp
-#if __has_cpp_attribute(__gnu__::__may_alias__)
-				[[__gnu__::__may_alias__]]
-#endif
-				= output_char_type const *;
-			::fast_io::operations::decay::write_all_decay_dispatch(
-				optstm, reinterpret_cast<output_char_type_may_alias_const_ptrtp>(buffer_start),
-				reinterpret_cast<output_char_type_may_alias_const_ptrtp>(iter));
-		}
-		totransmit -= this_round;
-	}
-}
-
-} // namespace details
-
 namespace operations
 {
 
@@ -99,7 +23,7 @@ namespace decay
 /** @brief Borrows stable observers while applying exact-count mutex recursion. */
 template <typename optstmtype, typename instmtype>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
-inline constexpr decltype(auto) transmit_all_decay_borrowed(optstmtype &optstm, instmtype &instm,
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto) transmit_all_decay_borrowed(optstmtype &optstm, instmtype &instm,
 															::fast_io::uintfpos_t totransmit)
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
@@ -139,7 +63,7 @@ inline constexpr decltype(auto) transmit_all_decay_borrowed(optstmtype &optstm, 
 	else
 	{
 		// Both observers are ready for the generic exact-count transfer loop.
-		return ::fast_io::details::transmit_all_main_impl(optstm, instm, totransmit);
+		return ::fast_io::details::transmit_exact_main_impl<false>(optstm, instm, totransmit);
 	}
 }
 
@@ -177,14 +101,31 @@ transmit_all_decay_dispatch(optstmtype &optstm, instmtype &instm,
  * output commit occurs only after the entire transfer succeeds.
  */
 template <typename optstmtype, typename instmtype>
-inline constexpr decltype(auto) transmit_all(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit)
+#if defined(__HERBCEPTIONS__)
+	requires (!::fast_io::details::uses_checked_transmit_all<false, optstmtype, instmtype>)
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_all(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit)
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
-		return ::fast_io::operations::decay::transmit_all_decay_dispatch(output_observer, input_observer, totransmit);
-	});
+	::fast_io::operations::decay::transmit_all_decay_dispatch(guard.ref(), input_observer, totransmit);
+	guard.commit();
 }
+
+#if defined(__HERBCEPTIONS__)
+/** @brief Transfers an exact element count using the checked endpoint and terminal-EOF ABI. */
+template <typename optstmtype, typename instmtype>
+	requires ::fast_io::details::uses_checked_transmit_all<false, optstmtype, instmtype>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+transmit_all(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit) throws
+{
+	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	::fast_io::details::transmit_exact_checked_dispatch<false>(guard.ref(), input_observer, totransmit);
+	::fast_io::details::finish_checked_transmit<optstmtype>(guard);
+}
+#endif
 
 } // namespace operations
 

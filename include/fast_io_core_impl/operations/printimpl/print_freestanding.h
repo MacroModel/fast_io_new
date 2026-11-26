@@ -318,8 +318,10 @@ struct print_leading_run_scan_elements
 		__type_pack_element<index, source_types...>;
 #endif
 
+	/** @brief Computes one prefix descriptor after every member template of the enclosing class is declared. */
 	template <::std::size_t index>
-	inline static constexpr element_type element{[]() consteval {
+	static consteval element_type classify_element() noexcept
+	{
 		if constexpr (index != 0u)
 		{
 			if constexpr (element<index - 1u>.stop)
@@ -335,7 +337,10 @@ struct print_leading_run_scan_elements
 		{
 			return classifier::template classify<source_type<index>>();
 		}
-	}()};
+	}
+
+	template <::std::size_t index>
+	inline static constexpr element_type element{classify_element<index>()};
 
 	struct table_type
 	{
@@ -1910,13 +1915,14 @@ inline constexpr ::std::size_t print_scatter_repack_stack_scatter_count() noexce
 
 /// @brief    Tries to repack small byte scatter segments before byte scatter output.
 /// @details  The first pass plans descriptor reduction and buffer needs; the second pass emits either preserved
-///           descriptors or copied coalesced chunks. Repacking is skipped unless enough descriptors are saved.
+///           descriptors or copied coalesced chunks. Repacking needs an allocator for unbounded scatter chains.
 /// @tparam   outputstmtype the decayed output stream reference type
+/// @tparam   Allocator     the provider for additional bytes and descriptors
 /// @param    outstm        the output stream reference
 /// @param    scatters      the first byte scatter descriptor
 /// @param    n             the number of descriptors
 /// @return   bool true when this function emitted the output through the repacked descriptor list
-template <typename outputstmtype>
+template <typename outputstmtype, typename Allocator = ::fast_io::native_thread_local_allocator>
 inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 	outputstmtype &outstm, ::fast_io::io_scatter_t const *scatters, ::std::size_t n)
 {
@@ -1927,10 +1933,11 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 		::fast_io::details::decay::print_small_scatter_repack_size<char_type, outputstmtype>()};
 	constexpr ::std::size_t small_chars{
 		requested_small_chars < chunk_chars ? requested_small_chars : chunk_chars};
-	if constexpr (chunk_chars == 0 || small_chars == 0 ||
+	if constexpr (!::fast_io::details::allocator_provider_available<Allocator> ||
+				  chunk_chars == 0 || small_chars == 0 ||
 				  !::fast_io::details::decay::print_has_direct_scatter_write_bytes_operations<outputstmtype>)
 	{
-		// Repacking requires both stream opt-in and a native byte-scatter output path.
+		// Keep the original descriptors when the complete repack protocol is unavailable.
 		return false;
 	}
 	else
@@ -2013,7 +2020,7 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 			}
 
 			::std::byte stack_buffer[chunk_bytes];
-			::fast_io::details::local_operator_new_array_ptr<::std::byte> dynamic_buffer;
+			::fast_io::details::local_operator_new_array_ptr<::std::byte, Allocator> dynamic_buffer;
 			if (dynamic_buffer_size != 0)
 			{
 				// Additional copied chunks beyond the first stack chunk use one dynamic byte buffer.
@@ -2149,7 +2156,7 @@ inline constexpr bool print_scatter_write_all_bytes_try_repack_small(
 				}
 			}
 			// Large repacked descriptor chains allocate descriptor storage before emission.
-			::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t> out_scatters(output_count);
+			::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t, Allocator> out_scatters(output_count);
 			emit_repacked(out_scatters.ptr);
 			return true;
 		}
@@ -2409,7 +2416,7 @@ inline constexpr bool print_scatter_write_all_try_repack_small(
 /// @param    outstm        the output stream reference
 /// @param    scatters      the first byte scatter descriptor
 /// @param    n             the number of scatter descriptors
-template <typename outputstmtype>
+template <typename outputstmtype, typename Allocator = ::fast_io::native_thread_local_allocator>
 inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype &outstm,
 																   ::fast_io::io_scatter_t const *scatters,
 																   ::std::size_t n)
@@ -2503,7 +2510,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 				}
 			}
 		}
-		else
+		else if constexpr (::fast_io::details::allocator_provider_available<Allocator>)
 		{
 			// A threshold above the stack budget first measures the exact byte count for one dynamic allocation.
 			constexpr ::std::size_t threshold_bytes{
@@ -2528,7 +2535,7 @@ inline constexpr void print_scatter_write_all_bytes_maybe_coalesce(outputstmtype
 			if (total_size != 0)
 			{
 				// Allocate exactly the measured bytes, copy every non-empty scatter, and write once.
-				::fast_io::details::local_operator_new_array_ptr<::std::byte> buffer(total_size);
+				::fast_io::details::local_operator_new_array_ptr<::std::byte, Allocator> buffer(total_size);
 				::std::byte *curr{buffer.ptr};
 				for (auto iter{scatters}, last{scatters + n}; iter != last; ++iter)
 				{
@@ -3302,7 +3309,8 @@ print_runtime_scatter_plan_retain_static_arg(T &&t) noexcept
 ///          default here would permit a 64-KiB metadata frame before descriptor and reserve storage are considered.
 ///          This separate ceiling prevents a very large formatting pack from turning validation metadata itself into
 ///          a stack performance or exhaustion accident.
-template <bool line, typename outputstmtype, typename... Args>
+template <bool line, typename outputstmtype, typename Allocator = ::fast_io::native_thread_local_allocator,
+		  typename... Args>
 	requires ::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_available_v<
 		typename outputstmtype::output_char_type, outputstmtype, Args...>
 inline constexpr void print_runtime_scatter_plan_fast_entry(outputstmtype &outstm, Args &&...args)
@@ -3340,7 +3348,7 @@ inline constexpr void print_runtime_scatter_plan_fast_entry(outputstmtype &outst
 	}
 	else
 	{
-		::fast_io::details::local_operator_new_array_ptr<capacity_type> component_capacities(component_count);
+		::fast_io::details::local_operator_new_array_ptr<capacity_type, Allocator> component_capacities(component_count);
 		if constexpr (retain_static_scatter)
 		{
 			::fast_io::details::decay::print_runtime_scatter_plan_fast_entry_impl<line>(
@@ -3745,7 +3753,7 @@ inline constexpr void print_retained_buffered_reserve_scatters_run(outputstmtype
 /// @tparam   char_type     the output character type
 /// @param    outstm        the output stream reference
 /// @param    scatter_res   the scatter payload to write before the newline
-template <typename outputstmtype, ::std::integral char_type>
+template <typename outputstmtype, ::std::integral char_type, typename Allocator = ::fast_io::native_thread_local_allocator>
 inline constexpr void print_single_scatter_with_line(outputstmtype &outstm,
 													 ::fast_io::basic_io_scatter_t<char_type> scatter_res)
 {
@@ -3765,7 +3773,7 @@ inline constexpr void print_single_scatter_with_line(outputstmtype &outstm,
 		else
 		{
 			// Oversized byte scatter descriptor storage is allocated before writing the two-part output.
-			::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t> scatters(2u);
+			::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t, Allocator> scatters(2u);
 			scatters.ptr[0] = {scatter_res.base,
 							   ::fast_io::details::intrinsics::mul_or_overflow_die(
 								   scatter_res.len, sizeof(char_type))};
@@ -3915,7 +3923,8 @@ inline constexpr void print_reserve_scatters_basic_with_scatter(
 /// @tparam   T             the reserve-scatters printable type
 /// @param    outstm        the output stream reference
 /// @param    t             the argument to emit
-template <bool line, typename outputstmtype, ::std::integral char_type, typename T>
+template <bool line, typename outputstmtype, ::std::integral char_type, typename T,
+		  typename Allocator = ::fast_io::native_thread_local_allocator>
 inline constexpr void print_control_single_reserve_scatters(outputstmtype &outstm, T &t)
 {
 	using value_type = ::std::remove_cvref_t<T>;
@@ -3938,7 +3947,7 @@ inline constexpr void print_control_single_reserve_scatters(outputstmtype &outst
 			else
 			{
 				// Large byte scatter descriptor storage is allocated before materializing the output.
-				::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t> scatters(scattersnum);
+				::fast_io::details::local_operator_new_array_ptr<::fast_io::io_scatter_t, Allocator> scatters(scattersnum);
 				::fast_io::details::decay::print_reserve_scatters_bytes_with_scatter<line, outputstmtype, char_type>(
 					outstm, scatters.ptr, t);
 			}
@@ -4397,6 +4406,22 @@ template <bool line, ::std::integral char_type, typename output_type,
 	obuffer_set_curr(output, expected_end);
 }
 
+/// @brief Proves the non-throwing cursor operations used by deferred put-area publication.
+template <typename outputstmtype, typename char_type>
+concept print_buffered_mixed_nothrow_put_area = ::std::integral<char_type> && requires(
+																	  outputstmtype &optstm, char_type *cursor) {
+#if defined(__HERBCEPTIONS__)
+	// These are the exact named output expressions used by both mixed emitters. A deterministic error cannot be
+	// represented after raw bytes have been written but before the final cursor is published.
+	requires(!throws((obuffer_curr(optstm))));
+	requires(!throws((obuffer_end(optstm))));
+	requires(!throws((obuffer_set_curr(optstm, cursor))));
+#endif
+	{ obuffer_curr(optstm) } noexcept -> ::std::same_as<char_type *>;
+	{ obuffer_end(optstm) } noexcept -> ::std::same_as<char_type *>;
+	{ obuffer_set_curr(optstm, cursor) } noexcept -> ::std::same_as<void>;
+};
+
 /// @brief    A destination whose put-area cursor can accept an exact reserve emission.
 /// @details  Keep this separate from the broad obuffer capability: adapters with a partial or refill-on-demand
 ///           cursor protocol must retain the established materialize/write fallback.
@@ -4410,19 +4435,52 @@ concept print_direct_obuffer_reserve_destination =
 	};
 
 /// @brief Identifies an ordinary reserve writer which may initialize scratch inside its complete reserve bound.
-/// @details Such a writer is memory-safe in an owning/refillable put area, but a fixed external view exposes the bytes
-///          after its published cursor to the caller. Source implementations specialize this internal trait only for
-///          audited library writers; it is not inferred from reserve printability itself.
+/// @details An owning put area can lend scratch storage. A fixed external view exposes the bytes after its cursor,
+///          so audited library writers may also provide define_exact for direct emission under that contract.
 template <::std::integral char_type, typename T>
 struct print_fixed_external_overstore_traits
 {
 	inline static constexpr bool available{};
 };
 
+template <typename char_type, typename T>
+concept print_fixed_external_exact_reserve = ::std::integral<char_type> && requires(char_type *ptr, T &value) {
+	{ print_fixed_external_overstore_traits<char_type, ::std::remove_cvref_t<T>>::define_exact(ptr, value) }
+		noexcept -> ::std::same_as<char_type *>;
+};
+
 template <bool line, typename output, ::std::integral char_type,
 		  typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
 print_fixed_static_reserve_run(output &, Args &...);
+
+/// @brief Emits a dynamic reserve field through private storage when the destination cannot lend its put area.
+/// @details The caller has measured the field exactly once. A bounded stack hint covers small values.
+///          Larger fields receive the measured capacity including a requested line feed. Only the produced
+///          prefix is sent to the endpoint after the formatter returns successfully.
+template <bool line, ::std::size_t stack_size, ::std::integral char_type, typename output, typename T>
+inline constexpr void print_dynamic_reserve_staged(output &outstm, T &value, ::std::size_t size)
+{
+	auto emit = [&](char_type *buffer) constexpr {
+		auto end{print_reserve_define(::fast_io::io_reserve_type<char_type, ::std::remove_cvref_t<T>>, buffer, value)};
+		if constexpr (line)
+		{
+			*end++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+		}
+		::fast_io::details::decay::print_write_all_materialized(outstm, buffer, end);
+	};
+	if constexpr (stack_size != 0u)
+	{
+		if (size <= stack_size)
+		{
+			char_type buffer[stack_size];
+			emit(buffer);
+			return;
+		}
+	}
+	::fast_io::details::local_operator_new_array_ptr<char_type> buffer(size);
+	emit(buffer.ptr);
+}
 
 /// @brief    Emits one already-forwarded printable control argument to an output stream.
 /// @details  The dispatcher selects the most specialized single-argument path available: scatter, static reserve,
@@ -4530,6 +4588,21 @@ inline constexpr void print_control_single(output &outstm, T &t)
 
 		if constexpr (line)
 		{
+			if constexpr (::fast_io::single_pass_bounded_obuffer_materialization_safe<char_type, output> &&
+						  print_buffered_mixed_nothrow_put_area<output, char_type>)
+			{
+				// The projection has completed. Only the raw payload and line feed remain.
+				// A strict comparison leaves room for the newline without overflowing len + 1.
+				auto curr{obuffer_curr(outstm)};
+				auto end{obuffer_end(outstm)};
+				if (scatter_res.len < print_obuffer_remaining_size<char_type, output>(curr, end)) [[likely]]
+				{
+					curr = ::fast_io::details::decay::small_scatter_copy_n(scatter_res.base, scatter_res.len, curr);
+					*curr++ = lfch;
+					obuffer_set_curr(outstm, curr);
+					return;
+				}
+			}
 			// The line variant writes the scatter range and a trailing newline as one scatter-oriented output.
 			::fast_io::details::decay::print_single_scatter_with_line(outstm, scatter_res);
 		}
@@ -4797,150 +4870,31 @@ inline constexpr void print_control_single(output &outstm, T &t)
 				fast_terminate();
 			}
 		}
-#if 0
-		if constexpr(contiguous_output_stream<output>)
+		if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> && !asan_activated)
 		{
-			auto bcurr{obuffer_curr(outstm)};
-			auto bend{obuffer_end(outstm)};
-			auto it{print_reserve_define(::fast_io::io_reserve_type<char_type,value_type>,bcurr,t,size)};
-			::std::size_t diff{static_cast<::std::size_t>(bend-bcurr)};
-			if(diff<size)[[unlikely]]
-				fast_terminate();
-			if constexpr(line)
+			// Buffered streams first try to emit the dynamic reserve output into the current put area.
+			auto curr{obuffer_curr(outstm)};
+			auto ed{obuffer_end(outstm)};
+			::std::ptrdiff_t const diff{
+				curr == nullptr || ed == nullptr ? -1 : ed - curr};
+			// `[curr, ed)` contains exactly `diff` writable elements; equality consumes the final slot and leaves
+			// the cursor at `ed`, so it must stay on the direct path.
+			bool fits{static_cast<::std::ptrdiff_t>(size) <= diff};
+			if (fits) [[likely]]
 			{
-				*it=lfch;
-				++it;
-			}
-			obuffer_set_curr(outstm,it);
-		}
-		else
-#endif
-		{
-			if constexpr (::fast_io::operations::decay::defines::has_obuffer_basic_operations<output> &&
-						  !asan_activated)
-			{
-				// Buffered streams first try to emit the dynamic reserve output into the current put area.
-				auto curr{obuffer_curr(outstm)};
-				auto ed{obuffer_end(outstm)};
-				::std::ptrdiff_t const diff{
-					curr == nullptr || ed == nullptr ? -1 : ed - curr};
-				// `[curr, ed)` contains exactly `diff` writable elements; equality consumes the final slot and leaves
-				// the cursor at `ed`, so it must stay on the direct path.
-				bool fits{static_cast<::std::ptrdiff_t>(size) <= diff};
-				if (fits)
+				// The current put area has enough room, so emit directly and commit the new cursor.
+				auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, curr, t)};
+				if constexpr (line)
 				{
-					// The current put area has enough room, so emit directly and commit the new cursor.
-					auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, curr, t)};
-					if constexpr (line)
-					{
-						// The line variant appends the newline in the same output-buffer commit.
-						*it = lfch;
-						++it;
-					}
-					obuffer_set_curr(outstm, it);
+					// The line variant appends the newline in the same output-buffer commit.
+					*it = lfch;
+					++it;
 				}
-				else
-#if __has_cpp_attribute(unlikely)
-					[[unlikely]]
-#endif
-				{
-					// The current put area is too small, so dynamic output falls back to temporary storage.
-					if constexpr (stack_buffer_size != 0)
-					{
-						// A static stack hint allows small dynamic output to avoid heap allocation.
-						if (size <= stack_buffer_size)
-						{
-							// The measured dynamic output fits in the bounded stack buffer.
-							char_type stack_buffer[stack_buffer_size];
-							auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>,
-														 stack_buffer, t)};
-							if constexpr (line)
-							{
-								// The line variant appends the newline before the stack buffer is written.
-								*it = lfch;
-								++it;
-							}
-							::fast_io::details::decay::print_write_all_materialized(outstm, stack_buffer, it);
-						}
-						else
-						{
-							// The measured dynamic output exceeds the stack hint and is materialized on the heap.
-							::fast_io::details::local_operator_new_array_ptr<char_type> newptr(size);
-							auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>,
-														 newptr.ptr, t)};
-							if constexpr (line)
-							{
-								// The line variant appends the newline before the heap buffer is written.
-								*it = lfch;
-								++it;
-							}
-							::fast_io::details::decay::print_write_all_materialized(outstm, newptr.ptr, it);
-						}
-					}
-					else
-					{
-						// Without a usable static stack hint, dynamic output is materialized on the heap.
-						::fast_io::details::local_operator_new_array_ptr<char_type> newptr(size);
-						auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, newptr.ptr,
-													 t)};
-						if constexpr (line)
-						{
-							// The line variant appends the newline before the heap buffer is written.
-							*it = lfch;
-							++it;
-						}
-						::fast_io::details::decay::print_write_all_materialized(outstm, newptr.ptr, it);
-					}
-				}
-			}
-			else
-			{
-				// Without a usable output buffer, dynamic output chooses between static stack hint and heap storage.
-				if constexpr (stack_buffer_size != 0)
-				{
-					// Without a usable output buffer, a static stack hint may still avoid heap allocation.
-					if (size <= stack_buffer_size)
-					{
-						// The measured dynamic output fits in the bounded stack buffer.
-						char_type buffer[stack_buffer_size];
-						auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, buffer, t)};
-						if constexpr (line)
-						{
-							// The line variant appends the newline before the stack buffer is written.
-							*it = lfch;
-							++it;
-						}
-						::fast_io::details::decay::print_write_all_materialized(outstm, buffer, it);
-					}
-					else
-					{
-						// The measured dynamic output exceeds the stack hint and is materialized on the heap.
-						::fast_io::details::local_operator_new_array_ptr<char_type> newptr(size);
-						auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, newptr.ptr, t)};
-						if constexpr (line)
-						{
-							// The line variant appends the newline before the heap buffer is written.
-							*it = lfch;
-							++it;
-						}
-						::fast_io::details::decay::print_write_all_materialized(outstm, newptr.ptr, it);
-					}
-				}
-				else
-				{
-					// Without a stack hint, dynamic output is materialized on the heap and written once.
-					::fast_io::details::local_operator_new_array_ptr<char_type> newptr(size);
-					auto it{print_reserve_define(::fast_io::io_reserve_type<char_type, value_type>, newptr.ptr, t)};
-					if constexpr (line)
-					{
-						// The line variant appends the newline before the heap buffer is written.
-						*it = lfch;
-						++it;
-					}
-					::fast_io::details::decay::print_write_all_materialized(outstm, newptr.ptr, it);
-				}
+				obuffer_set_curr(outstm, it);
+				return;
 			}
 		}
+		print_dynamic_reserve_staged<line, stack_buffer_size, char_type>(outstm, t, size);
 	}
 	else if constexpr (reserve_scatters_printable<char_type, value_type>)
 	{
@@ -5926,7 +5880,7 @@ struct print_fixed_external_semantic_overstore
 		  char_type, T>
 {};
 
-template <::std::integral char_type, typename value_type>
+template <::std::integral char_type, bool exact_bounds = false, typename value_type>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 print_fixed_static_reserve_emit_one(char_type *ptr, value_type &value)
 {
@@ -5938,6 +5892,10 @@ print_fixed_static_reserve_emit_one(char_type *ptr, value_type &value)
 	else if constexpr (print_fixed_hot_scalar_traits<decay_type>::available)
 	{
 		return print_fixed_decimal_integer_emit<char_type>(ptr, value.reference);
+	}
+	else if constexpr (exact_bounds && print_fixed_external_exact_reserve<char_type, value_type>)
+	{
+		return print_fixed_external_overstore_traits<char_type, decay_type>::define_exact(ptr, value);
 	}
 	else if constexpr (sizeof(char_type) == 1u && ::fast_io::details::is_ascii<char_type> &&
 					   ::std::integral<decay_type> && !::std::same_as<decay_type, bool>)
@@ -5951,11 +5909,11 @@ print_fixed_static_reserve_emit_one(char_type *ptr, value_type &value)
 	}
 }
 
-template <::std::integral char_type, typename... Args>
+template <::std::integral char_type, bool exact_bounds = false, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr char_type *
 print_fixed_static_reserve_emit(char_type *ptr, Args &...args)
 {
-	((ptr = print_fixed_static_reserve_emit_one<char_type>(ptr, args)), ...);
+	((ptr = print_fixed_static_reserve_emit_one<char_type, exact_bounds>(ptr, args)), ...);
 	return ptr;
 }
 
@@ -6182,43 +6140,17 @@ inline consteval ::std::size_t print_fixed_static_reserve_total() noexcept
 	return total;
 }
 
-template <bool line, typename output, ::std::integral char_type, typename... Args>
-FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
-print_fixed_static_reserve_run(output &outstm, Args &...args)
+/// @brief Stages one fixed-view record when its physical reserve bound requires private storage.
+/// @details The returned cursor measures the actual record before any bytes are copied to the caller's view.
+///          This also accommodates producers which may write beyond their logical end inside their reserve bound.
+template <bool line, ::std::size_t output_size, typename output, ::std::integral char_type, typename... Args>
+inline constexpr void print_fixed_static_reserve_staged(output &outstm, char_type *curr, char_type *end, Args &...args)
 {
-	constexpr ::std::size_t reserve_total{print_fixed_static_reserve_total<char_type, Args...>()};
-	constexpr ::std::size_t output_size{
-		reserve_total == SIZE_MAX || (line && reserve_total == SIZE_MAX - 1u)
-			? SIZE_MAX
-			: reserve_total + static_cast<::std::size_t>(line)};
-	static_assert(output_size != SIZE_MAX);
-	auto curr{obuffer_curr(outstm)};
-	auto const end{obuffer_end(outstm)};
-	if ((curr == nullptr) != (end == nullptr) ||
-		(curr != nullptr && curr > end)) [[unlikely]]
+	if ((curr == nullptr) != (end == nullptr) || (curr != nullptr && curr > end)) [[unlikely]]
 	{
 		fast_terminate();
 	}
-	::std::size_t const available{
-		curr == nullptr ? 0u : static_cast<::std::size_t>(end - curr)};
-	constexpr bool requires_external_staging{
-		(false || ... ||
-		 print_fixed_external_overstore_traits<
-			 char_type, ::std::remove_cvref_t<Args>>::available)};
-	if constexpr (!requires_external_staging)
-	{
-		if (output_size <= available) [[likely]]
-		{
-			curr = print_fixed_static_reserve_emit<char_type>(curr, args...);
-			if constexpr (line)
-			{
-				*curr++ = ::fast_io::char_literal_v<u8'\n', char_type>;
-			}
-			obuffer_set_curr(outstm, curr);
-			return;
-		}
-	}
-
+	::std::size_t const available{curr == nullptr ? 0u : static_cast<::std::size_t>(end - curr)};
 	// A reserve bound is a physical-store bound, not necessarily the logical result size. The historical fixed-view
 	// path materialized on a bound miss and then wrote only [buffer,actual_end), which permits a true exact fit. Keep
 	// that behavior here, and also use it for an audited writer whose fast implementation may initialize scratch after
@@ -6281,6 +6213,77 @@ print_fixed_static_reserve_run(output &outstm, Args &...args)
 				buffer.ptr, actual_size, curr);
 		}
 		obuffer_set_curr(outstm, curr);
+	}
+}
+
+// Keep the scratch frame for a short external view off the in-place path.
+template <bool line, ::std::size_t output_size, typename output, ::std::integral char_type, typename... Args>
+#if __has_cpp_attribute(__gnu__::__noinline__)
+[[__gnu__::__noinline__]]
+#endif
+inline constexpr void print_fixed_static_reserve_exact_bound_miss(
+	output &outstm, char_type *curr, char_type *end, Args &...args)
+{
+	print_fixed_static_reserve_staged<line, output_size>(outstm, curr, end, args...);
+}
+
+/// @brief Writes one fixed reserve run and publishes its logical end once.
+/// @details For a direct write, a nonnegative signed pointer difference proves both cursor order and sufficient
+///          capacity. A pair of null cursors can accept a zero-size record. On a bound miss, staging preserves
+///          exact-fit output and isolates producers permitted to write past their returned logical end.
+template <bool line, typename output, ::std::integral char_type, typename... Args>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+print_fixed_static_reserve_run(output &outstm, Args &...args)
+{
+	constexpr ::std::size_t reserve_total{print_fixed_static_reserve_total<char_type, Args...>()};
+	constexpr ::std::size_t output_size{
+		reserve_total == SIZE_MAX || (line && reserve_total == SIZE_MAX - 1u)
+			? SIZE_MAX
+			: reserve_total + static_cast<::std::size_t>(line)};
+	static_assert(output_size != SIZE_MAX);
+	auto curr{obuffer_curr(outstm)};
+	auto const end{obuffer_end(outstm)};
+	constexpr bool requires_external_staging{
+		(false || ... ||
+		 (print_fixed_external_overstore_traits<char_type, ::std::remove_cvref_t<Args>>::available &&
+		  !print_fixed_external_exact_reserve<char_type, Args>))};
+	if constexpr (!requires_external_staging && output_size <= PTRDIFF_MAX)
+	{
+		auto const fits = [&] {
+			if constexpr (::fast_io::obuffer_address_distance_safe<char_type, output>)
+			{
+				if (!::std::is_constant_evaluated())
+				{
+					// An empty null pair gives zero. Reject a reversed live window
+					// before it can wrap into a large unsigned element count.
+					auto const bytes{static_cast<::std::intptr_t>(
+						reinterpret_cast<::std::uintptr_t>(end) - reinterpret_cast<::std::uintptr_t>(curr))};
+					return bytes >= 0 &&
+						   output_size <= static_cast<::std::size_t>(bytes) / sizeof(char_type);
+				}
+			}
+			return (curr != nullptr && end != nullptr && end - curr >= static_cast<::std::ptrdiff_t>(output_size)) ||
+				   (output_size == 0u && curr == nullptr && end == nullptr);
+		};
+		if (fits()) [[likely]]
+		{
+			curr = print_fixed_static_reserve_emit<char_type, true>(curr, args...);
+			if constexpr (line)
+			{
+				*curr++ = ::fast_io::char_literal_v<u8'\n', char_type>;
+			}
+			obuffer_set_curr(outstm, curr);
+			return;
+		}
+	}
+
+	if constexpr (!requires_external_staging && (print_fixed_external_exact_reserve<char_type, Args> || ...))
+	{
+		print_fixed_static_reserve_exact_bound_miss<line, output_size>(outstm, curr, end, args...);
+	}
+	else
+	{
+		print_fixed_static_reserve_staged<line, output_size>(outstm, curr, end, args...);
 	}
 }
 
@@ -6668,6 +6671,21 @@ struct print_buffered_passive_reserve_leaf<
 		provider_type, offset, extent>> : ::std::true_type
 {};
 
+/// Uses the inline decimal emitter for small complete runs of built-in values
+/// and passive text over a put area that can publish the whole run at once.
+template <typename output, ::std::integral char_type, typename... Args>
+inline constexpr bool print_buffered_small_decimal_run{
+#if defined(__clang__) && 23 <= __clang_major__
+	sizeof...(Args) <= 8u &&
+	::fast_io::single_pass_bounded_obuffer_materialization_safe<char_type, output> &&
+	(print_fixed_hot_scalar_traits<::std::remove_cvref_t<Args>>::available || ...) &&
+	((print_fixed_hot_scalar_traits<::std::remove_cvref_t<Args>>::available ||
+	  print_buffered_passive_reserve_leaf<::std::remove_cvref_t<Args>>::value) && ...)
+#else
+	false
+#endif
+};
+
 /// @brief Proves that one normalized leaf may join a preflighted mixed put-area run.
 /// @details Static reserve leaves contribute a type-level capacity and must emit without throwing because the final
 ///          cursor is published only after the complete run. Dynamic text is admitted only after ordinary alias/status
@@ -6898,21 +6916,7 @@ inline constexpr char_type *print_buffered_mixed_put_area_emit(
 	}
 }
 
-/// @brief Proves the non-throwing cursor operations used by deferred put-area publication.
-template <typename outputstmtype, typename char_type>
-concept print_buffered_mixed_nothrow_put_area = ::std::integral<char_type> && requires(
-																	  outputstmtype &optstm, char_type *cursor) {
-#if defined(__HERBCEPTIONS__)
-	// These are the exact named output expressions used by both mixed emitters. A deterministic error cannot be
-	// represented after raw bytes have been written but before the final cursor is published.
-	requires(!throws((obuffer_curr(optstm))));
-	requires(!throws((obuffer_end(optstm))));
-	requires(!throws((obuffer_set_curr(optstm, cursor))));
-#endif
-	{ obuffer_curr(optstm) } noexcept -> ::std::same_as<char_type *>;
-	{ obuffer_end(optstm) } noexcept -> ::std::same_as<char_type *>;
-	{ obuffer_set_curr(optstm, cursor) } noexcept -> ::std::same_as<void>;
-};
+
 
 /**
  * @brief Preflights and emits an entire large mixed record with two direct folds.
@@ -8962,8 +8966,16 @@ inline constexpr void print_controls_buffer_impl(outputstmtype &optstm, T &t, Ar
 						}
 						// A successful minimum-buffer prepare is the capacity proof; avoid a
 						// redundant null guard in the hot grouped-reserve path.
-						bcurr = ::fast_io::details::decay::print_n_reserve<rsvresult.position, char_type>(
-							bcurr, t, args...);
+						if constexpr (rsvresult.position == n && print_buffered_small_decimal_run<outputstmtype, char_type, T, Args...>)
+						{
+							// Keep constants visible in Clang's short grouped decimal runs.
+							bcurr = print_fixed_static_reserve_emit<char_type>(bcurr, t, args...);
+						}
+						else
+						{
+							bcurr = ::fast_io::details::decay::print_n_reserve<rsvresult.position, char_type>(
+								bcurr, t, args...);
+						}
 						if constexpr (needprintlf)
 						{
 							// The line variant appends the newline in the same output-buffer commit.
@@ -12306,7 +12318,7 @@ inline constexpr decltype(auto) print_freestanding_decay_no_pack(outputstmtype &
 		::fast_io::operations::decay::defines::has_status_print_define<line, outputstmtype, Args...>)
 	{
 		// Status-print streams handle the complete run through their stream-specific customization.
-		return status_print_define<line>(optstm, args...);
+		return static_cast<void>(status_print_define<line>(optstm, args...));
 	}
 	else if constexpr (sizeof...(Args) == 0)
 	{
@@ -17567,7 +17579,7 @@ inline constexpr decltype(auto) print_freestanding_decay_impl(outputstmtype &opt
 		::fast_io::operations::decay::defines::has_status_print_define<line, outputstmtype, Args...>)
 	{
 		// Status-print streams delegate the whole freestanding run to their status customization.
-		return status_print_define<line>(optstm, args...);
+		return static_cast<void>(status_print_define<line>(optstm, args...));
 	}
 	else if constexpr (sizeof...(Args) == 0)
 	{
@@ -22642,7 +22654,8 @@ inline constexpr void print_static_provider_prefix_normalized_emit_impl(
 ///          TU's text changed by +93 bytes on Clang and -5,016 bytes on GCC, while compile RSS was neutral or lower.
 ///
 ///          Admission is deliberately narrow: a writable put area, two to sixteen leading provider nodes, at least one
-///          compiler-constant-capable source type after them, and at most 64 bytes of merged provider storage. Complete
+///          compiler-constant-capable source or a single directly writable bounded suffix, and at most 64 bytes of
+///          merged provider storage. The bounded-suffix path requires a transactional direct-copy put area. Complete
 ///          mutex ownership stays outside, and status is checked on the original, historically normalized, and reduced
 ///          type graphs so an internal transport type can never acquire or bypass a user customization.
 template <bool line, typename outputstmtype, typename... Args>
@@ -22666,11 +22679,7 @@ print_static_provider_prefix_normalization_available() noexcept
 			line, outputstmtype,
 			::fast_io::operations::decay::
 				print_compiler_constant_pre_normalization_normalized_t<
-					char_type, semantic_run, Args>...> ||
-		!(false || ... ||
-		  ::fast_io::operations::decay::
-			  print_compiler_constant_pre_normalization_candidate_v<
-				  char_type, Args>))
+					char_type, semantic_run, Args>...>)
 	{
 		return false;
 	}
@@ -22692,6 +22701,31 @@ print_static_provider_prefix_normalization_available() noexcept
 		else
 		{
 			using source_tuple = ::std::tuple<Args...>;
+			if constexpr (!(false || ... || ::fast_io::operations::decay::print_compiler_constant_pre_normalization_candidate_v<char_type, Args>))
+			{
+				// A single audited runtime leaf can use the same reduced record on a transactional put area.
+				// Keep multi-leaf suffixes and observers without the direct-write promise on their ordinary path.
+				if constexpr (count + 1u != sizeof...(Args) ||
+							  !::fast_io::direct_obuffer_copy_safe<char_type, outputstmtype> ||
+							  !::fast_io::deferred_obuffer_commit_safe<char_type, outputstmtype>)
+				{
+					return false;
+				}
+				else
+				{
+					using tail = ::std::remove_cvref_t<::std::tuple_element_t<count, source_tuple>>;
+					if constexpr (!::fast_io::dynamic_reserve_printable<char_type, tail> ||
+								  !::fast_io::single_pass_bounded_materialization_source<char_type, tail> ||
+								  !::fast_io::operations::decay::print_fixed_prefix_scalar_define_nofail_v<char_type, tail> ||
+								  !requires {
+									  { print_single_pass_bounded_direct_put_area_safe(::fast_io::io_reserve_type<char_type, tail>) }
+									  -> ::std::same_as<::std::true_type>;
+								  })
+					{
+						return false;
+					}
+				}
+			}
 			using provider = typename ::fast_io::operations::decay::
 				print_static_provider_prefix_provider<
 					char_type, source_tuple,

@@ -234,8 +234,10 @@ inline void portable_fd_path([[maybe_unused]] int fd, char *buf, ::std::size_t b
 	constexpr auto all_sz{path_str_sz + fd_sz + 1u};
 
 	char linkpath[all_sz];
-	::fast_io::obuffer_view linkpath_ov{linkpath, linkpath + all_sz};
-	::fast_io::operations::print_freestanding<false>(linkpath_ov, path_str, fd, ::fast_io::mnp::chvw(::fast_io::char_literal_v<u8'\0', char>));
+	// This system path has one fixed prefix and one decimal field. The reserve formatter fits in fd_sz
+	// code units and returns the position of the terminator, including for a signed descriptor.
+	::fast_io::details::non_overlapped_copy_n(path_str, path_str_sz, linkpath);
+	*print_reserve_define(io_reserve_type<char, int>, linkpath + path_str_sz, fd) = '\0';
 
 	using my_ssize_t [[maybe_unused]] = ::std::make_signed_t<::std::size_t>;
 
@@ -384,6 +386,19 @@ inline ::fast_io::containers::basic_string<char, ::fast_io::native_thread_local_
 	ret.append(::fast_io::containers::basic_string_view<char>{filename, ::fast_io::cstr_len(filename)});
 
 	return ret;
+}
+
+/**
+ * @brief Builds the owning first argument of a relative-descriptor process launch.
+ * @details The resolved kernel pathname is already a terminated native byte string. The argv
+ * constructor copies those bytes into its global allocator before the thread-local path expires.
+ * This also preserves an empty first argument and the separate trailing null pointer.
+ */
+inline posix_process_args make_posix_path_argument(int fd, char const *filename)
+{
+	auto path{get_tls_str_fd_path_filename(fd, filename)};
+	char const *const arguments[]{path.c_str(), nullptr};
+	return {default_args, arguments};
 }
 
 inline pid_t posix_fork()
@@ -1047,7 +1062,7 @@ public:
 						 posix_process_envs const &envp = {}, posix_process_io const &pio = {}, [[maybe_unused]] process_mode mode = {})
 		: posix_process_observer{
 			  ::fast_io::details::fork_execveat_impl(pate.fd, filename,
-													 (mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : posix_process_args{details::get_tls_str_fd_path_filename(pate.fd, filename)}.append(args).get_argv(),
+													 (mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : details::make_posix_path_argument(pate.fd, filename).append(args).get_argv(),
 													 envp.get_envs(), pio, mode)
 
 		  }
@@ -1070,7 +1085,7 @@ public:
 						 posix_process_io const &pio = {}, [[maybe_unused]] process_mode mode = {})
 		: posix_process_observer{
 			  ::fast_io::details::fork_execveat_common_impl(ent.fd, ent.filename,
-															(mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : posix_process_args{details::get_tls_str_fd_path_filename(ent.fd, ent.filename)}.append(args).get_argv(),
+															(mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : details::make_posix_path_argument(ent.fd, ent.filename).append(args).get_argv(),
 															envp.get_envs(), pio, mode)}
 	{
 	}
@@ -1080,7 +1095,7 @@ public:
 						 posix_process_envs const &envp = {}, posix_process_io const &pio = {}, [[maybe_unused]] process_mode mode = process_mode::argv0_no_path_append)
 		: posix_process_observer{
 			  ::fast_io::details::fork_execveat_impl(pate.fd, filename,
-													 (mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : posix_process_args{details::get_tls_str_fd_path_filename(pate.fd, filename)}.append(args).get_argv(),
+													 (mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : details::make_posix_path_argument(pate.fd, filename).append(args).get_argv(),
 													 envp.get_envs(), pio, mode)
 
 		  }
@@ -1103,7 +1118,7 @@ public:
 						 posix_process_io const &pio = {}, [[maybe_unused]] process_mode mode = process_mode::argv0_no_path_append)
 		: posix_process_observer{
 			  ::fast_io::details::fork_execveat_common_impl(ent.fd, ent.filename,
-															(mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : posix_process_args{details::get_tls_str_fd_path_filename(ent.fd, ent.filename)}.append(args).get_argv(),
+															(mode & process_mode::argv0_no_path_append) == process_mode::argv0_no_path_append ? args.get_argv() : details::make_posix_path_argument(ent.fd, ent.filename).append(args).get_argv(),
 															envp.get_envs(), pio, mode)}
 	{
 	}

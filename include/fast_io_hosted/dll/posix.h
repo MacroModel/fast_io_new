@@ -208,7 +208,7 @@ struct posix_dll_load_impl_context
 	}
 };
 
-#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ) && !defined(__UCLIBC__)
 #if __GLIBC_PREREQ(2, 0)
 inline void *posix_dll_load_vers_symbol_impl(void *rtld_handle, char const *symbol, char const *vers)
 {
@@ -265,7 +265,7 @@ inline void *dll_load_symbol(posix_dll_io_observer pdliob, T const &symbol)
 template <::fast_io::constructible_to_os_c_str T, ::fast_io::constructible_to_os_c_str T1>
 inline void *dll_load_versioned_symbol(posix_dll_io_observer pdliob, T const &symbol, [[maybe_unused]] T1 const &vers)
 {
-#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ) && !defined(__UCLIBC__)
 #if __GLIBC_PREREQ(2, 0)
 	return ::fast_io::posix_api_common(
 		vers,

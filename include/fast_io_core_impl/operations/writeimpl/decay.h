@@ -81,6 +81,70 @@ inline constexpr void write_all_decay(
 	::fast_io::operations::decay::write_all_decay_borrowed(outsm, first, last);
 }
 
+#if defined(__HERBCEPTIONS__)
+/** @brief Selects the checked write of the exact normalized observer through ADL.
+ *  @details A provider can expose this channel independently of its ordinary overflow CPO.
+ *  The signature follows the selected call even when the compiler supports both exception ABIs.
+ */
+template <typename Ref, typename Unit = typename Ref::output_char_type>
+concept has_checked_write_all = requires(Ref &ref, Unit const *p)
+{
+	{ write_all_checked_define(ref, p, p) } -> ::std::same_as<void>;
+};
+
+/** @brief Allows a direct checked call on an observer whose caller retains the finish boundary. */
+template <typename Output, typename Unit = typename ::std::remove_cvref_t<Output>::output_char_type>
+concept borrowed_checked_writer = has_checked_write_all<::std::remove_reference_t<Output>, Unit> &&
+	(!::fast_io::temporary_output_finish_enabled<::std::remove_cvref_t<Output>>);
+
+/** @brief Reads the exception specification of the selected typed write without evaluating it. */
+template <typename Ref, typename Unit = typename Ref::output_char_type>
+inline constexpr bool checked_write_all_throws = throws((write_all_checked_define(
+	::std::declval<Ref &>(), ::std::declval<Unit const *>(), ::std::declval<Unit const *>())));
+
+/** @brief Propagates the selected borrowed writer's HC effect through a public range adapter.
+ *  @details Ordinary outputs and owning temporaries enter the existing guarded pointer operation.
+ *  Only a borrowed observer with a declared checked writer can expose HC through this entry.
+ */
+template <typename Output, typename Unit>
+inline constexpr bool borrowed_checked_write_throws = [] {
+	if constexpr (borrowed_checked_writer<Output, Unit>)
+		return checked_write_all_throws<::std::remove_reference_t<Output>, Unit>;
+	else
+		return false;
+}();
+
+/** @brief Writes scatter segments in order with the exception specification of the selected range writer.
+ *  @details Empty segments may have a null base. A byte scatter measures bytes, while a typed
+ *  scatter measures elements. Each nonempty segment reaches the observer before the next one.
+ */
+template <typename Ref, typename Element>
+inline constexpr void write_checked_scatters(Ref &ref, basic_io_scatter_t<Element> const *segments, ::std::size_t count)
+	throws(checked_write_all_throws<Ref, ::std::conditional_t<::std::is_void_v<Element>, ::std::byte, Element>>)
+{
+	using Unit = ::std::conditional_t<::std::is_void_v<Element>, ::std::byte, Element>;
+	for (::std::size_t i{}; i != count; ++i)
+	{
+		auto const &segment{segments[i]};
+		if (segment.len)
+		{
+			auto first{static_cast<Unit const *>(segment.base)};
+			write_all_checked_define(ref, first, first + segment.len);
+		}
+	}
+}
+
+template <typename outstmtype>
+	requires has_checked_write_all<outstmtype>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void write_all_decay_dispatch(
+	outstmtype &outsm, typename write_decay_stream_t<outstmtype>::output_char_type const *first,
+	typename write_decay_stream_t<outstmtype>::output_char_type const *last)
+	throws(checked_write_all_throws<outstmtype>)
+{
+	write_all_checked_define(outsm, first, last);
+}
+#endif
+
 template <typename outstmtype>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr void write_all_decay_dispatch(
 	outstmtype &outsm, typename write_decay_stream_t<outstmtype>::output_char_type const *first,

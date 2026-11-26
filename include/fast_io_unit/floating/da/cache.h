@@ -171,7 +171,7 @@ struct power10_cache
 {
 	inline static constexpr ::std::size_t size{618u};
 	inline static constexpr ::std::int_least32_t minimum_exponent{-293};
-	alignas(64)::std::uint_least64_t data[size * 2u]{};
+	alignas(::fast_io::details::hot_table_alignment)::std::uint_least64_t data[size * 2u]{};
 
 	[[nodiscard]] inline static constexpr uint64x2 compute(::std::size_t i) noexcept
 	{
@@ -244,54 +244,6 @@ struct power10_cache
 	}
 };
 
-// Check every invariant expressible with the production fixed-width arithmetic.
-// The exact rational lower-endpoint proof still belongs to the seed definition
-// above; these checks prevent index drift, denormalized factors and an unnoticed
-// borrow out of the low word when a correction bit is applied.
-[[nodiscard]] inline constexpr bool verify_power10_seed_invariants() noexcept
-{
-	// These table extents are type-level invariants. Expressing the guard as a
-	// discarded compile-time branch avoids MSVC 19.29's C4127 diagnostic under
-	// /W4 /WX without weakening the failure result or adding a runtime branch.
-	if constexpr ((power10_cache::size - 1u + 10u) / power10_minor_size >= power10_major_size ||
-				  (power10_cache::size - 1u) / 32u >= power10_fixup_size)
-	{
-		return false;
-	}
-	for (auto const minor : power10_minor)
-	{
-		if (!(minor >> 63u))
-		{
-			return false;
-		}
-	}
-	for (auto const major : power10_major)
-	{
-		if (!(major.hi >> 63u))
-		{
-			return false;
-		}
-	}
-	constexpr auto uint64_max{(::std::numeric_limits<::std::uint_least64_t>::max)()};
-	for (::std::size_t index{}; index != power10_cache::size; ++index)
-	{
-		auto const result{power10_cache::compute(index)};
-		if (!(result.hi >> 63u))
-		{
-			return false;
-		}
-		auto const corrected{
-			static_cast<bool>((power10_fixups[index >> 5u] >> (index & 31u)) & 1u)};
-		if (corrected && result.lo == uint64_max)
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
-static_assert(verify_power10_seed_invariants());
-
 [[nodiscard]] inline constexpr ::std::int_least32_t compute_decimal_exponent(
 	::std::int_least32_t binary_exponent, bool regular = true) noexcept
 {
@@ -363,31 +315,10 @@ struct exponent_shift_cache
 	}
 };
 
-// The precision carrier multiplies a normalized 53-bit significand after a
-// left shift.  Its error proof assumes that this shift never exceeds
-// extra_shift, because those are exactly the guard bits retained below the
-// provisional decimal integer.  Check the complete finite-normal raw-exponent
-// domain at compile time; raw exponent zero is subnormal and 2047 is non-finite,
-// and neither is admitted by the precision carrier.
-[[nodiscard]] inline constexpr bool verify_binary64_precision_exponent_shifts() noexcept
-{
-	exponent_shift_cache shifts{};
-	for (::std::size_t raw_exponent{1u}; raw_exponent != 2047u; ++raw_exponent)
-	{
-		if (exponent_shift_cache::extra_shift < shifts.data[raw_exponent])
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
-static_assert(verify_binary64_precision_exponent_shifts());
-
 struct cache
 {
 	exponent_shift_cache exponent_shifts;
-	alignas(64) power10_cache powers;
+	alignas(::fast_io::details::hot_table_alignment) power10_cache powers;
 };
 
 // Shared mathematical data for shortest and precision DA conversion.
@@ -404,6 +335,76 @@ struct cache
 #if __has_cpp_attribute(__gnu__::__visibility__) && 'A' == 0x41
 [[__gnu__::__visibility__("hidden")]]
 #endif
-alignas(64) inline constexpr cache cached_data{};
+alignas(::fast_io::details::hot_table_alignment) inline constexpr cache cached_data{};
+
+// Check every invariant expressible with the production fixed-width arithmetic.
+// The exact rational lower-endpoint proof still belongs to the seed definition
+// above; these checks prevent index drift, denormalized factors and an unnoticed
+// borrow out of the low word when a correction bit is applied.
+[[nodiscard]] inline constexpr bool verify_power10_seed_invariants() noexcept
+{
+	// These table extents are type-level invariants. Expressing the guard as a
+	// discarded compile-time branch avoids MSVC 19.29's C4127 diagnostic under
+	// /W4 /WX without weakening the failure result or adding a runtime branch.
+	if constexpr ((power10_cache::size - 1u + 10u) / power10_minor_size >= power10_major_size ||
+				  (power10_cache::size - 1u) / 32u >= power10_fixup_size)
+	{
+		return false;
+	}
+	for (auto const minor : power10_minor)
+	{
+		if (!(minor >> 63u))
+		{
+			return false;
+		}
+	}
+	for (auto const major : power10_major)
+	{
+		if (!(major.hi >> 63u))
+		{
+			return false;
+		}
+	}
+	constexpr auto uint64_max{(::std::numeric_limits<::std::uint_least64_t>::max)()};
+	for (::std::size_t index{}; index != power10_cache::size; ++index)
+	{
+		// The constructor has already evaluated the compressed product for every exponent.
+		auto const result{cached_data.powers[power10_cache::minimum_exponent + static_cast<::std::int_least32_t>(index)]};
+		if (!(result.hi >> 63u))
+		{
+			return false;
+		}
+		auto const corrected{
+			static_cast<bool>((power10_fixups[index >> 5u] >> (index & 31u)) & 1u)};
+		if (corrected && result.lo == uint64_max)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static_assert(verify_power10_seed_invariants());
+
+// The precision carrier multiplies a normalized 53-bit significand after a
+// left shift.  Its error proof assumes that this shift never exceeds
+// extra_shift, because those are exactly the guard bits retained below the
+// provisional decimal integer.  Check the complete finite-normal raw-exponent
+// domain at compile time; raw exponent zero is subnormal and 2047 is non-finite,
+// and neither is admitted by the precision carrier.
+[[nodiscard]] inline constexpr bool verify_binary64_precision_exponent_shifts() noexcept
+{
+	auto const &shifts{cached_data.exponent_shifts};
+	for (::std::size_t raw_exponent{1u}; raw_exponent != 2047u; ++raw_exponent)
+	{
+		if (exponent_shift_cache::extra_shift < shifts.data[raw_exponent])
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+static_assert(verify_binary64_precision_exponent_shifts());
 
 } // namespace fast_io::details::da

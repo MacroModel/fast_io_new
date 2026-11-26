@@ -21,26 +21,7 @@ namespace details
 template <typename optstmtype, typename instmtype, typename T>
 inline constexpr void transmit_bytes_until_eof_generic_main_impl(optstmtype &optstm, instmtype &instm, T &resultint)
 {
-	/*
-	A byte transmit operation is closed over the byte CPO domain on both sides.
-	Using input_char_type here would silently require a typed read, reject valid
-	byte-only observers, and round progress to sizeof(input_char_type).  A byte
-	buffer plus read_some_bytes/write_all_bytes instead proves that every returned
-	cursor denotes the exact opaque byte interval [buffer_start, iter), including
-	odd lengths for wide-character observers.
-	*/
-	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
-		::fast_io::details::transmit_buffer_size_cache<1>);
-	::std::byte *buffer_start{newptr.ptr};
-	::std::byte *buffer_end{newptr.ptr + newptr.size};
-	for (::std::byte *iter;
-		 (iter = ::fast_io::operations::decay::read_some_bytes_decay_dispatch(instm, buffer_start, buffer_end)) != buffer_start;)
-	{
-		// Pointer subtraction is now already expressed in the operation's byte unit.
-		::std::size_t off{static_cast<::std::size_t>(iter - buffer_start)};
-		::fast_io::operations::decay::write_all_bytes_decay_dispatch(optstm, buffer_start, iter);
-		transmit_integer_add_define(resultint, off);
-	}
+	::fast_io::details::transmit_copy_available<true>(optstm, instm, resultint);
 }
 
 /** @brief Transfers bytes to logical EOF and returns the standard result type. */
@@ -49,7 +30,23 @@ inline constexpr ::fast_io::transmit_result transmit_bytes_until_eof_main_impl(o
 {
 	::fast_io::uintfpos_t transmitted{};
 	uintfpos_transmit_reference_wrapper wrapper{__builtin_addressof(transmitted)};
-	::fast_io::details::transmit_bytes_until_eof_generic_main_impl(optstm, instm, wrapper);
+	// Prefer the complete byte window only when no converter owns the borrowed path.
+	if constexpr (::fast_io::details::transmit_direct_terminal_window<true, optstmtype, instmtype> &&
+				  !::fast_io::details::transmit_borrowable_window<true, optstmtype, instmtype>)
+	{
+		if (::fast_io::details::transmit_try_direct_terminal_window<true>(optstm, instm, transmitted) ==
+			transmit_terminal_window_result::complete) [[likely]]
+		{
+			return {transmitted};
+		}
+		::fast_io::details::transmit_terminal_window_miss<
+			::fast_io::details::transmit_bytes_until_eof_generic_main_impl<optstmtype, instmtype,
+				uintfpos_transmit_reference_wrapper>>(optstm, instm, wrapper);
+	}
+	else
+	{
+		::fast_io::details::transmit_bytes_until_eof_generic_main_impl(optstm, instm, wrapper);
+	}
 	return {transmitted};
 }
 
@@ -146,17 +143,6 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_decay_borrowed(optstmty
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
 	using input_observer_type = ::std::remove_cvref_t<instmtype>;
-#if 0
-	if constexpr(::fast_io::status_output_stream<optstmtype>)
-	{
-		return status_transmit_bytes_until_eof_define(optstm,instm);
-	}
-	else if constexpr(::fast_io::status_input_stream<instmtype>)
-	{
-		return status_transmit_bytes_until_eof_define(optstm,instm);
-	}
-	else
-#endif
 	if constexpr (::fast_io::operations::decay::defines::has_complete_output_stream_mutex_protocol<
 					  output_observer_type>)
 	{
@@ -175,6 +161,11 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_decay_borrowed(optstmty
 			::fast_io::operations::decay::input_stream_mutex_ref_decay(instm)};
 		decltype(auto) unlocked_input{::fast_io::operations::decay::input_stream_unlocked_ref_decay(instm)};
 		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_borrowed(optstm, unlocked_input);
+	}
+	else if constexpr (::fast_io::details::has_transmit_eof_status<true, optstmtype, instmtype>)
+	{
+		// Both unlocked observers authorize a complete byte-domain transfer.
+		return status_transmit_bytes_until_eof_define(optstm, instm);
 	}
 	else
 	{
@@ -207,9 +198,23 @@ transmit_bytes_until_eof_decay_dispatch(optstmtype &optstm, instmtype &instm)
 /** @brief Transfers bytes to EOF with a caller-selected progress accumulator. */
 template <typename optstmtype, typename instmtype, typename T>
 inline constexpr decltype(auto) transmit_bytes_until_eof_generic(optstmtype &&optstm, instmtype &&instm, T resultint)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::uses_checked_transmit_eof<true, false, optstmtype, instmtype>)
+#endif
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::uses_checked_transmit_eof<true, false, optstmtype, instmtype>)
+	{
+		if constexpr (details::uses_checked_transmit_eof_loop<true, false, optstmtype, instmtype>)
+			details::transmit_checked_eof<true>(guard.ref(), input_observer, resultint);
+		else
+			decay::transmit_bytes_until_eof_generic_decay_dispatch(guard.ref(), input_observer, resultint);
+		details::finish_checked_transmit<optstmtype>(guard);
+	}
+	else
+#endif
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
 		return ::fast_io::operations::decay::transmit_bytes_until_eof_generic_decay_dispatch(
 			output_observer, input_observer, resultint);
@@ -219,9 +224,28 @@ inline constexpr decltype(auto) transmit_bytes_until_eof_generic(optstmtype &&op
 /** @brief Transfers bytes to EOF and checked-finishes an eligible output. */
 template <typename optstmtype, typename instmtype>
 inline constexpr decltype(auto) transmit_bytes_until_eof(optstmtype &&optstm, instmtype &&instm)
+#if defined(__HERBCEPTIONS__)
+	throws(::fast_io::details::uses_checked_transmit_eof<true, true, optstmtype, instmtype>)
+#endif
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::uses_checked_transmit_eof<true, true, optstmtype, instmtype>)
+	{
+		::fast_io::transmit_result result;
+		if constexpr (details::uses_checked_transmit_eof_loop<true, true, optstmtype, instmtype>)
+		{
+			::fast_io::uintfpos_transmit_reference_wrapper progress{__builtin_addressof(result.transmitted)};
+			details::transmit_checked_eof<true>(guard.ref(), input_observer, progress);
+		}
+		else
+			result = decay::transmit_bytes_until_eof_decay_dispatch(guard.ref(), input_observer);
+		details::finish_checked_transmit<optstmtype>(guard);
+		return result;
+	}
+	else
+#endif
 	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
 		return ::fast_io::operations::decay::transmit_bytes_until_eof_decay_dispatch(output_observer, input_observer);
 	});

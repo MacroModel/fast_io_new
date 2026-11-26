@@ -244,6 +244,7 @@ inline constexpr char_type *print_reserve_define(
 	return end;
 }
 
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 /// Keeps the optional compiler-constant floating proxy visible through format's spelling wrapper.
 ///
 /// This overload remains ordinary inline: independent GCC 13/15 and Clang 23
@@ -347,6 +348,8 @@ inline constexpr char_type *print_reserve_define(
 	}
 	return end;
 }
+
+#endif
 
 /// Propagates the core compiler-constant protocol through format's sign/prefix spelling wrapper.
 ///
@@ -691,6 +694,7 @@ inline constexpr ::std::size_t print_reserve_static_stack_size(
 	return result;
 }
 
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 /// @brief Forwards exact-size queries for the already-materialized constant precision-float proxy.
 /// @details Tested GCC 13--16 otherwise outline this spelling-only wrapper after the IO gate has built the integer-field
 ///          proxy. In the focused `{:.6f}` caller, retaining the boundary left 232 instructions and four calls on GCC
@@ -739,6 +743,7 @@ inline constexpr ::std::size_t print_reserve_precise_size(
 				char_type, flags, floating_type>>,
 		value.scalar);
 }
+#endif
 
 template <::std::integral char_type, typename scalar_type, ::std::size_t base_prefix_size, bool space_sign>
 	requires requires(scalar_type value) {
@@ -815,6 +820,7 @@ inline constexpr decltype(auto) print_reserve_precise_define(
 	}
 }
 
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 /// @brief Keeps a compiler-constant precision-float proxy visible across format's final precise-define forwarding leaf.
 /// @details Clang 23 otherwise outlined only this spelling wrapper for `fmt::print<"v={:.3a}">(out(), 1.25)`, leaving
 ///          a 120-byte frame and a call after the core proxy had already become fully constant.  The overload is
@@ -898,6 +904,8 @@ print_reserve_precise_define(
 		return result;
 	}
 }
+
+#endif
 
 /// Propagates the child's flat integer replacement proof through format's spelling-only wrapper.
 /// Format adds only compile-time prefix and space-sign spelling. It introduces no value field, loop, planner, dynamic
@@ -1038,7 +1046,12 @@ template <typename value_type>
 [[nodiscard]] inline constexpr bool scalar_negative(value_type value) noexcept
 {
 	using clean_type = ::std::remove_cvref_t<value_type>;
-	if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
+	if constexpr (::fast_io::details::interchange_floating<clean_type>)
+	{
+		return ::fast_io::details::interchange_floating_traits<clean_type>::negative(value);
+	}
+	else if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
 		clean_type>)
 	{
 		return (::fast_io::bit_cast<::std::uint_least16_t>(value) & 0x8000u) != 0u;
@@ -1060,7 +1073,9 @@ template <typename value_type>
 #endif
 		}
 	}
-	else if constexpr (::fast_io::details::my_signed_integral<clean_type>)
+	else
+#endif
+	if constexpr (::fast_io::details::my_signed_integral<clean_type>)
 	{
 		return value < 0;
 	}
@@ -1079,10 +1094,15 @@ template <typename value_type>
  * floating argument ABI and target-specific classification instruction choice.
  */
 template <typename value_type>
-[[nodiscard]] inline constexpr bool scalar_finite(value_type value) noexcept
+[[nodiscard]] inline constexpr bool scalar_finite([[maybe_unused]] value_type value) noexcept
 {
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 	using clean_type = ::std::remove_cvref_t<value_type>;
-	if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
+	if constexpr (::fast_io::details::interchange_floating<clean_type>)
+	{
+		return ::fast_io::details::interchange_floating_traits<clean_type>::finite(value);
+	}
+	else if constexpr (::fast_io::details::floating_scalar_requires_integer_proxy<
 		clean_type>)
 	{
 		auto const representation{
@@ -1127,6 +1147,7 @@ template <typename value_type>
 		}
 	}
 	else
+#endif
 	{
 		return true;
 	}
@@ -1161,6 +1182,7 @@ inline constexpr ::std::size_t print_define_internal_shift(
 		value.scalar.reference, base_prefix_size);
 }
 
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags, typename value_type,
 	::std::size_t base_prefix_size, bool space_sign>
@@ -1208,6 +1230,7 @@ inline constexpr ::std::size_t print_define_internal_shift(
 	return static_cast<::std::size_t>(flags.showpos || fields.sign) +
 		(fields.exponent == exponent_mask ? 0u : base_prefix_size);
 }
+#endif
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  typename value_type, ::std::size_t base_prefix_size, bool space_sign>
@@ -1244,6 +1267,7 @@ inline constexpr ::std::size_t print_define_internal_shift(
 		value.scalar.reference, base_prefix_size);
 }
 
+#if !defined(FAST_IO_DISABLE_FLOATING_POINT) && !defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
 /// @brief Preserves sign/prefix placement for an optimizer-proven default/scalar floating replacement.
 template <::std::integral char_type,
 	::fast_io::manipulators::scalar_flags flags,
@@ -1301,6 +1325,8 @@ inline constexpr ::std::size_t print_define_internal_shift(
 		: base_prefix_size};
 	return sign_size + prefix_size;
 }
+
+#endif
 
 } // namespace fast_io
 

@@ -292,12 +292,8 @@ struct print_semantic_status_probe_canonical_graph
 	template <::std::size_t mask, ::std::size_t... I>
 	static consteval bool query(::std::index_sequence<I...>) noexcept
 	{
-		// Repeat has_status_print_define's named requires-expression in the same defines namespace. The exact
-		// parameter types preserve cv qualification and array/function adjustments, and therefore the original
-		// lvalue expressions, associated ADL namespaces, overload resolution, and required void return type.
-		return requires(output optstm, expression<selected<mask>.indices[I]>... args) {
-			{ status_print_define<line>(optstm, args...) } -> ::std::same_as<void>;
-		};
+		// Apply the exact named-argument probe used by the ordinary dispatcher to this selection.
+		return has_status_print_define<line, output, expression<selected<mask>.indices[I]>...>;
 	}
 
 	template <::std::size_t begin, ::std::size_t... I>

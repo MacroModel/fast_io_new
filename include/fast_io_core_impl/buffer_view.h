@@ -87,6 +87,34 @@ struct basic_padded_ibuffer_view_ref
 	native_handle_type ptr{};
 };
 
+/** @brief Lends the caller's live input array through its logical end with a single cursor publication. */
+template <::std::integral Char>
+inline constexpr ::std::true_type input_stream_borrowed_terminal_define(io_type_t<basic_ibuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
+/** @brief Lends the logical input of a padded view while keeping padding outside the borrowed range. */
+template <::std::integral Char>
+inline constexpr ::std::true_type input_stream_borrowed_terminal_define(io_type_t<basic_padded_ibuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
+/** @brief Declares that an exhausted input view reaches EOF directly in its resident storage. */
+template <::std::integral Char>
+inline constexpr ::std::true_type input_stream_immediate_define(io_type_t<basic_ibuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
+/** @brief Retains immediate EOF for input views with separately guaranteed readable padding. */
+template <::std::integral Char>
+inline constexpr ::std::true_type input_stream_immediate_define(io_type_t<basic_padded_ibuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
 template <::std::integral char_type>
 [[nodiscard]] inline constexpr ::std::size_t
 contiguous_range_padding_size(
@@ -117,6 +145,20 @@ requires ::std::same_as<::std::iter_value_t<Iter>,ch_type>
 	return it;
 }
 #endif
+
+/** @brief Preserves the shared input cursor when a buffer or lock owns a view observer. */
+template <::std::integral Char>
+inline constexpr basic_ibuffer_view_ref<Char> input_stream_ref_define(basic_ibuffer_view_ref<Char> view) noexcept
+{
+	return view;
+}
+
+/** @brief Preserves the original padding contract through repeated directional projection. */
+template <::std::integral Char>
+inline constexpr basic_padded_ibuffer_view_ref<Char> input_stream_ref_define(basic_padded_ibuffer_view_ref<Char> view) noexcept
+{
+	return view;
+}
 
 template <::std::integral ch_type>
 inline constexpr basic_ibuffer_view_ref<ch_type> input_stream_ref_define(basic_ibuffer_view<ch_type> &other) noexcept
@@ -381,6 +423,59 @@ struct basic_obuffer_view_ref
 	native_handle_type ptr{};
 };
 
+/** @brief Certifies the fixed view's bulk-write capacity and cursor-only publication contract. */
+template <::std::integral Char>
+	requires ::std::same_as<Char, ::std::remove_cv_t<Char>>
+inline constexpr ::std::true_type
+output_stream_terminal_put_area_define(io_type_t<basic_obuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <::std::integral C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_obuffer_view_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <::std::integral C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_ibuffer_view_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <::std::integral C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_padded_ibuffer_view_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Declares that a fixed output view writes to caller-provided storage on the issuing thread. */
+template <::std::integral Char>
+inline constexpr ::std::true_type output_stream_immediate_define(io_type_t<basic_obuffer_view_ref<Char>>) noexcept
+{
+	return {};
+}
+
+/** @brief Lends a bounded put range of a fixed external view without advancing its cursor. */
+template <::std::integral Char>
+inline constexpr Char *output_stream_try_reserve_define(basic_obuffer_view_ref<Char> ref, ::std::size_t count) noexcept
+{
+	auto *first{ref.ptr->curr_ptr};
+	if (first == nullptr || static_cast<::std::size_t>(ref.ptr->end_ptr - first) < count) { return nullptr; }
+	return first;
+}
+
+/** @brief Publishes exactly the code units emitted into the last successful view reservation. */
+template <::std::integral Char>
+inline constexpr void output_stream_commit_reserved_define(basic_obuffer_view_ref<Char> ref, Char *last) noexcept
+{
+	ref.ptr->curr_ptr = last;
+}
+
 /// The fixed external buffer owns a stable writable range, so print may fold a complete scatter copy into one cursor
 /// publication without invoking the generic write CPO. Growing/string-like wrappers intentionally do not advertise this
 /// stronger destination proof.
@@ -420,6 +515,13 @@ inline constexpr void write(basic_obuffer_view<ch_type>& view,Iter first,Iter la
 	view.curr_ptr=::fast_io::details::non_overlapped_copy_n(first,static_cast<::std::size_t>(diff),view.curr_ptr);
 }
 #endif
+
+/** @brief Returns the same writable extent and publication cursor to a nested stream adapter. */
+template <::std::integral Char>
+inline constexpr basic_obuffer_view_ref<Char> output_stream_ref_define(basic_obuffer_view_ref<Char> view) noexcept
+{
+	return view;
+}
 
 template <::std::integral ch_type>
 inline constexpr basic_obuffer_view_ref<ch_type> output_stream_ref_define(basic_obuffer_view<ch_type> &other) noexcept

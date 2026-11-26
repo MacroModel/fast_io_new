@@ -459,6 +459,12 @@ inline constexpr ::std::byte const *write_some_bytes_cold_impl(outstmtype &outsm
 			::fast_io::seekdir::cur);
 		return ret;
 	}
+	else
+	{
+		static_assert(sizeof(char_type) == 1u && ::fast_io::operations::decay::defines::has_obuffer_basic_operations<outstmtype>,
+			"byte writes require a byte write provider or a compatible one-byte output cursor");
+		return first;
+	}
 }
 
 template <typename outstmtype>
@@ -669,6 +675,11 @@ inline constexpr void write_all_bytes_cold_impl(outstmtype &outsm, ::std::byte c
 		::fast_io::operations::decay::output_stream_seek_decay_dispatch(
 			outsm, ::fast_io::details::output_pointer_distance(firstcptr, lastcptr),
 			::fast_io::seekdir::cur);
+	}
+	else if constexpr (sizeof(char_type) > 1u)
+	{
+		static_assert(::fast_io::operations::decay::defines::bytes_writable<outstmtype>,
+			"a multi-byte output cursor requires a byte write provider");
 	}
 }
 

@@ -28,6 +28,36 @@
 namespace fast_io
 {
 
+/**
+ * @brief Recognizes a stable, borrowed span containing the complete remaining public input.
+ * @details The provider lends live code units until the caller changes their storage. Reading a prefix
+ * has exactly the effect of advancing its cursor. No refill, observer callback, transformation or status
+ * observation is hidden by consuming that prefix. Empty means logical EOF, including for a null range.
+ * The three cursor operations must refer to the same external range. A padded provider excludes its
+ * padding from the logical end. Callers retain the usual lifetime and exclusive cursor obligations.
+ */
+template <typename Input>
+concept borrowed_terminal_input = requires(Input &in, typename Input::input_char_type const *position) {
+	{ input_stream_borrowed_terminal_define(io_type<Input>) } -> ::std::same_as<::std::true_type>;
+	{ ibuffer_curr(in) } noexcept -> ::std::same_as<typename Input::input_char_type const *>;
+	{ ibuffer_end(in) } noexcept -> ::std::same_as<typename Input::input_char_type const *>;
+	{ ibuffer_set_curr(in, position) } noexcept -> ::std::same_as<void>;
+};
+
+/**
+ * @brief Recognizes a bounded put area that terminates on an oversized bulk write.
+ * @details A fitting bulk write copies its whole range, then advances only the put cursor.
+ * An oversized bulk write terminates before copying any part of that write. There is no
+ * refill, callback, recoverable error or other effect that can observe intermediate cursor
+ * assignments. The payload window remains live and cannot overwrite observer state.
+ * This lets exact transmit publish the same complete staging blocks from a terminal input
+ * without allocating a temporary merely to rediscover EOF or capacity exhaustion.
+ */
+template <typename Output>
+concept terminal_put_area = requires {
+	{ output_stream_terminal_put_area_define(io_type<Output>) } -> ::std::same_as<::std::true_type>;
+};
+
 /// @brief Reports the readable padding owned by a contiguous range.
 /// @details This is a run-time capability query, not a claim that every object of the provider type currently owns
 ///          padding. For a particular range `r`, let `B = ranges::data(r)`, `E = ranges::end(r)`, and
@@ -391,8 +421,8 @@ concept context_scanner_result_in_range =
 
 /// @brief Optional transactional fast path for a context scanner on one buffered input chunk.
 /// @details `scan_context_current_chunk_minimum_size(tag)` advertises the smallest buffer capacity for which dispatching
-///          this accelerator is useful. The dispatcher enables it only when the input has a compile-time minimum-window
-///          protocol at least that large; context-oriented small buffers retain their original code shape.
+///          this accelerator is useful. A one-unit minimum applies to any nonempty dynamic window. Larger minima
+///          require a sufficient compile-time minimum-window protocol; context-oriented small buffers retain their original code shape.
 ///
 ///          `scan_context_current_chunk_define(tag, first, last, target)` may complete a value only when the supplied
 ///          chunk contains enough input to decide the result without relying on `last` as semantic EOF. A miss must
@@ -439,6 +469,23 @@ concept current_chunk_context_scanner_result_in_range =
 			scan_context_current_chunk_result_in_range(
 				io_reserve_type<char_type, ::std::remove_cvref_t<T>>)
 		} -> ::std::same_as<::std::true_type>;
+	};
+
+/**
+ * @brief Recognizes a context scanner that can transact on the complete remaining input.
+ * @details The caller supplies a nonempty borrowed terminal span [first,last). A nonnull
+ * return commits the target and gives the next cursor, with the same array provenance
+ * and the same value and position as the streaming protocol through EOF. Both first
+ * and last are valid success positions. A null return leaves the target untouched and
+ * requests the ordinary state machine from first, including its normal error handling.
+ * A refillable device can provide an identical pointer pair with further input pending.
+ * Only the endpoint's terminal guarantee makes last available as a field boundary.
+ */
+template <typename Char, typename T>
+concept terminal_prefix_context_scannable =
+	context_scannable<Char, T> && requires(Char const *first, Char const *last, T &value) {
+		{ scan_context_try_terminal_define(io_reserve_type<Char, ::std::remove_cvref_t<T>>, first, last, value) }
+			-> ::std::same_as<Char const *>;
 	};
 
 /// @brief Opts a hybrid scanner into terminal contiguous dispatch.
@@ -1912,6 +1959,18 @@ concept direct_printable_to = ::std::integral<char_type> && requires(output out,
 
 } // namespace details
 
+/** @brief Declares that direct formatting of a field depends on the identity of the normalized output type.
+ *  @details Return std::true_type from the ADL declaration for the field and observer type tags.
+ *  No object or customization is evaluated. A checked encoder then passes its concrete observer
+ *  to print_define, preserving endpoint-specific overloads, including when a generic overload
+ *  also exists. The selected formatter owns the error contract of operations on that observer.
+ */
+template <typename Char, typename Ref, typename Value>
+concept print_requires_exact_ref = requires {
+	requires ::std::same_as<decltype(print_requires_exact_ref_define(
+		io_reserve_type<Char, ::std::remove_cvref_t<Value>>, io_type<::std::remove_cvref_t<Ref>>)), ::std::true_type>;
+};
+
 /// @brief      buffered_printable_preferred
 /// @details    Marks a dynamic-reserve printable whose `print_define` path is a single-pass producer and is preferred
 ///             when the destination already owns reusable writable storage. This is an explicit cost property, not a
@@ -2689,13 +2748,12 @@ inline consteval bool abi_small_trivial_argument_layout_envelope(
 	abi_small_aggregate_model model, ::std::size_t object_size, ::std::size_t object_alignment,
 	bool is_scalar, ::std::size_t maximum_size, ::std::size_t scalar_alignment) noexcept
 {
-	using enum abi_small_aggregate_model;
-	if (model == microsoft_x64 || model == s390_integer_equivalent)
+	if (model == abi_small_aggregate_model::microsoft_x64 || model == abi_small_aggregate_model::s390_integer_equivalent)
 	{
 		return (object_size == 1u || object_size == 2u || object_size == 4u || object_size == 8u) &&
 			   object_size <= maximum_size && object_alignment <= object_size;
 	}
-	if (model == capability_scalar || model == aggregate_indirect_or_stack || model == unmodelled)
+	if (model == abi_small_aggregate_model::capability_scalar || model == abi_small_aggregate_model::aggregate_indirect_or_stack || model == abi_small_aggregate_model::unmodelled)
 	{
 		return is_scalar && object_size <= maximum_size && object_alignment <= scalar_alignment;
 	}
@@ -2725,19 +2783,18 @@ inline consteval bool abi_small_trivial_result_layout_envelope(
 	abi_small_aggregate_model model, ::std::size_t object_size, ::std::size_t object_alignment,
 	bool is_scalar, ::std::size_t maximum_size, ::std::size_t scalar_alignment) noexcept
 {
-	using enum abi_small_aggregate_model;
 	if (is_scalar)
 	{
 		return ::fast_io::details::abi_small_trivial_argument_layout_envelope(
 			model, object_size, object_alignment, true, maximum_size, scalar_alignment);
 	}
-	if (model == aapcs32)
+	if (model == abi_small_aggregate_model::aapcs32)
 	{
 		return object_size <= 4u && object_size <= maximum_size && object_alignment <= 4u &&
 			   object_alignment <= maximum_size;
 	}
-	if (model == mips_o32 || model == s390_integer_equivalent ||
-		model == powerpc64_elfv1)
+	if (model == abi_small_aggregate_model::mips_o32 || model == abi_small_aggregate_model::s390_integer_equivalent ||
+		model == abi_small_aggregate_model::powerpc64_elfv1)
 	{
 		return false;
 	}
@@ -3204,6 +3261,17 @@ using parameter_const_member_reference_t =
 	decltype((::std::declval<::fast_io::parameter<value_type> const &>().reference));
 
 #if defined(__HERBCEPTIONS__)
+/** @brief Propagates the declared effect of the reference stored in a parameter wrapper. */
+template <typename Char, typename Expression>
+inline constexpr bool parameter_reserve_size_has_hc = throws((print_reserve_size(
+	io_reserve_type<Char, ::std::remove_cvref_t<Expression>>, ::std::declval<Expression>())));
+
+/** @brief Reads the exact named reserve-writer expression before forwarding its ABI. */
+template <typename Char, typename Expression>
+inline constexpr bool parameter_reserve_write_has_hc = throws((print_reserve_define(
+	io_reserve_type<Char, ::std::remove_cvref_t<Expression>>, ::std::declval<Char *&>(),
+	::std::declval<Expression>())));
+
 /// @brief Classifies the deterministic effect of an exact-size query delegated through `parameter`.
 /// @details `member_reference` is the precise expression type of `wrapper.reference`; keeping it independent from the
 ///          wrapper's storage type makes mutable and const adapters query the same overload that their bodies invoke.
@@ -3411,6 +3479,9 @@ template <::std::integral char_type, typename value_type>
 		char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, parameter<value_type>>,
 												  parameter<value_type> &para)
+#if defined(__HERBCEPTIONS__)
+	throws(details::parameter_reserve_size_has_hc<char_type, details::parameter_mutable_member_reference_t<value_type>>)
+#endif
 {
 	// The strategy engine presents its single normalized owner as a named lvalue. Borrowing it keeps a move-only or
 	// identity-sensitive formatter viable and makes the size and define phases observe the same object.
@@ -3422,6 +3493,9 @@ template <::std::integral char_type, typename value_type>
 		char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>
 inline constexpr ::std::size_t print_reserve_size(io_reserve_type_t<char_type, parameter<value_type>>,
 												  parameter<value_type> const &para)
+#if defined(__HERBCEPTIONS__)
+	throws(details::parameter_reserve_size_has_hc<char_type, details::parameter_const_member_reference_t<value_type>>)
+#endif
 {
 	// Measurement and materialization must observe the same const owner. This is stronger than merely making the call
 	// well formed: an identity-sensitive formatter may cache derived state in mutable members, so copying the wrapper
@@ -3454,6 +3528,9 @@ template <::std::integral char_type, typename value_type>
 				 char_type, ::fast_io::details::parameter_mutable_member_reference_t<value_type>>)
 inline constexpr auto print_reserve_define(io_reserve_type_t<char_type, parameter<value_type>>, char_type *begin,
 										   parameter<value_type> &para)
+#if defined(__HERBCEPTIONS__)
+	throws(details::parameter_reserve_write_has_hc<char_type, details::parameter_mutable_member_reference_t<value_type>>)
+#endif
 {
 	return print_reserve_define(io_reserve_type<char_type, ::std::remove_cvref_t<value_type>>, begin, para.reference);
 }
@@ -3465,6 +3542,9 @@ template <::std::integral char_type, typename value_type>
 				 char_type, ::fast_io::details::parameter_const_member_reference_t<value_type>>)
 inline constexpr auto print_reserve_define(io_reserve_type_t<char_type, parameter<value_type>>, char_type *begin,
 										   parameter<value_type> const &para)
+#if defined(__HERBCEPTIONS__)
+	throws(details::parameter_reserve_write_has_hc<char_type, details::parameter_const_member_reference_t<value_type>>)
+#endif
 {
 	// The size-only tag is cv-neutral, but the producer expression is not. Mirror the exact const member expression
 	// here so both static- and dynamic-reserve concepts reject a mutable-only child cleanly and accept a read-only one.
@@ -3682,6 +3762,18 @@ template <::std::integral char_type, typename value_type>
 	// underlying CPO's fail-with-SIZE_MAX contract and prevents this transparent adapter from inventing another bound.
 	return ::fast_io::single_pass_bounded_materialization_size_invoke<char_type>(
 		wrapper.reference, maximum_size);
+}
+
+/** @brief Preserves an exact observer requirement through transparent parameter transport.
+ *  @details The wrapper forwards print_define to its stored field. That forwarding retains
+ *  the field's overload set and therefore the observer type against which it is resolved.
+ */
+template <::std::integral Char, typename T, typename Ref>
+	requires print_requires_exact_ref<Char, Ref, T>
+inline constexpr ::std::true_type print_requires_exact_ref_define(
+	io_reserve_type_t<Char, parameter<T>>, io_type_t<Ref>) noexcept
+{
+	return {};
 }
 
 /// @brief Preserves the wrapped source's explicit one-pass staging safety proof.

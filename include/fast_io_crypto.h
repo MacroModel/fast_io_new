@@ -20,6 +20,7 @@
 #include "fast_io_crypto/hash/impl.h"
 #include "fast_io_crypto/hash/rapidhash.h"
 #include "fast_io_crypto/cipher/aes_context.h"
+#include "fast_io_crypto/cipher/aes_ctr.h"
 
 #include "fast_io_dsal/impl/misc/pop_macros.h"
 #include "fast_io_dsal/impl/misc/pop_warnings.h"

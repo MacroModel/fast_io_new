@@ -169,14 +169,14 @@ inline constexpr wchar_t const *find_space_simd_common_wide_none_utf_encoding_im
 					simdvec_reverse.swap_endian();
 					return (spaces == simdvec) ^
 						   (static_cast<simd_vector_type>(
-								(static_cast<decision_simd_vector_type>(simdvec_reverse) - horizontaltabs) < fives) &
+								::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec_reverse), horizontaltabs) < fives) &
 							(simdvec != verticaltabs));
 				}
 				else
 				{
 					return (spaces == simdvec) ^
 						   (static_cast<simd_vector_type>(
-								(static_cast<decision_simd_vector_type>(simdvec) - horizontaltabs) < fives) &
+								::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec), horizontaltabs) < fives) &
 							(simdvec != verticaltabs));
 				}
 			});
@@ -192,13 +192,13 @@ inline constexpr wchar_t const *find_space_simd_common_wide_none_utf_encoding_im
 					simdvec_reverse.swap_endian();
 					return (spaces == simdvec) ^
 						   (static_cast<simd_vector_type>(
-							   (static_cast<decision_simd_vector_type>(simdvec_reverse) - horizontaltabs) < fives));
+							   ::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec_reverse), horizontaltabs) < fives));
 				}
 				else
 				{
 					return (spaces == simdvec) ^
 						   (static_cast<simd_vector_type>(
-							   (static_cast<decision_simd_vector_type>(simdvec) - horizontaltabs) < fives));
+							   ::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec), horizontaltabs) < fives));
 				}
 			});
 	}
@@ -302,13 +302,15 @@ inline constexpr char_type const *find_space_simd_common_impl(char_type const *f
 					[&](simd_vector_type const &simdvec) noexcept {
 						return (horizontaltabs == simdvec) ^
 							   static_cast<simd_vector_type>(
-								   (static_cast<decision_simd_vector_type>(simdvec) - verticaltabs) < threes) ^
+								   ::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec), verticaltabs) < threes) ^
 							   (ebcdic_specific_nls == simdvec) ^ (linefeeds == simdvec) ^ (spaces == simdvec);
 					});
 			}
 		}
 		else
 		{
+			// The threshold carries the sign-bit bias for a signed comparison.
+			// The subtraction wraps in each lane before that comparison.
 			constexpr char_type five{5};
 #if (__cpp_lib_bit_cast >= 201806L) && !defined(__clang__)
 			constexpr decision_simd_vector_type fives{::std::bit_cast<decision_simd_vector_type>(
@@ -338,7 +340,7 @@ inline constexpr char_type const *find_space_simd_common_impl(char_type const *f
 					[&](simd_vector_type const &simdvec) noexcept {
 						return (spaces == simdvec) ^
 							   (static_cast<simd_vector_type>(
-									(static_cast<decision_simd_vector_type>(simdvec) - horizontaltabs) < fives) &
+									::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec), horizontaltabs) < fives) &
 								(simdvec != verticaltabs));
 					});
 			}
@@ -349,7 +351,7 @@ inline constexpr char_type const *find_space_simd_common_impl(char_type const *f
 					[&](simd_vector_type const &simdvec) noexcept {
 						return (spaces == simdvec) ^
 							   (static_cast<simd_vector_type>(
-								   (static_cast<decision_simd_vector_type>(simdvec) - horizontaltabs) < fives));
+								   ::fast_io::intrinsics::wrap_sub(static_cast<decision_simd_vector_type>(simdvec), horizontaltabs) < fives));
 					});
 			}
 		}
@@ -383,18 +385,20 @@ inline constexpr char unsigned const *find_characters_musl(char unsigned const *
 #else
 				__builtin_memcpy(__builtin_addressof(x), first, diff);
 #endif
-				x ^= constantk;
-				::std::size_t v{(x - ones) & (~x) & highs};
 				if constexpr (findnot)
 				{
-					if (v != highs)
+					// Subtracting ones can borrow across bytes. The zero-byte
+					// detector answers whether any byte matches, so a whole
+					// run of matching bytes requires exact word equality.
+					if (x != constantk)
 					{
 						break;
 					}
 				}
 				else
 				{
-					if (v)
+					x ^= constantk;
+					if (((x - ones) & ~x & highs) != 0u)
 					{
 						break;
 					}
@@ -616,6 +620,28 @@ inline constexpr char_type const *find_lf_simd_impl(char_type const *first, char
 template <::std::integral char_type>
 inline constexpr char_type const *find_none_zero_simd_impl(char_type const *first, char_type const *last) noexcept
 {
+	FAST_IO_IF_NOT_CONSTEVAL
+	{
+		if constexpr (sizeof(char_type) == 1u &&
+					  ::std::numeric_limits<unsigned char>::digits == 8 &&
+					  ::std::numeric_limits<::std::uint_least64_t>::digits == 64)
+		{
+			if (static_cast<::std::size_t>(last - first) >= sizeof(::std::uint_least64_t))
+			{
+				::std::uint_least64_t word;
+				::fast_io::freestanding::my_memcpy(__builtin_addressof(word), first, sizeof(word));
+				constexpr auto zero{static_cast<unsigned char>(char_literal_v<u8'0', char_type>)};
+				// Canonical byte order makes the first differing byte the lowest
+				// nonzero byte. An all-zero difference proves that the full word is padding.
+				auto const diff{::fast_io::little_endian(word) ^ (UINT64_C(0x0101010101010101) * zero)};
+				if (diff)
+				{
+					return first + (static_cast<unsigned>(::std::countr_zero(diff)) >> 3u);
+				}
+				first += sizeof(word);
+			}
+		}
+	}
 	return find_simd_constant_common_impl<u8'0', true>(first, last);
 }
 

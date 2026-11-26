@@ -125,15 +125,10 @@ inline win32_shared_memory_state win32_family_create_shared_memory_impl(
 		throw_win32_error();
 	}
 
-	try
-	{
-		return win32_map_shared_memory_impl(handle, bytes, mode);
-	}
-	catch (...)
-	{
-		::fast_io::win32::CloseHandle(handle);
-		throw;
-	}
+	::fast_io::win32::details::handle_guard owned{handle};
+	auto const mapped{win32_map_shared_memory_impl(handle, bytes, mode)};
+	owned.h = nullptr;
+	return mapped;
 }
 
 template <win32_family family>
@@ -195,16 +190,10 @@ inline win32_shared_memory_state win32_create_named_shared_memory_impl(
 inline win32_shared_memory_state win32_duplicate_shared_memory_impl(
 	void *handle, ::std::size_t bytes, ipc_mode mode)
 {
-	auto const duplicated_handle{::fast_io::win32::details::win32_dup_impl(handle)};
-	try
-	{
-		return win32_map_shared_memory_impl(duplicated_handle, bytes, mode);
-	}
-	catch (...)
-	{
-		::fast_io::win32::CloseHandle(duplicated_handle);
-		throw;
-	}
+	::fast_io::win32::details::handle_guard owned{::fast_io::win32::details::win32_dup_impl(handle)};
+	auto const mapped{win32_map_shared_memory_impl(owned.h, bytes, mode)};
+	owned.h = nullptr;
+	return mapped;
 }
 
 } // namespace win32::details
@@ -242,18 +231,9 @@ public:
 		native_handle_type section_handle, size_type size, ipc_mode mode = ipc_mode::in | ipc_mode::out)
 	{
 		::fast_io::win32::details::win32_shared_memory_validate_mode(mode);
-		try
-		{
-			assign(::fast_io::win32::details::win32_map_shared_memory_impl(section_handle, size, mode), mode);
-		}
-		catch (...)
-		{
-			if (section_handle != nullptr) [[likely]]
-			{
-				::fast_io::win32::CloseHandle(section_handle);
-			}
-			throw;
-		}
+		::fast_io::win32::details::handle_guard owned{section_handle};
+		assign(::fast_io::win32::details::win32_map_shared_memory_impl(section_handle, size, mode), mode);
+		owned.h = nullptr;
 	}
 
 	inline basic_win32_family_shared_memory(basic_win32_family_shared_memory const &other)

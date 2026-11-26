@@ -93,14 +93,14 @@ inline
 #elif defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC)) && __has_builtin(__builtin_ia32_pmovmskb128) && defined(__SSE2__)
 			using x86_64_v16qi [[__gnu__::__vector_size__(16)]] = char;
 #if __has_builtin(__builtin_bit_cast)
-			return !__builtin_ia32_pmovmskb128(__builtin_bit_cast(x86_64_v16qi, vec.value));
+			return __builtin_ia32_pmovmskb128(__builtin_bit_cast(x86_64_v16qi, vec.value) == x86_64_v16qi{}) == 0xffff;
 #else
-			return !__builtin_ia32_pmovmskb128((x86_64_v16qi)vec.value);
+			return __builtin_ia32_pmovmskb128(((x86_64_v16qi)vec.value) == x86_64_v16qi{}) == 0xffff;
 #endif
 
 #elif defined(__wasm_simd128__) && __has_builtin(__builtin_wasm_bitmask_i8x16)
 			using wasmsimd128_i8x16 [[__gnu__::__vector_size__(16)]] = char;
-			return !__builtin_wasm_bitmask_i8x16(static_cast<wasmsimd128_i8x16>(vec.value));
+			return __builtin_wasm_bitmask_i8x16(static_cast<wasmsimd128_i8x16>(vec.value) == wasmsimd128_i8x16{}) == 0xffff;
 #elif (defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)) && __has_builtin(__builtin_neon_vmaxvq_u32)
 			using armneon_uint32x4 [[__gnu__::__vector_size__(16)]] = unsigned;
 			if constexpr (::fast_io::details::cpu_flags::armneon_supported)
@@ -119,7 +119,7 @@ inline
 #endif
 			}
 #endif
-#elif ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+#elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86)) && !defined(_M_ARM64EC)
 			if constexpr (::fast_io::details::cpu_flags::sse4_2_supported)
 			{
 				__m128i a = __builtin_bit_cast(__m128i, vec);
@@ -128,7 +128,7 @@ inline
 			else if constexpr (::fast_io::details::cpu_flags::sse2_supported)
 			{
 				__m128i a = __builtin_bit_cast(__m128i, vec);
-				return !_mm_movemask_epi8(a);
+				return _mm_movemask_epi8(_mm_cmpeq_epi8(a, _mm_setzero_si128())) == 0xffff;
 			}
 #elif defined(__arm64__) || defined(__aarch64__) || defined(_M_ARM64) || defined(__arm64ec__) || defined(_M_ARM64EC)
 			if constexpr (::fast_io::details::cpu_flags::armneon_supported)
@@ -151,13 +151,13 @@ inline
 #elif defined(__AVX2__) && defined(__x86_64__) && !(defined(__arm64ec__) || defined(_M_ARM64EC)) && __has_builtin(__builtin_ia32_pmovmskb256)
 			using x86_64_v32qi [[__gnu__::__vector_size__(32)]] = char;
 #if __has_builtin(__builtin_bit_cast)
-			return !__builtin_ia32_pmovmskb256(__builtin_bit_cast(x86_64_v32qi, vec.value));
+			return __builtin_ia32_pmovmskb256(__builtin_bit_cast(x86_64_v32qi, vec.value) == x86_64_v32qi{}) == -1;
 #else
-			return !__builtin_ia32_pmovmskb256((x86_64_v32qi)vec.value);
+			return __builtin_ia32_pmovmskb256(((x86_64_v32qi)vec.value) == x86_64_v32qi{}) == -1;
 #endif
 
 #endif
-#elif ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+#elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86)) && !defined(_M_ARM64EC)
 			if constexpr (::fast_io::details::cpu_flags::avx_supported)
 			{
 				__m256i a = __builtin_bit_cast(__m256i, vec);
@@ -184,7 +184,7 @@ inline
 			return !__builtin_ia32_cmpb512_mask((x86_64_v64qi)vec.value, x86_64_v64qi{}, 0x04, UINT_LEAST64_MAX);
 #endif
 #endif
-#elif ((defined(__x86_64__) || defined(_M_AMD64) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)) && !(defined(__arm64ec__) || defined(_M_ARM64EC)))
+#elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86)) && !defined(_M_ARM64EC)
 			if constexpr (::fast_io::details::cpu_flags::avx512bw_supported)
 			{
 				__m512i a = __builtin_bit_cast(__m512i, vec);

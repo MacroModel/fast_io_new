@@ -439,6 +439,79 @@ struct scan_hexfloat_significand_state
 	bool truncated_nonzero{};
 };
 
+// A two-word accumulator keeps the guard nibble and a rounding carry on x87
+// builds without a native 128-bit integer. The lexer stores at most 17 digits.
+struct scan_hexfloat_x87_storage
+{
+	::std::uint_least64_t high{};
+	::std::uint_least64_t low{};
+
+	constexpr scan_hexfloat_x87_storage(::std::uint_least64_t lower = 0u,
+										 ::std::uint_least64_t upper = 0u) noexcept
+		: high(upper), low(lower) {}
+
+	constexpr void append(::std::size_t, ::std::size_t count, ::std::uint_least64_t packed) noexcept
+	{
+		// Only the final append can take the significand beyond 64 bits.
+		auto const bits{static_cast<unsigned>(count * 4u)};
+		high = low >> (64u - bits);
+		low = (low << bits) | packed;
+	}
+
+	[[nodiscard]] explicit constexpr operator ::std::uint_least64_t() const noexcept
+	{
+		return low;
+	}
+
+	friend constexpr bool operator==(scan_hexfloat_x87_storage, scan_hexfloat_x87_storage) noexcept = default;
+	friend constexpr auto operator<=>(scan_hexfloat_x87_storage, scan_hexfloat_x87_storage) noexcept = default;
+
+	friend constexpr scan_hexfloat_x87_storage operator&(
+		scan_hexfloat_x87_storage value, scan_hexfloat_x87_storage mask) noexcept
+	{
+		return {value.low & mask.low, value.high & mask.high};
+	}
+
+	friend constexpr scan_hexfloat_x87_storage operator<<(scan_hexfloat_x87_storage value, unsigned bits) noexcept
+	{
+		if (64u <= bits)
+		{
+			return {0u, value.low << (bits - 64u)};
+		}
+		if (!bits)
+		{
+			return value;
+		}
+		return {value.low << bits, (value.high << bits) | (value.low >> (64u - bits))};
+	}
+
+	friend constexpr scan_hexfloat_x87_storage operator>>(scan_hexfloat_x87_storage value, unsigned bits) noexcept
+	{
+		if (64u <= bits)
+		{
+			return {value.high >> (bits - 64u), 0u};
+		}
+		if (!bits)
+		{
+			return value;
+		}
+		return {(value.low >> bits) | (value.high << (64u - bits)), value.high >> bits};
+	}
+
+	constexpr void operator>>=(unsigned bits) noexcept
+	{
+		*this = *this >> bits;
+	}
+
+	constexpr void operator++() noexcept
+	{
+		if (++low == 0)
+		{
+			++high;
+		}
+	}
+};
+
 template <::std::size_t precision_bits>
 struct scan_hexfloat_storage_type
 {
@@ -448,14 +521,72 @@ struct scan_hexfloat_storage_type
 		(stored_hex_digits_limit * 4u <= ::std::numeric_limits<::std::uint_least64_t>::digits),
 		::std::uint_least64_t, __uint128_t>;
 #else
-	static_assert(stored_hex_digits_limit * 4u <= ::std::numeric_limits<::std::uint_least64_t>::digits,
+	static_assert(precision_bits == 64u ||
+					  stored_hex_digits_limit * 4u <= ::std::numeric_limits<::std::uint_least64_t>::digits,
 				  "fast_io hexfloat scan needs 128-bit integer support for this floating-point type");
-	using type = ::std::uint_least64_t;
+	using type = ::std::conditional_t<precision_bits == 64u, scan_hexfloat_x87_storage, ::std::uint_least64_t>;
 #endif
 };
 
 template <::std::size_t precision_bits>
 using scan_hexfloat_storage_t = typename ::fast_io::details::scan_hexfloat_storage_type<precision_bits>::type;
+
+// From the greatest leading bit (1023) through the low binary64 midpoint
+// (-1075), inclusive. Retaining 33 words also leaves room for a partial nibble.
+struct scan_hexfloat_ibm_storage
+{
+	inline static constexpr ::std::size_t word_count{33u};
+	inline static constexpr ::std::size_t digit_capacity{word_count * 16u};
+	::std::uint_least64_t words[word_count]{};
+
+	constexpr void append(::std::size_t offset, ::std::size_t count, ::std::uint_least64_t packed) noexcept
+	{
+		auto const word{offset / 16u};
+		auto const available{16u - offset % 16u};
+		if (count <= available)
+		{
+			words[word] |= packed << ((available - count) * 4u);
+		}
+		else
+		{
+			if (word_count <= word + 1u) [[unlikely]]
+			{
+				::fast_io::fast_terminate();
+			}
+			auto const remaining{count - available};
+			words[word] |= packed >> (remaining * 4u);
+			words[word + 1u] |= packed << ((16u - remaining) * 4u);
+		}
+	}
+};
+
+template <typename T>
+using scan_hexfloat_value_storage_t = ::std::conditional_t<
+	::fast_io::details::fp_floating_point_is_ibm_double_double<T>, scan_hexfloat_ibm_storage,
+	scan_hexfloat_storage_t<::fast_io::details::iec559_traits<T>::mbits + 1u>>;
+
+template <typename T>
+inline constexpr ::std::size_t scan_hexfloat_value_digit_capacity{
+	::fast_io::details::fp_floating_point_is_ibm_double_double<T>
+		? scan_hexfloat_ibm_storage::digit_capacity
+		: (::fast_io::details::iec559_traits<T>::mbits + 8u) / 4u};
+
+template <typename state_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void scan_hexfloat_store_digits(
+	state_type &state, ::std::size_t count, ::std::uint_least64_t packed) noexcept
+{
+	using storage_type = typename state_type::storage_type;
+	if constexpr (requires { state.stored.append(state.stored_hex_digits, count, packed); })
+	{
+		state.stored.append(state.stored_hex_digits, count, packed);
+	}
+	else
+	{
+		state.stored = static_cast<storage_type>((state.stored << (count * 4u)) |
+												static_cast<storage_type>(packed));
+	}
+	state.stored_hex_digits += count;
+}
 
 template <::std::size_t stored_hex_digits_limit, typename state_type>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -466,7 +597,6 @@ template <::std::size_t stored_hex_digits_limit, typename state_type>
 inline constexpr void scan_hexfloat_append_digit(state_type &state, bool after_decimal,
 												 char8_t digit) noexcept
 {
-	using storage_type = typename state_type::storage_type;
 	state.has_digit = true;
 	if (after_decimal)
 	{
@@ -483,8 +613,7 @@ inline constexpr void scan_hexfloat_append_digit(state_type &state, bool after_d
 	++state.significant_hex_digits;
 	if (state.stored_hex_digits != stored_hex_digits_limit)
 	{
-		state.stored = static_cast<storage_type>((state.stored << 4u) | static_cast<storage_type>(digit));
-		++state.stored_hex_digits;
+		::fast_io::details::scan_hexfloat_store_digits(state, 1u, digit);
 	}
 	else if (digit != 0u)
 	{
@@ -733,7 +862,6 @@ inline constexpr void scan_hexfloat_append_ascii8(state_type &state, bool after_
 												  ::std::uint_least64_t nibbles,
 												  ::std::uint_least64_t packed) noexcept
 {
-	using storage_type = typename state_type::storage_type;
 	state.has_digit = true;
 	if (after_decimal)
 	{
@@ -766,18 +894,12 @@ inline constexpr void scan_hexfloat_append_ascii8(state_type &state, bool after_
 	auto available{stored_hex_digits_limit - state.stored_hex_digits};
 	if (significant_digits <= available)
 	{
-		state.stored = static_cast<storage_type>(
-			(state.stored << static_cast<unsigned>(significant_digits * 4u)) |
-			static_cast<storage_type>(packed));
-		state.stored_hex_digits += static_cast<::std::size_t>(significant_digits);
+		::fast_io::details::scan_hexfloat_store_digits(state, static_cast<::std::size_t>(significant_digits), packed);
 		return;
 	}
 	auto const truncated_digits{significant_digits - available};
 	auto const truncated_bits{static_cast<unsigned>(truncated_digits * 4u)};
-	state.stored = static_cast<storage_type>(
-		(state.stored << static_cast<unsigned>(available * 4u)) |
-		static_cast<storage_type>(packed >> truncated_bits));
-	state.stored_hex_digits = stored_hex_digits_limit;
+	::fast_io::details::scan_hexfloat_store_digits(state, available, packed >> truncated_bits);
 	if ((packed & ((::std::uint_least64_t{1} << truncated_bits) - 1u)) != 0)
 	{
 		state.truncated_nonzero = true;
@@ -911,12 +1033,18 @@ template <::fast_io::details::my_unsigned_integral storage_type>
 		auto const high{static_cast<::std::uint_least64_t>(stored >> 64u)};
 		if (high != 0)
 		{
-			return static_cast<::std::int_least64_t>(64u + ::std::bit_width(high));
+			return static_cast<::std::int_least64_t>(64u + static_cast<unsigned>(::std::bit_width(high)));
 		}
 		return static_cast<::std::int_least64_t>(
 			::std::bit_width(static_cast<::std::uint_least64_t>(stored)));
 	}
 #endif
+}
+
+[[nodiscard]] inline constexpr ::std::int_least64_t scan_hexfloat_bit_width(scan_hexfloat_x87_storage stored) noexcept
+{
+	return stored.high ? static_cast<::std::int_least64_t>(64u + static_cast<unsigned>(::std::bit_width(stored.high)))
+					   : static_cast<::std::int_least64_t>(::std::bit_width(stored.low));
 }
 
 template <::fast_io::details::my_unsigned_integral storage_type>
@@ -940,8 +1068,15 @@ template <::fast_io::details::my_unsigned_integral storage_type>
 	return static_cast<storage_type>((storage_type{1} << static_cast<unsigned>(bits)) - storage_type{1});
 }
 
-template <::fast_io::manipulators::floating_rounding rounding,
-		  ::fast_io::details::my_unsigned_integral storage_type>
+template <::std::same_as<scan_hexfloat_x87_storage> storage_type>
+[[nodiscard]] inline constexpr storage_type scan_hexfloat_low_mask(::std::int_least64_t bits) noexcept
+{
+	return {scan_hexfloat_low_mask<::std::uint_least64_t>(bits),
+			scan_hexfloat_low_mask<::std::uint_least64_t>(bits - 64)};
+}
+
+template <::fast_io::manipulators::floating_rounding rounding, typename storage_type>
+	requires(::fast_io::details::my_unsigned_integral<storage_type> || ::std::same_as<storage_type, scan_hexfloat_x87_storage>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -1044,9 +1179,10 @@ template <::fast_io::manipulators::floating_rounding rounding,
 	return quotient;
 }
 
-template <typename T, ::fast_io::details::my_unsigned_integral storage_type,
+template <typename T, typename storage_type,
 		  ::fast_io::manipulators::floating_rounding rounding =
 			  ::fast_io::manipulators::floating_rounding::nearest_to_even>
+	requires(::fast_io::details::my_unsigned_integral<storage_type> || ::std::same_as<storage_type, scan_hexfloat_x87_storage>)
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
@@ -1275,6 +1411,33 @@ inline constexpr ::fast_io::parse_code scan_hexfloat_assign_ieee_result(T &value
 	}
 }
 
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+template <::fast_io::manipulators::floating_rounding rounding, typename T>
+inline constexpr ::fast_io::parse_code scan_hexfloat_assign_ibm_result(
+	T &value, bool negative, scan_hexfloat_significand_state<scan_hexfloat_ibm_storage> const &state,
+	::std::int_least64_t binary_exponent) noexcept;
+#endif
+
+template <::fast_io::manipulators::floating_rounding rounding, typename T, typename storage_type>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr ::fast_io::parse_code scan_hexfloat_assign_result(
+	T &value, bool negative, scan_hexfloat_significand_state<storage_type> const &state,
+	::std::int_least64_t binary_exponent) noexcept
+{
+#if defined(__SIZEOF_INT128__) && __SIZEOF_INT128__ == 16
+	if constexpr (::std::same_as<storage_type, scan_hexfloat_ibm_storage>)
+	{
+		return ::fast_io::details::scan_hexfloat_assign_ibm_result<rounding>(
+			value, negative, state, binary_exponent);
+	}
+	else
+#endif
+	{
+		return ::fast_io::details::scan_hexfloat_assign_ieee_result<T, storage_type, rounding>(
+			value, negative, state.stored, state.stored_hex_digits,
+			state.significant_hex_digits, state.truncated_nonzero, binary_exponent);
+	}
+}
+
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
 		  ::fast_io::details::my_floating_point T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -1285,10 +1448,8 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 inline constexpr ::fast_io::parse_result<char_type const *>
 scan_hexfloat_contiguous_scalar_define_impl(char_type const *begin, char_type const *end, T &value) noexcept
 {
-	using trait = ::fast_io::details::iec559_traits<T>;
-	constexpr ::std::size_t precision_bits{trait::mbits + 1u};
-	constexpr ::std::size_t stored_hex_digits_limit{(precision_bits + 7u) / 4u};
-	using storage_type = ::fast_io::details::scan_hexfloat_storage_t<precision_bits>;
+	constexpr auto stored_hex_digits_limit{::fast_io::details::scan_hexfloat_value_digit_capacity<T>};
+	using storage_type = ::fast_io::details::scan_hexfloat_value_storage_t<T>;
 	static_assert(stored_hex_digits_limit * 4u <= sizeof(storage_type) * ::std::numeric_limits<unsigned char>::digits);
 	auto first{begin};
 	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
@@ -1367,9 +1528,8 @@ scan_hexfloat_contiguous_scalar_define_impl(char_type const *begin, char_type co
 									   : significand_state.fractional_hex_digits * 4};
 	auto const binary_exponent{exponent < int64_min + fractional_exponent ? int64_min : exponent - fractional_exponent};
 	return {exponent_result.iter,
-			::fast_io::details::scan_hexfloat_assign_ieee_result<T, storage_type, flags.rounding>(
-				value, negative, significand_state.stored, significand_state.stored_hex_digits,
-				significand_state.significant_hex_digits, significand_state.truncated_nonzero, binary_exponent)};
+			::fast_io::details::scan_hexfloat_assign_result<flags.rounding>(
+				value, negative, significand_state, binary_exponent)};
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
@@ -1386,10 +1546,8 @@ scan_hexfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 	{
 		return ::fast_io::details::scan_hexfloat_contiguous_scalar_define_impl<char_type, flags>(begin, end, value);
 	}
-	using trait = ::fast_io::details::iec559_traits<T>;
-	constexpr ::std::size_t precision_bits{trait::mbits + 1u};
-	constexpr ::std::size_t stored_hex_digits_limit{(precision_bits + 7u) / 4u};
-	using storage_type = ::fast_io::details::scan_hexfloat_storage_t<precision_bits>;
+	constexpr auto stored_hex_digits_limit{::fast_io::details::scan_hexfloat_value_digit_capacity<T>};
+	using storage_type = ::fast_io::details::scan_hexfloat_value_storage_t<T>;
 	static_assert(stored_hex_digits_limit * 4u <= sizeof(storage_type) * ::std::numeric_limits<unsigned char>::digits);
 	auto first{begin};
 	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
@@ -1469,9 +1627,8 @@ scan_hexfloat_contiguous_define_impl(char_type const *begin, char_type const *en
 	auto const binary_exponent{exponent < int64_min + fractional_exponent ? int64_min
 																		  : exponent - fractional_exponent};
 	return {exponent_result.iter,
-			::fast_io::details::scan_hexfloat_assign_ieee_result<T, storage_type, flags.rounding>(
-				value, negative, significand_state.stored, significand_state.stored_hex_digits,
-				significand_state.significant_hex_digits, significand_state.truncated_nonzero, binary_exponent)};
+			::fast_io::details::scan_hexfloat_assign_result<flags.rounding>(
+				value, negative, significand_state, binary_exponent)};
 }
 
 /*
@@ -1541,22 +1698,6 @@ inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f
 	::std::int_least32_t e2{static_cast<::std::int_least32_t>(exponent) + minus_bias};
 	if (mantissa)
 	{
-		::std::uint_least32_t trailing_zeros_digits{
-			static_cast<::std::uint_least32_t>(my_countr_zero_unchecked(mantissa)) + makeup_bits};
-		constexpr ::std::uint_least32_t trailing_zeros_mdigits_d4{
-			static_cast<::std::uint_least32_t>((mbits + makeup_bits) >> 2)};
-		::std::uint_least32_t trailing_zeros_digits_d4{trailing_zeros_digits >> 2};
-		::std::uint_least32_t trailing_zeros_digits_d4m4{trailing_zeros_digits_d4 << 2};
-
-		// A narrow unsigned field carrier (binary16/bfloat16) is promoted to int by
-		// each shift.  The trait-masked mantissa and at most three alignment bits
-		// prove that both results fit the original carrier; the explicit casts only
-		// restore that carrier width after promotion.  The floating input remains
-		// by value above so native floating register passing is preserved.
-		mantissa = static_cast<mantissa_type>(mantissa << makeup_bits);
-		mantissa = static_cast<mantissa_type>(
-			mantissa >> trailing_zeros_digits_d4m4);
-		::std::uint_least32_t mantissa_len{trailing_zeros_mdigits_d4 - trailing_zeros_digits_d4};
 		if (exponent == 0)
 		{
 			++e2;
@@ -1566,8 +1707,22 @@ inline constexpr char_type *print_rsvhexfloat_define_impl(char_type *iter, flt f
 		{
 			iter = prsv_fp_hex1d<comma>(iter);
 		}
-		::fast_io::details::print_rsvhexfloat_mantissa_fixed_impl<uppercase>(
-			iter += mantissa_len, mantissa, mantissa_len);
+		constexpr ::std::size_t digits{(mbits + makeup_bits) / 4u};
+		auto aligned{static_cast<mantissa_type>(mantissa << makeup_bits)};
+		auto const omitted{static_cast<unsigned>(my_countr_zero_unchecked(aligned)) / 4u};
+		auto const length{digits - omitted};
+		if (omitted <= 3u)
+		{
+			// The signed exponent always occupies at least three code units (p+0).
+			// It overwrites these trailing zeroes inside the final output interval.
+			print_rsvhexfloat_mantissa_fixed_impl<uppercase>(iter + digits, aligned, digits);
+		}
+		else
+		{
+			print_rsvhexfloat_mantissa_fixed_impl<uppercase>(
+				iter + length, static_cast<mantissa_type>(aligned >> (4u * omitted)), length);
+		}
+		iter += length;
 	}
 	else
 	{
@@ -1621,6 +1776,122 @@ template <::fast_io::manipulators::floating_rounding rounding>
 	{
 		return ::fast_io::details::floating_rounding_directed_round_up<rounding>(negative);
 	}
+}
+
+/// @brief Rounds and writes hexadecimal digits supplied in most-significant-first order.
+/// @details A nibble beyond the retained precision is the guard. Any later nonzero nibble
+/// supplies the sticky bit, including when a two-word significand crosses the word boundary.
+template <::std::size_t total_hex_digits, ::std::size_t exponent_digits, bool uppercase, bool uppercase_e,
+          bool comma, ::fast_io::manipulators::floating_precision precision_mode,
+          ::std::integral char_type, typename Digits, typename Round>
+inline constexpr char_type *print_hexfloat_digits(char_type *iter, bool normal, ::std::int_least32_t e2,
+                                                   ::std::size_t total_precision, Digits hex_digit_at, Round round_up) noexcept
+{
+    constexpr bool preserve_trailing_zero{floating_precision_preserves_trailing_zero<precision_mode>};
+	char8_t digits[total_hex_digits + 1u]{};
+	auto const retained_digits{total_precision < total_hex_digits ? total_precision : total_hex_digits};
+	for (::std::size_t index{}; index != retained_digits; ++index)
+	{
+		digits[index] = static_cast<char8_t>(hex_digit_at(index));
+	}
+	if (total_precision < total_hex_digits)
+	{
+		auto const next_digit{hex_digit_at(total_precision)};
+		bool tail_nonzero{};
+		for (auto index{total_precision + 1u}; index != total_hex_digits; ++index)
+		{
+			if (hex_digit_at(index))
+			{
+				tail_nonzero = true;
+				break;
+			}
+		}
+		if (round_up(digits[total_precision - 1u], next_digit, tail_nonzero))
+		{
+			for (auto index{total_precision}; index; --index)
+			{
+				auto &digit{digits[index - 1u]};
+				if (digit != 0xFu)
+				{
+					++digit;
+					break;
+				}
+				digit = 0u;
+			}
+			/*
+			The carry 1.ffff... -> 2.000... has two value-equivalent
+			presentations: 2p+E and 1p+(E+1).  Shortest/native fast_io
+			hexadecimal output uses the normalized latter form.  Explicit
+			std::to_chars precision is specified by the printf-a layout and
+			therefore retains the leading 2 at the original exponent.  This
+			branch changes only presentation: 2*2^E = 1*2^(E+1), so all
+			rounding policies and exact bits remain identical.
+			*/
+			if constexpr (
+				precision_mode !=
+				::fast_io::manipulators::floating_precision::
+					charconv_hex_fractional)
+			{
+				if (normal && digits[0] == 2u)
+				{
+					digits[0] = 1u;
+					for (::std::size_t index{1u};
+						 index < retained_digits; ++index)
+					{
+						digits[index] = 0u;
+					}
+					++e2;
+				}
+			}
+		}
+	}
+	auto digits_to_print{retained_digits};
+	if constexpr (preserve_trailing_zero)
+	{
+		digits_to_print = total_precision;
+	}
+	else
+	{
+		for (; 1u < digits_to_print && !digits[digits_to_print - 1u]; --digits_to_print)
+		{
+		}
+	}
+	iter = print_rsvhexfloat_digit_impl<uppercase>(iter, digits[0]);
+	if (1u < digits_to_print)
+	{
+		*iter = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+		++iter;
+		auto const digit_limit{digits_to_print < retained_digits ? digits_to_print : retained_digits};
+		for (::std::size_t index{1u}; index < digit_limit; ++index)
+		{
+			iter = print_rsvhexfloat_digit_impl<uppercase>(iter, digits[index]);
+		}
+		if (digit_limit < digits_to_print)
+		{
+			iter = ::fast_io::details::my_fill_n(iter, digits_to_print - digit_limit,
+												 char_literal_v<u8'0', char_type>);
+		}
+	}
+	*iter = char_literal_v < uppercase_e ? u8'P' : u8'p', char_type > ;
+	++iter;
+	return with_sign_prt_rsv_exponent_hex_impl<exponent_digits>(iter, e2);
+}
+
+/// @brief Emits the complete finite hexadecimal fraction, followed by padding and its exponent.
+/// The significand requires exactly ceil(mantissa_bits / 4) hexadecimal places.
+/// With at least that many places every discarded bit is zero for every rounding mode.
+template <typename trait, bool uppercase, bool uppercase_e, bool comma, ::std::integral char_type>
+inline constexpr char_type *print_exact_hex_fraction(char_type *iter, bool normal,
+	typename trait::mantissa_type aligned, ::std::int_least32_t exponent, ::std::size_t precision) noexcept
+{
+	constexpr ::std::size_t fraction_digits{(trait::mbits + 3u) / 4u};
+	*iter++ = normal ? char_literal_v<u8'1', char_type> : char_literal_v<u8'0', char_type>;
+	*iter++ = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
+	iter += fraction_digits;
+	print_rsvhexfloat_mantissa_fixed_impl<uppercase>(iter, aligned, fraction_digits);
+	iter = ::fast_io::details::my_fill_n(iter, precision - fraction_digits, char_literal_v<u8'0', char_type>);
+	*iter++ = char_literal_v<(uppercase_e ? u8'P' : u8'p'), char_type>;
+	return with_sign_prt_rsv_exponent_hex_impl<trait::e2hexdigits>(iter, exponent);
 }
 
 /// @brief Formats a precision-controlled hexadecimal floating value at the native floating ABI boundary.
@@ -1721,6 +1992,15 @@ inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *i
 			++e2;
 		}
 		auto aligned_mantissa{static_cast<mantissa_type>(mantissa << makeup_bits)};
+		if constexpr (preserve_trailing_zero)
+		{
+			if (total_hex_digits <= total_precision)
+			{
+				// Every fraction bit fits in the requested field, so no discarded digit can affect rounding.
+				return print_exact_hex_fraction<trait, uppercase, uppercase_e, comma>(
+					iter, exponent != 0u, aligned_mantissa, e2, total_precision - 1u);
+			}
+		}
 		// Init-capture transports the structured-binding value without requiring the later direct-capture extension from
 		// the frontend; the copied scalar is exactly the exponent observed by the surrounding formatting operation.
 		auto hex_digit_at = [aligned_mantissa, exponent_value = exponent](::std::size_t index) constexpr noexcept -> ::std::uint_least32_t {
@@ -1736,94 +2016,10 @@ inline constexpr char_type *print_rsvhexfloat_precision_define_impl(char_type *i
 			return static_cast<::std::uint_least32_t>(
 				(aligned_mantissa >> shift) & static_cast<mantissa_type>(0xFu));
 		};
-		char8_t digits[total_hex_digits + 1u]{};
-		auto const retained_digits{total_precision < total_hex_digits ? total_precision : total_hex_digits};
-		for (::std::size_t index{}; index != retained_digits; ++index)
-		{
-			digits[index] = static_cast<char8_t>(hex_digit_at(index));
-		}
-		if (total_precision < total_hex_digits)
-		{
-			auto const next_digit{hex_digit_at(total_precision)};
-			bool tail_nonzero{};
-			for (auto index{total_precision + 1u}; index != total_hex_digits; ++index)
-			{
-				if (hex_digit_at(index))
-				{
-					tail_nonzero = true;
-					break;
-				}
-			}
-			if (::fast_io::details::print_rsvhexfloat_round_up<rounding>(
-					sign, digits[total_precision - 1u], next_digit, tail_nonzero))
-			{
-				for (auto index{total_precision}; index; --index)
-				{
-					auto &digit{digits[index - 1u]};
-					if (digit != 0xFu)
-					{
-						++digit;
-						break;
-					}
-					digit = 0u;
-				}
-				/*
-				The carry 1.ffff... -> 2.000... has two value-equivalent
-				presentations: 2p+E and 1p+(E+1).  Shortest/native fast_io
-				hexadecimal output uses the normalized latter form.  Explicit
-				std::to_chars precision is specified by the printf-a layout and
-				therefore retains the leading 2 at the original exponent.  This
-				branch changes only presentation: 2*2^E = 1*2^(E+1), so all
-				rounding policies and exact bits remain identical.
-				*/
-				if constexpr (
-					precision_mode !=
-					::fast_io::manipulators::floating_precision::
-						charconv_hex_fractional)
-				{
-					if (exponent != 0 && digits[0] == 2u)
-					{
-						digits[0] = 1u;
-						for (::std::size_t index{1u};
-							 index < retained_digits; ++index)
-						{
-							digits[index] = 0u;
-						}
-						++e2;
-					}
-				}
-			}
-		}
-		auto digits_to_print{retained_digits};
-		if constexpr (preserve_trailing_zero)
-		{
-			digits_to_print = total_precision;
-		}
-		else
-		{
-			for (; 1u < digits_to_print && !digits[digits_to_print - 1u]; --digits_to_print)
-			{
-			}
-		}
-		iter = print_rsvhexfloat_digit_impl<uppercase>(iter, digits[0]);
-		if (1u < digits_to_print)
-		{
-			*iter = char_literal_v<(comma ? u8',' : u8'.'), char_type>;
-			++iter;
-			auto const digit_limit{digits_to_print < retained_digits ? digits_to_print : retained_digits};
-			for (::std::size_t index{1u}; index < digit_limit; ++index)
-			{
-				iter = print_rsvhexfloat_digit_impl<uppercase>(iter, digits[index]);
-			}
-			if (digit_limit < digits_to_print)
-			{
-				iter = ::fast_io::details::my_fill_n(iter, digits_to_print - digit_limit,
-													 char_literal_v<u8'0', char_type>);
-			}
-		}
-		*iter = char_literal_v < uppercase_e ? u8'P' : u8'p', char_type > ;
-		++iter;
-		return with_sign_prt_rsv_exponent_hex_impl<trait::e2hexdigits>(iter, e2);
+		return print_hexfloat_digits<total_hex_digits, trait::e2hexdigits, uppercase, uppercase_e, comma, precision_mode>(
+			iter, exponent != 0, e2, total_precision, hex_digit_at, [sign_copy = sign](auto kept, auto guard, bool sticky) {
+				return print_rsvhexfloat_round_up<rounding>(sign_copy, kept, guard, sticky);
+			});
 	}
 }
 
@@ -2119,10 +2315,8 @@ scan_hexfloat_context_assign(
 	auto const exponent{::fast_io::details::scan_hexfloat_context_exponent(state)};
 	auto const binary_exponent{exponent < int64_min + fractional_exponent ? int64_min
 																		   : exponent - fractional_exponent};
-	return ::fast_io::details::scan_hexfloat_assign_ieee_result<T, storage_type, flags.rounding>(
-		value, state.negative, state.significand_state.stored, state.significand_state.stored_hex_digits,
-		state.significand_state.significant_hex_digits, state.significand_state.truncated_nonzero,
-		binary_exponent);
+	return ::fast_io::details::scan_hexfloat_assign_result<flags.rounding>(
+		value, state.negative, state.significand_state, binary_exponent);
 }
 
 template <::std::integral char_type, typename storage_type>
@@ -2180,7 +2374,7 @@ scan_hexfloat_context_special_define(
 				}
 				return {end, ::fast_io::parse_code::partial};
 			}
-			value = parsed_value;
+			::fast_io::details::scan_floating_commit_special(value, parsed_value);
 			return {::fast_io::details::scan_floating_context_map_iter(
 						state.special_buffer, old_size, begin, append_result.iter, parse_result.iter),
 					::fast_io::parse_code::ok};
@@ -2190,7 +2384,7 @@ scan_hexfloat_context_special_define(
 		{
 			return {end, ::fast_io::parse_code::partial};
 		}
-		value = parsed_value;
+		::fast_io::details::scan_floating_commit_special(value, parsed_value);
 		return {::fast_io::details::scan_floating_context_map_iter(
 					state.special_buffer, old_size, begin, end, parse_result.iter),
 				::fast_io::parse_code::ok};
@@ -2230,16 +2424,15 @@ scan_hexfloat_context_special_define(
 			parse_result.code};
 }
 
-template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
-		  ::fast_io::details::my_floating_point T, typename storage_type>
+/// @brief Advances one hexadecimal token while leaving target-specific assignment to the caller.
+/// @details A chunk boundary returns partial even when the current prefix is a valid token.
+/// Numeric completion and special-token replay each publish exactly once at a delimiter or EOF.
+template <::std::size_t stored_hex_digits_limit, ::fast_io::manipulators::scalar_flags flags,
+          ::std::integral char_type, typename storage_type, typename Finish, typename Special>
 [[nodiscard]] inline constexpr ::fast_io::parse_result<char_type const *>
-scan_hexfloat_context_numeric_define(
-	::fast_io::details::scan_hexfloat_context<char_type, storage_type> &state,
-	char_type const *first, char_type const *end, T &value) noexcept
+scan_hexfloat_context_feed(scan_hexfloat_context<char_type, storage_type> &state, char_type const *first,
+                           char_type const *end, Finish finish, Special special) noexcept
 {
-	using trait = ::fast_io::details::iec559_traits<T>;
-	constexpr ::std::size_t precision_bits{trait::mbits + 1u};
-	constexpr ::std::size_t stored_hex_digits_limit{(precision_bits + 7u) / 4u};
 	constexpr auto plus{::fast_io::char_literal_v<u8'+', char_type>};
 	constexpr auto minus{::fast_io::char_literal_v<u8'-', char_type>};
 	constexpr auto zero{::fast_io::char_literal_v<u8'0', char_type>};
@@ -2310,8 +2503,7 @@ scan_hexfloat_context_numeric_define(
 					break;
 				}
 				state.phase = ::fast_io::details::scan_hexfloat_context_phase::special;
-				return ::fast_io::details::scan_hexfloat_context_special_define<char_type, flags, T>(
-					state, first, end, value);
+				return special(first, end);
 			}
 			else
 			{
@@ -2359,8 +2551,7 @@ scan_hexfloat_context_numeric_define(
 			if (first == before_digits && !state.significand_state.has_digit)
 			{
 				state.phase = ::fast_io::details::scan_hexfloat_context_phase::special;
-				return ::fast_io::details::scan_hexfloat_context_special_define<char_type, flags, T>(
-					state, first, end, value);
+				return special(first, end);
 			}
 			if (first != end && *first == dot)
 			{
@@ -2454,14 +2645,27 @@ scan_hexfloat_context_numeric_define(
 			{
 				return {end, ::fast_io::parse_code::partial};
 			}
-			auto code{::fast_io::details::scan_hexfloat_context_assign<T, flags>(state, value)};
+			auto code{finish()};
 			return {first, code};
 		}
 		case ::fast_io::details::scan_hexfloat_context_phase::special:
-			return ::fast_io::details::scan_hexfloat_context_special_define<char_type, flags, T>(
-				state, first, end, value);
+			return special(first, end);
 		}
 	}
+}
+
+template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
+		  ::fast_io::details::my_floating_point T, typename storage_type>
+[[nodiscard]] inline constexpr ::fast_io::parse_result<char_type const *>
+scan_hexfloat_context_numeric_define(
+	::fast_io::details::scan_hexfloat_context<char_type, storage_type> &state,
+	char_type const *first, char_type const *end, T &value) noexcept
+{
+	return scan_hexfloat_context_feed<scan_hexfloat_value_digit_capacity<T>, flags>(state, first, end,
+        [&] { return scan_hexfloat_context_assign<T, flags>(state, value); },
+        [&](char_type const *begin, char_type const *last) {
+            return scan_hexfloat_context_special_define<char_type, flags, T>(state, begin, last, value);
+        });
 }
 
 template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags,
@@ -2483,7 +2687,7 @@ scan_hexfloat_context_eof(
 			buffer_begin, buffer_end, parsed_value)};
 		if (parse_result.code == ::fast_io::parse_code::ok)
 		{
-			value = parsed_value;
+			::fast_io::details::scan_floating_commit_special(value, parsed_value);
 		}
 		return parse_result.code;
 	}
@@ -2530,7 +2734,7 @@ namespace manipulators
 ///          is skipped, a leading `+` is rejected, period is the radix point, and conversion rounds nearest-to-even.
 ///          `inf`/`infinity` and `nan` spellings are also recognized and do not require the numeric prefix.
 template <bool noskipws = false, bool prefix = false, bool allow_leading_plus = false,
-		  ::fast_io::details::my_floating_point scalar_type>
+		  ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
 									noskipws, prefix, allow_leading_plus>,
 								scalar_type &>
@@ -2543,7 +2747,7 @@ hexfloat_get(scalar_type &t) noexcept
 /// @details Grammar and `noskipws`/`prefix`/`allow_leading_plus` behavior match the primary `hexfloat_get`; only an
 ///          inexact value's conversion to the destination binary format changes according to `rounding_policy`.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false, bool prefix = false,
-		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
+		  bool allow_leading_plus = false, ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
 									::fast_io::details::hexfloat_scan_mani_flags_cache<
 										noskipws, prefix, allow_leading_plus>,
@@ -2559,7 +2763,7 @@ hexfloat_get(scalar_type &t) noexcept
 ///          digits. Leading whitespace is skipped unless `noskipws` is true; `+` is accepted only when
 ///          `allow_leading_plus` is true. Special values remain unprefixed.
 template <bool noskipws = false, bool allow_leading_plus = false,
-		  ::fast_io::details::my_floating_point scalar_type>
+		  ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
 									noskipws, true, allow_leading_plus>,
 								scalar_type &>
@@ -2572,7 +2776,7 @@ hexfloat0x_get(scalar_type &t) noexcept
 /// @details The accepted representation is identical to `hexfloat0x_get`; `rounding_policy` determines the result when
 ///          discarded significand bits, overflow boundaries, or subnormal boundaries require rounding.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
-		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
+		  bool allow_leading_plus = false, ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
 									::fast_io::details::hexfloat_scan_mani_flags_cache<
 										noskipws, true, allow_leading_plus>,
@@ -2588,7 +2792,7 @@ hexfloat0x_get(scalar_type &t) noexcept
 ///          optionally requires `0x`/`0X` for numeric values, leading whitespace is skipped unless `noskipws`, and a
 ///          leading `+` requires `allow_leading_plus`. The default rounding is nearest-to-even.
 template <bool noskipws = false, bool prefix = false, bool allow_leading_plus = false,
-		  ::fast_io::details::my_floating_point scalar_type>
+		  ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
 									noskipws, prefix, allow_leading_plus, true>,
 								scalar_type &>
@@ -2602,7 +2806,7 @@ comma_hexfloat_get(scalar_type &t) noexcept
 ///          comma radix. `rounding_policy` controls only conversion of an inexact mathematical value to `scalar_type`.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
 		  bool prefix = false, bool allow_leading_plus = false,
-		  ::fast_io::details::my_floating_point scalar_type>
+		  ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
 									::fast_io::details::hexfloat_scan_mani_flags_cache<
 										noskipws, prefix, allow_leading_plus, true>,
@@ -2619,7 +2823,7 @@ comma_hexfloat_get(scalar_type &t) noexcept
 ///          point, whitespace behavior follows `noskipws`, and a leading `+` is conditional on `allow_leading_plus`;
 ///          special `inf`/`nan` values do not carry the prefix.
 template <bool noskipws = false, bool allow_leading_plus = false,
-		  ::fast_io::details::my_floating_point scalar_type>
+		  ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::hexfloat_scan_mani_flags_cache<
 									noskipws, true, allow_leading_plus, true>,
 								scalar_type &>
@@ -2633,7 +2837,7 @@ comma_hexfloat0x_get(scalar_type &t) noexcept
 ///          value whenever the hexadecimal input is not exactly representable. It does not relax prefix, exponent,
 ///          whitespace, sign, or radix requirements.
 template <::fast_io::manipulators::floating_rounding rounding_policy, bool noskipws = false,
-		  bool allow_leading_plus = false, ::fast_io::details::my_floating_point scalar_type>
+		  bool allow_leading_plus = false, ::fast_io::details::binary_floating_io_value scalar_type>
 inline constexpr scalar_manip_t<::fast_io::details::floating_precision_rounding_mani_flags_cache<
 									::fast_io::details::hexfloat_scan_mani_flags_cache<
 										noskipws, true, allow_leading_plus, true>,
@@ -2677,9 +2881,7 @@ template <::std::integral char_type, ::fast_io::manipulators::scalar_flags flags
 inline constexpr auto
 scan_context_type(io_reserve_type_t<char_type, ::fast_io::manipulators::scalar_manip_t<flags, T &>>) noexcept
 {
-	using trait = ::fast_io::details::iec559_traits<T>;
-	constexpr ::std::size_t precision_bits{trait::mbits + 1u};
-	using storage_type = ::fast_io::details::scan_hexfloat_storage_t<precision_bits>;
+	using storage_type = ::fast_io::details::scan_hexfloat_value_storage_t<T>;
 	return io_type_t<::fast_io::details::scan_hexfloat_context<char_type, storage_type>>{};
 }
 

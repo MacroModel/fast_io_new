@@ -20,6 +20,11 @@ namespace fast_io
 template <typename T>
 inline constexpr bool temporary_output_finish_enabled = false;
 
+/** @brief An owned annotation retains its endpoint's terminal responsibility. A borrowed endpoint stays open. */
+template <typename Selection, typename T>
+inline constexpr bool temporary_output_finish_enabled<::fast_io::async::basic_async<Selection, T>> =
+	!::std::is_lvalue_reference_v<T> && temporary_output_finish_enabled<::std::remove_cvref_t<T>>;
+
 namespace operations
 {
 

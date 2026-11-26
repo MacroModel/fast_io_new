@@ -177,25 +177,91 @@ subnormal significand, which is exactly the identity
 m*2^-149 = m*2^(1-150).  Exact normal powers of two use `compute_irregular`;
 every admitted value therefore has the symmetric cell (1).
 */
+inline constexpr ::std::uint_least8_t compute_binary32_fraction_bits{34u};
+
+// Project the existing DA scale onto raw binary32 exponents. The scale's
+// multiplier, alignment and half-ULP radius depend only on the exponent.
+struct binary32_shortest_exponent_cache
+{
+	static inline constexpr ::std::uint_least32_t alignment_bits{6u};
+	static inline constexpr ::std::uint_least32_t exponent_position{compute_binary32_fraction_bits + alignment_bits};
+	static inline constexpr ::std::uint_least64_t fractional_mask{
+		(::std::uint_least64_t{1} << compute_binary32_fraction_bits) - 1u};
+	static inline constexpr ::std::uint_least64_t alignment_mask{(::std::uint_least64_t{1} << alignment_bits) - 1u};
+	static inline constexpr ::std::int_least32_t minimum_decimal_exponent{-45};
+
+	struct entry
+	{
+		::std::uint_least64_t multiplier;
+		::std::uint_least64_t parameters;
+	} entries[255]{};
+
+	consteval binary32_shortest_exponent_cache() noexcept
+	{
+		for (::std::uint_least32_t raw{1u}; raw < 255u; ++raw)
+		{
+			auto const decimal_exponent{compute_decimal_exponent_reduced(
+				static_cast<::std::int_least32_t>(raw) - 150)};
+			auto const shift{static_cast<::std::uint_least64_t>(
+				cached_data.exponent_shifts.data[raw + 925u] +
+				(compute_binary32_fraction_bits - exponent_shift_cache::extra_shift))};
+			auto const power{cached_data.powers[-decimal_exponent - 1].hi};
+			auto const half_ulp{power >> (65u - shift)};
+			if (fractional_mask < half_ulp || alignment_mask < shift ||
+				decimal_exponent < minimum_decimal_exponent)
+			{
+				::fast_io::fast_terminate();
+			}
+			entries[raw] = {power + 1u,
+				half_ulp | (shift << compute_binary32_fraction_bits) |
+					(static_cast<::std::uint_least64_t>(decimal_exponent - minimum_decimal_exponent)
+					 << exponent_position)};
+		}
+	}
+};
+
+inline constexpr binary32_shortest_exponent_cache cached_binary32_shortest_exponents{};
+
+template <bool use_exponent_cache = false>
 FAST_IO_GNU_ALWAYS_INLINE inline constexpr void compute_binary32_fields(
 	::std::uint_least32_t binary_significand, ::std::uint_least32_t raw_exponent,
 	::std::uint_least64_t &integral_result, ::std::int_least32_t &decimal_exponent_result,
 	::std::uint_least32_t &last_digit_result, bool &has_last_digit_result) noexcept
 {
-	constexpr ::std::uint_least8_t extra_shift{34u};
-	// IEEE binary32 decodes exactly as m*2^(raw_exponent-150).
-	auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 150};
+	constexpr auto extra_shift{compute_binary32_fraction_bits};
 	/*
 	d=floor(e*log10(2)) is the regular cell-width exponent.  The generated
 	table stores the same alignment proved exhaustively below; adding 34-6
 	changes only the fixed-point radix from the shared cache guard width to
 	B=2^34.
 	*/
-	auto const decimal_exponent{compute_decimal_exponent_reduced(binary_exponent)};
-	auto const shift{static_cast<::std::uint_least8_t>(
-		cached_data.exponent_shifts.data[static_cast<::std::size_t>(raw_exponent + 925u)] +
-		(extra_shift - exponent_shift_cache::extra_shift))};
-	auto const power_high{cached_data.powers[-decimal_exponent - 1].hi};
+	::std::int_least32_t decimal_exponent;
+	::std::uint_least32_t shift;
+	::std::uint_least64_t multiplier;
+	::std::uint_least64_t half_ulp;
+	if constexpr (use_exponent_cache)
+	{
+		using exponent_cache = binary32_shortest_exponent_cache;
+		auto const &entry{cached_binary32_shortest_exponents.entries[raw_exponent]};
+		multiplier = entry.multiplier;
+		half_ulp = entry.parameters & exponent_cache::fractional_mask;
+		shift = static_cast<::std::uint_least32_t>(
+			(entry.parameters >> compute_binary32_fraction_bits) & exponent_cache::alignment_mask);
+		decimal_exponent = static_cast<::std::int_least32_t>(entry.parameters >> exponent_cache::exponent_position) +
+			exponent_cache::minimum_decimal_exponent;
+	}
+	else
+	{
+		// IEEE binary32 decodes exactly as m*2^(raw_exponent-150).
+		auto const binary_exponent{static_cast<::std::int_least32_t>(raw_exponent) - 150};
+		decimal_exponent = compute_decimal_exponent_reduced(binary_exponent);
+		shift = static_cast<::std::uint_least8_t>(
+			cached_data.exponent_shifts.data[static_cast<::std::size_t>(raw_exponent + 925u)] +
+			(extra_shift - exponent_shift_cache::extra_shift));
+		auto const power_high{cached_data.powers[-decimal_exponent - 1].hi};
+		multiplier = power_high + 1u;
+		half_ulp = power_high >> (65u - shift);
+	}
 	/*
 	The 64-bit high word is sufficient for binary32 because m has at most 24
 	bits.  `power_high+1` is the matching upward endpoint of the truncated
@@ -203,7 +269,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr void compute_binary32_fields(
 	required by the cache/product lemma.
 	*/
 	auto const product{::fast_io::intrinsics::umulh(
-		power_high + 1u, static_cast<::std::uint_least64_t>(binary_significand) << shift)};
+		multiplier, static_cast<::std::uint_least64_t>(binary_significand) << shift)};
 	constexpr ::std::uint_least64_t fractional_mask{(static_cast<::std::uint_least64_t>(1) << extra_shift) - 1u};
 	auto const fractional{product & fractional_mask};
 	/*
@@ -211,8 +277,7 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr void compute_binary32_fields(
 	is one exactly when m is even.  Thus `F+H >= 2^34` admits I+1 and `H>F`
 	admits I with precisely the open/closed endpoint rule in (1).
 	*/
-	auto const half_ulp{static_cast<::std::uint_least64_t>(
-		(power_high >> (65u - shift)) + (1u - (binary_significand & 1u)))};
+	half_ulp += 1u - (binary_significand & 1u);
 	auto const round_up{static_cast<bool>((fractional + half_ulp) >> extra_shift)};
 	auto const round_down{half_ulp > fractional};
 	auto const integral{static_cast<::std::uint_least64_t>((product >> extra_shift) + round_up)};
@@ -237,11 +302,12 @@ FAST_IO_GNU_ALWAYS_INLINE inline constexpr void compute_binary32_fields(
 	has_last_digit_result = !(round_up || round_down);
 }
 
+template <bool use_exponent_cache = false>
 [[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr conversion_result compute_binary32(
 	::std::uint_least32_t binary_significand, ::std::uint_least32_t raw_exponent) noexcept
 {
 	conversion_result result;
-	::fast_io::details::da::compute_binary32_fields(binary_significand, raw_exponent,
+	::fast_io::details::da::compute_binary32_fields<use_exponent_cache>(binary_significand, raw_exponent,
 		result.significand, result.exponent, result.last_digit, result.has_last_digit);
 	return result;
 }

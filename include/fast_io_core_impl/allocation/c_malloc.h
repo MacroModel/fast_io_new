@@ -30,6 +30,29 @@ inline ::std::size_t c_malloc_usable_size_impl(void *p) noexcept
 class c_malloc_allocator
 {
 public:
+	/**
+	 * @brief Allocates storage whose alignment can be forgotten before an ordinary free.
+	 * @details POSIX guarantees that free accepts the unmodified posix_memalign result for any
+	 * requested power-of-two alignment that is a multiple of sizeof(void *). Fundamental alignments
+	 * use malloc directly. Dependent lookup exposes the operation when the C headers declare it.
+	 */
+	template <typename Size>
+		requires (::std::same_as<Size, ::std::size_t> &&
+		          requires(void **result, Size a) { { posix_memalign(result, a, a) } -> ::std::same_as<int>; })
+	static inline void *allocate_aligned_for_deallocate(Size alignment, Size n) noexcept
+	{
+		if (alignment <= alignof(::std::max_align_t))
+		{
+			return allocate(n);
+		}
+		void *result;
+		if (posix_memalign(&result, alignment, n ? n : Size{1}) != 0) [[unlikely]]
+		{
+			::fast_io::fast_terminate();
+		}
+		return result;
+	}
+
 #if __has_cpp_attribute(__gnu__::__returns_nonnull__)
 	[[__gnu__::__returns_nonnull__]]
 #endif

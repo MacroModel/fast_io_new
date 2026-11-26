@@ -7,6 +7,7 @@ template <typename T>
 class basic_io_buffer_ref
 {
 public:
+	using buffered_stream_type = typename T::handle_type;
 	using io_buffer_type = T;
 	using handle_type = typename io_buffer_type::handle_type;
 	using traits_type = typename io_buffer_type::traits_type;
@@ -16,6 +17,25 @@ public:
 	using native_handle_type = io_buffer_type *;
 	native_handle_type iobptr{};
 };
+
+/** @brief Certifies that a byte-wide public buffer uses the same cursor for byte and typed transfers. */
+template <typename C>
+inline constexpr ::std::true_type transcode_byte_window_define(io_type_t<basic_io_buffer_ref<C>>) noexcept
+{
+	return {};
+}
+
+/** @brief Identifies the buffer acceptance boundary separately from its backing file. */
+template <typename T>
+inline constexpr auto async_layer_kind_define(io_type_t<basic_io_buffer_ref<T>>) noexcept
+{ return ::fast_io::async::point_kind::buffer; }
+
+/** @brief Propagates a buffer's directional transport-stage contract through its backing handle. */
+template <typename T>
+inline constexpr auto async_stage_child_define(io_type_t<basic_io_buffer_ref<T>>) noexcept
+{
+	return ::std::type_identity<typename T::handle_type>{};
+}
 
 /// @brief Preserves an owned input-buffer proof through the exact buffered-stream reference wrapper.
 /// @details The wrapper stores only the address of its owner, and every input cursor operation reaches the same input

@@ -45,7 +45,7 @@ inline auto fgetc_unlocked_impl(FILE *fp) noexcept
 #endif
 
 #ifndef FAST_IO_FGETC_UNLOCKED
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_FGETC_UNLOCKED(...) ::fgetc_unlocked(__VA_ARGS__)
 #elif defined(fgetc_unlocked)
 #define FAST_IO_FGETC_UNLOCKED(...) fgetc_unlocked(__VA_ARGS__)
@@ -55,7 +55,7 @@ inline auto fgetc_unlocked_impl(FILE *fp) noexcept
 #endif
 
 
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_FGETC(...) ::fgetc(__VA_ARGS__)
 #elif defined(fgetc_unlocked)
 #define FAST_IO_FGETC(...) fgetc(__VA_ARGS__)
@@ -115,7 +115,7 @@ inline auto fgetc_unlocked_impl(FILE *fp) noexcept
 #endif
 
 #ifndef FAST_IO_FGETWC_UNLOCKED
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_FGETWC_UNLOCKED(...) ::fgetwc_unlocked(__VA_ARGS__)
 #elif defined(fgetwc_unlocked)
 #define FAST_IO_FGETWC_UNLOCKED(...) fgetwc_unlocked(__VA_ARGS__)
@@ -125,7 +125,7 @@ inline auto fgetc_unlocked_impl(FILE *fp) noexcept
 #endif
 
 
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_FGETWC(...) ::fgetwc(__VA_ARGS__)
 #elif defined(fgetwc_unlocked)
 #define FAST_IO_FGETWC(...) fgetwc(__VA_ARGS__)
@@ -151,7 +151,7 @@ inline auto fgetc_unlocked_impl(FILE *fp) noexcept
 #if __GNU_VISIBLE
 #define FAST_IO_PLATFORM_SUPPORTS_FGETWC_UNLOCKED 1
 #endif
-#elif _POSIX_C_SOURCE >= 199309L || _XOPEN_SOURCE || _POSIX_SOURCE || _BSD_SOURCE || _SVID_SOURCE
+#elif !defined(__MLIBC_EOF_BIT) && (_POSIX_C_SOURCE >= 199309L || _XOPEN_SOURCE || _POSIX_SOURCE || _BSD_SOURCE || _SVID_SOURCE)
 #define FAST_IO_PLATFORM_SUPPORTS_FGETWC_UNLOCKED 1
 #endif
 
@@ -215,7 +215,7 @@ inline auto ungetc_unlocked_impl(char_type ch, FILE *fp) noexcept
 #endif
 
 #ifndef FAST_IO_UNGETC_UNLOCKED
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_UNGETC_UNLOCKED(...) ::ungetc_unlocked(__VA_ARGS__)
 #elif defined(ungetc_unlocked)
 #define FAST_IO_UNGETC_UNLOCKED(...) ungetc_unlocked(__VA_ARGS__)
@@ -225,7 +225,7 @@ inline auto ungetc_unlocked_impl(char_type ch, FILE *fp) noexcept
 #endif
 
 
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_UNGETC(...) ::ungetc(__VA_ARGS__)
 #elif defined(ungetc)
 #define FAST_IO_UNGETC(...) ungetc(__VA_ARGS__)
@@ -273,7 +273,7 @@ inline auto ungetc_unlocked_impl(char_type ch, FILE *fp) noexcept
 #endif
 
 #ifndef FAST_IO_UNGETWC_UNLOCKED
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_UNGETWC_UNLOCKED(...) ::ungetwc_unlocked(__VA_ARGS__)
 #elif defined(ungetwc_unlocked)
 #define FAST_IO_UNGETWC_UNLOCKED(...) ungetwc_unlocked(__VA_ARGS__)
@@ -283,7 +283,7 @@ inline auto ungetc_unlocked_impl(char_type ch, FILE *fp) noexcept
 #endif
 
 
-#if defined(__GLIBC__) || defined(__LLVM_LIBC_TYPES_FILE_H__)
+#if (defined(__GLIBC__) && !defined(__UCLIBC__)) || defined(__LLVM_LIBC_TYPES_FILE_H__)
 #define FAST_IO_UNGETWC(...) ::ungetwc(__VA_ARGS__)
 #elif defined(ungetwc_unlocked)
 #define FAST_IO_UNGETWC(...) ungetwc(__VA_ARGS__)

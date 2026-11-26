@@ -14,8 +14,7 @@
  * This file neither parses a format language nor defines primitive input
  * devices. `operations::decay` means that stream/source normalization has
  * already occurred; lower read/ibuffer CPOs provide bytes and scanner CPOs
- * define how one target consumes them. The `report` behavior of the user-facing
- * `io::scan` facade remains above this level.
+ * define how one target consumes them. The public scan translates exhaustion into an exception.
  */
 
 namespace fast_io
@@ -88,7 +87,7 @@ template <typename input, ::std::integral char_type, typename T>
 [[msvc::forceinline]]
 #endif
 inline constexpr ::fast_io::parse_result<char_type const *> scan_contiguous_invoke(
-	input &in, char_type const *first, char_type const *last, T &arg)
+	input &in, char_type const *first, char_type const *last, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using scanner_type = ::std::remove_cvref_t<T>;
 	if constexpr (
@@ -214,13 +213,23 @@ inline constexpr void scan_commit_bounded_iterator(
 	}
 }
 
+/** @brief Adapts a scanner's failure code to the ordinary synchronous exception boundary. */
+struct raise_scan_failure
+{
+	/** @brief Raises the original parse domain and code after cursor validation and publication. */
+	[[noreturn]] bool operator()(parse_code code) const FAST_IO_HERBCEPTIONS_THROWS
+	{
+		::fast_io::details::raise_scan_error(code);
+	}
+};
+
 /// @brief Executes and commits one terminal contiguous scan.
 /// @details `scan_contiguous_invoke` proves protocol selection preserves `last` as semantic EOF.  The closed-interval
 ///          validator below independently checks the customization's returned address before converting it to the
 ///          backend cursor type.  Thus even a malformed padded scanner cannot commit into its readable suffix.  Status
 ///          normalization is identical for ordinary and padded scanners: ok succeeds, terminal exhaustion reports
 ///          false, and every other code throws.
-template <typename input, typename T>
+template <typename input, typename T, typename Failure = raise_scan_failure>
 	requires ::fast_io::details::input_contiguous_scannable<
 		input, typename input::input_char_type, T>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
@@ -228,7 +237,7 @@ template <typename input, typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_contiguous_status_impl(input &in, T &arg)
+inline constexpr bool scan_contiguous_status_impl(input &in, T &arg, Failure failure = {}) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using char_type = typename input::input_char_type;
 	auto curr{ibuffer_curr(in)};
@@ -252,7 +261,7 @@ inline constexpr bool scan_contiguous_status_impl(input &in, T &arg)
 		result before cursor publication protects both the true file position and
 		the padding boundary.
 		*/
-		throw_parse_code(parse_code::invalid);
+		return failure(parse_code::invalid);
 	}
 	if (ec == parse_code::ok)
 	{
@@ -275,7 +284,7 @@ inline constexpr bool scan_contiguous_status_impl(input &in, T &arg)
 	All remaining codes preserve their ordinary exception behavior.  Padding
 	changes legal load width only and cannot weaken error propagation.
 	*/
-	throw_parse_code(ec);
+	return failure(ec);
 }
 
 template <typename char_type, typename P, typename state_type>
@@ -312,14 +321,37 @@ inline constexpr void scan_context_eof_rewind_if_available(input &in, state_type
 	}
 }
 
+/** @brief Requests more scanner input, preserving the device's checked error and the ordinary logical EOF result.
+ * @details A known fixed extent may request a larger contiguous window. Context scanners request ordinary refill.
+ */
+template <::std::size_t N = 0, typename Input>
+inline constexpr bool scan_buffer_underflow(Input &in) FAST_IO_HERBCEPTIONS_THROWS
+{
+#if defined(__HERBCEPTIONS__)
+	if constexpr (requires { { ibuffer_underflow_checked_define(in, N) } -> ::std::same_as<bool>; })
+	{
+		return ibuffer_underflow_checked_define(in, N);
+	}
+	else
+#endif
+	if constexpr (N != 0 && requires { { ibuffer_underflow_reserve_define(in, N) } -> ::std::same_as<bool>; })
+	{
+		return ibuffer_underflow_reserve_define(in, N);
+	}
+	else
+	{
+		return ibuffer_underflow(in);
+	}
+}
+
 /// @brief Copies exactly `count` buffered characters without converting clean EOF into an exception.
-/// @details The public reporting scan API represents insufficient input as `false`. Generic `read_all` instead throws
+/// @details The scanner uses an internal EOF sentinel. Generic `read_all` raises an error
 ///          on a short refill and, for a terminal view without read CPOs, can have no viable cold operation at all.
 ///          This helper consumes the already-required ibuffer protocol directly. Pointer subtraction occurs only after
 ///          a successful nonempty-buffer observation, so a freshly constructed `{nullptr,nullptr}` buffer is safe.
 template <typename input>
 inline constexpr bool scan_read_exact_from_ibuffer(
-	input &in, typename input::input_char_type *destination, ::std::size_t count)
+	input &in, typename input::input_char_type *destination, ::std::size_t count) FAST_IO_HERBCEPTIONS_THROWS
 {
 	while (count != 0u)
 	{
@@ -327,7 +359,7 @@ inline constexpr bool scan_read_exact_from_ibuffer(
 		auto end{ibuffer_end(in)};
 		if (curr == end)
 		{
-			if (!ibuffer_underflow(in)) [[unlikely]]
+			if (!scan_buffer_underflow(in)) [[unlikely]]
 			{
 				return false;
 			}
@@ -336,7 +368,7 @@ inline constexpr bool scan_read_exact_from_ibuffer(
 			if (curr == end) [[unlikely]]
 			{
 				// `true` is the underflow protocol's proof that at least one character became available.
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 		}
 		::std::size_t const available{static_cast<::std::size_t>(end - curr)};
@@ -350,7 +382,7 @@ inline constexpr bool scan_read_exact_from_ibuffer(
 
 /// @brief Applies one fixed-extent scanner and normalizes its two permitted result contracts to bool/exception.
 template <::std::integral char_type, typename T>
-inline constexpr bool scan_precise_reserve_apply(char_type const *buffer, T &arg)
+inline constexpr bool scan_precise_reserve_apply(char_type const *buffer, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using scanner_type = ::std::remove_cvref_t<T>;
 	// Protocol admission observes the exact cv-qualified lvalue passed to the CPO. The reserve tag remains
@@ -372,7 +404,7 @@ inline constexpr bool scan_precise_reserve_apply(char_type const *buffer, T &arg
 		{
 			return false;
 		}
-		throw_parse_code(code);
+		::fast_io::details::raise_scan_error(code);
 	}
 }
 
@@ -401,7 +433,7 @@ template <::std::size_t extent, typename input, typename T>
 #elif __has_cpp_attribute(msvc::noinline)
 [[msvc::noinline]]
 #endif
-inline constexpr bool scan_precise_reserve_large_staging(input &in, T &arg)
+inline constexpr bool scan_precise_reserve_large_staging(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using char_type = typename input::input_char_type;
 	static_assert(extent != 0u);
@@ -420,7 +452,7 @@ inline constexpr bool scan_precise_reserve_large_staging(input &in, T &arg)
 template <::std::size_t extent,
 		  typename stack_policy = ::fast_io::details::default_print_stack_policy,
 		  typename input, typename T>
-inline constexpr bool scan_precise_reserve_staging(input &in, T &arg)
+inline constexpr bool scan_precise_reserve_staging(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// This specialization is the policy-dependent allocation decision. Encoding `stack_policy` here is required even
 	// though `extent` is already a template value: the same scanner extent may be inline under one budget and dynamic
@@ -473,21 +505,26 @@ inline constexpr bool scan_single_status_impl(input in,T& state_machine,P arg)
 		if(state_machine.code==parse_code::ok)[[likely]]
 			return true;
 	}
-	throw_parse_code(state_machine.code);
+	::fast_io::details::raise_scan_error(state_machine.code);
 }
 #endif
 
 /// @brief Runs the ordinary context-scanner state machine with caller-owned state storage.
+/// @details Exhausting [current,end) establishes that this window is empty. A refill can extend the same
+///          field, so the driver preserves its state until the device establishes EOF or the target finishes.
+///          Even a statically sized get area can contain an arbitrarily small part of a long token.
+///          A complete-input conversion obtains its terminal boundary from its source sequence.
+/// @see bounded_to_scannable
 /// @details This is the normal success path for a context-only scanner and must not be marked `cold`; doing so would
 ///          turn a valid concept choice into a layout and branch-prediction penalty. Storage policy is deliberately
 ///          outside the loop so a large state cannot inflate this hot frame.
-template <typename input, typename P, typename state_type>
+template <typename input, typename P, typename state_type, typename Failure = raise_scan_failure>
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_type &state)
+inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_type &state, Failure failure = {}) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using char_type = typename input::input_char_type;
 	using scanner_type = ::std::remove_cvref_t<P>;
@@ -502,7 +539,7 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 		auto end{ibuffer_end(in)};
 		if (curr == end)
 		{
-			if (!ibuffer_underflow(in)) [[unlikely]]
+			if (!scan_buffer_underflow(in)) [[unlikely]]
 			{
 				auto const code{scan_context_eof_define(
 					io_reserve_type<char_type, scanner_type>, state, arg)};
@@ -517,15 +554,15 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 				if (code == parse_code::partial) [[unlikely]]
 				{
 					// No future refill exists, so EOF cannot legally preserve an unfinished state.
-					throw_parse_code(parse_code::invalid);
+					return failure(parse_code::invalid);
 				}
-				throw_parse_code(code);
+				return failure(code);
 			}
 			curr = ibuffer_curr(in);
 			end = ibuffer_end(in);
 			if (curr == end) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				return failure(parse_code::invalid);
 			}
 			active_chunk_begin = curr;
 			active_chunk_end = end;
@@ -542,7 +579,7 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 					 static_cast<char_type const *>(end), it)) [[unlikely]]
 		{
 			// Validate before committing: no parse code makes an out-of-range iterator a valid cursor.
-			throw_parse_code(parse_code::invalid);
+			return failure(parse_code::invalid);
 		}
 		if (ec == parse_code::ok)
 		{
@@ -554,7 +591,7 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 		}
 		if (ec != parse_code::partial)
 		{
-			throw_parse_code(ec);
+			return failure(ec);
 		}
 		if (it != end)
 		{
@@ -563,11 +600,11 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 			// protocol and would otherwise spin forever.
 			if (it == curr) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				return failure(parse_code::invalid);
 			}
 			continue;
 		}
-		if (!ibuffer_underflow(in)) [[unlikely]]
+		if (!scan_buffer_underflow(in)) [[unlikely]]
 		{
 			ec = scan_context_eof_define(io_reserve_type<char_type, scanner_type>, state, arg);
 			if (ec == parse_code::ok)
@@ -580,11 +617,11 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 			}
 			if (ec == parse_code::partial) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				return failure(parse_code::invalid);
 			}
 			::fast_io::details::scan_context_eof_rewind_if_available(
 				in, state, arg, active_chunk_begin, active_chunk_end);
-			throw_parse_code(ec);
+			return failure(ec);
 		}
 		// A successful underflow is the backend's progress proof. Validate it at this boundary rather than returning to
 		// the loop head, where another underflow call could turn a broken `true + empty` backend into an unbounded loop.
@@ -592,7 +629,7 @@ inline constexpr bool scan_context_status_with_state(input &in, P &arg, state_ty
 		auto const refill_end{ibuffer_end(in)};
 		if (refill_curr == refill_end) [[unlikely]]
 		{
-			throw_parse_code(parse_code::invalid);
+			return failure(parse_code::invalid);
 		}
 		active_chunk_begin = refill_curr;
 		active_chunk_end = refill_end;
@@ -606,7 +643,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_context_status_impl(input &in, P &arg)
+inline constexpr bool scan_context_status_impl(input &in, P &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using char_type = typename input::input_char_type;
 	using scanner_type = ::std::remove_cvref_t<P>;
@@ -622,7 +659,7 @@ inline constexpr bool scan_context_status_impl(input &in, P &arg)
 	}
 	else
 	{
-		return ::fast_io::details::with_large_scan_context_state<state_type>([&](state_type &state) {
+		return ::fast_io::details::with_large_scan_context_state<state_type>([&](state_type &state) FAST_IO_HERBCEPTIONS_THROWS {
 			return ::fast_io::details::scan_context_status_with_state(in, arg, state);
 		});
 	}
@@ -639,7 +676,7 @@ template <typename input, typename T>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
+inline constexpr bool scan_context_current_chunk_try(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	using char_type = typename input::input_char_type;
 	using scanner_type = ::std::remove_cvref_t<T>;
@@ -659,7 +696,7 @@ inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
 		// cursor half of that contract mechanically checkable before the context fallback is entered.
 		if (it != first) [[unlikely]]
 		{
-			throw_parse_code(parse_code::invalid);
+			::fast_io::details::raise_scan_error(parse_code::invalid);
 		}
 		return false;
 	}
@@ -667,7 +704,7 @@ inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
 	{
 		// This protocol never assigns EOF meaning to the chunk end. A decisive result must leave at least one character
 		// proving that the token ended inside the supplied chunk.
-		throw_parse_code(parse_code::invalid);
+		::fast_io::details::raise_scan_error(parse_code::invalid);
 	}
 	if constexpr (::fast_io::current_chunk_context_scanner_result_in_range<char_type, T>)
 	{
@@ -676,13 +713,13 @@ inline constexpr bool scan_context_current_chunk_try(input &in, T &arg)
 	else if (!::fast_io::details::scan_commit_iterator_if_in_current_chunk(
 				 in, current_pointer, first, last, it)) [[unlikely]]
 	{
-		throw_parse_code(parse_code::invalid);
+		::fast_io::details::raise_scan_error(parse_code::invalid);
 	}
 	if (ec == parse_code::ok)
 	{
 		return true;
 	}
-	throw_parse_code(ec);
+	::fast_io::details::raise_scan_error(ec);
 }
 
 template <typename input, typename T>
@@ -690,11 +727,14 @@ inline constexpr bool scan_context_current_chunk_dispatch_available_impl() noexc
 {
 	using char_type = typename input::input_char_type;
 	using scanner_type = ::std::remove_cvref_t<T>;
-	if constexpr (
-		!::fast_io::current_chunk_context_scannable<char_type, T> ||
-		!::fast_io::operations::decay::defines::has_ibuffer_minimum_size_operations<input>)
+	if constexpr (!::fast_io::current_chunk_context_scannable<char_type, T>)
 	{
 		return false;
+	}
+	else if constexpr (!::fast_io::operations::decay::defines::has_ibuffer_minimum_size_operations<input>)
+	{
+		// The dispatcher checks for a nonempty area before calling the provider, even on a borrowed view.
+		return scan_context_current_chunk_minimum_size(::fast_io::io_reserve_type<char_type, scanner_type>) == 1u;
 	}
 	else
 	{
@@ -723,9 +763,29 @@ template <typename stack_policy, typename input, typename T>
 #elif __has_cpp_attribute(msvc::noinline)
 [[msvc::noinline]]
 #endif
-inline bool scan_context_current_chunk_fallback(input &in, T &arg)
+inline constexpr bool scan_context_current_chunk_fallback(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::details::scan_context_status_impl<stack_policy>(in, arg);
+}
+
+/** @brief Publishes one proven terminal prefix, or delegates the original span to the context scanner. */
+template <typename stack_policy, borrowed_terminal_input Input, typename T>
+	requires terminal_prefix_context_scannable<typename Input::input_char_type, T>
+inline constexpr bool scan_context_terminal_prefix(Input &in, T &target) FAST_IO_HERBCEPTIONS_THROWS
+{
+	auto const first{ibuffer_curr(in)};
+	auto const last{ibuffer_end(in)};
+	if (first != last)
+	{
+		using Char = typename Input::input_char_type;
+		if (auto const next{scan_context_try_terminal_define(io_reserve_type<Char, ::std::remove_cvref_t<T>>,
+															 first, last, target)}) [[likely]]
+		{
+			ibuffer_set_curr(in, next);
+			return true;
+		}
+	}
+	return scan_context_current_chunk_fallback<stack_policy>(in, target);
 }
 
 template <bool>
@@ -766,7 +826,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
-[[nodiscard]] inline constexpr bool scan_single_impl(input &in, T &arg)
+[[nodiscard]] inline constexpr bool scan_single_impl(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Precise staging may be reached only after the direct current-chunk test fails (or unconditionally under ASan).
 	// Carrying the policy in this caller's identity prevents inlining that policy-dependent branch into an otherwise
@@ -794,7 +854,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				auto end_ptr{ibuffer_end(in)};
 				if (curr_ptr == end_ptr)
 				{
-					if (!ibuffer_underflow(in)) [[unlikely]]
+					if (!::fast_io::details::scan_buffer_underflow<n>(in)) [[unlikely]]
 					{
 						return false;
 					}
@@ -802,7 +862,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					end_ptr = ibuffer_end(in);
 					if (curr_ptr == end_ptr) [[unlikely]]
 					{
-						throw_parse_code(parse_code::invalid);
+						::fast_io::details::raise_scan_error(parse_code::invalid);
 					}
 				}
 				char_type const *curr{curr_ptr};
@@ -841,7 +901,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 								 in, curr, static_cast<char_type const *>(curr),
 								 static_cast<char_type const *>(end), it)) [[unlikely]]
 					{
-						throw_parse_code(parse_code::invalid);
+						::fast_io::details::raise_scan_error(parse_code::invalid);
 					}
 					if (ec == parse_code::ok)
 					{
@@ -852,10 +912,14 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 						// `partial` has no distinct public meaning on a terminal buffer: no refill can complete it.
 						return false;
 					}
-					throw_parse_code(ec);
+					::fast_io::details::raise_scan_error(ec);
 				}
 			}
-			if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
+			if constexpr (::fast_io::borrowed_terminal_input<input> && ::fast_io::terminal_prefix_context_scannable<char_type, T>)
+			{
+				return ::fast_io::details::scan_context_terminal_prefix<stack_policy>(in, arg);
+			}
+			else if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
 			{
 				if (::fast_io::details::scan_context_current_chunk_try(in, arg)) [[likely]]
 				{
@@ -878,7 +942,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				"a padding-only scanner requires a terminal ibuffer");
 			if (!ibuffer_underflow_never(in)) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 			return ::fast_io::details::scan_contiguous_status_impl(in, arg);
 		}
@@ -891,7 +955,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			{
 				// The type supplies the query but this object is currently refillable. Without a context protocol there is
 				// no semantics-preserving fallback, so treating the current chunk as a complete token would be incorrect.
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 			auto curr{ibuffer_curr(in)};
 			auto end{ibuffer_end(in)};
@@ -908,7 +972,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 						 in, curr, static_cast<char_type const *>(curr),
 						 static_cast<char_type const *>(end), it)) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 			if (ec == parse_code::ok)
 			{
@@ -918,7 +982,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			{
 				return false;
 			}
-			throw_parse_code(ec);
+			::fast_io::details::raise_scan_error(ec);
 		}
 		else
 		{
@@ -936,7 +1000,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 #if __has_cpp_attribute(__gnu__::__always_inline__)
 [[__gnu__::__always_inline__]]
 #endif
-[[nodiscard]] inline constexpr bool scan_single_impl(input &in, T &arg)
+[[nodiscard]] inline constexpr bool scan_single_impl(input &in, T &arg) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Precise staging may be reached only after the direct current-chunk test fails (or unconditionally under ASan).
 	// Carrying the policy in this caller's identity prevents inlining that policy-dependent branch into an otherwise
@@ -969,7 +1033,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					{
 						return false;
 					}
-					throw_parse_code(ret);
+					::fast_io::details::raise_scan_error(ret);
 				}
 			}
 			ibuffer_set_curr(in,curr_ptr+n);
@@ -992,7 +1056,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			{
 				if(ec==parse_code::end_of_file)
 					return false;
-				throw_parse_code(ec);
+				::fast_io::details::raise_scan_error(ec);
 			}
 			return true;
 		}
@@ -1013,12 +1077,12 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			if(ec==parse_code::ok)
 				return true;
 			else if(ec!=parse_code::partial)
-				throw_parse_code(ec);
+				::fast_io::details::raise_scan_error(ec);
 			ec=scan_context_eof_define(io_reserve_type<char_type,T>,state,arg);
 			if(ec==parse_code::ok)
 				return true;
 			else if(ec!=parse_code::end_of_file)
-				throw_parse_code(ec);
+				::fast_io::details::raise_scan_error(ec);
 			return false;
 		}
 		else
@@ -1052,7 +1116,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				auto end_ptr{ibuffer_end(in)};
 				if (curr_ptr == end_ptr)
 				{
-					if (!ibuffer_underflow(in)) [[unlikely]]
+					if (!::fast_io::details::scan_buffer_underflow<n>(in)) [[unlikely]]
 					{
 						return false;
 					}
@@ -1060,7 +1124,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 					end_ptr = ibuffer_end(in);
 					if (curr_ptr == end_ptr) [[unlikely]]
 					{
-						throw_parse_code(parse_code::invalid);
+						::fast_io::details::raise_scan_error(parse_code::invalid);
 					}
 				}
 				char_type const *curr{curr_ptr};
@@ -1108,7 +1172,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 									static_cast<char_type const *>(end),
 									it)) [[unlikely]]
 						{
-							throw_parse_code(parse_code::invalid);
+							::fast_io::details::raise_scan_error(parse_code::invalid);
 						}
 						if (ec == parse_code::ok)
 						{
@@ -1120,11 +1184,15 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 							// `partial` has no distinct public meaning on a terminal buffer: no refill can complete it.
 							return false;
 						}
-						throw_parse_code(ec);
+						::fast_io::details::raise_scan_error(ec);
 					}
 				}
 			}
-			if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
+			if constexpr (::fast_io::borrowed_terminal_input<input> && ::fast_io::terminal_prefix_context_scannable<char_type, T>)
+			{
+				return ::fast_io::details::scan_context_terminal_prefix<stack_policy>(in, arg);
+			}
+			else if constexpr (::fast_io::details::scan_context_current_chunk_dispatch_available<input, T>)
 			{
 				if (::fast_io::details::scan_context_current_chunk_try(in, arg)) [[likely]]
 				{
@@ -1145,7 +1213,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				"a padding-only scanner requires a terminal ibuffer");
 			if (!ibuffer_underflow_never(in)) [[unlikely]]
 			{
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 			return ::fast_io::details::scan_contiguous_status_impl(in, arg);
 		}
@@ -1158,7 +1226,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 			{
 				// The type supplies the query but this object is currently refillable. Without a context protocol there is
 				// no semantics-preserving fallback, so treating the current chunk as a complete token would be incorrect.
-				throw_parse_code(parse_code::invalid);
+				::fast_io::details::raise_scan_error(parse_code::invalid);
 			}
 			if constexpr (
 				::fast_io::contiguous_range_with_padding<input> &&
@@ -1184,7 +1252,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 							static_cast<char_type const *>(end),
 							it)) [[unlikely]]
 				{
-					throw_parse_code(parse_code::invalid);
+					::fast_io::details::raise_scan_error(parse_code::invalid);
 				}
 				if (ec == parse_code::ok)
 				{
@@ -1195,7 +1263,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 				{
 					return false;
 				}
-				throw_parse_code(ec);
+				::fast_io::details::raise_scan_error(ec);
 			}
 		}
 		else
@@ -1311,12 +1379,12 @@ inline constexpr precise_scan_run_result find_continuous_precise_scan_n() noexce
 
 template <::std::integral char_type, typename tuple_type, ::std::size_t... indices>
 inline constexpr char_type const *scan_precise_tuple_no_error(
-	char_type const *current, tuple_type &targets, ::std::index_sequence<indices...>)
+	char_type const *current, tuple_type &targets, ::std::index_sequence<indices...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// One fold gives the optimizer a single linear expression. The old recursive helper carried the complete remaining
 	// parameter list in every specialization; once inlining stopped, a 256-target run left several large ABI shims and
 	// superlinear text. Target order remains the language-defined left-to-right order of the comma fold.
-	auto apply_one = [&](auto &target) {
+	auto apply_one = [&](auto &target) FAST_IO_HERBCEPTIONS_THROWS {
 		using scanner_type = ::std::remove_cvref_t<decltype(target)>;
 		constexpr ::std::size_t sz{
 			scan_precise_reserve_size(::fast_io::io_reserve_type<char_type, scanner_type>)};
@@ -1329,7 +1397,7 @@ inline constexpr char_type const *scan_precise_tuple_no_error(
 }
 
 template <::std::size_t n, ::std::integral char_type, typename... Args>
-inline constexpr char_type const *scan_n_precise_reserve_no_error(char_type const *p, Args &...args)
+inline constexpr char_type const *scan_n_precise_reserve_no_error(char_type const *p, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(n <= sizeof...(Args));
 	if constexpr (n == sizeof...(Args))
@@ -1337,7 +1405,7 @@ inline constexpr char_type const *scan_n_precise_reserve_no_error(char_type cons
 		// The overwhelmingly common batch is the complete remaining pack. Expanding it directly avoids constructing a
 		// tuple of hundreds of reference members solely to recover every member immediately; prefix runs retain the
 		// indexed tuple path below because C++20 has no native pack slice.
-		auto apply_one = [&](auto &target) {
+		auto apply_one = [&](auto &target) FAST_IO_HERBCEPTIONS_THROWS {
 			using scanner_type = ::std::remove_cvref_t<decltype(target)>;
 			constexpr ::std::size_t sz{
 				scan_precise_reserve_size(::fast_io::io_reserve_type<char_type, scanner_type>)};
@@ -1365,9 +1433,9 @@ template <::std::integral char_type, typename input, typename current_pointer,
 		  typename tuple_type, ::std::size_t... indices>
 inline constexpr void scan_precise_tuple_with_scalar_commits(
 	input &in, current_pointer current, char_type const *p, tuple_type &targets,
-	::std::index_sequence<indices...>)
+	::std::index_sequence<indices...>) FAST_IO_HERBCEPTIONS_THROWS
 {
-	auto apply_one = [&](auto &target) {
+	auto apply_one = [&](auto &target) FAST_IO_HERBCEPTIONS_THROWS {
 		using scanner_type = ::std::remove_cvref_t<decltype(target)>;
 		constexpr ::std::size_t sz{
 			scan_precise_reserve_size(::fast_io::io_reserve_type<char_type, scanner_type>)};
@@ -1385,12 +1453,12 @@ inline constexpr void scan_precise_tuple_with_scalar_commits(
 template <::std::size_t n, ::std::integral char_type, typename input, typename current_pointer,
 		  typename... Args>
 inline constexpr void scan_n_precise_reserve_with_scalar_commits(
-	input &in, current_pointer current, char_type const *p, Args &...args)
+	input &in, current_pointer current, char_type const *p, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(n <= sizeof...(Args));
 	if constexpr (n == sizeof...(Args))
 	{
-		auto apply_one = [&](auto &target) {
+		auto apply_one = [&](auto &target) FAST_IO_HERBCEPTIONS_THROWS {
 			using scanner_type = ::std::remove_cvref_t<decltype(target)>;
 			constexpr ::std::size_t sz{
 				scan_precise_reserve_size(::fast_io::io_reserve_type<char_type, scanner_type>)};
@@ -1419,7 +1487,7 @@ inline constexpr void scan_n_precise_reserve_with_scalar_commits(
 ///          without placing its full refill/state machinery in the hot contiguous branch.
 template <typename stack_policy, typename input, typename tuple_type, ::std::size_t... indices>
 inline constexpr bool scan_controls_scalar_tuple(
-	input &in, tuple_type &targets, ::std::index_sequence<indices...>)
+	input &in, tuple_type &targets, ::std::index_sequence<indices...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// Built-in `&&` folds sequence left-to-right and stop at the first reported EOF, preserving the public pack rule
 	// without recursively instantiating one complete controller for every suffix.
@@ -1434,7 +1502,7 @@ template <typename stack_policy, typename input, typename... Args>
 #elif __has_cpp_attribute(msvc::noinline)
 [[msvc::noinline]]
 #endif
-inline constexpr bool scan_controls_scalar_fallback(input &in, Args &...args)
+inline constexpr bool scan_controls_scalar_fallback(input &in, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	auto targets{::fast_io::containers::forward_as_tuple(args...)};
 	return ::fast_io::details::decay::scan_controls_scalar_tuple<stack_policy>(
@@ -1456,7 +1524,7 @@ template <typename stack_policy, typename input, typename... Args>
 #elif __has_cpp_attribute(msvc::noinline)
 [[msvc::noinline]]
 #endif
-inline constexpr bool scan_controls_scalar_fallback_owned(input &in, Args... args)
+inline constexpr bool scan_controls_scalar_fallback_owned(input &in, Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	auto targets{::fast_io::containers::forward_as_tuple(args...)};
 	return ::fast_io::details::decay::scan_controls_scalar_tuple<stack_policy>(
@@ -1477,7 +1545,7 @@ template <::std::size_t offset, typename stack_policy, typename input,
 [[msvc::forceinline]]
 #endif
 inline constexpr bool scan_controls_scalar_fallback_value_chunk(
-	input &in, tuple_type &targets, ::std::index_sequence<indices...>)
+	input &in, tuple_type &targets, ::std::index_sequence<indices...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(sizeof...(indices) != 0u);
 	static_assert(sizeof...(indices) <=
@@ -1502,7 +1570,7 @@ template <::std::size_t offset, ::std::size_t total, typename stack_policy,
 [[msvc::forceinline]]
 #endif
 inline constexpr bool scan_controls_scalar_fallback_value_chunks_impl(
-	input &in, tuple_type &targets)
+	input &in, tuple_type &targets) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(offset < total);
 	constexpr ::std::size_t remaining{total - offset};
@@ -1532,7 +1600,7 @@ template <typename stack_policy, typename input, typename... Args>
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_controls_scalar_fallback_value_chunks(input &in, Args &...args)
+inline constexpr bool scan_controls_scalar_fallback_value_chunks(input &in, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(sizeof...(Args) != 0u);
 	auto targets{::fast_io::containers::forward_as_tuple(args...)};
@@ -1552,7 +1620,7 @@ template <scan_proxy_fallback_transport transport, typename stack_policy,
 #elif __has_cpp_attribute(msvc::forceinline)
 [[msvc::forceinline]]
 #endif
-inline constexpr bool scan_controls_scalar_fallback_select(input &in, Args &...args)
+inline constexpr bool scan_controls_scalar_fallback_select(input &in, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	// A short scalar pack is smaller than the outlined ABI bridge and benefits from sharing the terminal/current cursor
 	// directly across adjacent leaf scans.  Larger packs keep the bounded outline: it prevents the refill/context bodies
@@ -1581,12 +1649,12 @@ inline constexpr bool scan_controls_scalar_fallback_select(input &in, Args &...a
 
 template <typename stack_policy, scan_proxy_fallback_transport transport,
 		  typename input, typename T, typename... Args>
-[[nodiscard]] inline constexpr bool scan_controls_impl(input &in, T &t, Args &...args);
+[[nodiscard]] inline constexpr bool scan_controls_impl(input &in, T &t, Args &...args) FAST_IO_HERBCEPTIONS_THROWS;
 
 template <::std::size_t processed, typename stack_policy, scan_proxy_fallback_transport transport,
 		  typename input, typename tuple_type, ::std::size_t... indices>
 [[nodiscard]] inline constexpr bool scan_controls_suffix_tuple(
-	input &in, tuple_type &targets, ::std::index_sequence<indices...>)
+	input &in, tuple_type &targets, ::std::index_sequence<indices...>) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::details::decay::scan_controls_impl<stack_policy, transport>(
 		in, ::fast_io::containers::get<processed + indices>(targets)...);
@@ -1594,7 +1662,7 @@ template <::std::size_t processed, typename stack_policy, scan_proxy_fallback_tr
 
 template <::std::size_t processed, typename stack_policy, scan_proxy_fallback_transport transport,
 		  typename input, typename... Args>
-[[nodiscard]] inline constexpr bool scan_controls_suffix(input &in, Args &...args)
+[[nodiscard]] inline constexpr bool scan_controls_suffix(input &in, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	static_assert(processed < sizeof...(Args));
 	auto targets{::fast_io::containers::forward_as_tuple(args...)};
@@ -1611,7 +1679,7 @@ template <typename stack_policy, scan_proxy_fallback_transport transport, typena
 
 template <typename stack_policy, scan_proxy_fallback_transport transport,
 		  typename input, typename T, typename... Args>
-[[nodiscard]] inline constexpr bool scan_controls_impl(input &in, T &t, Args &...args)
+[[nodiscard]] inline constexpr bool scan_controls_impl(input &in, T &t, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (::fast_io::details::asan_state::current == ::fast_io::details::asan_state::activate)
 	{
@@ -1886,7 +1954,7 @@ inline consteval bool scan_owned_proxy_context_pair_available()
 ///          growth.
 template <typename stack_policy, ::fast_io::details::decay::scan_proxy_fallback_transport transport,
 		  typename input, typename... Args>
-[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_impl(input &instm, Args &...args)
+[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_impl(input &instm, Args &...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (::fast_io::operations::decay::defines::has_status_scan_define<input, Args &...>)
 	{
@@ -1929,7 +1997,7 @@ template <typename stack_policy, ::fast_io::details::decay::scan_proxy_fallback_
 ///          or reject a valid move-only stream-ref result. Inlining can scalar-replace the proxy values on the
 ///          contiguous fast path, while non-admitted packs never instantiate this by-value aggregate path.
 template <typename stack_policy, typename input, typename... Args>
-[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_owned(input &instm, Args... args)
+[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_owned(input &instm, Args... args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::operations::decay::scan_freestanding_decay_impl<
 		stack_policy,
@@ -1949,7 +2017,7 @@ template <typename stack_policy, typename input, typename... Args>
 ///          rebuilding a forwarding-reference graph.
 template <typename stack_policy = ::fast_io::details::default_print_stack_policy,
 		  typename input, typename... Args>
-[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_dispatch(input &instm, Args &&...args)
+[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_dispatch(input &instm, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	if constexpr (::fast_io::operations::decay::defines::has_input_or_io_stream_mutex_ref_define<input>)
 	{
@@ -2031,7 +2099,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 ///          storage, so controller recursion cannot multiply observer construction.
 template <typename stack_policy = ::fast_io::details::default_print_stack_policy,
 		  typename input, typename... Args>
-[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay(input instm, Args &&...args)
+[[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay(input instm, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::operations::decay::scan_freestanding_decay_dispatch<stack_policy>(
 		instm, ::std::forward<Args>(args)...);
@@ -2045,7 +2113,7 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 template <typename stack_policy = ::fast_io::details::default_print_stack_policy,
 		  typename input, typename... Args>
 [[nodiscard]] inline constexpr decltype(auto) scan_freestanding_decay_borrowed_input(
-	input &instm, Args &&...args)
+	input &instm, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
 {
 	return ::fast_io::operations::decay::scan_freestanding_decay_dispatch<stack_policy>(
 		instm, ::std::forward<Args>(args)...);
@@ -2053,4 +2121,154 @@ template <typename stack_policy = ::fast_io::details::default_print_stack_policy
 
 } // namespace operations::decay
 
+namespace details::io_buffer
+{
+/** @brief Scans decimal lvalues in order and preserves the access cursor and exact first failing parse code.
+ * @details The ordinary terminal and refilling state machines publish their usual progress. A provider may
+ * return a parse failure without calling the legacy exception ABI, including after earlier fields committed.
+ */
+template <typename Input, decimal_scan_integer... Targets>
+inline constexpr parse_code scan_integer_codes(Input &in, Targets &...targets) FAST_IO_HERBCEPTIONS_THROWS
+{
+	using Char = typename Input::input_char_type;
+	parse_code code{parse_code::end_of_file};
+	auto fail = [&](parse_code error) { code = error; return false; };
+	auto field = [&](auto &target) FAST_IO_HERBCEPTIONS_THROWS {
+		auto proxy{scan_alias_define(io_alias, target)};
+		if constexpr (::fast_io::borrowed_terminal_input<Input>)
+		{
+			// A terminal span requires no speculative transaction. Commit this field before inspecting the next
+			// one so a target that aliases later input retains its ordinary sequential effects.
+			if constexpr (sizeof(Char) <= sizeof(::std::uint_least32_t))
+			{
+				auto *first{ibuffer_curr(in)};
+				auto *last{ibuffer_end(in)};
+				if (first != last && last - first >= 10)
+				{
+					Char const *cursor{first};
+					constexpr bool complete_narrow{sizeof...(Targets) == 1u &&
+												   ((::std::numeric_limits<Targets>::digits10 == 4u) && ...)};
+					if (::fast_io::details::io_buffer::short_decimal<complete_narrow>(cursor, target))
+					{
+						ibuffer_set_curr(in, first + (cursor - first));
+						return true;
+					}
+				}
+			}
+			return ::fast_io::details::scan_contiguous_status_impl(in, proxy, fail);
+		}
+		else
+		{
+			::fast_io::details::scan_context_state_t<Char, decltype(proxy)> state{};
+			return ::fast_io::details::scan_context_status_with_state(in, proxy, state, fail);
+		}
+	};
+	return (field(targets) && ...) ? parse_code::ok : code;
+}
+} // namespace details::io_buffer
+
+/** @brief Reports a terminal decimal tuple's exact scanner status without unwinding through a synchronous facade. */
+template <borrowed_terminal_input Input, details::io_buffer::decimal_scan_integer... Targets>
+	requires details::io_buffer::plain_integer_window<Input, Targets...>
+inline constexpr parse_code input_stream_scan_code_define(Input &in, Targets &...targets) FAST_IO_HERBCEPTIONS_THROWS
+{
+	return details::io_buffer::scan_integer_codes(in, targets...);
+}
+
 } // namespace fast_io
+
+namespace fast_io::operations
+{
+
+/** @brief Scans one normalized source and raises EOF if any required field remains unread. */
+template <typename Input, typename... Args>
+inline constexpr void scan_explicit_ref(Input &ref, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
+{
+	if constexpr (::std::same_as<::std::remove_cvref_t<Input>, ::fast_io::basic_ibuffer_view_ref<char>> &&
+				  sizeof...(Args) == 1 && ::std::numeric_limits<unsigned>::digits == 32 &&
+				  (::std::same_as<::std::remove_reference_t<Args>, unsigned> && ...) &&
+				  ::fast_io::details::io_buffer::plain_integer_window<::std::remove_cvref_t<Input>, Args...>)
+	{
+		if (!::std::is_constant_evaluated())
+		{
+			auto const first{ibuffer_curr(ref)};
+			auto const last{ibuffer_end(ref)};
+			if (first != last && last - first <= 10)
+			{
+				if (last - first <= 2)
+				{
+					constexpr unsigned zero{static_cast<unsigned char>(::fast_io::char_literal_v<u8'0', char>)};
+					auto digit = [](char ch) { return static_cast<unsigned>(static_cast<unsigned char>(ch)) - zero; };
+					auto const lead{digit(*first)};
+					if (lead <= 9u)
+					{
+						auto next{first + 1};
+						if (next == last || digit(*next) > 9u)
+						{
+							((args = lead), ...);
+							ibuffer_set_curr(ref, next);
+							return;
+						}
+						if (lead != 0u)
+						{
+							((args = lead * 10u + digit(*next)), ...);
+							ibuffer_set_curr(ref, last);
+							return;
+						}
+					}
+				}
+				if (auto const *next{::fast_io::details::io_buffer::scan_small_terminal_unsigned(first, last, args...)};
+					next != nullptr)
+				{
+					ibuffer_set_curr(ref, next);
+					return;
+				}
+			}
+		}
+	}
+	using char_type = typename ::std::remove_cvref_t<Input>::input_char_type;
+	if (!::fast_io::operations::decay::scan_freestanding_decay_borrowed_input(
+			ref, ::fast_io::io_scan_forward<char_type>(::fast_io::io_scan_alias(args))...)) [[unlikely]]
+	{
+		::fast_io::details::raise_scan_error(::fast_io::parse_code::end_of_file);
+	}
+}
+
+/** @brief Normalizes a named input once and preserves partial assignment on a failed scan. */
+template <typename Input, typename... Args>
+inline constexpr void scan_explicit(Input &&input, Args &&...args) FAST_IO_HERBCEPTIONS_THROWS
+{
+	decltype(auto) ref{::fast_io::operations::input_stream_ref(input)};
+	if constexpr (sizeof...(Args) > 1u &&
+				  ::fast_io::details::io_buffer::plain_integer_window<::std::remove_cvref_t<decltype(ref)>, Args...> &&
+				  requires { { input_stream_try_scan_define(ref, args...) } noexcept -> ::std::same_as<bool>; })
+	{
+		// A declined tuple probe preserves the cursor and every target for ordinary field-by-field parsing.
+		if (!::std::is_constant_evaluated() && input_stream_try_scan_define(ref, args...))
+		{
+			return;
+		}
+	}
+	else if constexpr (sizeof...(Args) == 1u && ::std::numeric_limits<unsigned>::digits == 32 &&
+					   (::std::same_as<::std::remove_reference_t<Args>, unsigned> && ...) &&
+					   ::fast_io::details::io_buffer::builtin_decimal_window<::std::remove_cvref_t<decltype(ref)>> &&
+					   ::fast_io::details::io_buffer::plain_integer_window<::std::remove_cvref_t<decltype(ref)>, Args...>)
+	{
+		if (!::std::is_constant_evaluated() && ::fast_io::details::io_buffer::try_scan_resident_unsigned(ref, args...)) [[likely]]
+		{
+			return;
+		}
+	}
+	else if constexpr (sizeof...(Args) == 1u && (::fast_io::details::io_buffer::bounded_decimal_target<::std::remove_reference_t<Args>> && ...) &&
+					   ::fast_io::details::io_buffer::builtin_decimal_window<::std::remove_cvref_t<decltype(ref)>> &&
+					   ::fast_io::details::io_buffer::plain_integer_window<::std::remove_cvref_t<decltype(ref)>, Args...>)
+	{
+		if (!::std::is_constant_evaluated() && ::fast_io::details::io_buffer::try_scan_resident_integral(ref, args...))
+		{
+			return;
+		}
+	}
+	::fast_io::operations::scan_explicit_ref(ref, static_cast<Args &&>(args)...);
+}
+
+} // namespace fast_io::operations

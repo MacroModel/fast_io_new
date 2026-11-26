@@ -41,7 +41,7 @@ inline consteval auto generate_jeaiii_tables() noexcept
 }
 
 template <::std::integral char_type>
-alignas(64u) inline static constexpr auto jeaiii_tables_cache{generate_jeaiii_tables<char_type>()};
+alignas(::fast_io::details::hot_table_alignment) inline static constexpr auto jeaiii_tables_cache{generate_jeaiii_tables<char_type>()};
 
 template <::std::integral char_type>
 inline constexpr char_type *jeaiii_after_first_pair(char_type *iter, bool short_form) noexcept

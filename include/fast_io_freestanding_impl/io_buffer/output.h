@@ -304,6 +304,40 @@ inline constexpr void obuffer_set_curr(basic_io_buffer_ref<io_buffer_type> iobre
 	iobref.iobptr->output_buffer.buffer_curr = ptr;
 }
 
+/** @brief Returns a writable range only when all requested code units are already resident. */
+template <typename Buffer>
+inline constexpr auto output_stream_try_reserve_define(basic_io_buffer_ref<Buffer> ref, ::std::size_t count) noexcept
+	-> typename Buffer::output_char_type *
+{
+	auto *p{obuffer_curr(ref)};
+	return p && static_cast<::std::size_t>(obuffer_end(ref) - p) >= count ? p : nullptr;
+}
+
+/** @brief Publishes the used prefix after formatting into an immediately reserved area. */
+template <typename Buffer>
+inline constexpr void output_stream_commit_reserved_define(basic_io_buffer_ref<Buffer> ref, typename Buffer::output_char_type *last) noexcept
+{
+	obuffer_set_curr(ref, last);
+}
+
+/** @brief Commits a staged record into the current put area when no allocation, flush or device call is needed. */
+template <typename Buffer>
+inline constexpr bool output_stream_try_write_define(basic_io_buffer_ref<Buffer> out,
+													 typename Buffer::output_char_type const *first, typename Buffer::output_char_type const *last) noexcept
+{
+	if (first == last)
+	{
+		return true;
+	}
+	auto *current{obuffer_curr(out)};
+	if (current == nullptr || obuffer_end(out) - current < last - first)
+	{
+		return false;
+	}
+	obuffer_set_curr(out, ::fast_io::details::non_overlapped_copy(first, last, current));
+	return true;
+}
+
 template <::std::integral char_type, typename io_buffer_type>
 	requires(::std::same_as<char_type, typename basic_io_buffer_ref<io_buffer_type>::output_char_type>)
 inline constexpr ::std::true_type print_compiler_constant_obuffer_materialization_safe(

@@ -152,6 +152,21 @@ inline constexpr ::std::byte *bytes_secure_clear(::std::byte *first, ::std::byte
 
 } // namespace freestanding
 
+/** @brief Clears owned arithmetic or byte elements, including during constant evaluation. */
+template <typename T, ::std::size_t N>
+	requires (::std::is_arithmetic_v<T> || ::std::same_as<T, ::std::byte>)
+inline constexpr void secure_clear_array(T (&region)[N]) noexcept
+{
+	if (::std::is_constant_evaluated())
+	{
+		for (auto &v : region) { v = T{}; }
+	}
+	else
+	{
+		::fast_io::secure_clear(region, sizeof(region));
+	}
+}
+
 template <typename T>
 class secure_clear_guard
 {

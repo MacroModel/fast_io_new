@@ -5772,13 +5772,82 @@ FAST_IO_GNU_ALWAYS_INLINE
 namespace fast_io
 {
 
+#if defined(__HERBCEPTIONS__)
+namespace details
+{
+/** @brief Selects deterministic range construction or field formatting for a fresh result.
+ *  @details The two effects compose. A returned result first becomes visible to its caller after
+ *  its range constructor succeeds. A marked source has its own operation and completion channel.
+ */
+template <bool Line, typename Char, typename T, typename... Args>
+inline constexpr bool concat_range_has_hc = [] {
+	if constexpr ((async::annotated_operand<Args> || ...) || !range_constructible_strlike<Char, T> || sizeof...(Args) == 0)
+		return false;
+	else
+		return throws((strlike_construct_define(io_strlike_type<Char, T>,
+			::std::declval<Char const *>(), ::std::declval<Char const *>()))) ||
+			checked_print_record<Line, basic_dynamic_output_buffer<Char>, Args...>;
+}();
+
+/** @brief Invokes a fallible range constructor directly for one scatter and after emission for a general record. */
+template <bool Line, typename Char, typename T, typename... Args>
+inline constexpr T concat_checked_range(Args &&...args) throws
+{
+	auto emit = [&](auto &&...fields) throws -> T {
+		if constexpr (!Line && sizeof...(fields) == 1 &&
+			(scatter_printable_for<Char, decltype(decay::print_runtime_scatter_plan_unwrap(fields))> && ...))
+		{
+			auto scatter = [&](auto &field) throws {
+				return print_scatter_define(io_reserve_type<Char, ::std::remove_cvref_t<decltype(field)>>, field);
+			};
+			auto span{(scatter(decay::print_runtime_scatter_plan_unwrap(fields)), ...)};
+			if (decay::print_contiguous_char_extent_add_or_unavailable<Char>(0, span.len) == SIZE_MAX) [[unlikely]]
+				fast_terminate();
+			auto first{span.len ? span.base : __builtin_addressof(char_literal_v<u8'\0', Char>)};
+			return strlike_construct_define(io_strlike_type<Char, T>, first, first + span.len);
+		}
+		else
+		{
+			basic_dynamic_output_buffer<Char> buffer;
+			auto ref{operations::output_stream_ref(buffer)};
+			(print_checked_field(ref, decay::print_runtime_scatter_plan_unwrap(fields)), ...);
+			if constexpr (Line) operations::decay::char_put_decay_dispatch(ref, char_literal_v<u8'\n', Char>);
+			return strlike_construct_define(io_strlike_type<Char, T>, static_cast<Char const *>(buffer.begin_ptr),
+				static_cast<Char const *>(buffer.curr_ptr));
+		}
+	};
+	return emit(io_print_forward<Char>(io_print_alias(::std::forward<Args>(args)))...);
+}
+}
+#endif
+
+/** @brief Binds marked fields to the selected string materializer through their associated namespace. */
+template <bool Line, ::std::integral C, typename T, typename... A>
+	requires (async::annotated_operand<A> || ...) && requires(A &&...values) {
+		async_concat_define(io_reserve_type<C,T>, ::std::bool_constant<Line>{}, static_cast<A &&>(values)...);
+	}
+[[nodiscard]] inline auto basic_general_concat(A &&...values)
+{
+	return async_concat_define(io_reserve_type<C,T>, ::std::bool_constant<Line>{}, static_cast<A &&>(values)...);
+}
+
+/** @brief Preserves source identity through string facades until the I/O layer binds the marked pack. */
+template <bool Line, ::std::integral C, typename T, typename... A>
+	requires (async::annotated_operand<A> || ...) && requires(A &&...values) {
+		async_concat_define(io_reserve_type<C,T>, ::std::bool_constant<Line>{}, static_cast<A &&>(values)...);
+	}
+[[nodiscard]] inline auto basic_general_concat_compiler_constant_checked_entry(A &&...values)
+{
+	return ::fast_io::basic_general_concat<Line,C,T>(static_cast<A &&>(values)...);
+}
+
 /// @brief Concat overload for one formally proved active compiler-constant condition record.
 /// @details Keeping this overload structurally separate prevents the generic pack/condition continuation graph from
 ///          sharing an out-of-line helper between literal and unknown values.  The selected active leaf owns the only
 ///          value query; all other source shapes retain the established general overload below.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires(
-		strlike<char_type, T> &&
+		(!async::annotated_operand<Args> && ...) && strlike<char_type, T> &&
 		::fast_io::details::decay::
 			basic_general_concat_single_condition_active_record_available<
 				line, char_type, T, Args && ...>())
@@ -5786,21 +5855,40 @@ template <bool line, ::std::integral char_type, typename T, typename... Args>
 FAST_IO_GNU_ALWAYS_INLINE
 #endif
 	inline constexpr T basic_general_concat(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(details::concat_range_has_hc<line, char_type, T, Args...>)
+#endif
 {
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::concat_range_has_hc<line, char_type, T, Args...>)
+		return details::concat_checked_range<line, char_type, T>(::std::forward<Args>(args)...);
+	else
+#endif
+	{
 	return (::fast_io::details::decay::
 				basic_general_concat_single_condition_active_record<
 					line, char_type, T>(::std::forward<Args>(args)),
 			...);
+	}
 }
 
 template <bool line, ::std::integral char_type, typename T, typename... Args>
 	requires(
-		strlike<char_type, T> &&
+		(!async::annotated_operand<Args> && ...) && strlike<char_type, T> &&
 		!::fast_io::details::decay::
 			basic_general_concat_single_condition_active_record_available<
 				line, char_type, T, Args && ...>())
 inline constexpr T basic_general_concat(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(details::concat_range_has_hc<line, char_type, T, Args...>)
+#endif
 {
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::concat_range_has_hc<line, char_type, T, Args...>)
+		return details::concat_checked_range<line, char_type, T>(::std::forward<Args>(args)...);
+	else
+#endif
+	{
 	// Normalization order is part of the allocation proof: alias/forward first, expand packs and remove nulls, select
 	// active conditions recursively, and only then allow phase 1 to compute the output capacity. Public argument value
 	// categories are preserved through the first CPO pair; every continuation below is synchronous and therefore keeps
@@ -5840,6 +5928,7 @@ inline constexpr T basic_general_concat(Args &&...args)
 		// A structurally flat run retains the original direct instantiation and pays no continuation machinery.
 		return ::fast_io::details::decay::basic_general_concat_phase1_decay_impl<line, char_type, T>(
 			io_print_forward<char_type>(io_print_alias(::std::forward<Args>(args)))...);
+	}
 	}
 }
 
@@ -5924,7 +6013,7 @@ inline constexpr T basic_general_concat_checked(Args &&...args)
 ///       for appending to an existing string, and inplace_to with whole_get only when replacement through the generic
 ///       print/scan conversion model is specifically required.
 template <bool line, ::std::integral char_type, typename T, typename... Args>
-	requires strlike<char_type, T>
+	requires (!async::annotated_operand<Args> && ...) && strlike<char_type, T>
 // This is the concat-level builtin-query boundary, not an implementation
 // detail which may be outlined.  A GCC 11--16 paired symbol audit found both
 // literal and unknown precision callers invoking this function out of line;
@@ -5938,7 +6027,16 @@ FAST_IO_GNU_ALWAYS_INLINE
 #endif
 	inline constexpr T
 	basic_general_concat_compiler_constant_checked_entry(Args &&...args)
+#if defined(__HERBCEPTIONS__)
+	throws(details::concat_range_has_hc<line, char_type, T, Args...>)
+#endif
 {
+#if defined(__HERBCEPTIONS__)
+	if constexpr (details::concat_range_has_hc<line, char_type, T, Args...>)
+		return details::concat_checked_range<line, char_type, T>(::std::forward<Args>(args)...);
+	else
+#endif
+	{
 	if constexpr (
 		::fast_io::basic_general_concat_checked_available<
 			line, char_type, T, Args...>())
@@ -6010,6 +6108,7 @@ FAST_IO_GNU_ALWAYS_INLINE
 	}
 	return ::fast_io::basic_general_concat_checked<line, char_type, T>(
 		::std::forward<Args>(args)...);
+	}
 }
 
 } // namespace fast_io

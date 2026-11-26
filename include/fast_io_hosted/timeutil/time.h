@@ -1362,6 +1362,8 @@ inline void posix_tzset() noexcept
 	details::m_tzset();
 #elif defined(__MSDOS__)
 	::fast_io::posix::libc_tzset();
+#elif defined(__LLVM_LIBC__)
+	// LLVM libc currently supplies a fixed timezone and omits the tzset entry point.
 #elif !defined(__AVR__) && (!defined(__wasi__) || defined(__wasilibc_unmodified_upstream))
 	noexcept_call(tzset);
 #endif
@@ -1562,7 +1564,9 @@ inline void posix_clock_settime([[maybe_unused]] posix_clock_id pclk_id, [[maybe
 	struct timespec res{
 		static_cast<::std::time_t>(timestamp.seconds), static_cast<long>(timestamp.subseconds / mul_factor)};
 	auto clk{details::posix_clock_id_to_native_value(pclk_id)};
-#ifdef __linux__
+#if defined(__linux__) && defined(__NR_clock_settime) && defined(__SIZEOF_LONG__) && __SIZEOF_LONG__ >= 8
+	// LP64 uses the kernel's native timespec layout. Let libc select the time32 or
+	// time64 syscall and its ENOSYS fallback on dual-time and time64-only ABIs.
 	system_call_throw_error(system_call<__NR_clock_settime, int>(clk, __builtin_addressof(res)));
 #else
 #if defined(__APPLE__) || defined(__DARWIN_C_LEVEL)

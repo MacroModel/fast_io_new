@@ -536,8 +536,8 @@ inline constexpr void capture_one(Output &out, Char *buffer, Char *&current, Cha
 		::std::size_t const size{[&]() constexpr {
 			if constexpr (::fast_io::reserve_printable<Char, value_type>)
 			{
-				constexpr ::std::size_t size{print_reserve_size(::fast_io::io_reserve_type<Char, value_type>)};
-				return size;
+				constexpr ::std::size_t capacity{print_reserve_size(::fast_io::io_reserve_type<Char, value_type>)};
+				return capacity;
 			}
 			else
 			{

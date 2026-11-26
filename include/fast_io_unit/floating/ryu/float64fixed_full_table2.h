@@ -172,6 +172,7 @@ constexpr residue reduce_with_known_high_remainder(binary_integer const &value,
 	return result;
 }
 
+template <typename Storage>
 constexpr triple_table<second_table_row_count> make_second_table() noexcept
 {
 	auto const minimum_blocks{make_second_table_minimum_blocks()};
@@ -224,7 +225,12 @@ alignas(fixed_precision_table_generation::public_table_alignment) inline constex
 	fixed_precision_table_generation::make_second_table_offsets()};
 alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr auto min_block_2{
 	fixed_precision_table_generation::make_second_table_minimum_blocks()};
-alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr auto pow10_split_2{
-	fixed_precision_table_generation::make_second_table()};
+/** @brief Materializes the aligned second multiplier table only when that precision path is instantiated. */
+template <typename Storage>
+alignas(fixed_precision_table_generation::public_table_alignment) inline constexpr fixed_precision_table_generation::triple_table<fixed_precision_table_generation::second_table_row_count> pow10_split_2_storage{fixed_precision_table_generation::make_second_table<Storage>()};
+
+/** @brief Provides each formatter with the same statically aligned rows and one ODR identity. */
+template <typename Consumer>
+inline constexpr auto const &pow10_split_2{pow10_split_2_storage<typename fixed_precision_table_key<Consumer>::type>};
 
 } // namespace fast_io::details::ryu

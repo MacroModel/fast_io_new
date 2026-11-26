@@ -305,6 +305,16 @@ inline constexpr basic_io_scatter_t<char_type> print_scatter_define(
 	return {value.base, value.len};
 }
 
+/// @brief Transmits a bounded C-string descriptor's maximum spelling to a conversion scanner.
+/// @details The origin promises len <= extent. The scatter exposes exactly len units. A bounded
+///          conversion may use extent for algorithm selection and may read only the exposed units.
+template <::std::integral char_type, ::std::size_t extent>
+inline consteval ::std::size_t to_scatter_max_size(
+	io_reserve_type_t<char_type, manipulators::bounded_cstr_scatter_t<char_type, extent>>) noexcept
+{
+	return extent;
+}
+
 template <::std::integral char_type, ::std::size_t extent>
 inline constexpr ::std::true_type print_borrowed_scatter_source(
 	io_reserve_type_t<

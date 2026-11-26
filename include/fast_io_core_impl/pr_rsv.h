@@ -310,7 +310,7 @@ inline constexpr ::fast_io::parse_result<char_type const *> parse_by_scan_impl(c
 	else if constexpr (::fast_io::context_scannable<char_type, T>)
 	{
 		using state_type = ::fast_io::details::scan_context_state_t<char_type, scanner_type>;
-		return ::fast_io::details::with_scan_context_state<state_type>([&](state_type &state) {
+		return ::fast_io::details::with_context_state<state_type, ::fast_io::details::scan_context_state_storage_tag>([&](state_type &state) {
 			auto current{first};
 			for (;;)
 			{
@@ -365,6 +365,12 @@ inline constexpr ::fast_io::parse_result<char_type const *> parse_by_scan_impl(c
 inline namespace io
 {
 
+/// @brief Parses one target from the caller's complete contiguous range and returns its cursor and parse code.
+/// @details Here the caller supplies the terminal boundary. Each invocation may provide a different range,
+///          so the pointer pair alone supplies no type-level upper bound. A successful result can leave a
+///          suffix at the returned cursor. A refillable stream separately carries parse state across windows.
+///          A conversion can additionally derive a static bound from the sources that produced its range.
+/// @see bounded_to_scannable
 template <::std::integral char_type, typename T>
 #if __has_cpp_attribute(nodiscard)
 [[nodiscard("NEVER discard return pointer and parse code from parse_by_scan")]]

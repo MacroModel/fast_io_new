@@ -409,7 +409,8 @@ inline constexpr char_type *copy_to_hash_df_commom_impl(char_type *iter, ::std::
 	}
 }
 
-template <::fast_io::manipulators::digest_format d, typename T, ::std::integral char_type>
+template <::fast_io::manipulators::digest_format d, typename T, ::std::integral char_type,
+		  typename Allocator = ::fast_io::native_thread_local_allocator>
 inline constexpr char_type *prv_srv_hash_df_common_impl(char_type *iter, T const &t) noexcept
 {
 	if constexpr (::fast_io::manipulators::compile_time_size_crypto_hash_context<T>)
@@ -437,7 +438,7 @@ inline constexpr char_type *prv_srv_hash_df_common_impl(char_type *iter, T const
 		}
 		else
 		{
-			::fast_io::details::local_operator_new_array_ptr<::std::byte> bufferf(digest_size);
+			::fast_io::details::local_operator_new_array_ptr<::std::byte, Allocator> bufferf(digest_size);
 			::std::byte *buffer{bufferf.ptr};
 			if constexpr (context_digest_to_byte_ptr_runtime_impl<T>)
 			{

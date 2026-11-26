@@ -198,6 +198,51 @@ read_all_bytes_abi_value_direct_impl(
 	}
 }
 
+/** @brief Copies a prefix from a cursor-only stream, in characters or their one-byte representations. */
+template <typename Input, typename Unit>
+inline constexpr Unit *read_some_cursor(Input &insm, Unit *first, Unit *last)
+{
+	auto curr{ibuffer_curr(insm)};
+	if (curr == ibuffer_end(insm))
+	{
+		if (!ibuffer_underflow(insm))
+		{
+			return first;
+		}
+		curr = ibuffer_curr(insm);
+	}
+	auto const available{::fast_io::details::ibuffer_remaining_size(curr, ibuffer_end(insm))};
+	auto const requested{::fast_io::details::input_pointer_range_size(first, last)};
+	auto const count{available < requested ? available : requested};
+	::fast_io::details::non_overlapped_copy_n(curr, count, first);
+	ibuffer_set_curr(insm, ::fast_io::details::input_pointer_advance(curr, count));
+	return ::fast_io::details::input_pointer_advance(first, count);
+}
+
+/** @brief Tries to fill a cursor-only read range, consuming any short final prefix. */
+template <typename Input, typename Unit>
+inline constexpr bool read_try_all_cursor(Input &insm, Unit *first, Unit *last)
+{
+	while (first != last)
+	{
+		auto next{read_some_cursor(insm, first, last)};
+		if (next == first)
+		{
+			return false;
+		}
+		first = next;
+	}
+	return true;
+}
+
+/** @brief An exact cursor-only read must report EOF after any short final prefix. */
+template <typename Input, typename Unit>
+inline constexpr void read_all_cursor(Input &insm, Unit *first, Unit *last)
+{
+	if (!read_try_all_cursor(insm, first, last)) [[unlikely]]
+		::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
+}
+
 template <typename instmtype>
 #if __has_cpp_attribute(__gnu__::__cold__)
 [[__gnu__::__cold__]]
@@ -316,6 +361,11 @@ inline constexpr
 		return ::fast_io::details::input_pointer_advance(
 			first, character_progress);
 	}
+	else if constexpr (::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
+	{
+		// Cursor-only streams can supply a short prefix without a bulk-read customization.
+		return read_some_cursor(insm, first, last);
+	}
 }
 
 template <typename instmtype>
@@ -387,6 +437,57 @@ inline constexpr ::std::byte *read_some_bytes_cold_impl(instmtype &insm, ::std::
 			::fast_io::seekdir::cur);
 		return ret;
 	}
+	else if constexpr (sizeof(char_type) == 1u && ::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
+	{
+		return read_some_cursor(insm, first, last);
+	}
+	else
+	{
+		static_assert(::fast_io::operations::decay::defines::bytes_readable<instmtype>,
+			"byte reads require a byte read provider or a compatible one-byte input cursor");
+	}
+}
+
+/** @brief Invokes the selected scalar CPO in the representation of the read interval. */
+template <typename Input, typename Unit>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr Unit *read_unbuffered_some_impl(
+	Input &input, Unit *first, Unit *last)
+{
+	if constexpr (::std::same_as<Unit, ::std::byte>)
+		return read_some_bytes_underflow_define(input, first, last);
+	else
+		return read_some_underflow_define(input, first, last);
+}
+
+/** @brief Attempts a complete contiguous read using its selected scalar progress operation.
+ * @details The caller has already selected the typed or byte read-some CPO
+ * and established that no buffered prefix can precede a subsequent call.
+ * The completed prefix is exactly [begin, first) at each iteration. Reaching
+ * last completes the read. An unchanged cursor returns false with the
+ * prefix consumed. The caller publishes EOF in its chosen ABI. An empty
+ * interval still invokes the selected CPO once.
+ */
+template <typename Input, typename Unit>
+[[nodiscard]] FAST_IO_GNU_ALWAYS_INLINE inline constexpr bool read_try_all_unbuffered_some_impl(
+	Input &input, Unit *first, Unit *last)
+{
+	for (Unit *next;; first = next)
+	{
+		next = ::fast_io::details::read_unbuffered_some_impl(input, first, last);
+		if (next == last)
+			return true;
+		if (next == first) [[unlikely]]
+			return false;
+	}
+}
+
+/** @brief Reports scalar exact-read EOF through the ordinary C++ ABI. */
+template <typename Input, typename Unit>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void read_all_unbuffered_some_impl(
+	Input &input, Unit *first, Unit *last)
+{
+	if (!::fast_io::details::read_try_all_unbuffered_some_impl(input, first, last)) [[unlikely]]
+		::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
 }
 
 template <typename instmtype>
@@ -435,13 +536,7 @@ inline constexpr void read_all_cold_impl(instmtype &insm, typename instmtype::in
 		}
 		else
 		{
-			for (decltype(first) it; (it = read_some_underflow_define(insm, first, last)) != last; first = it)
-			{
-				if (it == first)
-				{
-					::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
-				}
-			}
+			::fast_io::details::read_all_unbuffered_some_impl(insm, first, last);
 		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_scatter_read_some_underflow_define<instmtype>)
@@ -526,6 +621,10 @@ inline constexpr void read_all_cold_impl(instmtype &insm, typename instmtype::in
 			insm, ::fast_io::details::input_pointer_distance(firstbptr, lastbptr),
 			::fast_io::seekdir::cur);
 	}
+	else if constexpr (::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
+	{
+		read_all_cursor(insm, first, last);
+	}
 }
 
 template <typename instmtype>
@@ -574,13 +673,7 @@ inline constexpr void read_all_bytes_cold_impl(instmtype &insm, ::std::byte *fir
 		}
 		else
 		{
-			for (decltype(first) it; (it = read_some_bytes_underflow_define(insm, first, last)) != last; first = it)
-			{
-				if (it == first)
-				{
-					::fast_io::throw_parse_code(::fast_io::parse_code::end_of_file);
-				}
-			}
+			::fast_io::details::read_all_unbuffered_some_impl(insm, first, last);
 		}
 	}
 	else if constexpr (::fast_io::operations::decay::defines::has_scatter_read_some_bytes_underflow_define<instmtype>)
@@ -678,6 +771,15 @@ inline constexpr void read_all_bytes_cold_impl(instmtype &insm, ::std::byte *fir
 		::fast_io::operations::decay::input_stream_seek_decay_dispatch(
 			insm, ::fast_io::details::input_pointer_distance(firstcptr, lastcptr),
 			::fast_io::seekdir::cur);
+	}
+	else if constexpr (sizeof(char_type) == 1u && ::fast_io::operations::decay::defines::has_ibuffer_basic_operations<instmtype>)
+	{
+		read_all_cursor(insm, first, last);
+	}
+	else
+	{
+		static_assert(::fast_io::operations::decay::defines::bytes_readable<instmtype>,
+			"byte reads require a byte read provider or a compatible one-byte input cursor");
 	}
 }
 

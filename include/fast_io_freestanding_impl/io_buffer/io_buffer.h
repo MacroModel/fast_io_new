@@ -25,6 +25,7 @@ template <typename handletype, typename iobuffertraits>
 class basic_io_buffer
 {
 public:
+	using buffered_stream_type = handletype;
 	using handle_type = handletype;
 	using traits_type = iobuffertraits;
 	using input_char_type = typename traits_type::input_char_type;

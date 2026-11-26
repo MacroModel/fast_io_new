@@ -16,25 +16,15 @@ namespace fast_io
 namespace details
 {
 
-/** @brief Copies up to a requested byte count and reports actual progress. */
+/** @brief Transfers a positive count through bounded staging storage. */
 template <typename optstmtype, typename instmtype>
-inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype &optstm, instmtype &instm,
+inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_staged_impl(optstmtype &optstm, instmtype &instm,
 																	 ::fast_io::uintfpos_t needtransmit)
 {
-	if (needtransmit == 0u)
-	{
-		/*
-		The closed interval [0, 0] has the unique progress result zero.  Placing
-		this proof at the terminal layer retains outer reference, lock, and finish
-		protocols while removing the default 128 KiB staging allocation and all
-		primitive byte I/O from the identity case.
-		*/
-		return 0u;
-	}
 	// Generic partial transfer stages through one bounded local byte buffer and
 	// reports only bytes that have also been committed to the output.
 	constexpr ::std::size_t default_buffer_bytes{
-		::fast_io::details::transmit_buffer_size_cache<1>};
+		::fast_io::details::transmit_batch_size<::std::byte, optstmtype, instmtype>};
 	::std::size_t buffer_bytes{default_buffer_bytes};
 	if (needtransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
 	{
@@ -46,8 +36,11 @@ inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype 
 		*/
 		buffer_bytes = static_cast<::std::size_t>(needtransmit);
 	}
-	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
+	::fast_io::details::transmit_batch_storage<::std::byte, default_buffer_bytes> newptr(
 		buffer_bytes);
+	::fast_io::conditional_secure_clear_guard<::std::byte,
+		::fast_io::details::transcode_stream_sensitive<true,instmtype>() ||
+		::fast_io::details::transcode_stream_sensitive<false,optstmtype>()> erase{newptr.ptr,newptr.size};
 	::std::byte *buffer_start{newptr.ptr};
 	::fast_io::uintfpos_t totransmit{needtransmit};
 	while (totransmit)
@@ -70,6 +63,44 @@ inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype 
 		totransmit -= static_cast<::std::size_t>(iter - buffer_start);
 	}
 	return needtransmit - totransmit;
+}
+
+/** @brief Selects direct access or bounded staging for a counted transfer. */
+template <typename optstmtype, typename instmtype>
+inline constexpr ::fast_io::uintfpos_t transmit_bytes_some_main_impl(optstmtype &optstm, instmtype &instm,
+																	 ::fast_io::uintfpos_t needtransmit)
+{
+	if (needtransmit == 0u)
+	{
+		/*
+		The closed interval [0, 0] has the unique progress result zero.  Placing
+		this proof at the terminal layer retains outer reference, lock, and finish
+		protocols while removing the default 128 KiB staging allocation and all
+		primitive byte I/O from the identity case.
+		*/
+		return 0u;
+	}
+	if constexpr (::fast_io::details::transmit_borrowable_window<true, optstmtype, instmtype>)
+	{
+		::fast_io::uintfpos_t transferred{};
+		::fast_io::details::transmit_from_window<true, false>(optstm, instm, needtransmit,
+			[&](::std::size_t n) { transferred += n; });
+		return transferred;
+	}
+	else if constexpr (::fast_io::details::transmit_direct_terminal_window<true, optstmtype, instmtype>)
+	{
+		::fast_io::uintfpos_t transferred{};
+		if (::fast_io::details::transmit_try_direct_terminal_window<true, false>(
+				optstm, instm, transferred, needtransmit) == transmit_terminal_window_result::complete) [[likely]]
+		{
+			return transferred;
+		}
+		return ::fast_io::details::transmit_terminal_window_miss<
+			::fast_io::details::transmit_bytes_some_staged_impl<optstmtype, instmtype>>(
+				optstm, instm, needtransmit);
+	}
+
+	return ::fast_io::details::transmit_bytes_some_staged_impl(optstm, instm, needtransmit);
 }
 
 } // namespace details
@@ -152,6 +183,9 @@ transmit_bytes_some_decay_dispatch(optstmtype &optstm, instmtype &instm,
 
 /** @brief Partially transfers bytes and checked-finishes an eligible output. */
 template <typename optstmtype, typename instmtype>
+#if defined(__HERBCEPTIONS__)
+	requires (!::fast_io::details::uses_checked_transmit_some<true, optstmtype, instmtype>)
+#endif
 inline constexpr decltype(auto) transmit_bytes_some(optstmtype &&optstm, instmtype &&instm,
 													::fast_io::uintfpos_t totransmit)
 {
@@ -162,6 +196,21 @@ inline constexpr decltype(auto) transmit_bytes_some(optstmtype &&optstm, instmty
 																				totransmit);
 	});
 }
+
+#if defined(__HERBCEPTIONS__)
+/** @brief Partially transfers the requested bytes while preserving the selected checked engine effects. */
+template <typename optstmtype, typename instmtype>
+	requires ::fast_io::details::uses_checked_transmit_some<true, optstmtype, instmtype>
+inline constexpr ::fast_io::uintfpos_t transmit_bytes_some(
+	optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit) throws
+{
+	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	auto const transferred{::fast_io::details::transmit_checked_some<true>(guard.ref(), input_observer, totransmit)};
+	::fast_io::details::finish_checked_transmit<optstmtype>(guard);
+	return transferred;
+}
+#endif
 
 } // namespace operations
 

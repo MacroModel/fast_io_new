@@ -325,8 +325,12 @@ struct general_float_selection_hint
 template <typename fixed_type>
 [[nodiscard]] inline constexpr general_float_selection_hint
 general_float_initial_selection(
-	fixed_type const &fixed, ::std::size_t precision) noexcept
+	[[maybe_unused]] fixed_type const &fixed, [[maybe_unused]] ::std::size_t precision) noexcept
 {
+#if defined(FAST_IO_DISABLE_FLOATING_POINT) || defined(FAST_IO_DETAIL_DEC_F_D_FLOAT)
+	static_assert(!::std::same_as<fixed_type, fixed_type>, "fast_io floating-point formatting is disabled");
+	return {};
+#else
 	if constexpr (general_float_has_field_representation<fixed_type>)
 	{
 		auto const representation{general_float_field_representation(fixed)};
@@ -342,13 +346,33 @@ general_float_initial_selection(
 		auto const magnitude{transported < 0.0f ? -transported : transported};
 		if (magnitude == 0.0f) return {};
 		constexpr float lower_boundary{1.0f / 10000.0f};
-		if (magnitude < lower_boundary)
+		if (magnitude <= lower_boundary)
 		{
 			return {true, !(magnitude < lower_boundary / 2.0f)};
 		}
 		auto const upper{general_float_pow10<float>(precision)};
 		if (magnitude >= upper) return {true, false};
 		return {false, !(magnitude < upper / 2.0f)};
+	}
+	else if constexpr (::fast_io::details::interchange_floating<
+						   decltype(general_float_scalar_reference(fixed))>)
+	{
+		auto const value{general_float_scalar_reference(fixed)};
+		using value_trait = ::fast_io::details::interchange_floating_traits<::std::remove_cv_t<decltype(value)>>;
+		if (!value_trait::finite(value)) return {};
+		auto const exponent{value_trait::adjusted_exponent(value)};
+		// A carry can move the rounded exponent up by exactly one. Request the
+		// existing post-write validation only at the two notation boundaries.
+		auto const scientific{exponent < -4 || (0 <= exponent && precision <= static_cast<::std::size_t>(exponent))};
+		return {scientific, exponent == -5 || (0 <= exponent && static_cast<::std::size_t>(exponent) + 1u == precision)};
+	}
+	else if constexpr (::fast_io::details::fp_floating_point_is_ibm_double_double<
+						   ::std::remove_cvref_t<decltype(general_float_scalar_reference(fixed))>>)
+	{
+		// The rounded scientific spelling already supplies the exponent used
+		// by g/G. This also works on GCC's IBM ABI, where long double division
+		// is unavailable during constant evaluation.
+		return {true, true};
 	}
 	else
 	{
@@ -368,7 +392,9 @@ general_float_initial_selection(
 	if (magnitude == floating_type{}) return {};
 	constexpr auto lower_boundary{
 		floating_type{1} / floating_type{10000}};
-	if (magnitude < lower_boundary)
+	// The binary approximation of 10^-4 can lie below the exact boundary.
+	// Validate its own spelling along with the values immediately below it.
+	if (magnitude <= lower_boundary)
 	{
 		return {true, !(magnitude < lower_boundary / floating_type{2})};
 	}
@@ -376,6 +402,7 @@ general_float_initial_selection(
 	if (magnitude >= upper) return {true, false};
 	return {false, !(magnitude < upper / floating_type{2})};
 	}
+#endif
 }
 
 template <typename fixed_type>

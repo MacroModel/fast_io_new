@@ -131,6 +131,19 @@ inline constexpr ::std::size_t parse_domain_value{domain_define(error_type<parse
 namespace details
 {
 
+/** @brief Publishes a scanner failure in the active exception ABI, including in a dual-enabled build. */
+[[noreturn]] inline void raise_scan_error(parse_code code) FAST_IO_HERBCEPTIONS_THROWS
+{
+#if defined(__HERBCEPTIONS__)
+	static_assert(static_cast<unsigned>(parse_code::end_of_file) == static_cast<unsigned>(::std::parse_errc::end_of_file));
+	static_assert(static_cast<unsigned>(parse_code::invalid) == static_cast<unsigned>(::std::parse_errc::invalid));
+	static_assert(static_cast<unsigned>(parse_code::overflow) == static_cast<unsigned>(::std::parse_errc::overflow));
+	throw throws static_cast<::std::parse_errc>(code);
+#else
+	::fast_io::throw_parse_code(code);
+#endif
+}
+
 inline constexpr bool parse_code_equivalent_impl(::std::size_t domain, ::std::size_t code, ::std::size_t e) noexcept
 {
 	return domain == parse_domain_value && code == e;

@@ -14,60 +14,6 @@
 namespace fast_io
 {
 
-namespace details
-{
-
-/** @brief Copies an exact byte count through a bounded temporary buffer. */
-template <typename optstmtype, typename instmtype>
-inline constexpr void transmit_bytes_all_main_impl(optstmtype &optstm, instmtype &instm,
-												   ::fast_io::uintfpos_t totransmit)
-{
-	if (totransmit == 0u)
-	{
-		/*
-		Zero bytes form the identity element of exact byte transfer.  The shortcut
-		is terminal rather than public so observer normalization, mutex recursion,
-		and output finalization retain their contracts; only the otherwise
-		unobservable staging allocation and primitive I/O are eliminated.
-		*/
-		return;
-	}
-	// Generic byte transfer intentionally stages through a bounded local
-	// buffer; provider-specific zero-copy belongs to status transmit CPOs.
-	constexpr ::std::size_t default_buffer_bytes{
-		::fast_io::details::transmit_buffer_size_cache<1>};
-	::std::size_t buffer_bytes{default_buffer_bytes};
-	if (totransmit < static_cast<::fast_io::uintfpos_t>(default_buffer_bytes))
-	{
-		/*
-		Both values are byte counts: this operation never derives capacity from
-		the advertised stream character type. The uintfpos_t comparison precedes
-		the narrowing conversion and proves it safe, making the allocation exactly
-		min(default_buffer_bytes, remaining_request) bytes.
-		*/
-		buffer_bytes = static_cast<::std::size_t>(totransmit);
-	}
-	::fast_io::details::local_operator_new_array_ptr<::std::byte> newptr(
-		buffer_bytes);
-	::std::byte *buffer_start{newptr.ptr};
-	while (totransmit)
-	{
-		// Move one bounded byte block while preserving the exact remaining count.
-		::std::size_t this_round{buffer_bytes};
-		if (totransmit < this_round)
-		{
-			// Limit the final iteration to the exact remaining byte count.
-			this_round = static_cast<::std::size_t>(totransmit);
-		}
-		auto iter{buffer_start + this_round};
-		::fast_io::operations::decay::read_all_bytes_decay_dispatch(instm, buffer_start, iter);
-		::fast_io::operations::decay::write_all_bytes_decay_dispatch(optstm, buffer_start, iter);
-		totransmit -= this_round;
-	}
-}
-
-} // namespace details
-
 namespace operations
 {
 
@@ -77,7 +23,7 @@ namespace decay
 /** @brief Borrows stable observers while applying exact-byte mutex recursion. */
 template <typename optstmtype, typename instmtype>
 	requires(::fast_io::operations::decay::defines::has_complete_transmit_mutex_protocols<optstmtype, instmtype>)
-inline constexpr decltype(auto) transmit_bytes_all_decay_borrowed(optstmtype &optstm, instmtype &instm,
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto) transmit_bytes_all_decay_borrowed(optstmtype &optstm, instmtype &instm,
 																  ::fast_io::uintfpos_t totransmit)
 {
 	using output_observer_type = ::std::remove_cvref_t<optstmtype>;
@@ -115,7 +61,7 @@ inline constexpr decltype(auto) transmit_bytes_all_decay_borrowed(optstmtype &op
 	else
 	{
 		// Execute the generic byte loop once both observers are unlocked.
-		return ::fast_io::details::transmit_bytes_all_main_impl(optstm, instm, totransmit);
+		return ::fast_io::details::transmit_exact_main_impl<true>(optstm, instm, totransmit);
 	}
 }
 
@@ -151,15 +97,31 @@ transmit_bytes_all_decay_dispatch(optstmtype &optstm, instmtype &instm,
  * requested bytes; it intentionally does not validate or consume logical EOF.
  */
 template <typename optstmtype, typename instmtype>
-inline constexpr decltype(auto) transmit_bytes_all(optstmtype &&optstm, instmtype &&instm,
-												   ::fast_io::uintfpos_t totransmit)
+#if defined(__HERBCEPTIONS__)
+	requires (!::fast_io::details::uses_checked_transmit_all<true, optstmtype, instmtype>)
+#endif
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr decltype(auto)
+transmit_bytes_all(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit)
 {
 	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
 	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
-	return ::fast_io::operations::output_operation_guard_invoke(guard, [&](auto &output_observer) -> decltype(auto) {
-		return ::fast_io::operations::decay::transmit_bytes_all_decay_dispatch(output_observer, input_observer, totransmit);
-	});
+	::fast_io::operations::decay::transmit_bytes_all_decay_dispatch(guard.ref(), input_observer, totransmit);
+	guard.commit();
 }
+
+#if defined(__HERBCEPTIONS__)
+/** @brief Transfers an exact byte count using the checked endpoint and terminal-EOF ABI. */
+template <typename optstmtype, typename instmtype>
+	requires ::fast_io::details::uses_checked_transmit_all<true, optstmtype, instmtype>
+FAST_IO_GNU_ALWAYS_INLINE inline constexpr void
+transmit_bytes_all(optstmtype &&optstm, instmtype &&instm, ::fast_io::uintfpos_t totransmit) throws
+{
+	decltype(auto) input_observer{::fast_io::operations::input_stream_ref(instm)};
+	::fast_io::operations::basic_output_operation_guard<optstmtype &&> guard{optstm};
+	::fast_io::details::transmit_exact_checked_dispatch<true>(guard.ref(), input_observer, totransmit);
+	::fast_io::details::finish_checked_transmit<optstmtype>(guard);
+}
+#endif
 
 } // namespace operations
 

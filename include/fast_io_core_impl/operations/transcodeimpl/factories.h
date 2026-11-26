@@ -61,7 +61,7 @@ template <typename requested_public_char = void, typename handle,
 		  typename engine>
 	requires((::std::same_as<requested_public_char, void> ||
 			  ::std::integral<requested_public_char>) &&
-			 ::fast_io::transcoder<::std::remove_cvref_t<engine>> &&
+			 ::fast_io::bounded_transcoder<::std::remove_cvref_t<engine>> &&
 			 ::std::constructible_from<::std::remove_cvref_t<engine>, engine &&>)
 inline auto make_otranscoder(handle &&output, engine &&transcode_engine)
 {
@@ -98,7 +98,7 @@ template <typename requested_public_char = void, typename handle,
 		  typename engine>
 	requires((::std::same_as<requested_public_char, void> ||
 			  ::std::integral<requested_public_char>) &&
-			 ::fast_io::transcoder<::std::remove_cvref_t<engine>> &&
+			 ::fast_io::bounded_transcoder<::std::remove_cvref_t<engine>> &&
 			 ::std::constructible_from<::std::remove_cvref_t<engine>, engine &&>)
 inline auto make_itranscoder(handle &&input, engine &&transcode_engine)
 {
@@ -137,8 +137,8 @@ template <typename requested_input_char = void,
 			  ::std::integral<requested_input_char>) &&
 			 (::std::same_as<requested_output_char, void> ||
 			  ::std::integral<requested_output_char>) &&
-			 ::fast_io::transcoder<::std::remove_cvref_t<input_engine>> &&
-			 ::fast_io::transcoder<::std::remove_cvref_t<output_engine>> &&
+			 ::fast_io::bounded_transcoder<::std::remove_cvref_t<input_engine>> &&
+			 ::fast_io::bounded_transcoder<::std::remove_cvref_t<output_engine>> &&
 			 ::std::constructible_from<::std::remove_cvref_t<input_engine>,
 									   input_engine &&> &&
 			 ::std::constructible_from<::std::remove_cvref_t<output_engine>,
@@ -180,6 +180,55 @@ inline auto make_iotranscoder(handle &&io, input_engine &&input_transcode_engine
 			::std::forward<input_engine>(input_transcode_engine)),
 		output_engine_type(
 			::std::forward<output_engine>(output_transcode_engine))};
+}
+
+/**
+ * @brief Stacks output engines from the physical sink outward, retaining each intermediate owner.
+ * @details make_otranscoder(sink, inner, outer) is equivalent to make_otranscoder(make_otranscoder(sink,
+ * inner), outer). Writes visit outer first. Finishing the stack forwards each trailer through all
+ * downstream engines before finishing the next owned layer. PublicChar applies to the outermost layer.
+ */
+template <typename PublicChar = void, typename Handle, typename Inner, typename Outer, typename... More>
+	requires (::fast_io::bounded_transcoder<::std::remove_cvref_t<Inner>> && ::fast_io::bounded_transcoder<::std::remove_cvref_t<Outer>> &&
+			  (::fast_io::bounded_transcoder<::std::remove_cvref_t<More>> && ...))
+inline auto make_otranscoder(Handle &&sink, Inner &&inner, Outer &&outer, More &&...more)
+{
+	return ::fast_io::make_otranscoder<PublicChar>(
+		::fast_io::make_otranscoder(::std::forward<Handle>(sink), ::std::forward<Inner>(inner)),
+		::std::forward<Outer>(outer), ::std::forward<More>(more)...);
+}
+
+/**
+ * @brief Stacks input engines from the physical source outward.
+ * @details Input visits the engines in argument order. Each layer presents all of its final decoded units
+ * before signalling EOF to the next. Intermediate adapters own their buffers across partial reads.
+ */
+template <typename PublicChar = void, typename Handle, typename Inner, typename Outer, typename... More>
+	requires (::fast_io::bounded_transcoder<::std::remove_cvref_t<Inner>> && ::fast_io::bounded_transcoder<::std::remove_cvref_t<Outer>> &&
+			  (::fast_io::bounded_transcoder<::std::remove_cvref_t<More>> && ...))
+inline auto make_itranscoder(Handle &&source, Inner &&inner, Outer &&outer, More &&...more)
+{
+	return ::fast_io::make_itranscoder<PublicChar>(
+		::fast_io::make_itranscoder(::std::forward<Handle>(source), ::std::forward<Inner>(inner)),
+		::std::forward<Outer>(outer), ::std::forward<More>(more)...);
+}
+
+/**
+ * @brief Stacks input/output engine pairs from the duplex handle outward.
+ * @details Each adjacent pair supplies the decoder and encoder of one layer. Input proceeds from inner to
+ * outer, output from outer to inner. A read's tied flush keeps each output direction open for later writes.
+ */
+template <typename InputChar = void, typename OutputChar = void, typename Handle, typename InnerIn, typename InnerOut,
+		  typename OuterIn, typename OuterOut, typename... More>
+	requires (sizeof...(More) % 2u == 0u && ::fast_io::bounded_transcoder<::std::remove_cvref_t<InnerIn>> &&
+			  ::fast_io::bounded_transcoder<::std::remove_cvref_t<InnerOut>> && ::fast_io::bounded_transcoder<::std::remove_cvref_t<OuterIn>> &&
+			  ::fast_io::bounded_transcoder<::std::remove_cvref_t<OuterOut>> && (::fast_io::bounded_transcoder<::std::remove_cvref_t<More>> && ...))
+inline auto make_iotranscoder(Handle &&handle, InnerIn &&inner_in, InnerOut &&inner_out, OuterIn &&outer_in,
+							 OuterOut &&outer_out, More &&...more)
+{
+	return ::fast_io::make_iotranscoder<InputChar, OutputChar>(
+		::fast_io::make_iotranscoder(::std::forward<Handle>(handle), ::std::forward<InnerIn>(inner_in), ::std::forward<InnerOut>(inner_out)),
+		::std::forward<OuterIn>(outer_in), ::std::forward<OuterOut>(outer_out), ::std::forward<More>(more)...);
 }
 
 } // namespace fast_io
